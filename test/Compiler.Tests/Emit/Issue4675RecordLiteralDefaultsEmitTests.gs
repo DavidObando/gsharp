@@ -6,6 +6,8 @@ package GSharp.Compiler.Tests.Emit
 
 import System
 import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.PortableExecutable
 import GSharp.Tests
 import Xunit
 import GSharp.Compiler.Tests
@@ -854,6 +856,73 @@ Console.WriteLine(lowerValue.mark)
 `, "PropertyIdentity", true, "/r:" + contract)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
         Assert.Equal("7\n2\n0\n4\n0\nTrue\n2\n0\n4\n0\n0\n3\n0\n5\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_ExpressionTreePreservesConstrainedReceiverOwner() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package ConstrainedTree5419
+import System.Collections.Generic
+import System.Linq.Expressions
+import System
+public class Reader {
+    shared {
+        public func Read[A, R ICollection[A]]() Expression[Func[R, int32]] -> value -> value.Count
+    }
+}
+`, "ConstrainedTree5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import System.Collections.Generic
+import ConstrainedTree5419
+let values = List[int32](){4, 7}
+let tree = Reader.Read[int32, List[int32]]()
+Console.WriteLine(tree.Compile()(values))
+values.Add(11)
+Console.WriteLine(tree.Compile()(values))
+`, "ConstrainedTree", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("2\n3\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_NestedExpressionTreeRetainsMetadataOnlyTypeArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedLiteral5419;
+public static class Probe<T> {
+    public static int Count => typeof(T) == typeof(int) ? 7 : 9;
+    public static int Mark = typeof(T) == typeof(int) ? 17 : 19;
+}`, "Contract")
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import System.Linq.Expressions
+import ImportedLiteral5419
+func Make[T]() Func[Expression[Func[int32]]] -> () -> () -> Probe[T].Count
+func MakeField[T]() Func[Expression[Func[int32]]] -> () -> () -> Probe[T].Mark
+Console.WriteLine(Make[int32]()().Compile()())
+Console.WriteLine(Make[string]()().Compile()())
+Console.WriteLine(MakeField[int32]()().Compile()())
+Console.WriteLine(MakeField[string]()().Compile()())
+`, "NestedTree", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        using let stream = System.IO.File.OpenRead(dll)
+        using let pe = PEReader(stream)
+        let metadata = pe.GetMetadataReader()
+        var lambdas = 0
+        for handle in metadata.MethodDefinitions {
+            let method = metadata.GetMethodDefinition(handle)
+            let name = metadata.GetString(method.Name)
+            if name.StartsWith("<lambda", StringComparison.Ordinal) {
+                lambdas += 1
+                let owner = metadata.GetTypeDefinition(method.GetDeclaringType())
+                Assert.True(
+                    method.GetGenericParameters().Count + owner.GetGenericParameters().Count > 0,
+                    name + " must retain its metadata-only enclosing type parameter"
+                )
+            }
+        }
+        Assert.True(lambdas > 0)
+        Assert.Equal("7\n9\n17\n19\n", fixture.Run(dll))
     }
 
     @Fact

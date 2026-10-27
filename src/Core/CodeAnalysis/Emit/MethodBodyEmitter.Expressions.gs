@@ -677,7 +677,11 @@ internal partial class MethodBodyEmitter {
                 this.EmitMethodInfoLiteral(method)
             }
             case member is BoundClrPropertyAccessExpression {
-                let receiverType = member.StaticContainerType ?? member.Receiver?.Type
+                let receiverType = member.ConstrainedInterfaceType ??
+                    member.StaticContainerType ??
+                    member
+                    .Receiver
+                    ?.Type
                 let owner = if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
                     receiverType
                 ) is {} imported {

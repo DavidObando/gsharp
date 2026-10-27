@@ -1474,7 +1474,7 @@ Omitted collection inputs use the declaration's collection-shape metadata when a
 
 Structural spreads resolve the exact constructed target type before validating construction. Explicit primary inputs remain available during that validation.
 
-Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created. Deferred CLR field and property accesses retain the selected member and declaring-type identity, including case-distinct names.
+Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created. Deferred CLR field and property accesses retain the selected member and declaring-type identity, including case-distinct names. Constrained interface owners and metadata-only generic owners remain available in nested lambdas.
 
 ### Collection initializers
 
