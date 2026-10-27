@@ -277,6 +277,14 @@ open class Adr0212ScopeConformanceTests {
     }
 
     @Fact
+    func ConstInitializer_DoesNotSeePrimaryParametersOrInheritedConstants() {
+        let inherited = Program.IndexOf("var V int32 = 2", StringComparison.Ordinal) + 16
+        Assert.Empty(Compiled.LookupSymbols(inherited, "FuK"))
+        let primary = Program.IndexOf("const Z int32 = 3", StringComparison.Ordinal) + 16
+        Assert.Empty(Compiled.LookupSymbols(primary, "FuP"))
+    }
+
+    @Fact
     func InheritedMethod_DoesNotShadowASharedVariable() {
         let found = Assert.Single(
             Compiled.LookupSymbols(Program.IndexOf("// PFuMethodVar", StringComparison.Ordinal), "MX")
@@ -789,6 +797,18 @@ open class FuSBase {
 
 class FuSDerived : FuSBase {
     var Q int32 = FuShadow() + 1
+}
+
+open class FuCBase {
+    const FuK int32 = 1
+}
+
+class FuCDerived : FuCBase {
+    var V int32 = 2
+}
+
+class FuCPrimary(FuP int32) {
+    const Z int32 = 3
 }
 
 open class FuMBase {

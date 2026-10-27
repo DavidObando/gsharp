@@ -259,7 +259,7 @@ partial class SemanticModel {
                 insideMember = true
                 isShared = true
                 inInitializer = true
-                inInstanceInitializer = current.Parent is not SharedBlockSyntax
+                inInstanceInitializer = current.Parent is not SharedBlockSyntax && !current.IsConst
             } else if current is SharedBlockSyntax {
                 isShared = true
             } else if current is StructDeclarationSyntax or InterfaceDeclarationSyntax {
@@ -326,14 +326,18 @@ partial class SemanticModel {
         let query = if includeInstance {
             MemberQuery.All
         } else if ownStaticsOnly {
-            MemberQuery.Static()
+            // The kinds `PushStaticMemberScope` seeds: static fields, constants, properties and methods.
+            MemberQuery.Static(MemberKinds.Field | MemberKinds.Property | MemberKinds.Method)
         } else {
             MemberQuery.InheritedStatic()
         }
-        let hierarchy = if type is StructSymbol structSymbol {
-            structSymbol.GetHierarchy()
-        } else {
-            List[StructSymbol]()
+        let hierarchy = List[StructSymbol]()
+        if type is StructSymbol structSymbol {
+            if ownStaticsOnly {
+                hierarchy.Add(structSymbol)
+            } else {
+                hierarchy.AddRange(structSymbol.GetHierarchy())
+            }
         }
         if name != nil {
             // The binder binds an instance member before a static one of the same name, whatever the depth.
@@ -343,7 +347,9 @@ partial class SemanticModel {
                 // The nearest accessible match wins.
                 member = TypeMemberModel.EnumerateMembers(type, MemberQuery.Instance(InstanceSeededKinds()))
                     .FirstOrDefault(
-                    (m Symbol) -> string.Equals(m.Name, name, StringComparison.Ordinal) && IsReceiverlessMember(m, type)
+                    (m Symbol) -> string.Equals(m.Name, name, StringComparison.Ordinal) &&
+                        IsInstanceMember(m) &&
+                        IsReceiverlessMember(m, type)
                 )
             }
             if member == nil {
@@ -431,7 +437,9 @@ partial class SemanticModel {
         return switch member {
             case field is FieldSymbol: !field.IsStatic && !field.IsConst
             case property is PropertySymbol: !property.IsStatic
-            case declaredEvent is EventSymbol: !declaredEvent.IsStatic
+            case declaredEvent is EventSymbol: !declaredEvent.IsStatic &&
+                declaredEvent.IsFieldLike &&
+                declaredEvent.BackingField != nil
             default: false
         }
     }
