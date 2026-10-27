@@ -203,6 +203,10 @@ open class Adr0208NarrowingCorpusTests {
                 "o1_callback_after_test_replaces_root",
                 "o2_callback_in_or_arm_replaces_root",
                 "o3_callback_in_else_if_replaces_root",
+                "o4_stored_callback_run_by_named_function",
+                "o5_callback_literal_passed_to_named_function",
+                "o6_callback_run_through_another_callback",
+                "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias"
             },
             names
@@ -1498,6 +1502,88 @@ func Run(c bool) string {
     return b.Pet.Name
 }
 func Main() { Console.WriteLine(Run(false)) }`, "GS0158@18:18", "reject", "", ""}
+            yield[]object{"o4_stored_callback_run_by_named_function", `import System.Collections.Generic
+class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Fire(hs List[() -> bool]) bool {
+    for h in hs { h() }
+    return true
+}
+func Run() string {
+    var b = Box(Pet())
+    let handlers = List[() -> bool]()
+    handlers.Add(func() bool {
+        b = Box(nil)
+        return true
+    })
+    if b.Pet != nil && Fire(handlers) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@22:18", "reject", "", ""}
+            yield[]object{"o5_callback_literal_passed_to_named_function", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Use(f () -> bool) bool { return f() }
+func Run() string {
+    var b = Box(Pet())
+    if b.Pet != nil && Use(func() bool {
+        b = Box(nil)
+        return true
+    }) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:18", "reject", "", ""}
+            yield[]object{"o6_callback_run_through_another_callback", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run() string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return true
+    }
+    let again = func() bool { return clear() }
+    if b.Pet != nil && again() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@17:18", "reject", "", ""}
+            yield[]object{"o7_root_never_assigned_by_a_closure_keeps_the_fact", `import System.Collections.Generic
+class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Fire(hs List[() -> bool]) bool {
+    for h in hs { h() }
+    return true
+}
+func Run() string {
+    var b = Box(Pet())
+    let handlers = List[() -> bool]()
+    handlers.Add(func() bool { return true })
+    if b.Pet != nil && Fire(handlers) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "a", ""}
             yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
     func Init();
 }

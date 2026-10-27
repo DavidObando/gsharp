@@ -107,6 +107,8 @@ internal partial class StatementBinder {
         var filterNames HashSet[string]? = nil
         var branchesMutateMembers = false
         var statementMutatesMembers = false
+        var branchesMutateReferenceStorage = false
+        var statementMutatesReferenceStorage = false
         for path in exit.Paths {
             let joined = exit.NarrowedType(path)
             if joined == nil || !IsJoinGain(path, joined, entry) {
@@ -115,6 +117,9 @@ internal partial class StatementBinder {
             if effects == nil || branchEffects == nil {
                 effects = GetStatementEffects(statement, aliasesAtEntry)
                 let syntax = statement.Syntax
+                if syntax != nil {
+                    EnsureClosureAssignedNames(syntax)
+                }
                 filterNames = if syntax == nil {
                     default(HashSet[string]?)
                 } else {
@@ -133,11 +138,25 @@ internal partial class StatementBinder {
                     effects.MayMutateMemberPaths ||
                     syntax == nil ||
                     SyntaxMayMutateMemberPaths(syntax)
+                // An unanalyzed syntax node may write anything, so it keeps the conservative answer (#5292).
+                branchesMutateReferenceStorage = syntaxMutates || branchEffects.MayMutateReferenceStorage
+                statementMutatesReferenceStorage = branchesMutateReferenceStorage ||
+                    effects.MayMutateReferenceStorage ||
+                    syntax == nil ||
+                    SyntaxMayMutateMemberPaths(syntax)
             }
             let killedByFilter = filterNames != nil &&
                 (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
             if !killedByFilter &&
-                !KillsJoinGain(path, effects, branchEffects, branchesMutateMembers, statementMutatesMembers) {
+                !KillsJoinGain(
+                path,
+                effects,
+                branchEffects,
+                branchesMutateMembers,
+                statementMutatesMembers,
+                branchesMutateReferenceStorage,
+                statementMutatesReferenceStorage
+            ) {
                 SetPersistentNarrowing(persistentFrame, path, joined)
             }
         }
@@ -154,16 +173,21 @@ internal partial class StatementBinder {
         statementEffects AssignedRootsCollector,
         branchEffects AssignedRootsCollector,
         branchesMutateMembers bool,
-        statementMutatesMembers bool
+        statementMutatesMembers bool,
+        branchesMutateReferenceStorage bool,
+        statementMutatesReferenceStorage bool
     ) bool {
         if path.HasMembers && !IsExternalStorageAlias(path.Root) {
             // The members are immutable, so a call in the condition can only invalidate the
-            // fact by replacing the root, and it can do that after the test.
+            // fact by replacing the root, and it can do that after the test. A root that a
+            // closure assigns (or a global, or a by-reference root) can be replaced by any user
+            // code the statement runs, a named function that invokes a stored callback included.
             return statementEffects.AssignsRoot(path.Root) ||
                 MayBeMutatedByUnknownWrite(statementEffects, AccessPath.ForVariable(path.Root)) ||
-                StatementKillsPath(branchEffects, path, branchesMutateMembers)
+                (statementMutatesMembers && MayBeMutatedByUnknownCallable(AccessPath.ForVariable(path.Root))) ||
+                StatementKillsPath(branchEffects, path, branchesMutateMembers, branchesMutateReferenceStorage)
         }
-        return StatementKillsPath(statementEffects, path, statementMutatesMembers)
+        return StatementKillsPath(statementEffects, path, statementMutatesMembers, statementMutatesReferenceStorage)
     }
 
     // The statements that run after the facts of an `if` hold: its branches. A bare
@@ -205,6 +229,8 @@ internal partial class StatementBinder {
         return currentType == nil || !IsWeakerOrEqual(currentType, joined)
     }
 
-    private func IsWeakerOrEqual(held TypeSymbol, joined TypeSymbol) bool -> object.Equals(held, joined) ||
-        Conversion.IsRepresentationPreservingImplicit(held, joined)
+    private func IsWeakerOrEqual(held TypeSymbol, joined TypeSymbol) bool -> NarrowingState.IsNoStrongerThan(
+        joined,
+        held
+    )
 }

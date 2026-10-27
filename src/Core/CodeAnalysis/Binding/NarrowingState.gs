@@ -283,6 +283,52 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
     }
 
     shared {
+        /// Whether the fact [`joined`](paramref) adds nothing to the fact [`held`](paramref): the held
+        /// type is the joined type, or converts to it without changing what the value is. The one
+        /// comparison behind a gain (ADR-0208 A1): a joined type that fails it is a new or a stronger
+        /// fact, and a joined type that passes it must never replace the held fact.
+        ///
+        /// | held | joined | adds nothing |
+        /// | --- | --- | --- |
+        /// | `T` | `T` | yes |
+        /// | `Dog` | `Animal` (reference upcast) | yes |
+        /// | `Animal` | `Dog` | no (stronger) |
+        /// | `IA` | `IB` (unrelated interface) | no (a different test) |
+        /// | `int32` | `object`, `ValueType` or an interface it implements (boxing) | yes |
+        /// | `int32` | `int32?` | yes |
+        /// | `object` | `int32` | no (stronger) |
+        /// | `int32?` | `int32` | no (stronger) |
+        /// | `int32` | `int64` (numeric widening) | no (a different fact) |
+        /// @param held The type of the fact that is already held.
+        /// @param joined The type that a join proved.
+        /// @returns `true` when [`joined`](paramref) is no stronger than [`held`](paramref).
+        internal func IsNoStrongerThan(joined TypeSymbol, held TypeSymbol) bool {
+            if object.Equals(held, joined) || Conversion.IsRepresentationPreservingImplicit(held, joined) {
+                return true
+            }
+            if joined is NullableTypeSymbol nullable && object.Equals(held, nullable.UnderlyingType) {
+                return true
+            }
+            return IsBoxedSupertype(held, joined)
+        }
+
+        // A value type is also a fact about the object it boxes to: `object`, `ValueType` and the
+        // interfaces it implements say less than the value type itself.
+        private func IsBoxedSupertype(held TypeSymbol, joined TypeSymbol) bool {
+            if Conversion.IsReferenceLikeTarget(held) || !Conversion.IsReferenceLikeTarget(joined) {
+                return false
+            }
+            let conversion = Conversion.Classify(held, joined)
+            if !conversion.Exists || !conversion.IsImplicit || conversion.IsStructuralProjection {
+                return false
+            }
+            return if held.ClrType is {} heldClr && joined.ClrType is {} joinedClr {
+                ClrTypeUtilities.IsAssignableByName(joinedClr, heldClr)
+            } else {
+                joined is InterfaceSymbol
+            }
+        }
+
         /// Gets the state with no facts at a reachable point.
         prop Empty NarrowingState -> emptyState
 

@@ -137,6 +137,11 @@ The rows e9 (R4), e17 (R2), g1 and the `goto` rows (R6) did not change. New rows
 | i1 | `Make[T class init()]`: `if settings is IInit init { }` then `return settings` (#5206) | accepted before and after; the shadow report names a dropped fact if A1 is reverted |
 | i2 | the same with a forward `goto Done` out of the type test | rejected by 0.5.212 with GS0155, accepted after: the `goto` join takes the declared type (A1) |
 | j1 | `x object?`; `if k == 0 { x !is Animal ... } else if k == 1 { x !is Dog ... } else { x !is Cat ... }` | accepted: the `else if` chain joins three states at once |
+| o1-o3 | a closure assigns the root `b`; `if b.Pet != nil && clear() { } else { return }`, the `\|\|` form and the `else if` form; then `b.Pet.Name` | rejected (R5): a call that can replace the root runs after the test |
+| o4 | the closure is stored in a list and a named function runs the list in the condition | rejected (R5): any user code in the statement kills a member-path gain on a root that a closure assigns |
+| o5, o6 | the closure literal is an argument of a named function; the closure is run through a second closure | rejected, as o4 |
+| o7 | the same as o4 but no closure assigns `b` | accepted: nothing can replace the root |
+| unit | `NarrowingState.IsNoStrongerThan` | the gain table: a boxed or nullable-wrapped supertype of a held value type adds nothing and never replaces it; `object` to `int32` and `int32?` to `int32` are gains |
 
 ## Experiments on the deferred loop rule
 

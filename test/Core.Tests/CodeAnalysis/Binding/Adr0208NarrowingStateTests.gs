@@ -105,6 +105,26 @@ open class Adr0208NarrowingStateTests {
         Assert.Equal(TypeSymbol.Object, wide.Join(narrow).NarrowedType(AccessPath.ForVariable(x)))
     }
 
+    /// The gain comparison (ADR-0208 A1, Copilot review of #5247): a joined type that adds
+    /// nothing to a held value-type fact must not replace it, and a stronger one must.
+    @Fact
+    func IsNoStrongerThan_FollowsTheGainTable() {
+        let int32 = TypeSymbol.Int32
+        let nullableInt32 = NullableTypeSymbol.Get(TypeSymbol.Int32)
+        // Equal and reference upcast: adds nothing.
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.String, TypeSymbol.String))
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.Object, TypeSymbol.String))
+        Assert.False(NarrowingState.IsNoStrongerThan(TypeSymbol.String, TypeSymbol.Object))
+        // A boxed value type and its nullable wrapper say less than the value type.
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.Object, int32))
+        Assert.True(NarrowingState.IsNoStrongerThan(nullableInt32, int32))
+        // The value type is stronger than what it boxes to or wraps into.
+        Assert.False(NarrowingState.IsNoStrongerThan(int32, TypeSymbol.Object))
+        Assert.False(NarrowingState.IsNoStrongerThan(int32, nullableInt32))
+        // A numeric widening is a different fact, not a weaker one.
+        Assert.False(NarrowingState.IsNoStrongerThan(TypeSymbol.Int64, int32))
+    }
+
     @Fact
     func Join_IsOneNaryOperation_NotAPairwiseFold() {
         // ADR-0208 section 6, probe g1: Dog, Cat and Animal on `x Animal?`.
