@@ -804,7 +804,7 @@ internal class ConversionClassifier {
                 sourceType != TypeSymbol.Error &&
                 targetType != TypeSymbol
                 .Error {
-                if !StructuralProjectionPlanner.TryCreate(
+                if !conversion.IsInvariantArgumentMismatch && !StructuralProjectionPlanner.TryCreate(
                     sourceType,
                     targetType,
                     strict: true,

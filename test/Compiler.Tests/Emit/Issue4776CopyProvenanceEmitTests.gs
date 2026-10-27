@@ -24,6 +24,196 @@ import GSharp.Compiler.Tests
 import GSharp.Core.CodeAnalysis
 
 class Issue4776CopyProvenanceEmitTests {
+    private const ImportedNullableContract5408 string = `#nullable enable
+using System.Collections.Generic;
+namespace CopyAnnotated5408;
+public record struct S<T>(T Value) {
+    public readonly object Anchor = Api.Construct();
+}
+public record R<T>(T Value);
+public static class Api {
+    public static readonly object Marker = new();
+    public static int Calls, Constructions;
+    public static object Construct() { Constructions++; return Marker; }
+    public static S<string?> Create() { Calls++; return new(null); }
+    public static S<string> Required() { Calls++; return new("required"); }
+    public static S<int> Value() { Calls++; return new(42); }
+    public static S<int?> Optional() { Calls++; return new(null); }
+    public static S<List<int>> NestedValue() { Calls++; return new(new() { 42 }); }
+    public static S<List<int?>> NestedOptional() { Calls++; return new(new() { null }); }
+    public static S<List<string?>> Nested() { Calls++; return new(new() { null }); }
+    public static R<string?> Reference() { Calls++; return new(null); }
+    public static R<string?>? Maybe() { Calls++; return null; }
+    public static S<string?>? Lift() => Create();
+}`
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedNullableGenericReturn_PreservesExplicitContracts(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "Contract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(ImportedNullableContract5408, "Contract", reference)
+        const source = `package SameContract5408
+import System.Collections.Generic
+import CopyAnnotated5408
+public class Exports {
+    shared {
+        public func Direct() S[string?] -> Api.Create()
+        public func Local() S[string?] {
+            let value S[string?] = Api.Create()
+            return value
+        }
+        private func Receive(value S[string?]) S[string?] -> value
+        public func Argument() S[string?] -> Receive(Api.Create())
+        public func Required() S[string] -> Api.Required()
+        public func Value() S[int32] -> Api.Value()
+        public func Optional() S[int32?] -> Api.Optional()
+        public func NestedValue() S[List[int32]] -> Api.NestedValue()
+        public func NestedOptional() S[List[int32?]] -> Api.NestedOptional()
+        public func Nested() S[List[string?]] -> Api.Nested()
+        public func Reference() R[string?] -> Api.Reference()
+        public func Lift() S[string?]? -> Api.Create()
+        public func ReferenceLift() R[string?]? -> Api.Reference()
+        public func Maybe() R[string?]? -> Api.Maybe()
+    }
+}`
+        let apiReference = Path.Combine(fixture.Directory, "Api.ref.dll")
+        let arguments = []string{
+            "/assemblyname:Api",
+            "/refout:" + apiReference,
+            "/r:" + if useReference {
+                reference
+            } else {
+                contract
+            }
+        }
+        let api = fixture.Compile(source, "Api", executable: false, arguments)
+        let firstImage = File.ReadAllBytes(api)
+        let firstReference = File.ReadAllBytes(apiReference)
+        let _ = fixture.Compile(source, "Api", executable: false, arguments)
+        Assert.Equal(firstImage, File.ReadAllBytes(api))
+        Assert.Equal(firstReference, File.ReadAllBytes(apiReference))
+        let caller = fixture.CompileCSharp(`using System.Collections.Generic;
+using CopyAnnotated5408;
+using SameContract5408;
+using System;
+using System.Linq;
+using System.Reflection;
+public static class Probe {
+    private static string Describe(NullabilityInfo info) => info.Type + ":" + info.ReadState + ":" + info.WriteState
+        + "[" + string.Join(",", info.GenericTypeArguments.Select(Describe)) + "]";
+    public static string Run() {
+        foreach (var value in new[] { Exports.Direct(), Exports.Local(), Exports.Argument() }) {
+            if (value.Value != null || !ReferenceEquals(value.Anchor, Api.Marker)
+                || value.GetType() != typeof(S<string>)) throw new Exception("Nullable storage changed.");
+        }
+        var required = Exports.Required();
+        var number = Exports.Value();
+        var optional = Exports.Optional();
+        var nestedValue = Exports.NestedValue();
+        var nestedOptional = Exports.NestedOptional();
+        var nested = Exports.Nested();
+        var reference = Exports.Reference();
+        var lifted = Exports.Lift();
+        var referenceLift = Exports.ReferenceLift();
+        if (required.Value != "required" || number.Value != 42 || optional.Value != null
+            || optional.GetType() != typeof(S<int?>) || nested.Value.Count != 1
+            || nestedValue.Value.Single() != 42 || nestedOptional.Value.Count != 1
+            || nestedOptional.Value[0] != null || nestedOptional.GetType() != typeof(S<List<int?>>)
+            || nested.Value[0] != null || reference.Value != null
+            || reference.GetType() != typeof(R<string>)
+            || !lifted.HasValue || lifted.Value.Value != null
+            || !ReferenceEquals(lifted.Value.Anchor, Api.Marker)
+            || referenceLift == null || referenceLift.Value != null || Exports.Maybe() != null)
+            throw new Exception("Control contract changed.");
+        if (Api.Calls != 13 || Api.Constructions != 10)
+            throw new Exception("Conversion evaluated again or reconstructed a value.");
+        var context = new NullabilityInfoContext();
+        foreach (var name in new[] { "Direct", "Local", "Argument", "Reference" }) {
+            var info = context.Create(typeof(Exports).GetMethod(name)!.ReturnParameter);
+            if (info.GenericTypeArguments[0].ReadState != NullabilityState.Nullable)
+                throw new Exception("Nullable argument metadata changed: " + name);
+        }
+        var nonnull = context.Create(typeof(Exports).GetMethod("Required")!.ReturnParameter);
+        var nestedInfo = context.Create(typeof(Exports).GetMethod("Nested")!.ReturnParameter);
+        var liftedInfo = context.Create(typeof(Exports).GetMethod("Lift")!.ReturnParameter);
+        var nativeLiftInfo = context.Create(typeof(Api).GetMethod("Lift")!.ReturnParameter);
+        var maybeInfo = context.Create(typeof(Exports).GetMethod("Maybe")!.ReturnParameter);
+        if (nonnull.GenericTypeArguments[0].ReadState != NullabilityState.NotNull
+            || nestedInfo.GenericTypeArguments[0].ReadState != NullabilityState.NotNull
+            || nestedInfo.GenericTypeArguments[0].GenericTypeArguments[0].ReadState != NullabilityState.Nullable
+            || Describe(liftedInfo) != Describe(nativeLiftInfo)
+            || maybeInfo.ReadState != NullabilityState.Nullable
+            || maybeInfo.GenericTypeArguments[0].ReadState != NullabilityState.Nullable)
+            throw new Exception("Nested or non-null metadata changed.");
+        return "nullable-contract|storage|once|metadata";
+    }
+}`, "Caller", contract, apiReference)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(api, []string{contract})
+        IlVerifier.Verify(caller, []string{contract, api})
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(
+            "nullable-contract|storage|once|metadata",
+            assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+        )
+    }
+
+    @Theory
+    @InlineData("S[string]", "Api.Create()", false)
+    @InlineData("S[string]", "Api.Create()", true)
+    @InlineData("S[string?]", "Api.Required()", false)
+    @InlineData("S[string?]", "Api.Required()", true)
+    @InlineData("S[object?]", "Api.Create()", false)
+    @InlineData("S[object?]", "Api.Create()", true)
+    @InlineData("S[List[string]]", "Api.Nested()", false)
+    @InlineData("S[List[string]]", "Api.Nested()", true)
+    @InlineData("R[string]", "Api.Reference()", false)
+    @InlineData("R[string]", "Api.Reference()", true)
+    @InlineData("R[string?]", "Api.Maybe()", false)
+    @InlineData("R[string?]", "Api.Maybe()", true)
+    @InlineData("S[int32]", "Api.Optional()", false)
+    @InlineData("S[int32]", "Api.Optional()", true)
+    @InlineData("S[int32?]", "Api.Value()", false)
+    @InlineData("S[int32?]", "Api.Value()", true)
+    @InlineData("S[List[int32]]", "Api.NestedOptional()", false)
+    @InlineData("S[List[int32]]", "Api.NestedOptional()", true)
+    @InlineData("S[List[int32?]]", "Api.NestedValue()", false)
+    @InlineData("S[List[int32?]]", "Api.NestedValue()", true)
+    func ImportedNullableGenericReturn_RejectsDifferentInvariantContracts(
+        target string,
+        expression string,
+        useReference bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "Contract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(ImportedNullableContract5408, "Contract", reference)
+        let outputReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport CopyAnnotated5408\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            "/r:" + if useReference {
+                reference
+            } else {
+                contract
+            },
+            "/refout:" + outputReference
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("Rejected.gs(3,$start,3,$end): error GS0155", StringComparison.Ordinal), output)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(outputReference))
+    }
+
     @Theory
     @InlineData("source")
     @InlineData("implementation")
