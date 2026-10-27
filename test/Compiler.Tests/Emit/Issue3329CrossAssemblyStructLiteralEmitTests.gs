@@ -2423,12 +2423,14 @@ public data struct Child[T] { public let Items []T }`, "readonlyzero5412", false
         Assert.NotEqual(0, code)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
         let errors = Regex.Matches(diagnostics, `rejected.gs\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
-        let error = Assert.Single(errors)
-        Assert.Equal("GS0127", error.Groups[5].Value)
-        Assert.Equal("4", error.Groups[1].Value)
-        Assert.Equal("13", error.Groups[2].Value)
-        Assert.Equal("4", error.Groups[3].Value)
-        Assert.Equal("19", error.Groups[4].Value)
+        Assert.Equal(
+            if primary {
+                "rejected.gs(4,13,4,19): error GS0127:"
+            } else {
+                "rejected.gs(3,22,3,51): error GS0127:\nrejected.gs(4,13,4,19): error GS0127:"
+            },
+            string.Join("\n", errors.Cast[Match]().Select((error Match) -> error.Value))
+        )
     }
 
     @Theory
@@ -2476,14 +2478,21 @@ func Main() {
     System.Console.Write("|")
     System.Console.Write(raw.Items == nil)
 }`.Replace("ARG", argument)
-        let consumer = fixture.Compile(source, "consumer", true, "/r:" + producer, "/deterministic+", "/debug:none")
+        let consumer = fixture.Compile(
+            source,
+            "consumerzero5412",
+            true,
+            "/r:" + producer,
+            "/deterministic+",
+            "/debug:none"
+        )
         let first = File.ReadAllBytes(consumer)
-        fixture.Compile(source, "consumer", true, "/r:" + producer, "/deterministic+", "/debug:none")
+        fixture.Compile(source, "consumerzero5412", true, "/r:" + producer, "/deterministic+", "/debug:none")
         Assert.Equal(first, File.ReadAllBytes(consumer))
         IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(Encoding.UTF8.GetBytes("0|0|0|0|1|True"), fixture.RunBytes(consumer))
         let downstream = fixture.Compile(`import consumerzero5412
-let value = Parent{}
+var value Parent
 System.Console.Write(value.Value.Items.Length)
 System.Console.Write("|")
 System.Console.Write(value.Value.Scalar)`, "downstream", true, "/r:" + consumer, "/r:" + producer)
