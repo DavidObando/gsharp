@@ -163,7 +163,10 @@ class Holder {
         let original = Parse("A.gs", template.Replace("%BODY%", "return 1"))
         let scope_ = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(original))
         let edited = Parse("A.gs", template.Replace("%BODY%", "let shifted = 10\n    return shifted"))
-        let constructed = DelegateTypeSymbol.Construct(scope_.Delegates.Single(), ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32))
+        let constructed = DelegateTypeSymbol.Construct(
+            scope_.Delegates.Single(),
+            ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32)
+        )
         Assert.NotEmpty(scope_.Enums)
         Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope_, original, edited))
         Assert.Equal(2, scope_.Enums.Length)

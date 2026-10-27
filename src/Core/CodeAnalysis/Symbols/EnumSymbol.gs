@@ -51,7 +51,10 @@ class EnumSymbol : TypeSymbol {
 
     /// Gets the declaring syntax node. A constructed nested enum reads its definition's node, so a
     /// re-point of the definition (issue #5324) reaches every cached construction.
-    prop Declaration EnumDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(definition, this) {
+    prop Declaration EnumDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(
+        definition,
+        this
+    ) {
         definition.Declaration
     } else {
         declarationSyntax

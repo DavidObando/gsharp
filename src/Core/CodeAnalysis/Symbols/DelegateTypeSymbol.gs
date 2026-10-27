@@ -87,7 +87,10 @@ class DelegateTypeSymbol : TypeSymbol {
 
     /// Gets the declaring syntax node. A constructed delegate reads its definition's node, so a
     /// re-point of the definition (issue #5324) reaches every cached construction.
-    prop Declaration DelegateDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(definition, this) {
+    prop Declaration DelegateDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(
+        definition,
+        this
+    ) {
         definition.Declaration
     } else {
         declarationSyntax
