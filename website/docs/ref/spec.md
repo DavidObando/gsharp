@@ -752,6 +752,7 @@ Every declared `data class` / `data struct` synthesizes the C# `record` ABI, so 
 `with` and `.copy(...)` require a nonnullable receiver.
 Nullable type arguments are preserved: a `C[string?]` receiver can be copied,
 while a `C[string?]?` receiver must first be narrowed to a nonnullable value.
+The same requirement applies to optional value-type receivers such as `S[string?]?`.
 
 Known gaps: a data class that only synthesizes `PrintMembers` over an inherited abstract `PrintMembers` is rejected with GS0387 (#4876), and an imported non-data class between a record and a data class hides the inherited `PrintMembers` slot (#4877).
 

@@ -661,12 +661,15 @@ internal partial class OverloadResolver {
         return nil
     }
 
-    private func IsConstructibleSourceType(type TypeSymbol?) bool -> type is StructSymbol aggregate &&
+    private func IsConstructibleSourceType(
+        type TypeSymbol?,
+        argumentCount int32
+    ) bool -> type is StructSymbol aggregate &&
         (
         aggregate.IsClass ||
             aggregate.IsInline ||
             aggregate.HasPrimaryConstructor ||
-            aggregate.HasSynthesizedDataConstructor ||
+            (argumentCount == 0 && aggregate.ClrType == nil && aggregate.HasSynthesizedDataConstructor) ||
             !aggregate
             .EffectiveExplicitConstructors
             .IsDefaultOrEmpty
@@ -822,7 +825,7 @@ internal partial class OverloadResolver {
                 }
             ) == ctorPreferredArity
         ) &&
-            IsConstructibleSourceType(sourceCtorStruct)
+            IsConstructibleSourceType(sourceCtorStruct, syntax.Arguments.Count)
         // ADR-0187 / issue #4350: construction syntax that names a constructible
         // source type is never shadowed by receiver-clause EXTENSION functions
         // of the same name. C# never considers an extension method for `new
@@ -904,7 +907,8 @@ internal partial class OverloadResolver {
                 )
                 return conversions.BindConversion(syntax.Arguments[0], explicitConversionType, allowExplicit: true)
             }
-            if syntax.NullableQuestionToken != nil || !IsConstructibleSourceType(conversionType) {
+            if syntax.NullableQuestionToken != nil ||
+                !IsConstructibleSourceType(conversionType, syntax.Arguments.Count) {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
                 reportObsoleteUseIfApplicable(
@@ -928,7 +932,7 @@ internal partial class OverloadResolver {
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if !hasNonConstructorCallable &&
             conversionType is StructSymbol classType &&
-            IsConstructibleSourceType(classType) {
+            IsConstructibleSourceType(classType, syntax.Arguments.Count) {
             return BindConstructorCallExpression(syntax, classType)
         }
         // Issue #988: `T()` constructs the type parameter `T` when the enclosing

@@ -225,7 +225,8 @@ internal partial class ExpressionBinder {
 
     private func GetDataCopyType(type TypeSymbol) StructSymbol? {
         let receiverType = PlatformTypeSymbol.StripTopLevel(type)
-        if receiverType.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+        if receiverType.ReferenceNullability == ReferenceNullabilityKind.Nullable ||
+            NullableLifting.IsAnyValueTypeNullable(receiverType.StripToBareShape() as NullableTypeSymbol) {
             return nil
         }
         let normalized = ImportedTypeSymbol.NormalizeSemanticAggregate(
