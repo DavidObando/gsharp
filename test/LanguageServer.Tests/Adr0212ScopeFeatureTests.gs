@@ -123,11 +123,72 @@ class Unrelated {
                 }
             )
             // Both implementers are found, whichever order the project lists its files in. Every location
-            // carries the request's document, as before; the ranges are the declared names.
+            // carries the URI of the file that declares it; the ranges are the declared names.
             // A partial type is reported once, not once per part.
             Assert.Equal(2, found.Length)
             let starts = found.Select((l Location) -> l.Range.Start.Line).OrderBy((line int32) -> line).ToArray()
             Assert.Equal([]int32{2, 6}, starts)
+            let circleUri = DocumentUri.FromFileSystemPath(Path.Combine(projDir, "b_circles.gs"))!!
+            let circle = found.Single((l Location) -> l.Range.Start.Line == 2)
+            let square = found.Single((l Location) -> l.Range.Start.Line == 6)
+            Assert.Equal(circleUri.ToString(), circle.Uri!!.ToString())
+            Assert.Equal(uri.ToString(), square.Uri!!.ToString())
+        } finally {
+            Directory.Delete(rootDir, true)
+        }
+    }
+
+    @Fact
+    async func Implementation_PartialTypeAcrossFilesPairsUriWithItsOwnRange() {
+        let rootDir = Path.Combine(Path.GetTempPath(), "gsimpl_" + Guid.NewGuid().ToString("N"))
+        let projDir = Path.Combine(rootDir, "Demo")
+        Directory.CreateDirectory(projDir)
+        try {
+            File.WriteAllText(Path.Combine(projDir, "Demo.gsproj"), `<Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup><OutputType>Library</OutputType><TargetFramework>net10.0</TargetFramework><AssemblyName>Demo</AssemblyName></PropertyGroup>
+</Project>
+`)
+            let shapes = `package Demo
+
+interface Shape {
+    func Area() int32
+}
+
+partial class Circle {
+    var Radius int32
+}
+`
+            let circles = `package Demo
+
+partial class Circle : Shape {
+    func Area() int32 { return 2 }
+}
+`
+            let shapesPath = Path.Combine(projDir, "a_shapes.gs")
+            File.WriteAllText(shapesPath, shapes)
+            File.WriteAllText(Path.Combine(projDir, "b_circles.gs"), circles)
+            let workspace = WorkspaceState()
+            WorkspaceInitializer.Initialize(workspace, rootDir)
+            let server = LspServer(DocumentContentService(), workspace)
+            let uri = DocumentUri.FromFileSystemPath(shapesPath)!!
+            await server.DidOpenAsync(DidOpenTextDocumentParams{TextDocument: TextDocumentItem{Uri: uri, Text: shapes}})
+            let found = await server.ImplementationAsync(
+                ImplementationParams{
+                    TextDocument: TextDocumentIdentifier{Uri: uri},
+                    Position: LanguageServerTestHelpers.PositionOf(shapes, "Shape")
+                }
+            )
+            // One location, whichever part is canonical: its URI is the file that holds its range.
+            let location = Assert.Single(found)
+            let inShapes = location.Uri!!.ToString() == uri.ToString()
+            Assert.Equal(
+                if inShapes {
+                    6
+                } else {
+                    2
+                },
+                location.Range.Start.Line
+            )
         } finally {
             Directory.Delete(rootDir, true)
         }
