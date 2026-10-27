@@ -114,7 +114,9 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
     /// section 8). A root the node assigns loses every path. A member write
     /// or a call removes every member-bearing path. A call that can write a
     /// mutable global removes the facts on globals. A write through a
-    /// pointer removes the facts on every mutable root.
+    /// pointer removes the facts on every mutable root. A node that runs source
+    /// code also removes the facts on a root that a closure can assign
+    /// (row R15).
     /// @param effects The effects of the node.
     /// @param mayBeIndirectlyWritten Tells whether a call can write a root
     /// without naming it (a local that a closure assigns, or an alias
@@ -127,11 +129,23 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             (path AccessPath) -> effects.AssignsRoot(path.Root) ||
                 (path.HasMembers && effects.MayMutateMemberPaths) ||
                 (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol) ||
+                (
+                effects.MayRunEscapedClosure &&
+                    mayBeIndirectlyWritten != nil &&
+                    OwnsClosureWritableStorage(path.Root) &&
+                    mayBeIndirectlyWritten(path.Root)
+            ) ||
                 (effects.MayMutateWritableReferenceRoots && IsByReferenceParameter(path.Root)) ||
                 (effects.MayMutateAnyRootViaPointer && (path.HasMembers || !path.Root.IsReadOnly)) ||
                 (effects.MayMutateAnyRoot && mayBeIndirectlyWritten != nil && mayBeIndirectlyWritten(path.Root)),
             (variable VariableSymbol) -> effects.AssignsRoot(variable) ||
                 (effects.MayMutateGlobalRoots && variable is GlobalVariableSymbol) ||
+                (
+                effects.MayRunEscapedClosure &&
+                    mayBeIndirectlyWritten != nil &&
+                    OwnsClosureWritableStorage(variable) &&
+                    mayBeIndirectlyWritten(variable)
+            ) ||
                 (effects.MayMutateWritableReferenceRoots && IsByReferenceParameter(variable)) ||
                 effects.MayMutateAnyRootViaPointer ||
                 (effects.MayMutateAnyRoot && mayBeIndirectlyWritten != nil && mayBeIndirectlyWritten(variable))
@@ -283,6 +297,20 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
     }
 
     shared {
+        /// Whether a closure that escaped can assign [`root`](paramref) by its own name: a mutable local or
+        /// parameter that owns its storage. A by-reference parameter or local names caller-owned or aliased
+        /// storage, which the alias class decides (ADR-0208 R12, amendment A3). The one definition of the
+        /// root class of row R15 (#5237).
+        func OwnsClosureWritableStorage(root VariableSymbol) bool -> !root.IsReadOnly &&
+            (
+            (root is ParameterSymbol && root.RefKind is not(RefKind.Ref or RefKind.Out)) ||
+                (
+                root is LocalVariableSymbol local &&
+                    local.RefKind == RefKind.None &&
+                    local.ManagedReferenceOrigin == nil
+            )
+        )
+
         /// Whether the fact [`joined`](paramref) adds nothing to the fact [`held`](paramref): the held
         /// type is the joined type, or converts to it without changing what the value is. The one
         /// comparison behind a gain (ADR-0208 A1): a joined type that fails it is a new or a stronger

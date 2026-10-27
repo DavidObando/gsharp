@@ -1655,7 +1655,15 @@ internal partial class StatementBinder {
     )
 
     private func MayBeMutatedByUnknownWrite(mutations AssignedRootsCollector, path AccessPath) bool ->
-    MayBeMutatedByUnknownWrite(mutations.MayMutateAnyRoot, mutations.MayMutateAnyRootViaPointer, path)
+    MayBeMutatedByUnknownWrite(mutations.MayMutateAnyRoot, mutations.MayMutateAnyRootViaPointer, path) ||
+        (mutations.MayRunEscapedClosure && MayBeMutatedByEscapedClosure(path.Root))
+
+    // ADR-0208 R15 (#5237): a node that runs user code can run a closure that escaped and assigns [`root`](paramref).
+    // A by-reference parameter keeps its fact (amendment A3).
+    private func MayBeMutatedByEscapedClosure(root VariableSymbol) bool -> NarrowingState.OwnsClosureWritableStorage(
+        root
+    ) &&
+        binderCtx.MayBeAssignedByClosure(root)
 
     // The same decision from the two flags, for the region walker of ADR-0213 (slice L0).
     private func MayBeMutatedByUnknownWrite(mayMutateAnyRoot bool, viaPointer bool, path AccessPath) bool -> (
@@ -1715,7 +1723,7 @@ internal partial class StatementBinder {
                 }
             }
         }
-        if collector.MayMutateAnyRoot {
+        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
                 state.Remove(path)
             }
@@ -1879,6 +1887,13 @@ internal partial class StatementBinder {
             private set;
         }
 
+        // ADR-0208 R15 (#5237): the node runs source code, so it can run a closure that escaped. A call through a
+        // callable value is not in this set.
+        prop MayRunEscapedClosure bool {
+            get;
+            private set;
+        }
+
         prop MayMutateGlobalRoots bool {
             get;
             private set;
@@ -1982,6 +1997,7 @@ internal partial class StatementBinder {
             // with user code may assign a mutable global.
             if sourcePropertyRunsUserCode || sourceConstructionRunsUserCode {
                 MarkMayMutateGlobalRoots()
+                MayRunEscapedClosure = true
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
                 // ADR-0208 R12 (#5292, amendment A3): a plain function call does not write by-reference storage;
@@ -1989,6 +2005,7 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots(
                     writesReferenceStorage: function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet
                 )
+                MayRunEscapedClosure = true
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }

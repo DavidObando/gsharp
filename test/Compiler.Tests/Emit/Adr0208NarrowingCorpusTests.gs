@@ -208,6 +208,9 @@ open class Adr0208NarrowingCorpusTests {
                 "o6_callback_run_through_another_callback",
                 "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias",
+                "p1_5237_escaped_closure_run_by_declared_function",
+                "p2_5237_loop_form_escaped_closure",
+                "p3_5237_root_no_closure_assigns_keeps_the_fact",
                 "q1_5456_closure_own_local_survives_unknown_callable",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
@@ -1722,6 +1725,68 @@ func Main() {
     f()
     Console.WriteLine(hit.Id)
 }`, "GS0158@16:27", "reject", "", ""}
+            yield[]object{"p1_5237_escaped_closure_run_by_declared_function", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    Wrapper(h)
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"p2_5237_loop_form_escaped_closure", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) { h.Callback() }
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        Console.WriteLine(x.Value)
+        total++
+        Wrapper(h)
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:29", "reject", "", "R15"}
+            yield[]object{"p3_5237_root_no_closure_assigns_keeps_the_fact", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run() int32 {
+    var x C? = C{}
+    var y C? = C{}
+    let h = Holder{}
+    h.Callback = func() { y = nil }
+    if x == nil { return 0 }
+    Wrapper(h)
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

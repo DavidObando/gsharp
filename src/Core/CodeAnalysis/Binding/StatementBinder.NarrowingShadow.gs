@@ -405,7 +405,8 @@ internal partial class StatementBinder {
             collector.MayMutateAnyRoot,
             collector.MayMutateAnyRootViaPointer,
             collector.MayMutateGlobalRoots,
-            collector.MayMutateWritableReferenceRoots
+            collector.MayMutateWritableReferenceRoots,
+            collector.MayRunEscapedClosure
         )
     }
 
