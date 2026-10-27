@@ -21,6 +21,104 @@ import Xunit
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DuplicateAssemblyNames_KeepTheWinningImageVersionAndOriginalPath(reverse bool) {
+        using let first = CSharpFixture(
+            "[assembly: System.Reflection.AssemblyVersion(\"1.0.0.0\")]\npublic class First5421 {}",
+            assemblyName: "System.Console"
+        )
+        using let second = CSharpFixture(
+            "[assembly: System.Reflection.AssemblyVersion(\"2.0.0.0\")]\npublic class Second5421 {}",
+            assemblyName: "System.Console"
+        )
+        let winner = if reverse {
+            second.AssemblyPath
+        } else {
+            first.AssemblyPath
+        }
+        let loser = if reverse {
+            first.AssemblyPath
+        } else {
+            second.AssemblyPath
+        }
+        using let resolver = ReferenceResolver.WithReferences([]string{winner, loser})
+        Assert.True(
+            resolver.TryResolveType(
+                if reverse {
+                    "Second5421"
+                } else {
+                    "First5421"
+                },
+                out var type
+            )
+        )
+        Assert.False(
+            resolver.TryResolveType(
+                if reverse {
+                    "First5421"
+                } else {
+                    "Second5421"
+                },
+                out _
+            )
+        )
+        Assert.Equal(
+            Version(
+                if reverse {
+                    2
+                } else {
+                    1
+                },
+                0,
+                0,
+                0
+            ),
+            type.Assembly.GetName().Version
+        )
+        Assert.True(ReferenceResolver.TryGetAssemblyPath(type.Assembly, out var path))
+        Assert.Equal(winner, path)
+        Assert.False(resolver.IsHostFallback(type))
+    }
+
+    @Fact
+    func WithReferences_RenamedNetStandardCorePreservesTargetSurface() {
+        let referenceDirectory string? = typeof(ReferenceResolverTests)
+            .Assembly
+            .GetCustomAttributes[AssemblyMetadataAttribute]()
+            .Single((attribute AssemblyMetadataAttribute) -> attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value
+        Assert.True(Directory.Exists(referenceDirectory))
+        let directory = Path.Combine(AppContext.BaseDirectory, "reference-resolver-5421", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let reference = Path.Combine(directory, "framework.contract.dll")
+            File.Copy(Path.Combine(referenceDirectory!!, "netstandard.dll"), reference)
+            let original = File.ReadAllBytes(reference)
+            let paths = Directory
+                .EnumerateFiles(referenceDirectory!!, "*.dll")
+                .Select(
+                (path string) -> if Path.GetFileName(path) == "netstandard.dll" {
+                    reference
+                } else {
+                    path
+                }
+            )
+                .ToArray()
+            Assert.NotEmpty(paths)
+            using let resolver = ReferenceResolver.WithReferences(paths)
+            Assert.True(resolver.TryResolveType("System.Object", out var objectType))
+            Assert.Equal("netstandard", objectType.Assembly.GetName().Name)
+            Assert.False(resolver.IsHostFallback(objectType))
+            Assert.True(resolver.TargetsDownlevelFramework())
+            Assert.False(resolver.TryResolveType("System.MemoryExtensions", out _))
+            Assert.Equal(original, File.ReadAllBytes(reference))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
     @InlineData("System.Console")
     @InlineData("System.String")
     func Default_Resolves_Bcl_Type(fullName string) {
