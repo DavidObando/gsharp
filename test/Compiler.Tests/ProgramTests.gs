@@ -6,9 +6,11 @@ package GSharp.Compiler.Tests
 
 import GSharp.Compiler
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
 import System
+import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
@@ -16,6 +18,8 @@ import System.Reflection.Emit
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.Versioning
+import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 open class ProgramTests {
@@ -529,7 +533,7 @@ func Main() {
         // e.g. "$(WarningsAsErrors);GS0166") must promote the targeted
         // warning to an error and fail the build. GS0166 (ADR-0066 D6: TLS +
         // explicit Main coexistence) is a real warning emitted through the
-        // normal diagnostics pipeline, unlike the advisory GS9100.
+        // normal diagnostics pipeline.
         let sample = Path.Combine(Path.GetTempPath(), "gs_test_${Guid.NewGuid():N}.gs")
         File.WriteAllText(sample, `package P
 import System
@@ -761,6 +765,68 @@ func Main() {
         }
     }
 
+    @Theory
+    @InlineData("/warnaserror", "", "error")
+    @InlineData("/warnaserror+", "", "error")
+    @InlineData("/warnaserror:GS9100", "", "error")
+    @InlineData("/warnaserror+:GS9100", "", "error")
+    @InlineData("/gsdiag:GS9100=error", "", "error")
+    @InlineData("", "", "warning")
+    @InlineData("/warnaserror+:GS0166", "", "warning")
+    @InlineData("/warnaserror+", "/warnaserror-:GS9100", "warning")
+    @InlineData("/warnaserror+", "/nowarn:GS9100", "")
+    @InlineData("/warnaserror+", "/gsdiag:GS9100=none", "")
+    func Driver_UnderReferencedClosure_UsesDiagnosticPolicy(firstOption string, secondOption string, severity string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = BuildReferenceWarningLibrary(fixture)
+        let source = Path.Combine(fixture.Directory, "Warning.gs")
+        File.WriteAllText(source, "let value = 1\nConsole.Write(\"ran5420\")\n")
+        let output = Path.Combine(fixture.Directory, "Warning.dll")
+        let reference = Path.Combine(fixture.Directory, "Warning.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Warning.pdb")
+        let documentation = Path.Combine(fixture.Directory, "Warning.xml")
+        let (exit, diagnostics) = RunReferenceWarningDriver(
+            fixture.Directory,
+            source,
+            library,
+            "/out:" + output,
+            "/refout:" + reference,
+            "/pdb:" + pdb,
+            "/doc:" + documentation,
+            firstOption,
+            secondOption
+        )
+        if severity.Length == 0 {
+            Assert.DoesNotContain("GS9100", diagnostics)
+        } else {
+            let warnings = Regex.Matches(diagnostics, `(?m)^.*\(1,1,1,1\): (?:warning|error) GS9100:.*$`)
+            let warning = Assert.Single(warnings)
+            Assert.StartsWith("$source(1,1,1,1): $severity GS9100: ", warning.Value)
+            Assert.Contains("Missing5420", warning.Value)
+        }
+        Assert.DoesNotContain("GS9998", diagnostics)
+        if severity == "error" {
+            Assert.NotEqual(0, exit)
+            Assert.Contains("Failed.", diagnostics)
+            for path in[]string{
+                output,
+                reference,
+                pdb,
+                documentation,
+                Path.ChangeExtension(output, ".runtimeconfig.json")
+            } {
+                Assert.False(File.Exists(path), "Rejected compilation wrote $path")
+            }
+        } else {
+            Assert.True(exit == 0, diagnostics)
+            Assert.True(File.Exists(reference))
+            Assert.True(File.Exists(pdb))
+            Assert.True(File.Exists(documentation))
+            IlVerifier.Verify(output)
+            Assert.Equal(Encoding.UTF8.GetBytes("ran5420"), fixture.RunBytes(output))
+        }
+    }
+
     @Fact
     func Main_WithRelativeOut_And_Debug_EmitsAbsolutePdbPathInCodeView() {
         // Regression for #421 (P2-8): a relative /out:<path> used to default
@@ -883,6 +949,51 @@ func Main() {
     }
 
     shared {
+        private func BuildReferenceWarningLibrary(fixture NativeSliceLanguageTests.Fixture) string {
+            let dependency = fixture.CompileCSharp("public class MissingMarker { }", "Missing5420")
+            let library = fixture.CompileCSharp(
+                "public static class Contract5420 { public static void Accept(MissingMarker value) { } }",
+                "Contract5420",
+                dependency
+            )
+            File.Delete(dependency)
+            return library
+        }
+
+        private func RunReferenceWarningDriver(directory string, source string, library string, options ...string)(
+            Exit int32,
+            Diagnostics string
+        ) {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = directory
+            }
+            start.ArgumentList.Add(typeof(Program).Assembly.Location)
+            start.ArgumentList.Add(source)
+            start.ArgumentList.Add("/targetframework:net10.0")
+            start.ArgumentList.Add("/r:" + library)
+            let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)
+            for path in ReferenceResolver.HostTrustedPlatformAssemblyPaths().Where(
+                (path string) -> Path.GetDirectoryName(path) == runtimeDirectory
+            ) {
+                start.ArgumentList.Add("/r:" + path)
+            }
+            for option in options.Where((option string) -> option.Length > 0) {
+                start.ArgumentList.Add(option)
+            }
+            using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start gsc.")
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(30_000) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("Reference warning driver exceeded 30 seconds.")
+            }
+            return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult())
+        }
+
         private func BuildLibraryWithMissingDependency(dir string) string {
             let coreAssembly = typeof(object).Assembly
             let depName = AssemblyName("DepAsmB"){Version = Version(1, 0, 0, 0)}
