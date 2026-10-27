@@ -875,7 +875,7 @@ internal class ConversionClassifier {
             )
             return BindConversion(
                 diagnosticLocation,
-                BoundUnaryExpression(nil, unwrap, expression),
+                BoundUnaryExpression(nil, unwrap, expression){IsConversionUnwrap = true},
                 type,
                 allowExplicit: true,
                 callParameter

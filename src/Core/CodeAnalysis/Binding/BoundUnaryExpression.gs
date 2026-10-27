@@ -94,4 +94,10 @@ class BoundUnaryExpression : BoundExpression {
         get;
         init;
     }
+
+    /// Gets whether this node extracts a nullable value for an explicit conversion.
+    internal prop IsConversionUnwrap bool {
+        get;
+        init;
+    }
 }

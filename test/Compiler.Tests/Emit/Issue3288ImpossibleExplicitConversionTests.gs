@@ -217,6 +217,35 @@ Console.WriteLine(counter.Reads)`)
     }
 
     @Fact
+    func NullableNumericCasts_InExpressionTrees_PreserveConversionAndMissingValueException() {
+        let result = CompileAndRun(`package Issue5400ExpressionTree
+import System
+import System.Linq.Expressions
+
+let tree Expression[Func[uint32?, uint64]] = (value uint32?) -> cast[uint64](value)
+let convert = tree.Compile()
+Console.WriteLine(tree.Body.NodeType)
+Console.WriteLine(convert(4294967295))
+try {
+    Console.WriteLine(convert(nil))
+} catch (e InvalidOperationException) {
+    Console.WriteLine("missing")
+}
+let lifted Expression[Func[uint32?, uint64?]] = (value uint32?) -> cast[uint64?](value)
+let lift = lifted.Compile()
+Console.WriteLine(lift(nil) == nil)
+Console.WriteLine(lift(4294967295)!!)`)
+        Assert.Equal(0, result.CompileExitCode)
+        Assert.Equal(0, result.RunExitCode)
+        Assert.Equal(
+            string.Join(Environment.NewLine, "Convert", "4294967295", "missing", "True", "4294967295") +
+                Environment.NewLine,
+            result.Stdout
+        )
+        Assert.Equal(string.Empty, result.Stderr)
+    }
+
+    @Fact
     func LegalConversionLattice_CompilesAndRuns() {
         let result = CompileAndRun(`package Issue3288Controls
 import System
