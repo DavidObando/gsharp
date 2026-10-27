@@ -244,8 +244,7 @@ def test_without_collection(root):
                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600),
                            "wb") as stderr:
             result = subprocess.run(
-                ["timeout", "--signal=TERM", "--kill-after=10s", "900s",
-                 "dotnet", "test", "test/Core.Tests/Core.Tests.gsproj",
+                ["dotnet", "test", "test/Core.Tests/Core.Tests.gsproj",
                  "--configuration", "Release", "--no-build", "--no-restore",
                  "--filter", FILTER],
                 cwd=root, env=environment, stdout=stdout, stderr=stderr)

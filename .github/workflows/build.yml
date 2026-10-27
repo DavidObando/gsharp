@@ -311,7 +311,6 @@ jobs:
 
       - name: Test core without diagnostic collection
         if: env.GSHARP_5393_PRIVATE_ROUTE == 'true' && env.GSHARP_5393_DIAGNOSTIC != 'true'
-        timeout-minutes: 16
         env:
           MSBUILDDISABLENODEREUSE: 1
           TEST_FILTER: ${{ matrix.filter }}

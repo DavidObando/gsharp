@@ -99,6 +99,21 @@ class WorkflowTests(unittest.TestCase):
                           "GSHARP_5393_INITIAL_HEAD", "ulimit -f", "umask"):
             self.assertNotIn(forbidden, ordinary)
 
+    def test_unarmed_route_inherits_the_normal_job_budget(self):
+        workflow = self.workflow()
+        job = workflow.split("\n  tests:\n", 1)[1].split("    steps:\n", 1)[0]
+        self.assertRegex(job, r"(?m)^    timeout-minutes: [1-9][0-9]*$")
+        normal = workflow.split("      - name: Test\n", 1)[1]
+        normal = normal.split("      - name: Test core without diagnostic collection\n", 1)[0]
+        ordinary = workflow.split("      - name: Test core without diagnostic collection\n", 1)[1]
+        ordinary = ordinary.split("      - name: Remove private core validation output\n", 1)[0]
+        for step in (normal, ordinary):
+            self.assertNotIn("timeout-minutes:", step)
+        diagnostic = workflow.split("      - name: Test with dump-free sequence\n", 1)[1]
+        diagnostic = diagnostic.split("      - name: Normalize core diagnostics\n", 1)[0]
+        self.assertIn("timeout-minutes: 16", diagnostic)
+        self.assertIn("timeout --signal=TERM --kill-after=10s 900s", diagnostic)
+
 
 class OrdinaryValidationTests(unittest.TestCase):
     def setUp(self):
@@ -121,10 +136,10 @@ class OrdinaryValidationTests(unittest.TestCase):
             with self.subTest(exit_code=exit_code):
                 def run(command, **kwargs):
                     self.assertEqual(command, [
-                        "timeout", "--signal=TERM", "--kill-after=10s", "900s",
                         "dotnet", "test", "test/Core.Tests/Core.Tests.gsproj",
                         "--configuration", "Release", "--no-build", "--no-restore",
                         "--filter", self.helper.FILTER])
+                    self.assertNotIn("timeout", kwargs)
                     self.assertEqual(kwargs["cwd"], self.root)
                     for name in ("DOTNET_DbgEnableMiniDump", "COMPlus_DbgEnableMiniDump"):
                         self.assertEqual(kwargs["env"][name], "0")
@@ -152,11 +167,14 @@ class OrdinaryValidationTests(unittest.TestCase):
         program.write_bytes(Path(self.helper.__file__).read_bytes())
         tools = self.root / "tools"
         tools.mkdir()
+        dotnet = tools / "dotnet"
+        dotnet.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                          "if os.umask(0o022) != 0o022: sys.exit(24)\n"
+                          f"print({CANARY!r})\nprint({CANARY!r}, file=sys.stderr)\n"
+                          "sys.exit(23)\n")
+        dotnet.chmod(0o755)
         timeout = tools / "timeout"
-        timeout.write_text(f"#!{sys.executable}\nimport os, sys\n"
-                           "if os.umask(0o022) != 0o022: sys.exit(24)\n"
-                           f"print({CANARY!r})\nprint({CANARY!r}, file=sys.stderr)\n"
-                           "sys.exit(23)\n")
+        timeout.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(24)\n")
         timeout.chmod(0o755)
         result = subprocess.run(
             [sys.executable, "-B", str(program), "test"], cwd=self.root,
