@@ -38,6 +38,12 @@ internal sealed class RegionEffectScanner {
             Names = HashSet[string]()
             Kinds = Dictionary[string, string]()
             Aliases = Dictionary[string, string?]()
+            LocalAliases = HashSet[string]()
+        }
+
+        /// Gets the `ref` locals of the scope whose storage is a variable that the region declares.
+        prop LocalAliases HashSet[string] {
+            get;
         }
 
         /// Gets how each name was declared: `pattern`, `binding` or `local`.
@@ -388,7 +394,9 @@ internal sealed class RegionEffectScanner {
                 Visit(tryStatement.TryBlock)
                 for clause in tryStatement.CatchClauses {
                     NodesVisited++
-                    current.ContainsHandler = true
+                    if Active() {
+                        current.ContainsHandler = true
+                    }
                     Push()
                     Declare(clause.Identifier)
                     Visit(clause.Filter)
@@ -549,17 +557,30 @@ internal sealed class RegionEffectScanner {
     private func VisitVariableDeclaration(declaration VariableDeclarationSyntax) {
         Visit(declaration.Initializer)
         let name = declaration.Identifier.ValueText
+        // The storage that a `ref` local names is fixed where it is declared, before a later declaration
+        // of the same name can hide it (rule W3).
+        var target string? = nil
+        var targetIsLocal = false
+        var initializer ExpressionSyntax? = declaration.Initializer
+        if initializer is RefArgumentExpressionSyntax refArgument {
+            initializer = refArgument.Expression
+        }
+        if initializer != nil {
+            target = NameOf(initializer)
+        }
+        if target != nil {
+            let frame = DeclaringFrame(target)
+            if frame >= 0 {
+                if scopes[frame].Aliases.TryGetValue(target, out var outer) {
+                    targetIsLocal = scopes[frame].LocalAliases.Contains(target)
+                    target = outer
+                } else {
+                    targetIsLocal = true
+                }
+            }
+        }
         Declare(declaration.Identifier)
         if declaration.HasRefKindModifier && scopes.Count > 0 {
-            // A `ref` local names the storage of its initializer (rule W3).
-            var target string? = nil
-            var initializer ExpressionSyntax? = declaration.Initializer
-            if initializer is RefArgumentExpressionSyntax refArgument {
-                initializer = refArgument.Expression
-            }
-            if initializer != nil {
-                target = NameOf(initializer)
-            }
             if Active() {
                 current.ContainsAliasTake = true
                 if target == nil {
@@ -567,6 +588,9 @@ internal sealed class RegionEffectScanner {
                 }
             }
             scopes[scopes.Count - 1].Aliases[name] = target
+            if targetIsLocal {
+                scopes[scopes.Count - 1].LocalAliases.Add(name)
+            }
         }
     }
 
@@ -574,17 +598,36 @@ internal sealed class RegionEffectScanner {
 
     private func VisitNestedLoop(node SyntaxNode) {
         if nestedCache.TryGetValue(node, out var cached) {
-            current.Absorb(cached, (name string) -> IsDeclared(name))
+            Compose(cached)
             return
         }
         if !HasPartsThatRunOnce(node) && topLevelCache.TryGetValue(node, out var topLevel) {
             nestedCache.Add(node, topLevel)
-            current.Absorb(topLevel, (name string) -> IsDeclared(name))
+            Compose(topLevel)
             return
         }
         let record = ScanFresh(node, false)
         nestedCache.Add(node, record)
-        current.Absorb(record, (name string) -> IsDeclared(name))
+        Compose(record)
+    }
+
+    // Adds the record of a nested loop to the record of the region. Each write is replayed through the
+    // scopes of the enclosing region, so a name declared there is region-local (W1) and a `ref` local
+    // reaches its storage (W3). The nested record stays as it was: it is cached and shared.
+    private func Compose(record RegionEffects) {
+        for write in record.Writes {
+            PlaceWrite(
+                write.Name,
+                write.Position,
+                write.Proof,
+                write.ConstructedTypeName,
+                write.RightSideName,
+                write.RightSideDeclaration,
+                write.ViaCallArgument,
+                write.FollowedByExit
+            )
+        }
+        current.AbsorbFlags(record, Active())
     }
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
@@ -802,20 +845,6 @@ internal sealed class RegionEffectScanner {
     }
 
     private func RecordWriteCore(name string, position int32, value ExpressionSyntax?, viaCallArgument bool) {
-        let frame = DeclaringFrame(name)
-        if frame >= 0 {
-            // Region-local. A `ref` local writes the storage it names.
-            if scopes[frame].Aliases.TryGetValue(name, out var target) {
-                if target == nil {
-                    if Active() {
-                        current.ContainsMemberWrite = true
-                    }
-                } else {
-                    RecordWriteCore(target, position, nil, viaCallArgument)
-                }
-            }
-            return
-        }
         var proof = RegionWriteProof.None
         var typeName string? = nil
         var rightName string? = nil
@@ -829,9 +858,57 @@ internal sealed class RegionEffectScanner {
                 rightDeclaration = "pattern"
             }
         }
+        PlaceWrite(name, position, proof, typeName, rightName, rightDeclaration, viaCallArgument, false)
+    }
+
+    // Places a write in the record. A name the region declares is region-local; a `ref` local writes the
+    // storage it named when it was declared.
+    private func PlaceWrite(
+        name string,
+        position int32,
+        proof RegionWriteProof,
+        typeName string?,
+        rightName string?,
+        rightDeclaration string?,
+        viaCallArgument bool,
+        followedByExit bool
+    ) {
+        let frame = DeclaringFrame(name)
+        if frame >= 0 {
+            if scopes[frame].Aliases.TryGetValue(name, out var target) && !scopes[frame].LocalAliases.Contains(name) {
+                if target == nil {
+                    if Active() {
+                        current.ContainsMemberWrite = true
+                    }
+                } else {
+                    current.AddWrite(
+                        RegionWrite(
+                            target,
+                            position,
+                            RegionWriteProof.None,
+                            nil,
+                            nil,
+                            nil,
+                            viaCallArgument,
+                            followedByExit
+                        )
+                    )
+                }
+            }
+            return
+        }
         current.AddWrite(
-            RegionWrite(name, position, proof, typeName, rightName, rightDeclaration, viaCallArgument, false)
+            RegionWrite(name, position, proof, typeName, rightName, rightDeclaration, viaCallArgument, followedByExit)
         )
+    }
+
+    // The name of the variable a call operand denotes: a `ref` local stands for the storage it names.
+    private func OperandName(name string) string {
+        let frame = DeclaringFrame(name)
+        if frame >= 0 && scopes[frame].Aliases.TryGetValue(name, out var target) && target != nil {
+            return target
+        }
+        return name
     }
 
     // Proof rule P7 (ADR-0213 section 8) as a syntax shape. The consumer decides with types.
@@ -855,13 +932,16 @@ internal sealed class RegionEffectScanner {
                 }
             }
             case call is CallExpressionSyntax {
-                if call.Callee == nil && call.TypeArgumentList == nil && call.NullableQuestionToken == nil {
+                if call.Callee == nil &&
+                    call.TypeArgumentList == nil &&
+                    call.NullableQuestionToken == nil &&
+                    !IsDeclared(call.Identifier.ValueText) {
                     proof = RegionWriteProof.Construction
                     typeName = call.Identifier.ValueText
                 }
             }
             case literal is StructLiteralExpressionSyntax {
-                if literal.TypeArgumentList == nil {
+                if literal.TypeArgumentList == nil && !IsDeclared(literal.TypeIdentifier.ValueText) {
                     proof = RegionWriteProof.Construction
                     typeName = literal.TypeIdentifier.ValueText
                 }
@@ -1023,7 +1103,7 @@ internal sealed class RegionEffectScanner {
         if receiver != nil && receiverIsRoot {
             let receiverName = NameOf(receiver)
             if receiverName != nil {
-                byValue.Add(receiverName)
+                byValue.Add(OperandName(receiverName))
             }
         }
         if call.Callee != nil {
@@ -1041,10 +1121,10 @@ internal sealed class RegionEffectScanner {
                     }
                     if text == "in" {
                         if name != nil {
-                            byValue.Add(name)
+                            byValue.Add(OperandName(name))
                         }
                     } else if name != nil {
-                        byReference.Add(name)
+                        byReference.Add(OperandName(name))
                     } else if !reference.IsInlineDeclaration {
                         unresolved = true
                     }
@@ -1058,12 +1138,12 @@ internal sealed class RegionEffectScanner {
                     if address.OperatorToken.Kind == SyntaxKind.AmpersandToken {
                         let name = NameOf(address.Operand)
                         if name != nil {
-                            byReference.Add(name)
+                            byReference.Add(OperandName(name))
                         } else {
                             unresolved = true
                         }
                     } else if NameOf(address) != nil {
-                        byValue.Add(NameOf(address)!!)
+                        byValue.Add(OperandName(NameOf(address)!!))
                     } else {
                         unresolved = true
                     }
@@ -1072,7 +1152,7 @@ internal sealed class RegionEffectScanner {
                 default {
                     let name = NameOf(argument)
                     if name != nil {
-                        byValue.Add(name)
+                        byValue.Add(OperandName(name))
                     } else if argument.Kind != SyntaxKind.LiteralExpression {
                         unresolved = true
                     }

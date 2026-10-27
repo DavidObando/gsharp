@@ -184,6 +184,34 @@ open class Adr0213RegionEffectScannerTests {
         Assert.Equal(visitedForOuter, second.NodesVisited)
     }
 
+    @Fact
+    func W3_ARefLocalOperandIsTheStorageItNames() {
+        // `c` names the storage of `b`, so the call passes one storage twice.
+        let effects = Scan("while c {\nlet ref c = b\nClear2(ref b, ref c)\n}")
+        let call = Assert.Single(effects.Calls)
+        Assert.Equal([]string{"b", "b"}, call.ByReferenceNames.ToArray())
+    }
+
+    @Fact
+    func W2_ACachedRecordKeepsItsOwnExitAnnotation() {
+        // The enclosing `break` marks the copy in the outer record, not the cached record of the inner loop.
+        let tree = SyntaxTree.Parse(Wrap("while c {\nwhile c2 { s = nil }\nbreak\n}"))
+        let outer = FirstLoop(tree.Root)
+        let inner = Loops(outer).Skip(1).First()
+        let scanner = RegionEffectScanner()
+        let outerEffects = scanner.ScanLoop(outer)
+        Assert.True(Assert.Single(outerEffects.Writes).FollowedByExit)
+        Assert.False(Assert.Single(scanner.ScanLoop(inner).Writes).FollowedByExit)
+    }
+
+    @Fact
+    func P7_ACallableDeclaredInTheRegionIsNoConstruction() {
+        let shadowed = Scan("while c {\nlet Dog = func() { }\ns = Dog()\n}")
+        Assert.Equal(RegionWriteProof.None, Assert.Single(shadowed.Writes).Proof)
+        let plain = Scan("while c { s = Dog() }")
+        Assert.Equal(RegionWriteProof.Construction, Assert.Single(plain.Writes).Proof)
+    }
+
     // ----------------------------------------------------------------- spans
 
     @Fact
@@ -274,6 +302,45 @@ open class Adr0213RegionEffectScannerTests {
         Assert.Equal([]string{"First", "Second"}, found.Labels.ToArray())
         Assert.Equal(1, found.FirstIndex)
         Assert.Equal(4, found.LastIndex)
+    }
+
+    @Fact
+    func Span_ALabeledExitEndsThePath() {
+        // `Again: return 0` cannot complete, so the goto after it is at an unreachable point.
+        let span = Span(`func Run(n int32) int32 {
+    Again: return 0
+    goto Again
+}`)
+        Assert.Null(span)
+    }
+
+    @Fact
+    func Span_ALabeledExitAtTheEndOfAFinallyCannotComplete() {
+        let span = Span(`func Run(n int32) int32 {
+    Enter: n = n + 1
+    try {
+        if n < 3 { goto Enter }
+    } finally {
+        Out: return 4
+    }
+    return n
+}`)
+        Assert.Null(span)
+    }
+
+    @Fact
+    func Span_IsComputedForABlockBodyOfAFunctionLiteral() {
+        let span = Span(`func Run(n int32) int32 {
+    let f = func() int32 {
+        var i = 0
+        Again: i = i + 1
+        if i < n { goto Again }
+        return i
+    }
+    return f()
+}`)
+        // The label belongs to the function literal, which has its own spans (section 11).
+        Assert.Null(span)
     }
 
     // ----------------------------------------------------------------- helpers
@@ -376,6 +443,42 @@ open class Adr0213RegionEffectScannerTests {
             Add("T", "T6-do-while", "do { s = nil } while c", "flags=[] writes=[s]")
             Add("T", "T2-while-let", "while let t = Next() { s = nil }", "flags=[call] writes=[s]")
             Add("T", "T4-infinite", "for {\ns = nil\nbreak\n}", "flags=[] writes=[s]")
+            Add(
+                "W7",
+                "handler-in-a-closure",
+                "while c { let f = func() { try { } catch (e Exception) { } } }",
+                "flags=[closure] writes=[]"
+            )
+            Add(
+                "W7",
+                "loop-in-a-closure",
+                "while c { let f = func() { while c2 { Work() } } }",
+                "flags=[closure] writes=[]"
+            )
+            Add(
+                "W7",
+                "write-in-a-loop-in-a-closure",
+                "while c { let f = func() { while c2 { s = nil } } }",
+                "flags=[closure] writes=[s]"
+            )
+            Add(
+                "W3",
+                "ref-local-in-a-nested-loop",
+                "while c {\nlet ref a = s\nwhile c2 { a = nil }\n}",
+                "flags=[alias-take] writes=[s]"
+            )
+            Add(
+                "W3",
+                "ref-local-names-the-outer-variable",
+                "while c {\nlet ref a = s\n{\nvar s = \"local\"\na = nil\n}\n}",
+                "flags=[alias-take] writes=[s]"
+            )
+            Add(
+                "W3",
+                "ref-local-of-a-region-local",
+                "while c {\nvar t = \"x\"\nlet ref a = t\na = nil\n}",
+                "flags=[alias-take] writes=[]"
+            )
             return rows
         }
 

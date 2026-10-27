@@ -270,13 +270,17 @@ internal sealed class RegionEffects {
         writeNames.Add(write.Name)
     }
 
-    /// Adds the effects of a nested record. A write to a name for which
-    /// [`isDeclared`](paramref) is true is region-local and is dropped (rule W1).
-    func Absorb(other RegionEffects, isDeclared((string) -> bool)) {
-        for write in other.Writes {
-            if !isDeclared(write.Name) {
-                AddWrite(write)
-            }
+    /// Adds the flags and the call sites of a nested record. The scanner composes the writes itself,
+    /// because a write to a name that the enclosing region declares is region-local or reaches the
+    /// storage of a `ref` local (rules W1 and W3). When [`includeCode`](paramref) is false the nested
+    /// region only creates a closure, so only what it can write to captured names and the closure itself
+    /// count (rule W7).
+    func AbsorbFlags(other RegionEffects, includeCode bool) {
+        ContainsClosure = ContainsClosure || other.ContainsClosure
+        ContainsUnknownKind = ContainsUnknownKind || other.ContainsUnknownKind
+        ContainsGoto = ContainsGoto || other.ContainsGoto
+        if !includeCode {
+            return
         }
         Calls.AddRange(other.Calls)
         ContainsCall = ContainsCall || other.ContainsCall
@@ -285,13 +289,10 @@ internal sealed class RegionEffects {
         ContainsPointerWrite = ContainsPointerWrite || other.ContainsPointerWrite
         ContainsAliasTake = ContainsAliasTake || other.ContainsAliasTake
         ContainsRefOrOutArgument = ContainsRefOrOutArgument || other.ContainsRefOrOutArgument
-        ContainsClosure = ContainsClosure || other.ContainsClosure
         ContainsSuspension = ContainsSuspension || other.ContainsSuspension
         ContainsHandler = ContainsHandler || other.ContainsHandler
-        ContainsUnknownKind = ContainsUnknownKind || other.ContainsUnknownKind
         ContainsOperatorCandidate = ContainsOperatorCandidate || other.ContainsOperatorCandidate
         ContainsIteration = ContainsIteration || other.ContainsIteration
-        ContainsGoto = ContainsGoto || other.ContainsGoto
         MemberReadCount = MemberReadCount + other.MemberReadCount
     }
 

@@ -130,21 +130,38 @@ internal partial class StatementBinder {
 
     // The variables that one call of the region passes more than once with at least one `ref`/`out`
     // (ADR-0208 R12, amendment A3): the aliasing is visible at the call site.
+    // The storage that a call operand names: the variable at the end of its `ref` alias chain at the entry
+    // scope. Two spellings that reach one storage are one operand (ADR-0208 R12, amendment A3).
+    private func SameOperandStorage(first string, second string) bool {
+        if first == second {
+            return true
+        }
+        let left = $scope.TryLookupSymbol(first)
+        let right = $scope.TryLookupSymbol(second)
+        if left is VariableSymbol leftVariable && right is VariableSymbol rightVariable {
+            return ChainsOverlap(leftVariable, rightVariable)
+        }
+        return false
+    }
+
+    // The variables that one call of the region passes more than once with at least one `ref`/`out`
+    // (ADR-0208 R12, amendment A3): the aliasing is visible at the call site.
     private func IsCallAliasedName(effects RegionEffects, name string) bool {
         for call in effects.Calls {
             var byReference = 0
-            var byValue = 0
+            var total = 0
             for text in call.ByReferenceNames {
-                if text == name {
+                if SameOperandStorage(text, name) {
                     byReference++
+                    total++
                 }
             }
             for text in call.ByValueNames {
-                if text == name {
-                    byValue++
+                if SameOperandStorage(text, name) {
+                    total++
                 }
             }
-            if byReference > 0 && byReference + byValue >= 2 {
+            if byReference > 0 && total >= 2 {
                 return true
             }
         }
@@ -711,7 +728,7 @@ internal partial class StatementBinder {
         ) {
             return
         }
-        var body BlockStatementSyntax? = nil
+        var body SyntaxNode? = nil
         if function is FunctionDeclarationSyntax declaration {
             body = declaration.Body
         } else if function is FunctionLiteralExpressionSyntax literal {
@@ -719,7 +736,13 @@ internal partial class StatementBinder {
         } else if function is ConstructorDeclarationSyntax constructor {
             body = constructor.Body
         } else if function is PropertyAccessorSyntax accessor {
-            body = accessor.Body as BlockStatementSyntax
+            body = accessor.Body
+        } else if function is EventAccessorSyntax eventAccessor {
+            body = eventAccessor.Body
+        } else if function is DeinitDeclarationSyntax destructor {
+            body = destructor.Body
+        } else if function is LambdaExpressionSyntax lambda && lambda.Body is BlockExpressionSyntax lambdaBlock {
+            body = lambdaBlock
         }
         if body == nil {
             return
@@ -728,10 +751,9 @@ internal partial class StatementBinder {
         if span == nil {
             return
         }
-        CompilationMeasurements.Count("narrowing.spans")
         let effects = GetRegionScanner().ScanStatements(span.Statements())
         NarrowingComparison.ReportSpan(
-            span.Block.Statements[span.FirstIndex].Location,
+            span.FirstStatement.Location,
             "labels=${string.Join(",", span.Labels)} gotos=${span.GotoCount}",
             effects.ToString()
         )

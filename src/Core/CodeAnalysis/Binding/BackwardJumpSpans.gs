@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 
 /// The backward-jump span of a function (ADR-0213 section 11): the run of
@@ -14,18 +15,34 @@ import System.Linq
 /// the earliest label that a later `goto` targets through the statement that
 /// holds the last such `goto`.
 internal sealed class BackwardJumpSpan {
-    init(block BlockStatementSyntax, firstIndex int32, lastIndex int32, labels List[string], gotoCount int32) {
-        Block = block
+    init(
+        owner SyntaxNode,
+        statements ImmutableArray[StatementSyntax],
+        firstIndex int32,
+        lastIndex int32,
+        labels List[string],
+        gotoCount int32
+    ) {
+        Owner = owner
+        StatementList = statements
         FirstIndex = firstIndex
         LastIndex = lastIndex
         Labels = labels
         GotoCount = gotoCount
     }
 
-    /// Gets the statement list that holds the span.
-    prop Block BlockStatementSyntax {
+    /// Gets the block statement or block expression that holds the statement list of the span.
+    prop Owner SyntaxNode {
         get;
     }
+
+    /// Gets the statement list that holds the span.
+    prop StatementList ImmutableArray[StatementSyntax] {
+        get;
+    }
+
+    /// Gets the first statement of the span.
+    prop FirstStatement StatementSyntax -> StatementList[FirstIndex]
 
     /// Gets the index of the first statement of the span in the list.
     prop FirstIndex int32 {
@@ -51,7 +68,7 @@ internal sealed class BackwardJumpSpan {
     func Statements()[]SyntaxNode {
         let result = List[SyntaxNode]()
         for var i = FirstIndex; i <= LastIndex; i++ {
-            result.Add(Block.Statements[i])
+            result.Add(StatementList[i])
         }
         return result.ToArray()
     }
@@ -72,12 +89,17 @@ internal shared class BackwardJumpSpans {
     /// A statement list on the path from the function body to a node, with the index of the
     /// statement that leads to the node.
     private sealed class Step {
-        init(block BlockStatementSyntax, index int32) {
-            Block = block
+        init(owner SyntaxNode, statements ImmutableArray[StatementSyntax], index int32) {
+            Owner = owner
+            Statements = statements
             Index = index
         }
 
-        prop Block BlockStatementSyntax {
+        prop Owner SyntaxNode {
+            get;
+        }
+
+        prop Statements ImmutableArray[StatementSyntax] {
             get;
         }
 
@@ -133,7 +155,11 @@ internal shared class BackwardJumpSpans {
 
     /// Computes the span of a function body, or `nil` when the body has no participant backward
     /// `goto`.
-    func Compute(body BlockStatementSyntax) BackwardJumpSpan? {
+    func Compute(body BlockStatementSyntax) BackwardJumpSpan? -> Compute(cast[SyntaxNode](body))
+
+    /// Computes the span of a function body that is a block statement or a block expression (the body
+    /// of a lambda), or `nil` when the body has no participant backward `goto`.
+    func Compute(body SyntaxNode) BackwardJumpSpan? {
         let labels = List[LabelSite]()
         let gotos = List[GotoSite]()
         let path = List[Step]()
@@ -171,13 +197,14 @@ internal shared class BackwardJumpSpans {
             participants.Add(site.Path)
         }
         var depth = 0
-        var block BlockStatementSyntax = participants[0][0].Block
+        var owner SyntaxNode = participants[0][0].Owner
+        var statements = participants[0][0].Statements
         while true {
             var common = true
             for candidate in participants {
                 if candidate.Length <= depth || !object.ReferenceEquals(
-                    candidate[depth].Block,
-                    participants[0][depth].Block
+                    candidate[depth].Owner,
+                    participants[0][depth].Owner
                 ) {
                     common = false
                     break
@@ -186,7 +213,8 @@ internal shared class BackwardJumpSpans {
             if !common {
                 break
             }
-            block = participants[0][depth].Block
+            owner = participants[0][depth].Owner
+            statements = participants[0][depth].Statements
             depth++
         }
         // depth now counts the shared lists. The statement indices at the last shared list bound the span.
@@ -200,7 +228,7 @@ internal shared class BackwardJumpSpans {
         }
         let spanLabels = List[string]()
         for label in labels {
-            if label.Path.Length > level && object.ReferenceEquals(label.Path[level].Block, block) &&
+            if label.Path.Length > level && object.ReferenceEquals(label.Path[level].Owner, owner) &&
                 label
                 .Path[level]
                 .Index >= first &&
@@ -210,15 +238,22 @@ internal shared class BackwardJumpSpans {
                 spanLabels.Add(label.Name)
             }
         }
-        return BackwardJumpSpan(block, first, last, spanLabels, backward.Count)
+        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count)
     }
 
-    private func IsUnconditionalExit(statement SyntaxNode) bool -> statement.Kind == SyntaxKind.BreakStatement ||
-        statement.Kind == SyntaxKind.ContinueStatement ||
-        statement.Kind == SyntaxKind.ReturnStatement ||
-        statement.Kind == SyntaxKind.ThrowStatement ||
-        statement.Kind == SyntaxKind.RethrowStatement ||
-        statement.Kind == SyntaxKind.GotoStatement
+    // A label does not change what its statement does: `Again: return 0` ends the path.
+    private func IsUnconditionalExit(statement SyntaxNode) bool {
+        var node = statement
+        while node is LabeledStatementSyntax labeled {
+            node = labeled.Statement
+        }
+        return node.Kind == SyntaxKind.BreakStatement ||
+            node.Kind == SyntaxKind.ContinueStatement ||
+            node.Kind == SyntaxKind.ReturnStatement ||
+            node.Kind == SyntaxKind.ThrowStatement ||
+            node.Kind == SyntaxKind.RethrowStatement ||
+            node.Kind == SyntaxKind.GotoStatement
+    }
 
     private func IsFunctionLike(node SyntaxNode) bool -> node.Kind == SyntaxKind.FunctionLiteralExpression ||
         node.Kind == SyntaxKind.LambdaExpression ||
@@ -234,6 +269,30 @@ internal shared class BackwardJumpSpans {
         return statements.Length > 0 && IsUnconditionalExit(statements[statements.Length - 1])
     }
 
+    private func CollectList(
+        owner SyntaxNode,
+        statements ImmutableArray[StatementSyntax],
+        path List[Step],
+        tries List[TryStatementSyntax],
+        dead bool,
+        labels List[LabelSite],
+        gotos List[GotoSite]
+    ) {
+        var deadHere = dead
+        for var i = 0; i < statements.Length; i++ {
+            let statement = statements[i]
+            if statement.Kind == SyntaxKind.LabeledStatement {
+                deadHere = false
+            }
+            path.Add(Step(owner, statements, i))
+            Collect(statement, path, tries, deadHere, labels, gotos)
+            path.RemoveAt(path.Count - 1)
+            if IsUnconditionalExit(statement) {
+                deadHere = true
+            }
+        }
+    }
+
     private func Collect(
         node SyntaxNode,
         path List[Step],
@@ -243,18 +302,13 @@ internal shared class BackwardJumpSpans {
         gotos List[GotoSite]
     ) {
         if node is BlockStatementSyntax block {
-            var deadHere = dead
-            for var i = 0; i < block.Statements.Length; i++ {
-                let statement = block.Statements[i]
-                if statement.Kind == SyntaxKind.LabeledStatement {
-                    deadHere = false
-                }
-                path.Add(Step(block, i))
-                Collect(statement, path, tries, deadHere, labels, gotos)
-                path.RemoveAt(path.Count - 1)
-                if IsUnconditionalExit(statement) {
-                    deadHere = true
-                }
+            CollectList(block, block.Statements, path, tries, dead, labels, gotos)
+            return
+        }
+        if node is BlockExpressionSyntax blockExpression {
+            CollectList(blockExpression, blockExpression.Statements, path, tries, dead, labels, gotos)
+            if blockExpression.Expression != nil {
+                Collect(blockExpression.Expression, path, tries, dead, labels, gotos)
             }
             return
         }

@@ -94,6 +94,39 @@ func Run(n int32) int32 {
     }
 
     @Fact
+    func ASpanInALoopThatIsBoundTwiceIsReportedOnce() {
+        // The first label sits in a loop that the binder binds twice. The registration of the discarded
+        // bind goes with its reports, so the second bind reports the span, once.
+        NarrowingComparison.BeginCapture()
+        using let measurements = CompilationMeasurements.Start("test")
+        var lines = List[string]()
+        try {
+            Evaluate(`package T
+
+func Get() string? { return nil }
+
+func Run(n int32) int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    var i = 0
+    while i < n {
+        i = i + s.Length
+        s = nil
+        Again: i = i + 1
+        if i < 3 { goto Again }
+        s = Get()
+        if s == nil { return 0 }
+    }
+    return i
+}`)
+        } finally {
+            lines = NarrowingComparison.EndCapture()
+        }
+        Assert.Equal(1, lines.Count((line string) -> line.StartsWith("S\t", StringComparison.Ordinal)))
+        Assert.Equal(1L, measurements.GetCounter("narrowing.spans"))
+    }
+
+    @Fact
     func TheCountersOfSection15AreReported() {
         NarrowingComparison.BeginCapture()
         using let measurements = CompilationMeasurements.Start("test")
@@ -539,6 +572,23 @@ func Run(v object?, n int32) int32 {
     }
     return total
 }`, "7|cur|nullability|old-kept/new-killed|P7(variable:pattern-bound)|R7 b", "1/0/0")
+            Add("A3-one-storage-passed-twice-through-a-ref-local", `package T
+
+func Clear2(ref x string?, ref y string?) {
+    x = nil
+    y = nil
+}
+
+func Run(ref a string?, ref b string?, n int32) int32 {
+    if a == nil { return 0 }
+    let ref c string? = b
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + 1
+        Clear2(ref b, ref c)
+    }
+    return total
+}`, "", "1/1/0")
             return rows
         }
     }

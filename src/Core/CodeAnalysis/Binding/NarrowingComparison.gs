@@ -33,6 +33,8 @@ internal shared class NarrowingComparison {
     private let loopLines List[string] = List[string]()
     private let spanFunctions HashSet[string] = HashSet[string]()
     private let captureSpanFunctions AsyncLocal[HashSet[string]?] = AsyncLocal[HashSet[string]?]()
+    // The span registrations of the speculative binds that are open, innermost last.
+    private let speculationKeys AsyncLocal[List[HashSet[string]]?] = AsyncLocal[List[HashSet[string]]?]()
     private let environmentPath string? = ReadEnvironment()
     private let capture AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
     private let pending AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
@@ -122,15 +124,28 @@ internal shared class NarrowingComparison {
     }
 
     /// Whether this is the first request for the function with this key. A function that has
-    /// several labels asks once per label, and the span counts once.
+    /// several labels asks once per label, and the span counts once. A registration made in a
+    /// speculative bind is kept or dropped with the reports of that bind, so a bind that is
+    /// discarded and repeated reports the span again, and the counter counts a span when it commits.
     func TryRegisterSpanFunction(key string) bool {
         lock gate {
-            let scoped = captureSpanFunctions.Value
-            return if scoped != nil {
-                scoped.Add(key)
-            } else {
-                spanFunctions.Add(key)
+            let committed = captureSpanFunctions.Value ?? spanFunctions
+            if committed.Contains(key) {
+                return false
             }
+            let levels = speculationKeys.Value
+            if levels != nil && levels.Count > 0 {
+                for keys in levels {
+                    if keys.Contains(key) {
+                        return false
+                    }
+                }
+                levels[levels.Count - 1].Add(key)
+                return true
+            }
+            committed.Add(key)
+            CompilationMeasurements.Count("narrowing.spans")
+            return true
         }
     }
 
@@ -179,6 +194,11 @@ internal shared class NarrowingComparison {
         }
         let speculation = NarrowingSpeculation(pending.Value, List[string]())
         pending.Value = speculation.Buffer
+        lock gate {
+            let levels = speculationKeys.Value ?? List[HashSet[string]]()
+            levels.Add(HashSet[string]())
+            speculationKeys.Value = levels
+        }
         return speculation
     }
 
@@ -188,6 +208,24 @@ internal shared class NarrowingComparison {
             return
         }
         pending.Value = speculation.Previous
+        lock gate {
+            let levels = speculationKeys.Value
+            if levels != nil && levels.Count > 0 {
+                let keys = levels[levels.Count - 1]
+                levels.RemoveAt(levels.Count - 1)
+                if keep {
+                    // The registrations commit with the reports: into the enclosing bind, or for good.
+                    let committed = captureSpanFunctions.Value ?? spanFunctions
+                    for key in keys.OrderBy((text string) -> text, StringComparer.Ordinal) {
+                        if levels.Count > 0 {
+                            levels[levels.Count - 1].Add(key)
+                        } else if committed.Add(key) {
+                            CompilationMeasurements.Count("narrowing.spans")
+                        }
+                    }
+                }
+            }
+        }
         if keep {
             for tagged in speculation.Buffer {
                 Emit(tagged)
