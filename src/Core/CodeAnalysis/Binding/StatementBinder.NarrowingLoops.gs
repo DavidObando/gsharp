@@ -751,6 +751,9 @@ internal partial class StatementBinder {
         if span == nil {
             return
         }
+        NarrowingComparison.TryRegisterSpanFunction(
+            "span:" + NarrowingComparison.Format(location) + ":" + function.Span.Start.ToString()
+        )
         let effects = GetRegionScanner().ScanStatements(span.Statements())
         NarrowingComparison.ReportSpan(
             span.FirstStatement.Location,

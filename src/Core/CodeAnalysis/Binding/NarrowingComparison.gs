@@ -123,6 +123,13 @@ internal shared class NarrowingComparison {
         Emit("X\t${Format(location)}\t${path}\t${breakText}\t${bangSites}")
     }
 
+    // A key that starts with `span:` records a span that was found. Only those count.
+    private func CountSpan(key string) {
+        if key.StartsWith("span:", StringComparison.Ordinal) {
+            CompilationMeasurements.Count("narrowing.spans")
+        }
+    }
+
     /// Whether this is the first request for the function with this key. A function that has
     /// several labels asks once per label, and the span counts once. A registration made in a
     /// speculative bind is kept or dropped with the reports of that bind, so a bind that is
@@ -144,7 +151,7 @@ internal shared class NarrowingComparison {
                 return true
             }
             committed.Add(key)
-            CompilationMeasurements.Count("narrowing.spans")
+            CountSpan(key)
             return true
         }
     }
@@ -220,7 +227,7 @@ internal shared class NarrowingComparison {
                         if levels.Count > 0 {
                             levels[levels.Count - 1].Add(key)
                         } else if committed.Add(key) {
-                            CompilationMeasurements.Count("narrowing.spans")
+                            CountSpan(key)
                         }
                     }
                 }

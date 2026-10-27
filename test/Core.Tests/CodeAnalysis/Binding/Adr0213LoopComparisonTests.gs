@@ -127,6 +127,24 @@ func Run(n int32) int32 {
     }
 
     @Fact
+    func AFunctionWithOnlyAForwardJumpCountsNoSpan() {
+        NarrowingComparison.BeginCapture()
+        using let measurements = CompilationMeasurements.Start("test")
+        var lines = List[string]()
+        try {
+            Evaluate(`package T
+func Run(skip bool) int32 {
+    if skip { goto Done }
+    Done: return 1
+}`)
+        } finally {
+            lines = NarrowingComparison.EndCapture()
+        }
+        Assert.Equal(0, lines.Count((line string) -> line.StartsWith("S\t", StringComparison.Ordinal)))
+        Assert.Equal(0L, measurements.GetCounter("narrowing.spans"))
+    }
+
+    @Fact
     func TheCountersOfSection15AreReported() {
         NarrowingComparison.BeginCapture()
         using let measurements = CompilationMeasurements.Start("test")

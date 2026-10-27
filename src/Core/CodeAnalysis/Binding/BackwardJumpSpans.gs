@@ -196,6 +196,11 @@ internal shared class BackwardJumpSpans {
         for site in backward {
             participants.Add(site.Path)
         }
+        for candidate in participants {
+            if candidate.Length == 0 {
+                return nil
+            }
+        }
         var depth = 0
         var owner SyntaxNode = participants[0][0].Owner
         var statements = participants[0][0].Statements
@@ -218,6 +223,9 @@ internal shared class BackwardJumpSpans {
             depth++
         }
         // depth now counts the shared lists. The statement indices at the last shared list bound the span.
+        if depth == 0 {
+            return nil
+        }
         let level = depth - 1
         var first = int32.MaxValue
         var last = -1
@@ -226,6 +234,9 @@ internal shared class BackwardJumpSpans {
             first = Math.Min(first, index)
             last = Math.Max(last, index)
         }
+        // The trailing expression of a block expression is not a statement of the span.
+        last = Math.Min(last, statements.Length - 1)
+        first = Math.Min(first, last)
         let spanLabels = List[string]()
         for label in labels {
             if label.Path.Length > level && object.ReferenceEquals(label.Path[level].Owner, owner) &&
@@ -307,8 +318,12 @@ internal shared class BackwardJumpSpans {
         }
         if node is BlockExpressionSyntax blockExpression {
             CollectList(blockExpression, blockExpression.Statements, path, tries, dead, labels, gotos)
-            if blockExpression.Expression != nil {
-                Collect(blockExpression.Expression, path, tries, dead, labels, gotos)
+            let tail = blockExpression.Expression
+            if tail != nil {
+                // The trailing expression follows the statements in the same list, so it has a step of its own.
+                path.Add(Step(blockExpression, blockExpression.Statements, blockExpression.Statements.Length))
+                Collect(tail, path, tries, dead, labels, gotos)
+                path.RemoveAt(path.Count - 1)
             }
             return
         }
