@@ -18,6 +18,8 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 - **CI diagnostics:** Add an explicitly head-gated, dump-free `core-remainder` crash-sequence diagnostic with bounded, sanitized metadata artifacts. The normalizer accepts all reviewed VSTest TRX counters, including `inProgress`, and rejects empty successful runs. The prepared follow-up gate requires a `synchronize` event for PR #5432 and separate exact-head approval. A healthy observation is not a correction for the unresolved crash. Part of #5393.
 
+- **Bare `/warnaserror-` disables global warning promotion** (issue #5426). A later minus option now clears an earlier `/warnaserror`. Selected-ID promotions, exemptions, and suppressions remain unchanged.
+
 - **Captured generic values retain constraint dependencies** (issue #5427). Generated capture boxes and closures now declare parameters referenced transitively by their constraints. Dependent bounds retain their generated owner and declaration order, including expression-tree captures and nested generic owners.
 
 - **Explicit reference assemblies resolve by metadata name** (issue #5421). Transitive signatures now resolve supplied assemblies independently of their filenames, including `/refout` paths such as `Library.ref.dll`. The resolver retains first-reference precedence and missing-dependency diagnostics. Cached images retain the winning reference's original path for documentation and source navigation. Case-sensitive filesystem paths retain distinct images. Host fallback and target core-library selection use metadata identity instead of filenames. Consumers no longer lose members because a supplied dependency has a different file basename.
