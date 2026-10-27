@@ -2465,23 +2465,18 @@ internal partial class ExpressionBinder {
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             }
         }
-        // issue #1144: constant integer-literal adaptation (C#-style
-        // constant-expression conversion). When exactly one operand is a
-        // compile-time constant integer literal and the OTHER operand is a
-        // (non-literal) integer type, the literal implicitly adapts to that
-        // integer type provided its value is representable there. An OUT-OF-RANGE
-        // literal is NOT adapted, so the GS0129 path still reports an error.
+        // Issues #1144 / #5415: adapt an integer literal to the other operand's
+        // integer type when its value is representable (ADR-0129).
+        // The other operand can also be a literal. Out-of-range values remain unadapted.
         if boundOperator == nil {
             if boundLeft is BoundLiteralExpression leftLit &&
                 IsIntegerLiteralValue(leftLit.Value) &&
-                !(boundRight is BoundLiteralExpression) &&
                 IsIntegerType(boundRight.Type) &&
                 TryAdaptIntegerLiteral(leftLit.Value, boundRight.Type, out var adaptedLeftValue) {
                 boundLeft = BoundLiteralExpression(boundLeft.Syntax, adaptedLeftValue)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             } else if boundRight is BoundLiteralExpression rightLit &&
                 IsIntegerLiteralValue(rightLit.Value) &&
-                !(boundLeft is BoundLiteralExpression) &&
                 IsIntegerType(boundLeft.Type) &&
                 TryAdaptIntegerLiteral(rightLit.Value, boundLeft.Type, out var adaptedRightValue) {
                 boundRight = BoundLiteralExpression(boundRight.Syntax, adaptedRightValue)
