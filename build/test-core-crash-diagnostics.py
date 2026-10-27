@@ -60,9 +60,14 @@ class WorkflowTests(unittest.TestCase):
 
     def test_route_requires_an_explicit_head_and_keeps_fixture_behavior(self):
         workflow = self.workflow()
-        self.assertIn("vars.GSHARP_5393_INITIAL_HEAD", workflow)
-        self.assertIn("github.event.pull_request.head.sha", workflow)
-        self.assertIn("github.run_attempt == 1", workflow)
+        eligibility = workflow.split("      GSHARP_5393_DIAGNOSTIC: >-\n", 1)[1]
+        eligibility = eligibility.split("\n\n", 1)[0]
+        for predicate in ("vars.GSHARP_5393_INITIAL_HEAD",
+                          "github.event.pull_request.head.sha", "github.run_attempt == 1",
+                          "github.event.action == 'synchronize'", "github.event.number == 5432"):
+            self.assertIn(predicate, eligibility)
+        self.assertNotIn("'opened'", eligibility)
+        self.assertNotIn("'reopened'", eligibility)
         self.assertIn("No diagnostic observation is approved for this head and attempt.", workflow)
         diagnostic = workflow.split("      - name: Test with dump-free sequence\n", 1)[1]
         diagnostic = diagnostic.split("      - name: Normalize core diagnostics\n", 1)[0]
@@ -287,7 +292,7 @@ class NormalizerTests(unittest.TestCase):
             "GITHUB_HEAD_REF": "fix/p0-5393-b12435c5-r2", "GITHUB_RUN_ATTEMPT": "1",
             "GSHARP_5393_INITIAL_HEAD": head,
         }
-        event = {"action": "opened", "pull_request": {"head": {
+        event = {"action": "synchronize", "number": 5432, "pull_request": {"head": {
             "sha": head, "repo": {"full_name": "DavidObando/gsharp"}}}}
         self.helper.authorize(environment, event)
         for changed in ({"GSHARP_5393_INITIAL_HEAD": ""},
@@ -296,8 +301,17 @@ class NormalizerTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 with self.assertRaises(self.helper.DiagnosticError):
                     self.helper.authorize({**environment, **changed}, event)
-        with self.assertRaises(self.helper.DiagnosticError):
-            self.helper.authorize(environment, {**event, "action": "reopened"})
+        for action in ("opened", "reopened"):
+            with self.subTest(action=action):
+                with self.assertRaisesRegex(self.helper.DiagnosticError, "^not-authorized$"):
+                    self.helper.authorize(environment, {**event, "action": action})
+        for number in (5433, None):
+            changed_event = {**event, "number": number}
+            if number is None:
+                del changed_event["number"]
+            with self.subTest(number=number):
+                with self.assertRaisesRegex(self.helper.DiagnosticError, "^not-authorized$"):
+                    self.helper.authorize(environment, changed_event)
 
 
 class ProvenanceTests(unittest.TestCase):
@@ -338,7 +352,7 @@ class ProvenanceTests(unittest.TestCase):
             "msbuild-sdks": {"Gsharp.NET.Sdk": "0.5.212"}}))
         head = "1" * 40
         event = self.root / "event.json"
-        event.write_text(json.dumps({"action": "opened", "pull_request": {
+        event.write_text(json.dumps({"action": "synchronize", "number": 5432, "pull_request": {
             "head": {"sha": head, "repo": {"full_name": "DavidObando/gsharp"}},
             "base": {"sha": "2" * 40}}}))
         environment = {

@@ -94,7 +94,8 @@ def authorize(environment, event):
             and head.get("repo", {}).get("full_name") == "DavidObando/gsharp"
             and environment.get("GITHUB_HEAD_REF") == "fix/p0-5393-b12435c5-r2"
             and environment.get("GITHUB_RUN_ATTEMPT") == "1"
-            and event.get("action") == "opened"
+            and event.get("action") == "synchronize"
+            and event.get("number") == 5432
             and head.get("sha") == approved, "not-authorized")
 
 

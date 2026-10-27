@@ -207,7 +207,7 @@ jobs:
             github.event.pull_request.head.repo.full_name == github.repository &&
             github.head_ref == 'fix/p0-5393-b12435c5-r2' &&
             matrix.name == 'core-remainder' && github.run_attempt == 1 &&
-            github.event.action == 'opened' &&
+            github.event.action == 'synchronize' && github.event.number == 5432 &&
             vars.GSHARP_5393_INITIAL_HEAD != '' &&
             github.event.pull_request.head.sha == vars.GSHARP_5393_INITIAL_HEAD }}
 
