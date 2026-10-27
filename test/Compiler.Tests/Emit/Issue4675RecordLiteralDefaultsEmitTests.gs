@@ -547,4 +547,159 @@ func Main() {
 7
 `, fixture.Run(dll))
     }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ImportedGenericDataClassLiteral_PreservesArgumentsAndEvaluatesOnce(csharp bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "ImportedLiteral5419.ref.dll")
+        let contract = if csharp {
+            fixture.CompileCSharpWithReference(`namespace ImportedLiteral5419;
+public static class Counter {
+    public static int Count;
+    public static int Next() => ++Count;
+}
+public record Box<T>(T Value) {
+    public int Stamp { get; } = Counter.Next();
+}`, "ImportedLiteral5419", reference)
+        } else {
+            fixture.Compile(`package ImportedLiteral5419
+public class Counter {
+    shared {
+        public var Count int32
+        public func Next() int32 {
+            Count += 1
+            return Count
+        }
+    }
+}
+public data class Box[T](Value T) {
+    public let Stamp int32 = Counter.Next()
+}`, "ImportedLiteral5419", false, "/refout:" + reference)
+        }
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import ImportedLiteral5419
+func Input() string? {
+    Console.WriteLine("input")
+    return nil
+}
+func Main() {
+    let value Box[string?] = Box[string?]{Value: Input()}
+    Console.WriteLine(value.Value == nil)
+    Console.WriteLine(value.Stamp)
+    let call Box[string?] = Box[string?](nil)
+    Console.WriteLine(call.Value == nil)
+    Console.WriteLine(call.Stamp)
+    let number = Box[int32]{Value: 7}
+    Console.WriteLine(number.Value)
+    Console.WriteLine(number.Stamp)
+    Console.WriteLine(Counter.Count)
+}`, "GenericLiteral", true, "/r:" +
+                if referenceAssembly {
+                reference
+            } else {
+                contract
+            })
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("input\nTrue\n1\nTrue\n2\n7\n3\n3\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(
+        "let value = Box[string?]{Value: nil}\nlet narrowed string = value.Value",
+        "Rejected.gs(3,23,3,34): error GS0155"
+    )
+    @InlineData("let value = Box[string]{Value: nil}", "Rejected.gs(2,32,2,35): error GS0155")
+    @InlineData("let value = Box[string?]{Missing: nil}", "Rejected.gs(2,26,2,33): error GS0158")
+    func ImportedGenericDataClassLiteral_ReportsLocatedTypeErrors(statement string, diagnostic string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(
+            "package ImportedLiteral5419\npublic data class Box[T](Value T)",
+            "ImportedLiteral5419",
+            false
+        )
+        let (code, output) = fixture.TryCompile(
+            "import ImportedLiteral5419\n" + statement,
+            "Rejected",
+            true,
+            "/r:" + contract
+        )
+        Assert.Equal(1, code)
+        Assert.True(output.Contains(diagnostic, StringComparison.Ordinal), output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "Rejected.dll")))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_PrimaryInputsKeepSourceOrderBeforeMemberWrites() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedLiteral5419;
+public record Pair<T>(T First, T Second) {
+    public T? Extra { get; set; }
+    public int Stamp { get; } = Trace.Construct();
+}
+public static class Trace {
+    public static int Construct() {
+        System.Console.WriteLine("constructor");
+        return 1;
+    }
+}`, "Contract")
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import ImportedLiteral5419
+func Input(label string) string? {
+    Console.WriteLine(label)
+    return nil
+}
+let pair Pair[string?] = Pair[string?]{
+    Second: Input("second"),
+    First: Input("first"),
+    Extra: Input("extra")
+}
+Console.WriteLine(pair.First == nil && pair.Second == nil && pair.Extra == nil)
+Console.WriteLine(pair.Stamp)
+`, "PrimaryOrder", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("second\nfirst\nconstructor\nextra\nTrue\n1\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_SelectsPrimarySignatureBeforeClosing() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedLiteral5419;
+public record Collision<T> {
+    public Collision(string Value) => throw new System.InvalidOperationException("not primary");
+    public Collision(T Value) { this.Value = Value; }
+    public T Value { get; init; }
+}`, "Contract")
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import ImportedLiteral5419
+let value = Collision[string?]{Value: nil}
+System.Console.WriteLine(value.Value == nil)
+`, "ConstructorIdentity", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("True\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_RejectsAbstractClass() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(
+            "package ImportedLiteral5419\npublic abstract data class Box[T](Value T)",
+            "ImportedLiteral5419",
+            false
+        )
+        let (code, output) = fixture.TryCompile(
+            "import ImportedLiteral5419\nlet value = Box[string?]{Value: nil}",
+            "Abstract",
+            true,
+            "/r:" + contract
+        )
+        Assert.Equal(1, code)
+        Assert.True(output.Contains("Abstract.gs(2,13,2,16): error GS0386", StringComparison.Ordinal), output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "Abstract.dll")))
+    }
 }

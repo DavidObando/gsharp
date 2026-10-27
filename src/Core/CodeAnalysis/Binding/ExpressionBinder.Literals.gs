@@ -1761,6 +1761,23 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName)
                         return BoundErrorExpression(nil)
                     }
+                    if ImportedTypeSymbol.TryCreateSemanticAggregate(
+                        closedImportedType,
+                        $scope.References,
+                        out var dataClass
+                    ) &&
+                        dataClass is StructSymbol{IsClass: true, HasPrimaryConstructor: true} importedDataClass {
+                        return BindImportedDataClassLiteral(
+                            syntax,
+                            closedImportedType,
+                            ImportedTypeSymbol.GetConstructed(
+                                closedImportedType,
+                                importedCandidate.ClassType,
+                                literalSymbolicArguments
+                            ),
+                            importedDataClass
+                        )
+                    }
                     // Issue #4042: a RETAINED symbolic argument with no faithful
                     // closed CLR type of its own — a same-compilation user class
                     // or an in-scope type parameter — closes over the `object`
@@ -2558,6 +2575,77 @@ internal partial class ExpressionBinder {
         BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride)
     }
 
+    private func BindImportedDataClassLiteral(
+        syntax StructLiteralExpressionSyntax,
+        clrType Type,
+        resultType ImportedTypeSymbol,
+        aggregate StructSymbol
+    ) BoundExpression {
+        if clrType.IsAbstract {
+            Diagnostics.ReportCannotInstantiateAbstractType(syntax.TypeIdentifier.Location, aggregate.Name)
+            return BoundErrorExpression(syntax)
+        }
+        let constructor = ImportedTypeSymbol.FindPrimaryConstructor(clrType, aggregate.PrimaryConstructorParameters)
+        if constructor == nil {
+            Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
+            return BoundErrorExpression(syntax)
+        }
+        let parameters = constructor.GetParameters()
+        let arguments = [parameters.Length]BoundExpression
+        let consumed = HashSet[string](StringComparer.Ordinal)
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        var primaryPrefix = true
+        for element in syntax.Elements {
+            if element is not FieldInitializerSyntax initializer {
+                primaryPrefix = false
+                continue
+            }
+            let index = Array.FindIndex(
+                parameters,
+                (parameter ParameterInfo) -> parameter.Name == initializer.FieldIdentifier.ValueText
+            )
+            if index < 0 || initializer.Value is CollectionInitializerExpressionSyntax{Target: nil} {
+                primaryPrefix = false
+                continue
+            }
+            if !consumed.Add(initializer.FieldIdentifier.ValueText) {
+                continue
+            }
+            if !primaryPrefix {
+                Diagnostics.ReportPositionalInitializerAfterCompositeElement(
+                    initializer.FieldIdentifier.Location,
+                    initializer.FieldIdentifier.ValueText
+                )
+            }
+            // Read the constructor input, not its associated property's erased CLR type.
+            let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor, index)
+            let value = BindExpression(initializer.Value, parameterType)
+            let name = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
+                CultureInfo.InvariantCulture
+            )
+            let local = LocalVariableSymbol(name, isReadOnly: true, parameterType)
+            $scope.TryDeclareVariable(local)
+            statements.Add(BoundVariableDeclaration(initializer, local, value))
+            arguments[index] = BoundVariableExpression(initializer, local)
+        }
+        for var index = 0; index < arguments.Length; index++ {
+            if arguments[index] == nil {
+                let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor, index)
+                arguments[index] = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, parameterType) ??
+                    BoundDefaultExpression(syntax, parameterType)
+            }
+        }
+        let construction = BoundClrConstructorCallExpression(
+            syntax,
+            clrType,
+            constructor,
+            arguments.ToImmutableArray(),
+            resultType
+        )
+        let initialized = BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction, consumed)
+        return BoundBlockExpression(syntax, statements.ToImmutable(), initialized)
+    }
+
     /// ADR-0180: binds (for diagnostic continuity) and reports GS0369 for
     /// every content element/spread found directly on [`syntax`](paramref),
     /// for the struct-literal binder paths that do not (yet) support them —
@@ -2686,7 +2774,8 @@ internal partial class ExpressionBinder {
         syntax StructLiteralExpressionSyntax,
         clrType Type,
         resultType TypeSymbol,
-        construction BoundExpression
+        construction BoundExpression,
+        constructorMembers HashSet[string]? = nil
     ) BoundExpression {
         // ADR-0180: a bare content element or `...source` content spread on an
         // imported CLR type (e.g. `List[int32]{ Capacity: 1, 2 }`) lowers to
@@ -2772,6 +2861,9 @@ internal partial class ExpressionBinder {
             let memberName = initSyntax.FieldIdentifier.ValueText
             if !seen.Add(memberName) {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName)
+                continue
+            }
+            if constructorMembers?.Contains(memberName) == true {
                 continue
             }
             // Resolve a public instance property (non-indexer) or field on the

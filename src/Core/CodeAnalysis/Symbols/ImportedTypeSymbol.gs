@@ -733,11 +733,8 @@ class ImportedTypeSymbol : TypeSymbol {
         }
 
         private func ApplyPrimaryConstructorDefaults(type Type, parameters ImmutableArray[ParameterSymbol]) {
-            let parameterNames = ImmutableArray.CreateBuilder[string](parameters.Length)
-            for parameter in parameters {
-                parameterNames.Add(parameter.Name)
-            }
-            let clrParameters = FindPrimaryConstructorParameters(type, parameterNames.MoveToImmutable())
+            let clrParameters = FindPrimaryConstructor(type, parameters)?.GetParameters() ??
+                Array.Empty[ParameterInfo]()
             for var i = 0; i < parameters.Length && i < clrParameters.Length; i++ {
                 if TryGetOptionalDefault(clrParameters[i], out var defaultValue) {
                     parameters[i].SetExplicitDefaultValue(defaultValue)
@@ -745,24 +742,72 @@ class ImportedTypeSymbol : TypeSymbol {
             }
         }
 
-        private func FindPrimaryConstructorParameters(type Type, names ImmutableArray[string])[]ParameterInfo {
-            for constructor in ClrTypeUtilities.SafeGetConstructors(type, BindingFlags.Public | BindingFlags.Instance) {
+        internal func FindPrimaryConstructor(
+            type Type,
+            primaryParameters ImmutableArray[ParameterSymbol]
+        ) ConstructorInfo? {
+            let definition = if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+            if !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics) &&
+                !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(type, out semantics) {
+                return nil
+            }
+            if semantics is not ImportedTypeSemantics shape {
+                return nil
+            }
+            let fields = ClrTypeUtilities.SafeGetFields(
+                definition,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            )
+            for constructor in ClrTypeUtilities.SafeGetConstructors(
+                definition,
+                BindingFlags.Public | BindingFlags.Instance
+            ) {
                 let parameters = constructor.GetParameters()
-                if parameters.Length != names.Length {
+                if parameters.Length != primaryParameters.Length {
                     continue
                 }
-                var namesMatch = true
+                var matches = true
                 for var i = 0; i < parameters.Length; i++ {
-                    if !string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal) {
-                        namesMatch = false
+                    if !string.Equals(parameters[i].Name, primaryParameters[i].Name, StringComparison.Ordinal) {
+                        matches = false
+                        break
+                    }
+                    let tokens = shape.PrimaryConstructorParameterFieldTokens
+                    let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
+                        fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
+                    } else {
+                        fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == primaryParameters[i].Name)
+                    }
+                    let member MemberInfo? = if field != nil {
+                        field
+                    } else {
+                        definition.GetProperty(
+                            primaryParameters[i].Name,
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                        )
+                    }
+                    if member == nil || !ClrTypeUtilities.AreSame(
+                        ClrNullability.GetSignatureType(parameters[i]),
+                        ClrNullability.GetSignatureType(member)
+                    ) {
+                        matches = false
                         break
                     }
                 }
-                if namesMatch {
-                    return parameters
+                if matches {
+                    // Closing can collapse distinct overloads. Keep the selected open MethodDef.
+                    return ClrTypeUtilities.FindMetadataDefinition(
+                        type,
+                        constructor,
+                        BindingFlags.Public | BindingFlags.Instance
+                    ) as ConstructorInfo
                 }
             }
-            return Array.Empty[ParameterInfo]()
+            return nil
         }
 
         private func TryGetOptionalDefault(parameter ParameterInfo, out value object?) bool {
