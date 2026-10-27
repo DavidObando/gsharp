@@ -117,13 +117,8 @@ class Issue1481FuncRows {
     }
 
     @Fact
-    func StateMachineClass_MapOfListElement_StaysErased_AndVerifies() {
-        // `sequence[map[string, List[T]]]`: under the type-erased generic
-        // model (ADR-0004) `List[T]` is genuinely `List<object>` at runtime,
-        // so this map has a non-null erased ClrType and MUST stay
-        // `Dictionary<string, List<object>>` — reifying it would be a lie.
-        // This guards against over-reification: the rows stay erased AND the
-        // assembly still ilverifies (verified inside CompileLibrary).
+    func StateMachineClass_MapOfListElement_PreservesTypeParameter_AndVerifies() {
+        // ADR-0087 requires nested arguments to retain the state machine's type parameter.
         let source = `package Probe
 import System.Collections.Generic
 
@@ -139,6 +134,7 @@ class Issue1481MapListRows {
 }`
         let assembly = CompileLibrary(source)
         let smType = SingleStateMachine(assembly, "<MapListEntries>d__")
+        let typeParameter = Assert.Single(smType.GetGenericArguments())
         AssertImplementsEnumerableOf(
             smType,
             (i Type) -> {
@@ -149,9 +145,8 @@ class Issue1481MapListRows {
                 if dictArgs[0] != typeof(string) {
                     return false
                 }
-                // Value is the erased List<object> — NOT closed over the SM's Var(0).
                 return dictArgs[1].IsGenericType && dictArgs[1].GetGenericTypeDefinition() == typeof(List[_]) &&
-                    dictArgs[1].GetGenericArguments()[0] == typeof(object)
+                    dictArgs[1].GetGenericArguments()[0] == typeParameter
             }
         )
     }

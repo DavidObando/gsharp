@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Generic map expression-tree parameters** ([#5430](https://github.com/DavidObando/gsharp/issues/5430)): `map[K,V]` parameters now use the canonical `Dictionary[K,V]` type token instead of reporting `GS9998`. Map signatures and tokens retain generic owners, nested arguments, and nullable value types. Map literals inside expression-tree lambdas still report `GS0473`.
+
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
 - **Bare `/warnaserror-` disables global warning promotion** (issue #5426). A later minus option now clears an earlier `/warnaserror`. Selected-ID promotions, exemptions, and suppressions remain unchanged.
