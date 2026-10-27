@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
 
@@ -655,34 +656,10 @@ shared class BaseCallForwarderRewriter {
             /// original parameter the forwarder does not declare.
             private func CollectMethodTypeParameterClosure(mentioned List[TypeSymbol]) ImmutableArray[
                 TypeParameterSymbol
-            ] {
-                let found = List[TypeParameterSymbol]()
-                let pending = Queue[TypeParameterSymbol]()
-                for referenced in SynthesizedClosureReifier.CollectOrdered(mentioned) {
-                    if referenced.IsMethodTypeParameter && !found.Contains(referenced) {
-                        found.Add(referenced)
-                        pending.Enqueue(referenced)
-                    }
-                }
-                while pending.Count > 0 {
-                    let current = pending.Dequeue()
-                    let dependencies = List[TypeParameterSymbol]()
-                    if current.TypeParameterBound is {} bound {
-                        dependencies.Add(bound)
-                    }
-                    TypeSymbol.CollectReferencedTypeParameters(current.ClassConstraint, dependencies)
-                    TypeSymbol.CollectReferencedTypeParameters(current.InterfaceConstraint, dependencies)
-                    TypeSymbol.CollectReferencedTypeParameters(current.ClrInterfaceConstraint, dependencies)
-                    for dependency in dependencies {
-                        if dependency.IsMethodTypeParameter && !found.Contains(dependency) {
-                            found.Add(dependency)
-                            pending.Enqueue(dependency)
-                        }
-                    }
-                }
-                found.Sort((a TypeParameterSymbol, b TypeParameterSymbol) -> a.Ordinal - b.Ordinal)
-                return found.ToImmutableArray()
-            }
+            ] -> SynthesizedClosureReifier
+                .CollectOrdered(mentioned)
+                .Where((parameter TypeParameterSymbol) -> parameter.IsMethodTypeParameter)
+                .ToImmutableArray()
 
             /// Clones a generic base method's type parameters for its forwarder,
             /// carrying every constraint over and rewriting constraints that
