@@ -142,6 +142,33 @@ class Issue4633TestNameParityTests {
     // ---------------------------------------------------------------------
     // The C# oracle.
     // ---------------------------------------------------------------------
+    /// A selected library shard needs no oracle. Unknown selections still fail.
+    @Fact
+    func Capture_ExplicitLibrarySelection_DoesNotRequireTests() {
+        let directory = NewDirectory()
+        let initialized = ProcessRunner.Run("git", []string{"init", "--quiet", directory})
+        Assert.True(initialized.ExitCode == 0, initialized.Output)
+        File.WriteAllText(Path.Combine(directory, "Library.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />")
+        let output = Path.Combine(directory, "oracle")
+        let driver = Path.Combine(RepoRoot(), "out", "bin", "Release", "Cs2Gs.Cli", "cs2gs.dll")
+        let arguments = []string{"capture-test-oracle", "--corpus", directory, "--out", output}
+        let selected = ProcessRunner.Run(
+            "dotnet",
+            []string{driver}.Concat(arguments).Concat([]string{"--app", "Library.csproj"}).ToArray()
+        )
+        Assert.True(selected.ExitCode == 0, selected.Output)
+        Assert.Empty(Directory.GetFiles(output))
+        let unknown = ProcessRunner.Run(
+            "dotnet",
+            []string{driver}.Concat(arguments).Concat([]string{"--app", "Missing.csproj"}).ToArray()
+        )
+        Assert.Equal(1, unknown.ExitCode)
+        Assert.Contains("found no app 'Missing.csproj'", unknown.Output, StringComparison.Ordinal)
+        let unselected = ProcessRunner.Run("dotnet", []string{driver}.Concat(arguments).ToArray())
+        Assert.Equal(1, unselected.ExitCode)
+        Assert.Contains("found no test projects", unselected.Output, StringComparison.Ordinal)
+    }
+
     /// The real `dotnet test --list-tests` shape parses into its names.
     @Fact
     func Oracle_ParsesListTestsOutput() {

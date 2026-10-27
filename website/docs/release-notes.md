@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Nightly test oracles use the validation runner** (issue #5443). Each migration shard captures its selected C# test names locally. Different hosted targeting-pack inventories no longer cause false extra theory rows. Name and duplicate-count comparisons remain unchanged.
+
 - **Incremental reuse re-points enum and delegate declarations** (issue #5324). A body-only edit that shifts text now updates the declaration syntax of enums, nested enums, and delegates, including constructed delegates and enums. Go-to-definition on an enum no longer reads the previous tree.
 
 - **Imported record projections use their declaring constructors** (issue #5435). Structural spreads, casts, and implicit projections no longer select source-emitted constructors for imported records. They retain the selected open constructor identity, constructed owner, optional defaults, and single evaluation.
