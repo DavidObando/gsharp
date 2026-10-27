@@ -551,15 +551,30 @@ class ImportedTypeSymbol : TypeSymbol {
             }
             let includeInternal = ImportedAssemblySemantics.GrantsInternalAccessTo(type.Assembly, consumerAssemblyName)
             let bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+            let dataMembers = ClrTypeUtilities.SafeGetNearestDataMembers(
+                type,
+                bindingFlags,
+                (member MemberInfo) -> switch member {
+                    case field is FieldInfo: !field.IsStatic &&
+                        IsVisible(field, includeInternal) &&
+                        !field.IsSpecialName &&
+                        !field
+                        .Name
+                        .StartsWith("<", StringComparison.Ordinal)
+                    case property is PropertyInfo: property.GetIndexParameters()
+                        .Length == 0 &&
+                        (
+                        property.GetMethod is {} getter &&
+                            IsVisible(getter, includeInternal) ||
+                            property.SetMethod is {} setter &&
+                            IsVisible(setter, includeInternal)
+                    )
+                    default: false
+                }
+            )
             let fieldBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
             let fieldByToken = Dictionary[int32, FieldSymbol]()
-            for field in ClrTypeUtilities.SafeGetFields(type, bindingFlags) {
-                if field.IsStatic || !IsVisible(field, includeInternal) || field.IsSpecialName || field.Name.StartsWith(
-                    "<",
-                    StringComparison.Ordinal
-                ) {
-                    continue
-                }
+            for field in dataMembers.OfType[FieldInfo]() {
                 let fieldSymbol = FieldSymbol(
                     field.Name,
                     ClrNullability.GetFieldTypeSymbol(field),
@@ -570,18 +585,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 fieldByToken[field.MetadataToken] = fieldSymbol
             }
             let propertyBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
-            for property in ClrTypeUtilities.SafeGetNearestProperties(
-                type,
-                bindingFlags,
-                (property PropertyInfo) -> property.GetIndexParameters()
-                    .Length == 0 &&
-                    (
-                    property.GetMethod is {} getter &&
-                        IsVisible(getter, includeInternal) ||
-                        property.SetMethod is {} setter &&
-                        IsVisible(setter, includeInternal)
-                )
-            ) {
+            for property in dataMembers.OfType[PropertyInfo]() {
                 let getter MethodInfo? = property.GetMethod
                 let setter MethodInfo? = property.SetMethod
                 let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
