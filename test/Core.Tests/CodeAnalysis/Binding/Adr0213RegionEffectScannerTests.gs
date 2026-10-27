@@ -324,6 +324,25 @@ open class Adr0213RegionEffectScannerTests {
     }
 
     @Fact
+    func Span_ATailOnlySpanHasAFirstNodeAndItsLabels() {
+        // No prefix statement: the label and the goto sit in the nested tail block, whose list is the lowest shared one.
+        let span = Span(`func Run(n int32) int32 {
+    let v = {
+        {
+            Again: n = n + 1
+            if n < 3 { goto Again }
+            n
+        }
+    }
+    return v
+}`)
+        let found = span!!
+        Assert.Equal([]string{"Again"}, found.Labels.ToArray())
+        Assert.Equal(2, found.Statements().Length)
+        Assert.NotNull(found.FirstStatement)
+    }
+
+    @Fact
     func Span_ALabeledExitEndsThePath() {
         // `Again: return 0` cannot complete, so the goto after it is at an unreachable point.
         let span = Span(`func Run(n int32) int32 {

@@ -21,10 +21,8 @@ internal sealed class BackwardJumpSpan {
         firstIndex int32,
         lastIndex int32,
         labels List[string],
-        gotoCount int32,
-        includesTail bool
+        gotoCount int32
     ) {
-        IncludesTail = includesTail
         Owner = owner
         StatementList = statements
         FirstIndex = firstIndex
@@ -43,8 +41,20 @@ internal sealed class BackwardJumpSpan {
         get;
     }
 
-    /// Gets the first statement of the span.
-    prop FirstStatement StatementSyntax -> StatementList[FirstIndex]
+    /// Gets the first node of the span: a statement, or the trailing expression of a block expression
+    /// when the span starts there (index equal to the statement count).
+    prop FirstStatement SyntaxNode -> NodeAt(FirstIndex)
+
+    private func NodeAt(index int32) SyntaxNode {
+        if index < StatementList.Length {
+            return StatementList[index]
+        }
+        return Invariant.Required(
+            cast[BlockExpressionSyntax](Owner).Expression,
+            "a span index past the statements names the trailing expression",
+            expression: "Owner.Expression"
+        )
+    }
 
     /// Gets the index of the first statement of the span in the list.
     prop FirstIndex int32 {
@@ -66,19 +76,11 @@ internal sealed class BackwardJumpSpan {
         get;
     }
 
-    /// Whether the span also covers the trailing expression of a block expression.
-    prop IncludesTail bool {
-        get;
-    }
-
     /// Gets the statements of the span.
     func Statements()[]SyntaxNode {
         let result = List[SyntaxNode]()
         for var i = FirstIndex; i <= LastIndex; i++ {
-            result.Add(StatementList[i])
-        }
-        if IncludesTail && Owner is BlockExpressionSyntax blockExpression && blockExpression.Expression != nil {
-            result.Add(blockExpression.Expression)
+            result.Add(NodeAt(i))
         }
         return result.ToArray()
     }
@@ -244,10 +246,7 @@ internal shared class BackwardJumpSpans {
             first = Math.Min(first, index)
             last = Math.Max(last, index)
         }
-        // A participant in the trailing expression of a block expression puts the expression in the span.
-        let includesTail = last >= statements.Length
-        last = Math.Min(last, statements.Length - 1)
-        first = Math.Min(first, last)
+        // An index equal to the statement count is the trailing expression of a block expression.
         let spanLabels = List[string]()
         for label in labels {
             if label.Path.Length > level && object.ReferenceEquals(label.Path[level].Owner, owner) &&
@@ -260,7 +259,7 @@ internal shared class BackwardJumpSpans {
                 spanLabels.Add(label.Name)
             }
         }
-        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count, includesTail)
+        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count)
     }
 
     // A label does not change what its statement does: `Again: return 0` ends the path.
