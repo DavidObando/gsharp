@@ -24,6 +24,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Imported record expression trees defer projection effects** (issue #5437). Generated capture blocks now retain initializer receiver aliases. Source construction, getters, constructors, and setters run once per invocation, not during tree construction.
 
+- **Failed compiler emissions remove newly created outputs** (issue #5451). Exceptions no longer leave newly created implementation, reference, Portable PDB, or documentation files. Existing output overwrite behavior and diagnostic-failure cleanup remain unchanged.
+
 - **Imported data members keep derived name hiding** (issue #5436). Member reads, writes, and property patterns now select the nearest eligible field or property before imported aggregate tables flatten inheritance. A derived property no longer reads an inherited same-name field. Base-typed access keeps the base member.
 
 - **Generic map expression-tree parameters** ([#5430](https://github.com/DavidObando/gsharp/issues/5430)): `map[K,V]` parameters now use the canonical `Dictionary[K,V]` type token instead of reporting `GS9998`. Map signatures and tokens retain generic owners, nested arguments, and nullable value types. Map literals inside expression-tree lambdas still report `GS0473`.
