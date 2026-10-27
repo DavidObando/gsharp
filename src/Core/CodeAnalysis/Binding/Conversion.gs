@@ -458,6 +458,36 @@ class Conversion {
             if from is PlatformTypeSymbol || to is PlatformTypeSymbol {
                 return ClassifyPlatformType(from!!, to!!, allowStructuralProjection, allowExplicitReference)
             }
+            // Imported aggregates and explicit constructions must compare decoded arguments before the annotation carrier is removed.
+            // Preserve invariant contracts, including nullable positions nested inside an argument.
+            let aggregateFrom = UnwrapPlatformAndNullable(from)
+            let aggregateTo = UnwrapPlatformAndNullable(to)
+            if (aggregateFrom?.StripToBareShape() is StructSymbol || aggregateTo?.StripToBareShape() is StructSymbol) &&
+                TryGetConstructedGenericShape(
+                aggregateFrom,
+                out var aggregateFromOpen,
+                out var aggregateFromArguments
+            ) &&
+                TryGetConstructedGenericShape(aggregateTo, out var aggregateToOpen, out var aggregateToArguments) &&
+                ClrTypeUtilities
+                .AreSame(aggregateFromOpen, aggregateToOpen) {
+                if from is NullableTypeSymbol && to is not NullableTypeSymbol {
+                    return Conversion.None
+                }
+                if aggregateFromArguments.Length != aggregateToArguments.Length {
+                    return Conversion.None
+                }
+                for var i = 0; i < aggregateFromArguments.Length; i++ {
+                    if !HaveIdenticalTypeArgumentContracts(aggregateFromArguments[i], aggregateToArguments[i]) {
+                        return Conversion.None
+                    }
+                }
+                return if from is not NullableTypeSymbol && to is NullableTypeSymbol {
+                    Conversion.Implicit
+                } else {
+                    Conversion.Identity
+                }
+            }
             // Inner generic nullability metadata does not change the outer CLR type's
             // conversion rules. Expose the symbolic generic/interface shape beneath
             // it before applying identity, hierarchy, and variance classification.
@@ -2770,17 +2800,17 @@ class Conversion {
             return true
         }
 
-        /// Issue #1420: extracts the open generic CLR definition and the symbolic
-        /// type arguments of a constructed generic imported type or sequence alias,
-        /// whether the arguments are carried symbolically (#313 construction) or only
-        /// by the closed (cref:TypeSymbol.ClrType). CLR-backed arguments are
-        /// projected through (cref:TypeSymbol.FromClrType) so primitive
-        /// aliases and their BCL counterparts unify.
+        /// Extracts the open CLR definition and semantic arguments of an imported generic, aggregate, or sequence alias.
+        /// Reuses (cref:TryGetConstructedGenericArguments) to preserve annotation-backed contracts and CLR argument slots.
         private func TryGetConstructedGenericShape(
             symbol TypeSymbol?,
             @NotNullWhen(true) out openDefinition Type?,
             out typeArguments ImmutableArray[TypeSymbol]
         ) bool {
+            var shape = symbol
+            while shape is NullabilityAnnotatedTypeSymbol annotatedShape {
+                shape = annotatedShape.BaseType
+            }
             // #4731: aliases must use the same symbolic relation AND rejection
             // guard as their imported interface spellings, never erased CLR probes.
             if (symbol is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
@@ -2789,30 +2819,44 @@ class Conversion {
                 typeArguments = ImmutableArray.Create(elementType)
                 return openDefinition != nil
             }
-            if symbol is not ImportedTypeSymbol imported {
+            if shape is not ImportedTypeSymbol && shape is not StructSymbol{ClrType: not nil} {
                 openDefinition = nil
                 typeArguments = ImmutableArray[TypeSymbol].Empty
                 return false
             }
-            if imported.OpenDefinition != nil && !imported.TypeArguments.IsDefaultOrEmpty {
+            if shape is ImportedTypeSymbol imported &&
+                imported.OpenDefinition != nil &&
+                !imported
+                .TypeArguments
+                .IsDefaultOrEmpty {
                 openDefinition = imported.OpenDefinition
-                typeArguments = imported.TypeArguments
-                return true
+                return TryGetConstructedGenericArguments(symbol!!, out typeArguments, out _)
             }
-            let clr Type? = imported.ClrType
+            let clr Type? = shape?.ClrType
             if clr != nil && clr.IsGenericType && !clr.IsGenericTypeDefinition {
-                let clrArgs = clr.GetGenericArguments()
-                let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
-                for arg in clrArgs {
-                    builder.Add(TypeSymbol.FromClrTypeWithoutNullability(arg, NullabilityFreeReason.TypeStructure))
-                }
                 openDefinition = clr.GetGenericTypeDefinition()
-                typeArguments = builder.MoveToImmutable()
-                return true
+                return TryGetConstructedGenericArguments(symbol!!, out typeArguments, out _)
             }
             openDefinition = nil
             typeArguments = ImmutableArray[TypeSymbol].Empty
             return false
+        }
+
+        private func HaveIdenticalTypeArgumentContracts(from TypeSymbol, to TypeSymbol) bool {
+            if from.ReferenceNullability != to.ReferenceNullability || !AreTypeArgumentsEquivalent(from, to) {
+                return false
+            }
+            let fromPositions = from.GetElementPositions()
+            let toPositions = to.GetElementPositions()
+            if fromPositions.Length != toPositions.Length {
+                return false
+            }
+            for var i = 0; i < fromPositions.Length; i++ {
+                if !HaveIdenticalTypeArgumentContracts(fromPositions[i], toPositions[i]) {
+                    return false
+                }
+            }
+            return true
         }
 
         /// Issue #1088: determines whether two constructed generic
