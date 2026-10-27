@@ -83,12 +83,13 @@ internal shared class RepositoryGitMetadata {
         return result.Stdout
     }
 
-    private func Git(arguments[]string, workingDirectory string) ProcessRunResult -> ProcessRunner.Run(
+    private func Git(arguments[]string, workingDirectory string) ProcessRunResult -> ProcessRunner
+        .RunWithRemovedEnvironment(
         "git",
         arguments,
+        RepositoryEnvironmentVariables,
         workingDirectory,
-        TimeSpan.FromMinutes(5),
-        removedEnvironment: RepositoryEnvironmentVariables
+        TimeSpan.FromMinutes(5)
     )
 
     private func ReadRepositoryEnvironmentVariables()[]string {

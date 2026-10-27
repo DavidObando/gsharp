@@ -34,22 +34,30 @@ shared class ProcessRunner {
     /// @param timeout The maximum wall-clock time to wait before killing the process tree; defaults to
     /// (cref:DefaultTimeout).
     /// @param environment Environment variables to set or override for the child process.
-    /// @param removedEnvironment Environment variables to remove from the child process.
     /// @returns The exit code, captured output, and whether the run timed out.
     func Run(
         fileName string,
         arguments IReadOnlyList[string],
         workingDirectory string? = nil,
         timeout TimeSpan? = nil,
-        environment IReadOnlyDictionary[string, string]? = nil,
-        removedEnvironment IReadOnlyList[string]? = nil
-    ) ProcessRunResult -> RunAsync(
+        environment IReadOnlyDictionary[string, string]? = nil
+    ) ProcessRunResult -> RunAsync(fileName, arguments, workingDirectory, timeout, environment: environment)
+        .GetAwaiter().GetResult()
+
+    internal func RunWithRemovedEnvironment(
+        fileName string,
+        arguments IReadOnlyList[string],
+        removedEnvironment IReadOnlyList[string],
+        workingDirectory string? = nil,
+        timeout TimeSpan? = nil
+    ) ProcessRunResult -> RunAsyncCore(
         fileName,
         arguments,
         workingDirectory,
         timeout,
-        environment: environment,
-        removedEnvironment: removedEnvironment
+        default(CancellationToken),
+        nil,
+        removedEnvironment
     )
         .GetAwaiter().GetResult()
 
@@ -61,16 +69,32 @@ shared class ProcessRunner {
     /// (cref:DefaultTimeout).
     /// @param cancellationToken A token that, when canceled, also kills the process tree early.
     /// @param environment Environment variables to set or override for the child process.
-    /// @param removedEnvironment Environment variables to remove from the child process.
     /// @returns The exit code, captured output, and whether the run timed out.
-    async func RunAsync(
+    func RunAsync(
         fileName string,
         arguments IReadOnlyList[string],
         workingDirectory string? = nil,
         timeout TimeSpan? = nil,
         cancellationToken CancellationToken = default(CancellationToken),
-        environment IReadOnlyDictionary[string, string]? = nil,
-        removedEnvironment IReadOnlyList[string]? = nil
+        environment IReadOnlyDictionary[string, string]? = nil
+    ) Task[ProcessRunResult] -> RunAsyncCore(
+        fileName,
+        arguments,
+        workingDirectory,
+        timeout,
+        cancellationToken,
+        environment,
+        nil
+    )
+
+    private async func RunAsyncCore(
+        fileName string,
+        arguments IReadOnlyList[string],
+        workingDirectory string?,
+        timeout TimeSpan?,
+        cancellationToken CancellationToken,
+        environment IReadOnlyDictionary[string, string]?,
+        removedEnvironment IReadOnlyList[string]?
     ) ProcessRunResult {
         if string.IsNullOrEmpty(fileName) {
             throw ArgumentException("File name must be supplied.", "fileName")

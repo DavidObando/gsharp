@@ -30,6 +30,7 @@ Run all metadata Git commands without repository-local environment redirects.
 Use Git's own local-variable catalogue, plus namespace and quarantine variables.
 Keep global Git configuration and discovery settings.
 Remove variables only from each child process, not from the caller.
+Keep existing public subprocess method signatures for translated C# consumers.
 Do not create a translation commit or change the source version settings.
 The translated files form uncommitted working-tree changes.
 
