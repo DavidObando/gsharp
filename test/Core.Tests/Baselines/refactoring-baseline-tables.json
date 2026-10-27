@@ -577,13 +577,13 @@
       "rows=13 sha256=1178E6AEF56EEDB1"
     ],
     "MethodBodies": [
-      "rows=10 sha256=DE1302C19E54B3D0"
+      "rows=11 sha256=6D756DB67D487486"
     ],
     "MethodDef": [
-      "rows=10 sha256=32CE607B1CB35AEC"
+      "rows=11 sha256=769319F537496737"
     ],
     "TypeDef": [
-      "rows=3 sha256=EF733701B9C03F52"
+      "rows=3 sha256=D1F70AAB0E610F52"
     ],
     "TypeRef": [
       "rows=11 sha256=D8AD1CC39C07681E"
@@ -602,13 +602,13 @@
       "rows=14 sha256=F413570C80913C2E"
     ],
     "MethodBodies": [
-      "rows=10 sha256=23CC760DA71CDB1E"
+      "rows=11 sha256=C0BA1693B257E87B"
     ],
     "MethodDef": [
-      "rows=10 sha256=32CE607B1CB35AEC"
+      "rows=11 sha256=769319F537496737"
     ],
     "TypeDef": [
-      "rows=3 sha256=D9CE7765CEAC067D"
+      "rows=3 sha256=199429E3CB4893E0"
     ],
     "TypeRef": [
       "rows=11 sha256=D8AD1CC39C07681E"
@@ -2354,13 +2354,13 @@
       "rows=16 sha256=BDEC069F1A9011F1"
     ],
     "MethodBodies": [
-      "rows=17 sha256=D35AB7D389304638"
+      "rows=18 sha256=0A6227BB77B6E13F"
     ],
     "MethodDef": [
-      "rows=17 sha256=C6D48CC85E6F60D7"
+      "rows=18 sha256=A048B8F8F49715DF"
     ],
     "TypeDef": [
-      "rows=6 sha256=FB1CE2D25E3DB2AF"
+      "rows=6 sha256=30AA8ED819A6EB5E"
     ],
     "TypeRef": [
       "rows=12 sha256=A45FD97702884F31"
@@ -2529,13 +2529,13 @@
       "rows=13 sha256=1178E6AEF56EEDB1"
     ],
     "MethodBodies": [
-      "rows=10 sha256=DE1302C19E54B3D0"
+      "rows=11 sha256=6D756DB67D487486"
     ],
     "MethodDef": [
-      "rows=10 sha256=32CE607B1CB35AEC"
+      "rows=11 sha256=769319F537496737"
     ],
     "TypeDef": [
-      "rows=3 sha256=3C904FB89ED855E9"
+      "rows=3 sha256=B5022FF7186BB28B"
     ],
     "TypeRef": [
       "rows=11 sha256=D8AD1CC39C07681E"
@@ -2624,16 +2624,16 @@
       "rows=9 sha256=CB004FA27ED39B6E"
     ],
     "MemberRef": [
-      "rows=32 sha256=0EC26D155BDC500F"
+      "rows=35 sha256=0972103070B76D94"
     ],
     "MethodBodies": [
-      "rows=13 sha256=C4F60DA373E1F4F5"
+      "rows=14 sha256=12BA0E2BD1B93A4A"
     ],
     "MethodDef": [
-      "rows=13 sha256=6401334FADFC76B9"
+      "rows=14 sha256=835FFC774DC883FE"
     ],
     "TypeDef": [
-      "rows=4 sha256=689B56CA1B187E59"
+      "rows=4 sha256=CE47CCFE186DA90B"
     ],
     "TypeRef": [
       "rows=12 sha256=9C85B763D72E9F1C"
@@ -2730,13 +2730,13 @@
       "rows=30 sha256=1E4EAA26406D237E"
     ],
     "MethodBodies": [
-      "rows=19 sha256=DD5499F4BE10623F"
+      "rows=20 sha256=54BBF2A21B85138C"
     ],
     "MethodDef": [
-      "rows=19 sha256=E2B2E608634FA9E5"
+      "rows=20 sha256=B99E33EE1902B7C7"
     ],
     "TypeDef": [
-      "rows=3 sha256=15F5F23F7D38D01E"
+      "rows=3 sha256=893A49DE4A62DFEF"
     ],
     "TypeRef": [
       "rows=19 sha256=BDC00E5D1E533037"
@@ -2948,13 +2948,13 @@
       "rows=17 sha256=A6E8B3B9F6B1A2AC"
     ],
     "MethodBodies": [
-      "rows=14 sha256=8C8EC5829254393A"
+      "rows=15 sha256=8A8FF94F650C2C9C"
     ],
     "MethodDef": [
-      "rows=14 sha256=776C238C72B17937"
+      "rows=15 sha256=01AB58E49B1D85BE"
     ],
     "TypeDef": [
-      "rows=6 sha256=ADDBC586792A7AAE"
+      "rows=6 sha256=80C07B856402C00B"
     ],
     "TypeRef": [
       "rows=13 sha256=53023B97C08A108C"
@@ -3439,13 +3439,13 @@
       "rows=20 sha256=BBAFF78EF08FD8CC"
     ],
     "MethodBodies": [
-      "rows=11 sha256=60ED5328268D238E"
+      "rows=12 sha256=7D741529BD61752B"
     ],
     "MethodDef": [
-      "rows=11 sha256=38EF52E19FA2AC91"
+      "rows=12 sha256=E56585D243BF86E3"
     ],
     "TypeDef": [
-      "rows=3 sha256=E46BDB590FC3A5BA"
+      "rows=3 sha256=0702FD1A465495BF"
     ],
     "TypeRef": [
       "rows=13 sha256=27743BC3558BDE56"

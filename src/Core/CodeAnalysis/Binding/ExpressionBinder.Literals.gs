@@ -1621,7 +1621,8 @@ internal partial class ExpressionBinder {
     private func BindStructLiteralExpression(
         syntax StructLiteralExpressionSyntax,
         resolvedDefinition StructSymbol?,
-        enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        resolveTypeOnly bool = false
     ) BoundExpression {
         if resolvedDefinition == nil && syntax.TypeArgumentList is {} nativeTypeArguments {
             if CanUseSpanAlias(syntax.TypeIdentifier, expression: true) {
@@ -1727,7 +1728,11 @@ internal partial class ExpressionBinder {
                     ) {
                         structSymbol = importedAggregate
                     } else {
-                        return BindImportedTypeLiteralExpression(syntax, importedCandidate.ClassType)
+                        return BindImportedTypeLiteralExpression(
+                            syntax,
+                            importedCandidate.ClassType,
+                            resolveTypeOnly: resolveTypeOnly
+                        )
                     }
                 } else if syntax.TypeArgumentList != nil &&
                     hasImportedCandidate &&
@@ -1787,7 +1792,8 @@ internal partial class ExpressionBinder {
                                 closedImportedType,
                                 importedCandidate.ClassType,
                                 literalSymbolicArguments
-                            )
+                            ),
+                            resolveTypeOnly
                         )
                     }
                     if ImportedTypeSymbol.TryCreateSemanticAggregate(
@@ -1795,9 +1801,13 @@ internal partial class ExpressionBinder {
                         $scope.References,
                         out var importedAggregate
                     ) {
-                        return BindStructLiteralExpression(syntax, importedAggregate)
+                        return BindStructLiteralExpression(syntax, importedAggregate, resolveTypeOnly: resolveTypeOnly)
                     }
-                    return BindImportedTypeLiteralExpression(syntax, closedImportedType)
+                    return BindImportedTypeLiteralExpression(
+                        syntax,
+                        closedImportedType,
+                        resolveTypeOnly: resolveTypeOnly
+                    )
                 } else if !typeNameAmbiguous &&
                     syntax.TypeArgumentList == nil &&
                     lookupType(typeName) is TypeParameterSymbol tpLiteral {
@@ -1953,7 +1963,7 @@ internal partial class ExpressionBinder {
                     $scope.References!!.MapClrTypeToReferences
                 )
             }
-        } else if syntax.TypeArgumentList != nil {
+        } else if syntax.TypeArgumentList != nil && structSymbol!!.ClrType is not{IsConstructedGenericType: true} {
             Diagnostics.ReportWrongTypeArgumentCount(
                 syntax.TypeArgumentList!!.Location,
                 typeName,
@@ -1971,6 +1981,9 @@ internal partial class ExpressionBinder {
                 enclosingTypeArguments,
                 $scope.References!!.MapClrTypeToReferences
             )
+        }
+        if resolveTypeOnly {
+            return BoundDefaultExpression(syntax, structSymbol!!)
         }
         // ADR-0180: a bare content element or `...source` content spread
         // lowers to Add(...)/Add(item) on the constructed receiver, exactly
@@ -2010,7 +2023,19 @@ internal partial class ExpressionBinder {
         }
         let seenFieldNames = HashSet[string]()
         var inits = ImmutableArray.CreateBuilder[BoundFieldInitializer]()
+        let callsDataConstructor = structSymbol!!.UsesConstructorOwnedDataConstruction
         let callsPrimary = BoundStructLiteralExpression.UsesPrimaryConstructor(structSymbol!!)
+        if !BoundStructLiteralExpression.ValidateDataConstructor(
+            structSymbol!!,
+            Diagnostics,
+            syntax,
+            this.function,
+            structSymbol!!.ClrType is {} constructorType && binderCtx.References.CanAccessInternalMembers(
+                constructorType.Assembly
+            )
+        ) {
+            return BoundErrorExpression(syntax)
+        }
         let orderedInitializers List[StructLiteralOrderedStep]? = if hasContentElement || syntax.Initializers.Any(
             (initializer FieldInitializerSyntax) -> (
                 initializer.Value is CollectionInitializerExpressionSyntax and {Target: nil}
@@ -2123,6 +2148,20 @@ internal partial class ExpressionBinder {
                 }
                 continue
             }
+            if hasField &&
+                (!callsDataConstructor || (orderedInitializers != nil && !usesGetter)) &&
+                !consumesPrimaryArgument &&
+                !BoundStructLiteralExpression.CanWriteInitializerField(fieldDeclaringType ?? structSymbol!!, field!!) &&
+                (!usesGetter || !structSymbol!!.IsClass) {
+                Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName)
+                seenFieldNames.Add(fieldName)
+                if initSyntax.Value is CollectionInitializerExpressionSyntax{Target: nil} readonlyCollection {
+                    BindCollectionElementsForDiagnostics(readonlyCollection)
+                } else {
+                    let _ = BindExpression(initSyntax.Value, memberType)
+                }
+                continue
+            }
             // Issue #1567: a braced member value `Member: { a, b }` populates the
             // collection member by lowering to `.Add(...)` calls on the
             // constructed receiver's `Member` (the C# collection-initializer-in-
@@ -2150,7 +2189,11 @@ internal partial class ExpressionBinder {
             }
             // A get-only property (no `set` and no `init` accessor) cannot be
             // assigned in a composite literal — keep it diagnosed.
-            if !hasField && !Invariant.Required(property, "a resolved property is present", expression: "property")
+            if !hasField && !(callsDataConstructor && consumesPrimaryArgument) && !Invariant.Required(
+                property,
+                "a resolved property is present",
+                expression: "property"
+            )
                 .HasSetter {
                 Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName)
                 continue
@@ -2225,7 +2268,7 @@ internal partial class ExpressionBinder {
         // (For class/data-class literals the
         // synthesized default constructor — invoked by `newobj` — already runs
         // the instance field initializers, so this only applies to value types.)
-        if !structSymbol!!.IsClass && !callsPrimary {
+        if !structSymbol!!.IsClass && !callsPrimary && !callsDataConstructor {
             for field in structSymbol!!.Fields {
                 if seenFieldNames.Contains(field.Name) {
                     // A later explicit write must not leave an earlier Add
@@ -2254,6 +2297,12 @@ internal partial class ExpressionBinder {
                 .ToBuilder()
             for var i = 0; i < inits.Count; i++ {
                 let initializer = inits[i]
+                if callsDataConstructor && BoundStructLiteralExpression.GetPrimaryMember(
+                    structSymbol!!,
+                    initializer.MemberName
+                ) == nil {
+                    continue
+                }
                 argumentStatements ??= ImmutableArray.CreateBuilder[BoundStatement]()
                 let argumentName = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
                     CultureInfo.InvariantCulture
@@ -2284,6 +2333,12 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 if step.MemberSyntax is not{} member {
+                    continue
+                }
+                if callsDataConstructor && BoundStructLiteralExpression.GetPrimaryMember(
+                    structSymbol!!,
+                    member.FieldIdentifier.ValueText
+                ) == nil {
                     continue
                 }
                 if !scalarPrefix {
@@ -2434,7 +2489,8 @@ internal partial class ExpressionBinder {
     private func BindStructuralSpreadLiteral(
         syntax StructLiteralExpressionSyntax,
         resolvedDefinition StructSymbol?,
-        enclosingTypeArguments ImmutableArray[TypeSymbol]
+        enclosingTypeArguments ImmutableArray[TypeSymbol],
+        resolvedTarget TypeSymbol? = nil
     ) BoundExpression {
         let emptyTargetSyntax = StructLiteralExpressionSyntax(
             syntax.SyntaxTree,
@@ -2450,7 +2506,16 @@ internal partial class ExpressionBinder {
                 .SeparatedSyntaxList[StructLiteralElementSyntax](ImmutableArray[SyntaxNode].Empty),
             syntax.CloseBraceToken
         ){TypeArgumentList = syntax.TypeArgumentList}
-        let boundTarget = BindStructLiteralExpression(emptyTargetSyntax, resolvedDefinition, enclosingTypeArguments)
+        let boundTarget = if resolvedTarget != nil {
+            cast[BoundExpression](BoundDefaultExpression(emptyTargetSyntax, resolvedTarget))
+        } else {
+            BindStructLiteralExpression(
+                emptyTargetSyntax,
+                resolvedDefinition,
+                enclosingTypeArguments,
+                resolveTypeOnly: true
+            )
+        }
         let spreadExpression = Invariant.Required(
             syntax.SpreadExpression,
             "a structural spread has a source expression",
@@ -2488,7 +2553,8 @@ internal partial class ExpressionBinder {
                 boundTarget.Type,
                 strict: false,
                 explicitValues: failedValues,
-                explicitOrder: failedOrder.ToImmutable()
+                explicitOrder: failedOrder.ToImmutable(),
+                constructionSyntax: syntax
             )
         }
         plan = resolvedPlan
@@ -2534,7 +2600,8 @@ internal partial class ExpressionBinder {
             boundTarget.Type,
             strict: false,
             explicitValues: values,
-            explicitOrder: order.ToImmutable()
+            explicitOrder: order.ToImmutable(),
+            constructionSyntax: syntax
         )
     }
 
@@ -2551,8 +2618,28 @@ internal partial class ExpressionBinder {
     private func BindImportedTypeLiteralExpression(
         syntax StructLiteralExpressionSyntax,
         clrType Type,
-        resultTypeOverride TypeSymbol? = nil
-    ) BoundExpression -> if clrType.IsValueType {
+        resultTypeOverride TypeSymbol? = nil,
+        resolveTypeOnly bool = false
+    ) BoundExpression -> if resolveTypeOnly {
+        BoundDefaultExpression(
+            syntax,
+            resultTypeOverride ?? TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+        )
+    } else if syntax.SpreadExpression != nil {
+        BindStructuralSpreadLiteral(
+            syntax,
+            resolvedDefinition: nil,
+            enclosingTypeArguments: default(ImmutableArray[TypeSymbol]),
+            resolvedTarget: resultTypeOverride ??
+                (
+                if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregate) {
+                    cast[TypeSymbol](aggregate!!)
+                } else {
+                    TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+                }
+            )
+        )
+    } else if clrType.IsValueType {
         BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
     } else {
         BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride)
@@ -2660,21 +2747,99 @@ internal partial class ExpressionBinder {
             clrType,
             NullabilityFreeReason.TypeStructure
         )
-        let parameterlessCtor ConstructorInfo? = FindPublicParameterlessConstructor(clrType)
-        let construction BoundExpression = if parameterlessCtor != nil {
-            cast[BoundExpression](
-                BoundClrConstructorCallExpression(
-                    syntax,
-                    clrType,
-                    parameterlessCtor,
-                    ImmutableArray[BoundExpression].Empty,
-                    resultType
+        var constructor ConstructorInfo? = FindPublicParameterlessConstructor(clrType)
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression]()
+        let argumentStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+        let constructorMembers = HashSet[string](StringComparer.Ordinal)
+        if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, binderCtx.References, out var aggregate) &&
+            aggregate!!
+            .UsesConstructorOwnedDataConstruction {
+            if !BoundStructLiteralExpression.ValidateDataConstructor(
+                aggregate!!,
+                Diagnostics,
+                syntax,
+                getCurrentFunction(),
+                binderCtx.References.CanAccessInternalMembers(clrType.Assembly)
+            ) {
+                return BoundErrorExpression(syntax)
+            }
+            constructor = aggregate!!.GetDataConstructionConstructor()
+            let supplied = Dictionary[string, BoundExpression](StringComparer.Ordinal)
+            let parameters = if aggregate!!.HasDataConstructionPrimary {
+                aggregate!!.PrimaryConstructorParameters
+            } else {
+                ImmutableArray[ParameterSymbol].Empty
+            }
+            for parameter in parameters {
+                constructorMembers.Add(parameter.Name)
+            }
+            var beforePopulation = true
+            for element in syntax.Elements {
+                if element is not FieldInitializerSyntax member ||
+                    member.Value is CollectionInitializerExpressionSyntax{Target: nil} {
+                    beforePopulation = false
+                    continue
+                }
+                let name = member.FieldIdentifier.ValueText
+                if !constructorMembers.Contains(name) {
+                    continue
+                }
+                if !beforePopulation {
+                    Diagnostics.ReportPositionalInitializerAfterCompositeElement(member.FieldIdentifier.Location, name)
+                }
+                if supplied.ContainsKey(name) {
+                    Diagnostics.ReportSymbolAlreadyDeclared(member.FieldIdentifier.Location, name)
+                    continue
+                }
+                let index = parameters.IndexOf(parameters.First((parameter ParameterSymbol) -> parameter.Name == name))
+                let type = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor!!, index)
+                let value = BindExpression(member.Value, type)
+                let temporary = LocalVariableSymbol(
+                    "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
+                        CultureInfo.InvariantCulture
+                    ),
+                    isReadOnly: true,
+                    type
                 )
+                argumentStatements.Add(BoundVariableDeclaration(member, temporary, value))
+                supplied.Add(name, BoundVariableExpression(member, temporary))
+            }
+            for var i = 0; i < parameters.Length; i++ {
+                let type = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor!!, i)
+                arguments.Add(
+                    if supplied.TryGetValue(parameters[i].Name, out var value) {
+                        value
+                    } else {
+                        MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                            syntax,
+                            aggregate!!,
+                            parameters[i],
+                            type
+                        ) ??
+                            BoundDefaultExpression(syntax, type)
+                    }
+                )
+            }
+        }
+        let construction BoundExpression = if constructor != nil {
+            cast[BoundExpression](
+                BoundClrConstructorCallExpression(syntax, clrType, constructor, arguments.ToImmutable(), resultType)
             )
         } else {
             cast[BoundExpression](BoundDefaultExpression(syntax, resultType))
         }
-        return BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction)
+        let initialized = BindImportedTypeObjectInitializer(
+            syntax,
+            clrType,
+            resultType,
+            construction,
+            constructorMembers
+        )
+        return if argumentStatements.Count == 0 {
+            initialized
+        } else {
+            BoundBlockExpression(syntax, argumentStatements.ToImmutable(), initialized)
+        }
     }
 
     /// Issue #1199 / #2258: shared object-initializer lowering for an imported
@@ -2686,7 +2851,8 @@ internal partial class ExpressionBinder {
         syntax StructLiteralExpressionSyntax,
         clrType Type,
         resultType TypeSymbol,
-        construction BoundExpression
+        construction BoundExpression,
+        constructorMembers ISet[string]? = nil
     ) BoundExpression {
         // ADR-0180: a bare content element or `...source` content spread on an
         // imported CLR type (e.g. `List[int32]{ Capacity: 1, 2 }`) lowers to
@@ -2770,6 +2936,11 @@ internal partial class ExpressionBinder {
             }
             let initSyntax = cast[FieldInitializerSyntax](element)
             let memberName = initSyntax.FieldIdentifier.ValueText
+            if constructorMembers?.Contains(memberName) == true &&
+                initSyntax.Value is not CollectionInitializerExpressionSyntax{Target: nil} {
+                seen.Add(memberName)
+                continue
+            }
             if !seen.Add(memberName) {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName)
                 continue
@@ -2861,7 +3032,15 @@ internal partial class ExpressionBinder {
                 continue
             }
             let field FieldInfo? = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance)
-            let zeroValue BoundExpression? = MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(field, kind)
+            let zeroValue BoundExpression? = if field != nil {
+                MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                    field,
+                    kind,
+                    MemberLookup.GetClrFieldTypeSymbol(receiver.Type, field)
+                )
+            } else {
+                nil
+            }
             if field == nil ||
                 zeroValue == nil ||
                 !TryGetWritableClrMember(field, receiver.Type, out _, out var fieldType, out var writable) ||
@@ -3998,20 +4177,23 @@ internal partial class ExpressionBinder {
             return nil
         }
 
-        private func GetStructFieldZeroValue(
-            syntax SyntaxNode,
-            type StructSymbol,
-            field FieldSymbol
-        ) BoundExpression? -> if type.ClrType == nil {
-            MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
-        } else {
-            (
-                if type.InstanceFieldInitializers.TryGetValue(field, out var zeroValue) {
-                    zeroValue
-                } else {
-                    default(BoundExpression?)
-                }
-            )
+        private func GetStructFieldZeroValue(syntax SyntaxNode, type StructSymbol, field FieldSymbol) BoundExpression? {
+            let clrType = type.ClrType
+            if clrType == nil {
+                return MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
+            }
+            // Imported declaration initializers are not mandatory collection zero values.
+            if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
+                field.Name,
+                out var kind
+            ) {
+                return MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                    clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                    kind,
+                    field.Type
+                )
+            }
+            return nil
         }
 
         /// Issue #377 sub-item 2: returns true for argument expressions that are

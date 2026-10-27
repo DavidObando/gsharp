@@ -225,15 +225,27 @@ internal partial class ExpressionBinder {
 
     private func GetDataCopyType(type TypeSymbol) StructSymbol? {
         let receiverType = PlatformTypeSymbol.StripTopLevel(type)
+        if receiverType.ReferenceNullability == ReferenceNullabilityKind.Nullable ||
+            NullableLifting.IsAnyValueTypeNullable(receiverType.StripToBareShape() as NullableTypeSymbol) {
+            return nil
+        }
         let normalized = ImportedTypeSymbol.NormalizeSemanticAggregate(
             receiverType,
             receiverType.ClrType,
             $scope.References
         )
-        let aggregate StructSymbol? = switch normalized {
+        var aggregate StructSymbol? = switch normalized {
             case structType is StructSymbol: structType
             case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol structType}: structType
             default: default(StructSymbol?)
+        }
+        // Admission needs a data shape; lowering retains the exact receiver type.
+        if aggregate == nil && receiverType.ClrType is {} clrType && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            clrType,
+            $scope.References,
+            out var importedAggregate
+        ) {
+            aggregate = importedAggregate
         }
         return if aggregate?.IsData == true {
             aggregate
@@ -347,6 +359,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if target is BoundStructLiteralExpression{StructType: {IsClass: false}} literal &&
+            !literal.CallsDataConstructor &&
             !(literal.StructType.Definition ?? literal.StructType)
             .NeedsSynthesizedValueStructDefaultCtor {
             let initializers = literal.Initializers.ToBuilder()
@@ -1204,6 +1217,23 @@ internal partial class ExpressionBinder {
         // `with`/copy. Generalize the check to both kinds (drop the
         // `IsClass`-only restriction) so a data class AND a data struct both
         // resolve construction through the one semantic aggregate.
+        if syntax.Arguments.Count == 0 && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            resolvedClrType,
+            $scope.References,
+            out var zeroAggregate
+        ) &&
+            zeroAggregate is {IsData: true, IsClass: false, HasDataConstructionPrimary: false} zeroData &&
+            !BoundStructLiteralExpression
+            .ValidateDataConstructor(
+            zeroData,
+            Diagnostics,
+            syntax,
+            this.function,
+            binderCtx.References.CanAccessInternalMembers(resolvedClrType.Assembly)
+        ) {
+            result = BoundErrorExpression(syntax)
+            return true
+        }
         if openGenericDefinition == nil && ImportedTypeSymbol.TryCreateSemanticAggregate(
             resolvedClrType,
             $scope.References,
@@ -1218,7 +1248,7 @@ internal partial class ExpressionBinder {
             // so `Settings()` supplies declared defaults instead of selecting
             // that zero-initializing constructor. C# records have no gsc marker
             // and keep using CLR overload resolution (#2291/#2458).
-            if ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _) {
+            if dataClassAggregate!!.IsClass && ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _) {
                 let primaryParameterCount = dataClassAggregate!!.PrimaryConstructorParameters.Length
                 var primaryAcceptsArity = syntax.Arguments.Count <= primaryParameterCount
                 if primaryAcceptsArity {
@@ -1879,6 +1909,9 @@ internal partial class ExpressionBinder {
                 clrType.IsValueType &&
                 !clrType.IsEnum &&
                 !clrType.IsPrimitive &&
+                !(
+                ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out var zeroSemantics) && zeroSemantics!!.IsData
+            ) &&
                 !clrType
                 .ContainsGenericParameters {
                 result = BoundDefaultExpression(

@@ -386,12 +386,20 @@ internal partial class ExpressionBinder {
             typeSimpleName,
             terminalLiteral.TypeArgumentList,
             out var clrType,
-            out _,
-            out _
+            out var openDefinition,
+            out var symbolicArguments
         ) {
             return false
         }
-        result = BindImportedTypeLiteralExpression(terminalLiteral, clrType!!)
+        result = BindImportedTypeLiteralExpression(
+            terminalLiteral,
+            clrType!!,
+            if openDefinition != nil && !symbolicArguments.IsDefaultOrEmpty {
+                ImportedTypeSymbol.GetConstructed(clrType, openDefinition, symbolicArguments)
+            } else {
+                nil
+            }
+        )
         return true
     }
 

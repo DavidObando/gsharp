@@ -57,6 +57,12 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
             TypeSymbol.CollectReferencedTypeParameters(node.Type, this.sink)
         }
         switch node {
+            case BoundLiteralExpression{Value: BoundConstructorCallExpression constructor} {
+                TypeSymbol.CollectReferencedTypeParameters(constructor.StructType, this.sink)
+            }
+            case BoundLiteralExpression{Value: BoundClrConstructorCallExpression constructor} {
+                TypeSymbol.CollectReferencedTypeParameters(constructor.Type, this.sink)
+            }
             case literal is BoundFunctionLiteralExpression when literal.Function?.IsGeneric != true {
                 this.VisitStatement(literal.Body)
             }

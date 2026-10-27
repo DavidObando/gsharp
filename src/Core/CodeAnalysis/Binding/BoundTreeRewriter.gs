@@ -1539,7 +1539,8 @@ abstract class BoundTreeRewriter {
                 node.StructType,
                 builder?.ToImmutable() ?? node.Initializers,
                 copySource,
-                node.IsZeroInitialization
+                node.IsZeroInitialization,
+                node.ResultType
             )
         }
     }

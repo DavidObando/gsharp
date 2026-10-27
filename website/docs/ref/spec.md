@@ -727,7 +727,15 @@ Function types are written `(T1, T2) -> R` — fully-parenthesized parameter typ
 
 ### Structs, classes, data classes/structs, and inline value classes
 
-Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed. Structs are value-like and may declare fields, **in-body instance methods**, properties, events, and `shared` static members; a struct in-body `func` binds as an instance method on the value type with a synthesized by-ref `this`, the same canonical, warning-free site classes use. Structs are constructed via primary constructors and struct literals; plain structs also support explicit `init(...)` constructors. Data and inline structs retain their primary-constructor-only form. An explicit `init(...)` on a plain struct or class cannot duplicate its primary constructor's parameter signature (`GS0284`). Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`). Inside an instance member of a derived class, an `override` (or any other instance member) may invoke the **base class** implementation of an inherited virtual member non-virtually via the **base-class call** syntax `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or the explicit bracketed form `base[BaseClass].Member(args)`. Postfix access applies normally to the result, as in `base.Member(args).Next()`. The call emits as `ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`, so the nearest base implementation runs without re-dispatching through the v-table; this lets an override delegate to the member it shadows without infinite recursion. The member is resolved by walking the base chain, so a grandparent's implementation is reached when the immediate base class does not declare its own override; parameters, generics, and return values are supported. `base.Member(...)` is valid only inside an instance member of a class, or inside a function literal nested in one (the literal keeps its enclosing member's `base`, as a C# lambda or local function does; the compiler routes such a base call, including a generic one or one with `ref`/`out`/`in` arguments or a `ref` return, through a private forwarder method on the class so it stays non-virtual and verifiable); otherwise the call is rejected with GS0383. A base-qualified field or property is also a valid target of compound assignment, `??=` and increment/decrement (`base.count += 1`, `base.Name ??= v`, `base.Position++`), which reads and writes it through the base accessors non-virtually. `base.E += handler` and `base.E -= handler` subscribe through a non-virtual event the base declares (source or imported); a virtual (`open`/`override`) base event is not supported through `base` yet. : the base class may be an **imported / BCL** type — a class deriving from a CLR base (e.g. `System.IO.Stream`, `System.IO.MemoryStream`, or simply `System.Object`) can delegate to an inherited virtual member via `base.Dispose(disposing)`, `base.ToString()`, `base.Position`, etc. The inherited member is resolved against the class's CLR base type (honoring `protected`/`public` accessibility and walking a user → user → BCL chain) and emits the same non-virtual `call`; a base call into an **abstract** BCL member with no implementation (e.g. `base.Read(...)` on `System.IO.Stream`) is rejected with GS0413 (matching C# CS0205). A missing member on any base reports GS0384, and a `base[Type]` selector that is not the actual base class reports GS0385 — see the diagnostics reference. A class method MAY be declared **abstract** by giving an `open func` a `;` no-body marker instead of a `{ … }` block — `open func Area() float64;` — the canonical G# spelling of a C# `abstract` method. An abstract method declares a virtual slot with no implementation (emitted as `MethodAttributes.Abstract | Virtual | NewSlot`, no IL body); it is only valid as an `open` member of an `open class` (otherwise GS0388). A class that declares — or inherits without overriding — an abstract method is itself **abstract**: it is emitted with `TypeAttributes.Abstract` and cannot be instantiated (constructing it is the compile error GS0386, never a runtime failure). A concrete (non-`open`) subclass must `override` every inherited abstract member (otherwise GS0387); an `open` subclass may leave them abstract and remain abstract itself. Abstract methods support parameters, generic type parameters, and reference- or value-typed (including `ref`) return types, and dispatch virtually through the base/abstract slot. A class can also be declared **`abstract class`** explicitly: it is inheritable (the modifier implies `open`), is emitted with `TypeAttributes.Abstract` and cannot be instantiated even when it declares no abstract member; `Foo()` and `Foo{}` are both GS0386. A **`shared class`** is the spelling of a C# `static class`: it is emitted CLR `abstract sealed` and cannot be instantiated, and its body is the shared member list — every field, `const`, property, event and `func` declared directly in it is a shared (static) member, `init { }` is its static initializer, and it has no `shared { }` block of its own (a non-shared class keeps its trailing `shared { }` block). It cannot declare an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (GS0617), or have a base class or interface (GS0619), and it cannot be combined with `open`, `sealed`, `abstract` or `data` (GS0618). Every part of a `partial` shared class carries `shared` (GS0479). `abstract` and `shared` are contextual modifiers valid only on a `class` head.
+Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed. Structs are value-like and may declare fields, **in-body instance methods**, properties, events, and `shared` static members; a struct in-body `func` binds as an instance method on the value type with a synthesized by-ref `this`, the same canonical, warning-free site classes use.
+
+Structs use primary constructors and struct literals.
+Plain structs and data structs also support explicit `init(...)` constructors.
+Data structs also accept the existing `func init(...)` spelling and convenience constructors.
+Inline structs retain their primary-constructor-only form.
+An explicit constructor cannot duplicate its primary constructor's parameter signature (`GS0284`), including an empty data-struct primary list.
+
+Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`). Inside an instance member of a derived class, an `override` (or any other instance member) may invoke the **base class** implementation of an inherited virtual member non-virtually via the **base-class call** syntax `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or the explicit bracketed form `base[BaseClass].Member(args)`. Postfix access applies normally to the result, as in `base.Member(args).Next()`. The call emits as `ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`, so the nearest base implementation runs without re-dispatching through the v-table; this lets an override delegate to the member it shadows without infinite recursion. The member is resolved by walking the base chain, so a grandparent's implementation is reached when the immediate base class does not declare its own override; parameters, generics, and return values are supported. `base.Member(...)` is valid only inside an instance member of a class, or inside a function literal nested in one (the literal keeps its enclosing member's `base`, as a C# lambda or local function does; the compiler routes such a base call, including a generic one or one with `ref`/`out`/`in` arguments or a `ref` return, through a private forwarder method on the class so it stays non-virtual and verifiable); otherwise the call is rejected with GS0383. A base-qualified field or property is also a valid target of compound assignment, `??=` and increment/decrement (`base.count += 1`, `base.Name ??= v`, `base.Position++`), which reads and writes it through the base accessors non-virtually. `base.E += handler` and `base.E -= handler` subscribe through a non-virtual event the base declares (source or imported); a virtual (`open`/`override`) base event is not supported through `base` yet. : the base class may be an **imported / BCL** type — a class deriving from a CLR base (e.g. `System.IO.Stream`, `System.IO.MemoryStream`, or simply `System.Object`) can delegate to an inherited virtual member via `base.Dispose(disposing)`, `base.ToString()`, `base.Position`, etc. The inherited member is resolved against the class's CLR base type (honoring `protected`/`public` accessibility and walking a user → user → BCL chain) and emits the same non-virtual `call`; a base call into an **abstract** BCL member with no implementation (e.g. `base.Read(...)` on `System.IO.Stream`) is rejected with GS0413 (matching C# CS0205). A missing member on any base reports GS0384, and a `base[Type]` selector that is not the actual base class reports GS0385 — see the diagnostics reference. A class method MAY be declared **abstract** by giving an `open func` a `;` no-body marker instead of a `{ … }` block — `open func Area() float64;` — the canonical G# spelling of a C# `abstract` method. An abstract method declares a virtual slot with no implementation (emitted as `MethodAttributes.Abstract | Virtual | NewSlot`, no IL body); it is only valid as an `open` member of an `open class` (otherwise GS0388). A class that declares — or inherits without overriding — an abstract method is itself **abstract**: it is emitted with `TypeAttributes.Abstract` and cannot be instantiated (constructing it is the compile error GS0386, never a runtime failure). A concrete (non-`open`) subclass must `override` every inherited abstract member (otherwise GS0387); an `open` subclass may leave them abstract and remain abstract itself. Abstract methods support parameters, generic type parameters, and reference- or value-typed (including `ref`) return types, and dispatch virtually through the base/abstract slot. A class can also be declared **`abstract class`** explicitly: it is inheritable (the modifier implies `open`), is emitted with `TypeAttributes.Abstract` and cannot be instantiated even when it declares no abstract member; `Foo()` and `Foo{}` are both GS0386. A **`shared class`** is the spelling of a C# `static class`: it is emitted CLR `abstract sealed` and cannot be instantiated, and its body is the shared member list — every field, `const`, property, event and `func` declared directly in it is a shared (static) member, `init { }` is its static initializer, and it has no `shared { }` block of its own (a non-shared class keeps its trailing `shared { }` block). It cannot declare an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (GS0617), or have a base class or interface (GS0619), and it cannot be combined with `open`, `sealed`, `abstract` or `data` (GS0618). Every part of a `partial` shared class carries `shared` (GS0479). `abstract` and `shared` are contextual modifiers valid only on a `class` head.
 
 **Construction versus same-named callables.** A call-shaped construction `T(args)` / `T[A](args)` competes with any callable of the same name in scope. A free (non-receiver) function, a function-valued local, or a member of the enclosing type named `T` shadows the type, so the call binds to that callable. A receiver-clause **extension** function never shadows a constructible source type of the same name: C# never considers an extension method for `new T(...)`, so `Slice[T](owner, 0, n, n)` constructs `Slice[T]` even when an extension `func (s Slice[T]) Slice[T](lo int32, hi int32, max int32)` has the same arity in bare form. Such an extension stays callable in receiver form (`s.Slice(1, 2, 4)`).
 
@@ -741,6 +749,11 @@ Every declared `data class` / `data struct` synthesizes the C# `record` ABI, so 
 * A data class has the protected (private when sealed) copy constructor with parameter `original`, the `<Clone>$` method that `with` / `.copy(...)` call, and the record `EqualityContract` property (`protected virtual`, `private` on a sealed root) that typed equality consults. A body-only type has a parameterless constructor (what `T{X: 1}` uses); a type with a non-empty primary constructor has no additional one, and an empty primary constructor (`data class Empty()`) is itself the parameterless constructor.
 * `Deconstruct` stays G#'s own: positional components when there is a primary constructor, otherwise all fields and then all auto-properties in declaration order, and none for a type without members. This differs from a C# record only for body-only records.
 * `data object { ... }` and `object { ... }` literals keep G#'s equality surface plus `IEquatable<Self>` and print as `{ X = 1, Y = 2 }` with no type name; they get no `PrintMembers`, copy constructor or clone.
+
+`with` and `.copy(...)` require a nonnullable receiver.
+Nullable type arguments are preserved: a `C[string?]` receiver can be copied,
+while a `C[string?]?` receiver must first be narrowed to a nonnullable value.
+The same requirement applies to optional value-type receivers such as `S[string?]?`.
 
 Known gaps: a data class that only synthesizes `PrintMembers` over an inherited abstract `PrintMembers` is rejected with GS0387 (#4876), and an imported non-data class between a record and a data class hides the inherited `PrintMembers` slot (#4877).
 
@@ -1223,7 +1236,7 @@ class Foo {
 }
 ```
 
-The semantics match C#:
+Constructor-owned field initialization follows these rules. Plain struct literals retain the separate rules below:
 
 * An **instance** field initializer (`let`/`var x T = expr`) runs as part of
   **every** instance constructor, **before** the constructor body, in textual
@@ -1246,23 +1259,57 @@ The semantics match C#:
   contexts and from other assemblies. A `const` field with no initializer reports
   `GS0375`; a `const` field whose initializer is not a constant expression reports
   `GS0376`.
-* For **value types** (`struct` / `data struct`), a composite struct literal
-  (`Pt{ ... }`) starts with zero-initialized storage. Generic ownership,
-  primary-parameter scope, or non-public initialized storage requires an
-  owning constructor: primary inputs are evaluated once, then declaration
-  initializers run in declaration order, then explicit non-primary member
-  writes run in literal order. Ordinary omitted primary fields keep the
-  literal's zero value where that default is legal. An omitted primary input
-  whose substituted type requires a non-null managed-reference slot (including
-  nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
-  explicit `default` of that type. Nullable handles remain legal defaults.
-  Other public-only, non-generic literals retain inline
-  initialization for omitted fields. Braces do not execute an authored
-  constructor body; calling `T(...)` still does. Compiler-owned initialization
-  remains distinct when an authored parameterless constructor exists. Braced
-  member/content population runs after primary inputs and declaration
-  initializers. Raw `default(T)` and array element
-  zero-initialization do not invoke these constructors.
+* Fresh **data struct** construction uses an ordinary instance constructor.
+  This includes `T{...}`, structural projections, and ordinary `T(...)` calls.
+  Body-only data structs get a public parameterless constructor unless one is authored.
+  An empty primary list uses its ordinary parameterless constructor.
+  An accessible authored parameterless constructor runs its body; an inaccessible constructor is not bypassed.
+* Constructor arguments run once, in written order, before construction.
+  The constructor establishes sound zeros, stores primary inputs, runs declaration initializers in declaration order, then runs its authored body.
+  A delegating constructor does not repeat the delegated initialization plan.
+  Remaining member expressions run once after construction, immediately before each assignment.
+  Member assignments and collection population retain their written order.
+  The same phases apply to structural spreads with symbolic generic arguments and across `await`:
+  construct the receiver before evaluating an awaited nonprimary member value.
+* A data struct's declaration default still runs when the caller overwrites that field.
+  Its allocations, effects, and exceptions remain observable.
+  A throwing default prevents later member expressions from running.
+  Construction follows ordinary CLR static-initialization rules.
+  An explicit static constructor can therefore run where the old literal used only zero initialization.
+* Existing G# primary-member brace syntax supplies constructor inputs.
+  An omitted primary input receives a legal zero or sound collection zero, not its optional-call default.
+  For `P(A int32, B int32 = 5)`, `P{A: 3}` passes `(3, 0)`, while `P(3)` passes `(3, 5)`.
+  Missing non-null managed-reference inputs, including nested aggregates and nonempty fixed arrays, report `GS0604`.
+  Nullable handles remain legal defaults.
+* Source and imported data structs use the same construction phases.
+  The ordinary constructor and existing primary mapping form the cross-assembly contract.
+  A legacy G# producer without the required constructor reports `GS0267`; recompile that producer and its consumer.
+  An omitted nonnullable array input also reports `GS0267` when required primary collection shape metadata is missing.
+  An explicit primary value remains legal; nullable omission remains null.
+  Select the primary constructor on the open generic definition, then map that same method to the closed type.
+  A foreign type without G# primary metadata uses its accessible parameterless constructor or its implicit zero path,
+  including foreign record structs in symbolic generic spreads. Member names do not select a parameterized constructor.
+  Field names do not authorize selection of an unrelated parameterized constructor.
+  Implementation and reference assemblies expose the same constructor contract.
+* Data struct constructors may initialize their own readonly `let` fields.
+  Caller writes to those fields report located `GS0127` diagnostics and produce no image.
+  A primary input stored inside the constructor is legal.
+  Sound-zero-only initialization cannot bypass readonly storage with external writes or replay a fresh constructor.
+  If no legal sound-zero path exists, report located `GS0127` without an image.
+  Fields remain CLR `InitOnly` fields; they do not become C# record `init` properties.
+  C# consumers use `new S()` or `new S { X = 9 }` for legal mutable overrides.
+* Plain **struct** literals retain their existing initialization model.
+  Generic ownership, primary-parameter scope, or non-public initialized storage can require an owning initializer.
+  Other source-local public-only, non-generic literals initialize omitted fields inline.
+  Explicitly supplied fields skip those inline initializers.
+  Braces do not execute an authored plain-struct constructor body.
+* Raw `default(T)` and zero-initialized array elements do not invoke fresh constructors or declaration defaults.
+  Bare declarations retain sound-zero-only initialization.
+  A nested field without a declaration expression receives only its required sound-zero state.
+  `with` and `.copy` retain value-copy semantics without constructor or declaration-initializer replay.
+
+The constructor-owned data struct model changes the old omitted-only semantics.
+See [ADR-0214](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0214-imported-inline-field-initializers.md) for compatibility and metadata requirements.
 
 ## Expressions
 

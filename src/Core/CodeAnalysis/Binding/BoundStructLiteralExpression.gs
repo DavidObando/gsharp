@@ -8,7 +8,9 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 
@@ -27,12 +29,23 @@ class BoundStructLiteralExpression : BoundExpression {
         init(syntax, structType, initializers, copySource, false)
     }
 
-    init(
+    convenience init(
         syntax SyntaxNode?,
         structType StructSymbol,
         initializers ImmutableArray[BoundFieldInitializer],
         copySource BoundExpression?,
         isZeroInitialization bool
+    ) {
+        init(syntax, structType, initializers, copySource, isZeroInitialization, nil)
+    }
+
+    internal init(
+        syntax SyntaxNode?,
+        structType StructSymbol,
+        initializers ImmutableArray[BoundFieldInitializer],
+        copySource BoundExpression?,
+        isZeroInitialization bool,
+        resultType TypeSymbol?
     ) : base(syntax) {
         if copySource != nil && (!structType.IsData || !initializers.IsEmpty) {
             throw ArgumentException("A copy literal must be a data type without member initializers.", "copySource")
@@ -40,15 +53,17 @@ class BoundStructLiteralExpression : BoundExpression {
         StructType = structType
         CopySource = copySource
         IsZeroInitialization = isZeroInitialization
-        Initializers = if CallsPrimaryConstructor {
-            PreparePrimaryArguments(
-                syntax,
-                structType,
-                initializers.Where((initializer BoundFieldInitializer) -> !initializer.IsDeclarationInitializer)
-                    .ToImmutableArray()
-            )
+        ResultType = resultType
+        let explicitInitializers = if CallsDataConstructor || CallsPrimaryConstructor {
+            initializers.Where((initializer BoundFieldInitializer) -> !initializer.IsDeclarationInitializer)
+                .ToImmutableArray()
         } else {
             initializers
+        }
+        Initializers = if CallsPrimaryConstructor {
+            PreparePrimaryArguments(syntax, structType, explicitInitializers)
+        } else {
+            explicitInitializers
         }
     }
 
@@ -72,12 +87,59 @@ class BoundStructLiteralExpression : BoundExpression {
         get;
     }
 
-    override prop Type TypeSymbol -> CopySource?.Type ?? StructType
+    internal prop ResultType TypeSymbol? {
+        get;
+    }
+
+    override prop Type TypeSymbol -> CopySource?.Type ?? ResultType ?? StructType
     override prop Kind BoundNodeKind -> BoundNodeKind.StructLiteralExpression
+
+    internal prop CallsDataConstructor bool -> !IsZeroInitialization &&
+        CopySource == nil &&
+        StructType.UsesConstructorOwnedDataConstruction
+
+    internal func IsInTypeZeroInitializer(initializer BoundFieldInitializer) bool -> IsZeroInitialization &&
+        StructType.ClrType == nil &&
+        (StructType.Definition ?? StructType).ValueStructDefaultCtorIsZeroInitialization &&
+        (StructType.Definition ?? StructType).NeedsSynthesizedValueStructDefaultCtor &&
+        initializer.Field is {} field &&
+        MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(Syntax, StructType, field) != nil
 
     internal prop CallsPrimaryConstructor bool -> !IsZeroInitialization &&
         CopySource == nil &&
         UsesPrimaryConstructor(StructType)
+
+    /// Checks imported value-type stores after every construction path selects its initializers.
+    internal func ValidateInitializerWrites(diagnostics DiagnosticBag, anchor SyntaxNode?) {
+        // Class positional initializers may instead be arguments to an owning CLR constructor.
+        if StructType.IsClass {
+            return
+        }
+        for initializer in Initializers {
+            if initializer.Field is not{} field ||
+                CanWriteInitializerField(initializer.FieldDeclaringType ?? StructType, field) ||
+                IsInTypeZeroInitializer(initializer) ||
+                (CallsPrimaryConstructor && GetPrimaryMember(StructType, field.Name) == field) {
+                continue
+            }
+            let syntax = anchor ?? Syntax
+            let location = if syntax is StructLiteralExpressionSyntax literal {
+                literal
+                    .Initializers
+                    .FirstOrDefault(
+                    (candidate FieldInitializerSyntax) -> candidate.FieldIdentifier.ValueText == field.Name
+                )
+                    ?.FieldIdentifier
+                    .Location ??
+                    literal
+                    .TypeIdentifier
+                    .Location
+            } else {
+                syntax?.Location ?? default(TextLocation)
+            }
+            diagnostics.ReportCannotAssign(location, field.Name)
+        }
+    }
 
     internal func GetPrimaryArgument(name string) BoundFieldInitializer? {
         let member = GetPrimaryMember(StructType, name)
@@ -121,9 +183,95 @@ class BoundStructLiteralExpression : BoundExpression {
     }
 
     shared {
-        internal func UsesPrimaryConstructor(type StructSymbol) bool -> type.ClrType == nil &&
-            (type.IsClass || (type.Definition ?? type).IsData) &&
-            (type.Definition ?? type).HasDeclaredPrimaryConstructor
+        internal func UsesPrimaryConstructor(type StructSymbol) bool -> if type.IsClass {
+            type.ClrType == nil && (type.Definition ?? type).HasDeclaredPrimaryConstructor
+        } else {
+            type.HasDataConstructionPrimary
+        }
+
+        internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool ->
+        !(type.ClrType != nil && field.Accessibility == Accessibility.Private) &&
+            (!field.IsReadOnly || (type.ClrType == nil && (!type.IsData || type.IsClass)))
+
+        internal func ValidateDataConstructor(
+            type StructSymbol,
+            diagnostics DiagnosticBag,
+            syntax SyntaxNode?,
+            currentFunction FunctionSymbol?,
+            canAccessInternal bool,
+            checkAccessibility bool = true,
+            suppliedPrimaryInputs IEnumerable[string]? = nil
+        ) bool {
+            if !type.UsesConstructorOwnedDataConstruction {
+                return true
+            }
+            var valid = true
+            if type.ClrType is {} imported {
+                let constructor = type.GetDataConstructionConstructor()
+                valid = if constructor != nil {
+                    !checkAccessibility ||
+                        constructor.IsPublic ||
+                        (canAccessInternal && (constructor.IsAssembly || constructor.IsFamilyOrAssembly))
+                } else {
+                    !ImportedAssemblySemantics.TryGetTypeSemantics(imported, out _) &&
+                        !type.HasDataConstructionPrimary &&
+                        !ClrTypeUtilities
+                        .SafeGetConstructors(
+                        imported,
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic
+                    )
+                        .Any((candidate System.Reflection.ConstructorInfo) -> candidate.GetParameters().Length == 0)
+                }
+                if valid &&
+                    type.HasDataConstructionPrimary &&
+                    (suppliedPrimaryInputs != nil || syntax is StructLiteralExpressionSyntax) {
+                    let suppliedNames = suppliedPrimaryInputs ??
+                        (
+                        cast[StructLiteralExpressionSyntax](syntax)
+                            .Initializers
+                            .Where(
+                            (initializer FieldInitializerSyntax) ->
+                            initializer.Value is not CollectionInitializerExpressionSyntax{Target: nil}
+                        )
+                            .Select((initializer FieldInitializerSyntax) -> initializer.FieldIdentifier.ValueText)
+                    )
+                    for parameter in type.PrimaryConstructorParameters {
+                        if !suppliedNames.Contains(parameter.Name) &&
+                            parameter
+                            .Type
+                            .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                            parameter
+                            .Type
+                            .ClrType
+                            ?.IsArray == true &&
+                            MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) == nil {
+                            valid = false
+                            break
+                        }
+                    }
+                }
+            } else if !type.HasDataConstructionPrimary {
+                let constructor = type.EffectiveExplicitConstructors.FirstOrDefault(
+                    (candidate ConstructorSymbol) -> candidate.Parameters.IsEmpty
+                )
+                valid = !checkAccessibility || constructor == nil || AccessibilityChecker.IsAccessible(
+                    constructor.Function.Accessibility,
+                    type,
+                    currentFunction
+                )
+            }
+            if !valid {
+                let location = if syntax is StructLiteralExpressionSyntax literal {
+                    literal.TypeIdentifier.Location
+                } else {
+                    syntax?.Location ?? default(TextLocation)
+                }
+                diagnostics.ReportNoApplicableOverload(location, type.Name)
+            }
+            return valid
+        }
 
         internal func PreparePrimaryArguments(
             syntax SyntaxNode?,
@@ -144,7 +292,7 @@ class BoundStructLiteralExpression : BoundExpression {
                 }
                 // Defaults are children of the bound literal, so rewriting and
                 // slot planning see exactly the nodes that emission will consume.
-                let value = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, parameter.Type) ??
+                let value = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) ??
                     BoundDefaultExpression(syntax, parameter.Type)
                 builder ??= initializers.ToBuilder()
                 builder!!.Add(
