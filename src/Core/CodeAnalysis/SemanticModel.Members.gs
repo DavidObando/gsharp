@@ -537,20 +537,39 @@ partial class SemanticModel {
                 let declared = member.DeclaringSyntaxNodes[0].FirstAncestorOrSelf[StructDeclarationSyntax]()
                 if declared != nil {
                     for candidate in structure.GetHierarchy() {
-                        if candidate.Name == declared
-                            .Identifier
-                            .ValueText ||
-                            candidate
-                            .Definition
-                            ?.Name == declared
-                            .Identifier
-                            .ValueText {
+                        if DeclaredBy(candidate, declared) {
                             return candidate
                         }
                     }
                 }
             }
             return receiver
+        }
+
+        // Declaration identity, with the parts of a partial type: two types can share a simple name.
+        private func DeclaredBy(candidate StructSymbol, declared StructDeclarationSyntax) bool {
+            let declaration = (candidate.Definition ?? candidate).Declaration
+            if declaration == nil {
+                return false
+            }
+            if object.ReferenceEquals(declaration, declared) {
+                return true
+            }
+            if declaration.PartialPartLocations.IsDefaultOrEmpty {
+                return false
+            }
+            for location in declaration.PartialPartLocations {
+                if SourcePathIdentity.AreSame(location.FileName, declared.SyntaxTree.Text?.FileName) &&
+                    location
+                    .Span
+                    .Start == declared
+                    .Identifier
+                    .Span
+                    .Start {
+                    return true
+                }
+            }
+            return false
         }
 
         func CanAccess(member Symbol, receiver TypeSymbol) bool {
