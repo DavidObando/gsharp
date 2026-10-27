@@ -99,13 +99,16 @@ internal shared class MagicCollectionZeroValue {
     /// struct's fields are fully bound (see the "actual synthesis" call
     /// sites that gate on this candidacy).
     /// @param type The declared field/slot type.
-    /// @returns True when the type is directly magic, or a non-class non-inline struct that might
-    /// recursively contain one.
+    /// @returns True for a magic collection, imported value type, or non-class non-inline source struct.
     func MightNeedZeroValue(type TypeSymbol) bool -> type is MapTypeSymbol ||
         type is SliceTypeSymbol ||
         type is ArrayTypeSymbol ||
         type is RectangularArrayTypeSymbol ||
         type is SequenceTypeSymbol ||
+        type is ImportedTypeSymbol &&
+        type
+        .Type
+        .IsValueType ||
         type is StructSymbol &&
         type.IsClass == false &&
         type.IsInline == false
@@ -234,6 +237,10 @@ internal shared class MagicCollectionZeroValue {
             nil,
             structField
         ) != nil: "struct"
+        case importedField is ImportedTypeSymbol when importedField
+            .Type
+            .IsValueType &&
+            TrySynthesizeEmptyInstance(nil, importedField) != nil: "struct"
         default: default(string?)
     }
 
