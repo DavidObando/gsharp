@@ -1026,7 +1026,19 @@ shared class SignatureHelpComputer {
         if active < 0 && resolved is ImportedFunctionSymbol resolvedImported {
             active = candidates.FindIndex(
                 (c Symbol) -> c is ImportedFunctionSymbol imported && imported.Method.MetadataToken ==
-                resolvedImported.Method.MetadataToken
+                resolvedImported
+                    .Method
+                    .MetadataToken &&
+                    imported
+                    .Method
+                    .Module == resolvedImported
+                    .Method
+                    .Module &&
+                    imported
+                    .Method
+                    .DeclaringType == resolvedImported
+                    .Method
+                    .DeclaringType
             )
         }
         active = Math.Max(active, 0)
@@ -1049,7 +1061,7 @@ shared class SignatureHelpComputer {
                 .GetParameters()
                 .Select(
                 (p ParameterInfo) -> ParameterInformation{
-                    Label: "${p.Name} ${SymbolDisplay.ToTypeDisplayString(p.ParameterType)}"
+                    Label: "${p.Name} ${SymbolDisplay.ToDisplayString(p.ParameterType, SymbolDisplayFormat.Signature)}"
                 }
             )
                 .ToList()

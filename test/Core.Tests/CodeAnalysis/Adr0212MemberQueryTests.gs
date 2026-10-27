@@ -122,6 +122,14 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func MemberGroup_ArgumentProbe_DoesNotReplaceTheCalleesGroup() {
+        // The method-group argument is resolved against the Console overloads inside the call.
+        let group = Group("PProbe")
+        Assert.Equal(2, group.Length)
+        Assert.All(group, (s Symbol) -> Assert.IsType[FunctionSymbol](s))
+    }
+
+    @Fact
     func LookupMembers_ImportedLiteralField_CarriesItsConstant() {
         let model = ModelOf(Trees[0].Root)
         let max = Assert.Single(
@@ -359,6 +367,9 @@ class Cat {
     func Purr(a string) int32 { return 0 }
 }
 
+func WriteLine(callback Action[object]) int32 { return 0 }
+func WriteLine(a int32, b int32) int32 { return a }
+
 class Util {
     shared {
         func Make(a int32) int32 { return a }
@@ -386,6 +397,7 @@ func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder) {
     b.Put(1) // PBoxed
     p.Go(1) // PPartial
     Util.Make(1) // PStatic
+    WriteLine(Console.WriteLine) // PProbe
     // PLookup
 }
 `

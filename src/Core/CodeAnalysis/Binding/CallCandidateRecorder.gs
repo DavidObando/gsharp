@@ -96,26 +96,49 @@ internal shared class CallCandidateRecorder {
     private func Select(frame Frame, called Symbol) ImmutableArray[object] {
         var best ImmutableArray[object] = default(ImmutableArray[object])
         for set in frame.Sets {
-            if (best.IsDefault || set.Length >= best.Length) && ContainsName(set, called.Name) {
+            if (best.IsDefault || set.Length >= best.Length) && ContainsCallee(set, called) {
                 best = set
             }
         }
         return best
     }
 
-    private func ContainsName(set ImmutableArray[object], name string) bool {
+    // A probe of an argument conversion or an inference holds other methods, so a set counts only when it
+    // holds the called method itself.
+    private func ContainsCallee(set ImmutableArray[object], called Symbol) bool {
         for candidate in set {
-            if NameOf(candidate) == name {
+            if IsCallee(candidate, called) {
                 return true
             }
         }
         return false
     }
 
-    private func NameOf(candidate object) string? -> switch candidate {
-        case function is FunctionSymbol: function.Name
-        case method is MethodBase: method.Name
-        default: default(string?)
+    private func IsCallee(candidate object, called Symbol) bool {
+        if candidate is FunctionSymbol function {
+            return object.ReferenceEquals(function, called) ||
+                (
+                called is FunctionSymbol other && function.Declaration != nil && object.ReferenceEquals(
+                    function.Declaration,
+                    other.Declaration
+                )
+            )
+        }
+        if candidate is MethodBase method && called is ImportedFunctionSymbol imported {
+            let target = imported.Method
+            let left = if method is MethodInfo{IsGenericMethod: true} openLeft {
+                openLeft.GetGenericMethodDefinition()
+            } else {
+                method
+            }
+            let right = if target.IsGenericMethod {
+                target.GetGenericMethodDefinition()
+            } else {
+                cast[MethodBase](target)
+            }
+            return left.MetadataToken == right.MetadataToken && left.Module == right.Module && left.Name == right.Name
+        }
+        return false
     }
 
     /// The candidate sets of one call being bound.
