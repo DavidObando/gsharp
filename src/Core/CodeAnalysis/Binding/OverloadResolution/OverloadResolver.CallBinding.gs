@@ -666,6 +666,7 @@ internal partial class OverloadResolver {
         aggregate.IsClass ||
             aggregate.IsInline ||
             aggregate.HasPrimaryConstructor ||
+            aggregate.HasSynthesizedDataConstructor ||
             !aggregate
             .EffectiveExplicitConstructors
             .IsDefaultOrEmpty

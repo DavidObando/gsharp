@@ -749,6 +749,10 @@ Every declared `data class` / `data struct` synthesizes the C# `record` ABI, so 
 * `Deconstruct` stays G#'s own: positional components when there is a primary constructor, otherwise all fields and then all auto-properties in declaration order, and none for a type without members. This differs from a C# record only for body-only records.
 * `data object { ... }` and `object { ... }` literals keep G#'s equality surface plus `IEquatable<Self>` and print as `{ X = 1, Y = 2 }` with no type name; they get no `PrintMembers`, copy constructor or clone.
 
+`with` and `.copy(...)` require a nonnullable receiver.
+Nullable type arguments are preserved: a `C[string?]` receiver can be copied,
+while a `C[string?]?` receiver must first be narrowed to a nonnullable value.
+
 Known gaps: a data class that only synthesizes `PrintMembers` over an inherited abstract `PrintMembers` is rejected with GS0387 (#4876), and an imported non-data class between a record and a data class hides the inherited `PrintMembers` slot (#4877).
 
 ```gsharp title="samples/DataStruct.gs"

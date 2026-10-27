@@ -920,6 +920,9 @@ public data struct Optional {
 public data struct PrimaryOptional(A int32 = 5) {
     public init() { A = 7 }
 }
+public data struct SynthBody { public var X int32 = 7 }
+public data struct SynthEmpty() { public var X int32 = 11 }
+public func SourceZeroDefaults() int32 -> SynthBody().X * 100 + SynthEmpty().X
 public func SourceOptionalDefaults() int32 ->
     Optional().A * 100 + PrimaryOptional().A * 10 + PrimaryOptional{}.A`
         const source = `import overload5296
@@ -937,9 +940,16 @@ Console.WriteLine(Optional{}.A)
 Console.WriteLine(PrimaryOptional().A)
 Console.WriteLine(PrimaryOptional(6).A)
 Console.WriteLine(PrimaryOptional{}.A)
-Console.WriteLine(SourceOptionalDefaults())`
+Console.WriteLine(SourceOptionalDefaults())
+data struct LocalBody { public var X int32 = 13 }
+data struct LocalEmpty() { public var X int32 = 17 }
+Console.WriteLine(LocalBody().X)
+Console.WriteLine(LocalEmpty().X)
+Console.WriteLine(SynthBody().X)
+Console.WriteLine(SynthEmpty().X)
+Console.WriteLine(SourceZeroDefaults())`
         Assert.Equal(
-            ExpectedConsoleBytes("1\n2\n8\n9\n1\n6\n1\n7\n6\n0\n170\n"),
+            ExpectedConsoleBytes("1\n2\n8\n9\n1\n6\n1\n7\n6\n0\n170\n13\n17\n7\n11\n711\n"),
             CompileAndRunExact(source, library, "overload5296", useReferenceAssembly)
         )
     }
