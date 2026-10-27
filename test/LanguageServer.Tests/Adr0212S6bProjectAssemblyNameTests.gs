@@ -129,8 +129,31 @@ open class Adr0212S6bProjectAssemblyNameTests {
         Assert.True(HasInternalAccessErrors(back))
     }
 
+    // True when the compilation rejects the internal `Hidden` type. A rejection must be exactly GS0157 on
+    // `Hidden` (line 4, column 12 of the fixture source), so an unrelated import or binding failure fails the
+    // test instead of passing as a rejection.
+    @Fact
+    func RenamingAProjectWithoutReferences_ThenEditing_BindsWithTheNewName() {
+        let project = ProjectState("/test/project.gsproj")
+        project.AssemblyName = "Before"
+        project.UpdateFile("/test/a.gs", "package P\nfunc A() int32 {\n    return 1\n}\n")
+        Assert.Equal("Before", project.GetCompilation().AssemblyName)
+        project.AssemblyName = "After"
+        project.UpdateFile("/test/a.gs", "package P\nfunc A() int32 {\n    return 2\n}\n")
+        Assert.Equal("After", project.GetCompilation().AssemblyName)
+    }
+
     private func HasInternalAccessErrors(compilation Compilation) bool {
-        return compilation.BoundProgram.Diagnostics.Any((d Diagnostic) -> d.IsError)
+        let errors = compilation.BoundProgram.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        if errors.Length == 0 {
+            return false
+        }
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0157", error.Id)
+        Assert.Equal(3, error.Location.StartLine)
+        Assert.Equal(11, error.Location.StartCharacter)
+        Assert.Equal("Hidden".Length, error.Location.Span.Length)
+        return true
     }
 
     private class Fixture : IDisposable {

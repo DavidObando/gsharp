@@ -85,8 +85,12 @@ open class ProjectState {
                 if !string.Equals(assemblyName, value, StringComparison.Ordinal) {
                     assemblyName = value
                     Invalidate()
-                    // The resolver carries the consumer name for friend checks; a new name gets a new resolver
-                    // and, with it, a from-scratch compilation rather than a successor of the old name.
+                    // The resolver carries the consumer name for friend checks, and a successor copies its
+                    // predecessor's name. So a new name retires the cached compilation (the next GetCompilation
+                    // binds from scratch, even when the project has no references and so no resolver) and
+                    // drops the resolver.
+                    RetireCompilation_NoLock()
+                    compilation = nil
                     cachedResolver = nil
                     resolverReferences = nil
                 }
