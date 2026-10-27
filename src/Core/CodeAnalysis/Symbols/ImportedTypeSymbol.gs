@@ -602,6 +602,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 )
             }
             let primaryConstructorParameters = BuildPrimaryConstructorParameters(
+                type,
                 fieldBuilder.ToImmutable(),
                 propertyBuilder.ToImmutable(),
                 fieldByToken,
@@ -698,6 +699,7 @@ class ImportedTypeSymbol : TypeSymbol {
         }
 
         private func BuildPrimaryConstructorParameters(
+            type Type,
             fields ImmutableArray[FieldSymbol],
             properties ImmutableArray[PropertySymbol],
             fieldByToken Dictionary[int32, FieldSymbol]?,
@@ -715,13 +717,22 @@ class ImportedTypeSymbol : TypeSymbol {
             for var i = 0; i < semantics.PrimaryConstructorParameterNames.Length; i++ {
                 let name = semantics.PrimaryConstructorParameterNames[i]
                 var parameter ParameterSymbol? = nil
-                // Prefer the exact backing field recorded by metadata token
-                // (issue #1953 follow-up) — this is immune to the parameter name
-                // ever diverging from the field name (renames, lowering,
-                // mangling). Only fall back to a name-based lookup when no token
-                // was recorded (older payload shape) or the token failed to
-                // resolve (e.g. a property-backed parameter).
-                if !tokens.IsDefaultOrEmpty &&
+                // Foreign records retain property identity; G# metadata retains field-token ownership.
+                if !semantics
+                    .PrimaryConstructorProperties
+                    .IsDefaultOrEmpty &&
+                    i < semantics
+                    .PrimaryConstructorProperties
+                    .Length {
+                    let selectedProperty = ClrTypeUtilities.FindMetadataDefinition(
+                        type,
+                        semantics.PrimaryConstructorProperties[i],
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    ) as PropertyInfo
+                    if selectedProperty != nil {
+                        parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(selectedProperty))
+                    }
+                } else if !tokens.IsDefaultOrEmpty &&
                     i < tokens.Length &&
                     tokens[i] != 0 &&
                     fieldByToken != nil &&
@@ -784,19 +795,29 @@ class ImportedTypeSymbol : TypeSymbol {
                         matches = false
                         break
                     }
-                    let tokens = shape.PrimaryConstructorParameterFieldTokens
-                    let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
-                        fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
+                    var member MemberInfo? = nil
+                    if !shape
+                        .PrimaryConstructorProperties
+                        .IsDefaultOrEmpty &&
+                        i < shape
+                        .PrimaryConstructorProperties
+                        .Length {
+                        member = shape.PrimaryConstructorProperties[i]
                     } else {
-                        fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == primaryParameters[i].Name)
-                    }
-                    let member MemberInfo? = if field != nil {
-                        field
-                    } else {
-                        definition.GetProperty(
-                            primaryParameters[i].Name,
-                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                        )
+                        let tokens = shape.PrimaryConstructorParameterFieldTokens
+                        let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
+                            fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
+                        } else {
+                            fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == primaryParameters[i].Name)
+                        }
+                        member = if field != nil {
+                            field
+                        } else {
+                            definition.GetProperty(
+                                primaryParameters[i].Name,
+                                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                            )
+                        }
                     }
                     if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
                         ClrNullability.GetSignatureType(member)

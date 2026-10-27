@@ -226,13 +226,14 @@ internal shared class ImportedAssemblySemantics {
                 return false
             }
         }
-        let (parameterNames, parameterFieldTokens) = BuildRecordPrimaryConstructorShape(type)
+        let (parameterNames, parameterFieldTokens, parameterProperties) = BuildRecordPrimaryConstructorShape(type)
         semantics = ImportedTypeSemantics(
             MetadataToken: type.MetadataToken,
             IsValueType: type.IsValueType,
             IsData: true,
             PrimaryConstructorParameterNames: parameterNames,
-            PrimaryConstructorParameterFieldTokens: parameterFieldTokens
+            PrimaryConstructorParameterFieldTokens: parameterFieldTokens,
+            PrimaryConstructorProperties: parameterProperties
         )
         return true
     }
@@ -368,7 +369,8 @@ internal shared class ImportedAssemblySemantics {
     // (an empty `{ }`  member list).
     private func BuildRecordPrimaryConstructorShape(type Type)(
         Names ImmutableArray[string],
-        FieldTokens ImmutableArray[int32]
+        FieldTokens ImmutableArray[int32],
+        Properties ImmutableArray[PropertyInfo]
     ) {
         let definition = if type.IsGenericType {
             type.GetGenericTypeDefinition()
@@ -382,7 +384,7 @@ internal shared class ImportedAssemblySemantics {
             }
         }
         if autoProperties.Count == 0 {
-            return (ImmutableArray[string].Empty, ImmutableArray[int32].Empty)
+            return (ImmutableArray[string].Empty, ImmutableArray[int32].Empty, ImmutableArray[PropertyInfo].Empty)
         }
         var bestMatch ConstructorInfo? = nil
         var bestParameters = Array.Empty[ParameterInfo]()
@@ -411,20 +413,22 @@ internal shared class ImportedAssemblySemantics {
             }
         }
         if bestMatch == nil {
-            return (ImmutableArray[string].Empty, ImmutableArray[int32].Empty)
+            return (ImmutableArray[string].Empty, ImmutableArray[int32].Empty, ImmutableArray[PropertyInfo].Empty)
         }
         let namesBuilder = ImmutableArray.CreateBuilder[string](bestParameters.Length)
         let tokensBuilder = ImmutableArray.CreateBuilder[int32](bestParameters.Length)
+        let propertiesBuilder = ImmutableArray.CreateBuilder[PropertyInfo](bestParameters.Length)
         for parameter in bestParameters {
             let name string? = parameter.Name
             namesBuilder.Add(name ?? string.Empty)
+            propertiesBuilder.Add(autoProperties[name ?? string.Empty])
             let backingField = definition.GetField(
                 "<$name>k__BackingField",
                 BindingFlags.NonPublic | BindingFlags.Instance
             )
             tokensBuilder.Add(backingField?.MetadataToken ?? 0)
         }
-        return (namesBuilder.ToImmutable(), tokensBuilder.ToImmutable())
+        return (namesBuilder.ToImmutable(), tokensBuilder.ToImmutable(), propertiesBuilder.ToImmutable())
     }
 
     private func ReadAssemblySemantics(assembly Assembly) AssemblySemantics {
@@ -592,5 +596,6 @@ internal data class ImportedTypeSemantics(
     IsData bool,
     PrimaryConstructorParameterNames ImmutableArray[string],
     PrimaryConstructorParameterFieldTokens ImmutableArray[int32] = default(ImmutableArray[int32]),
-    InheritanceMode ImportedInheritanceMode = ImportedInheritanceMode.Unknown
+    InheritanceMode ImportedInheritanceMode = ImportedInheritanceMode.Unknown,
+    PrimaryConstructorProperties ImmutableArray[PropertyInfo] = default(ImmutableArray[PropertyInfo])
 ) : IEquatable[ImportedTypeSemantics] { }

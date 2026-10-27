@@ -862,6 +862,52 @@ System.Console.WriteLine(call.Value)
         Assert.Equal("default\n7\ndefault\n0\n", fixture.Run(dll))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_PrimaryPropertyHidesInheritedField(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "PropertyContract5419.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+namespace PropertyContract5419;
+public record Base {
+    public int Value;
+}
+public record Box<T>(T Value) : Base {
+    public new T Value { get; init; } = Value;
+    public string Selected { get; } = "primary";
+    public Box(int Value) : this(default(T)!) { Selected = "secondary"; }
+}`, "PropertyContract5419", reference)
+        IlVerifier.Verify(contract)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let dll = fixture.Compile(`import PropertyContract5419
+let value = Box[int32]{Value: 7}
+System.Console.WriteLine(value.Value)
+System.Console.WriteLine(value.Selected)
+`, "PrimaryProperty", true, "/r:" + selected)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("7\nprimary\n", fixture.Run(dll))
+        let generic = fixture.Compile(`import PropertyContract5419
+data struct Point(X int32)
+func Build[T](value T) Box[T] -> Box[T]{Value: value}
+let nullable = Build[string?](nil)
+System.Console.WriteLine(nullable.Value == nil)
+System.Console.WriteLine(nullable.Selected)
+let point = Build[Point](Point{X: 9})
+System.Console.WriteLine(point.Value.X)
+System.Console.WriteLine(point.Selected)
+let call = Box[string?](nil)
+System.Console.WriteLine(call.Value == nil)
+System.Console.WriteLine(call.Selected)
+`, "GenericPrimaryProperty", true, "/r:" + selected)
+        IlVerifier.Verify(generic, additionalReferences: []string{contract})
+        Assert.Equal("True\nprimary\n9\nprimary\nTrue\nprimary\n", fixture.Run(generic))
+    }
+
     @Fact
     func ImportedGenericDataClassLiteral_UnknownCollectionOmissionsAreDiagnosedAndExplicitInputsWork() {
         using let fixture = NativeSliceLanguageTests.Fixture()
