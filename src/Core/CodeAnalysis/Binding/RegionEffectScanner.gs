@@ -258,14 +258,33 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.BlockStatement {
                 VisitBlock(cast[BlockStatementSyntax](node))
             }
+            case SyntaxKind.BlockExpression {
+                // The declarations of a block expression are not visible after it.
+                let blockExpression = cast[BlockExpressionSyntax](node)
+                Push()
+                for statement in blockExpression.Statements {
+                    Visit(statement)
+                }
+                Visit(blockExpression.Expression)
+                Pop()
+            }
+            case SyntaxKind.ListPattern {
+                // A list pattern reads the length and the elements of its subject (rule W5).
+                RecordMemberRead()
+                VisitChildren(node)
+            }
             case SyntaxKind.IfStatement {
                 let ifStatement = cast[IfStatementSyntax](node)
+                // The initializer scope encloses both arms. The condition and the then branch have a scope
+                // of their own, so a pattern variable of the condition is not visible in the else arm.
                 Push()
                 Visit(ifStatement.Initializer)
+                Push()
                 Visit(ifStatement.Condition)
                 Visit(ifStatement.ThenStatement)
                 Pop()
                 Visit(ifStatement.ElseClause)
+                Pop()
             }
             case SyntaxKind.IfLetStatement {
                 let ifLet = cast[IfLetStatementSyntax](node)
@@ -344,6 +363,10 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.PropertyPattern {
                 let pattern = cast[PropertyPatternSyntax](node)
                 Declare(pattern.Designation, "pattern")
+                // Each field of the pattern reads a member of the subject (rule W5). `{ }` is a null test.
+                for field in pattern.Fields {
+                    RecordMemberRead()
+                }
                 VisitChildren(node)
             }
             case SyntaxKind.SlicePattern {

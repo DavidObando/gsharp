@@ -479,6 +479,27 @@ open class Adr0213RegionEffectScannerTests {
                 "while c {\nvar t = \"x\"\nlet ref a = t\na = nil\n}",
                 "flags=[alias-take] writes=[]"
             )
+            Add("W5", "list-pattern", "while c { if xs is [1] { } }", "flags=[member-read] writes=[]")
+            Add("W5", "property-pattern-field", "while c { if v is { Value: 1 } { } }", "flags=[member-read] writes=[]")
+            Add("W5", "empty-property-pattern-is-a-null-test", "while c { if v is { } { } }", "flags=[] writes=[]")
+            Add(
+                "W1",
+                "block-expression-scope",
+                "while c {\nlet v = if c2 {\nlet s = \"x\"\ns\n} else {\n\"\"\n}\ns = nil\n}",
+                "flags=[] writes=[s]"
+            )
+            Add(
+                "W1",
+                "if-initializer-covers-the-else-arm",
+                "while c { if var s string? = nil; c2 { } else { s = nil } }",
+                "flags=[] writes=[]"
+            )
+            Add(
+                "W3",
+                "ref-local-shadows-its-own-target",
+                "while c {\nlet ref x = x\nx = 1\n}",
+                "flags=[alias-take] writes=[x]"
+            )
             return rows
         }
 
