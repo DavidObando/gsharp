@@ -282,6 +282,7 @@ def main():
         s = json.loads((from_corpus / "stats.json").read_text())
         assert (s["green"], s["floor"], s["baseline"]) == (2, floor, "failed"), s
         assert gate.returncode != 0 and f"fell below floor {floor}" in gate.stderr, gate.stderr
+        shard_with_runner_local_oracle(d)
         single_job_with_separate_corpus(d)
     print("OK")
 
@@ -300,11 +301,18 @@ case "$verb" in
     mkdir -p "$(get --out)" "$(get --artifacts)/r1"
     echo '{"runId":"r1","succeeded":true,"apps":[{"appId":"src/A/A.csproj","succeeded":true,"stages":[{"stage":"translate","status":"passed"}]}]}' \
       > "$(get --artifacts)/r1/run.json" ;;
-  capture-test-oracle) mkdir -p "$(get --out)" ;;
+  capture-test-oracle)
+    [[ ${STUB_CAPTURE_FAIL:-0} == 1 ]] && exit 1
+    mkdir -p "$(get --out)"
+    printf '%s' "${STUB_CASES:-runner cases}" > "$(get --out)/cases"
+    printf '%s\n' "${args[@]}" > "$(get --out)/capture-args" ;;
   validate)
     { ls "$(get --migrated)/.nugs"; echo "channels=${GsharpChannelsRuntimeAssemblyFullPath:-<unset>}"; } > "$STUB_LOG"
+    status=passed
+    [[ -f "$(get --csharp-test-oracle)/cases" ]] &&
+      [[ $(cat "$(get --csharp-test-oracle)/cases") == "${STUB_CASES:-runner cases}" ]] || status=failed
     mkdir -p "$(get --artifacts)/r2"
-    echo '{"apps":[{"appId":"src/A/A.csproj","succeeded":true,"stages":[{"stage":"compile","status":"passed"},{"stage":"ilverify","status":"passed"},{"stage":"test-parity","status":"passed"}]}]}' \
+    echo "{\"apps\":[{\"appId\":\"src/A/A.csproj\",\"succeeded\":$([[ $status == passed ]] && echo true || echo false),\"stages\":[{\"stage\":\"compile\",\"status\":\"passed\"},{\"stage\":\"ilverify\",\"status\":\"passed\"},{\"stage\":\"test-parity\",\"status\":\"$status\"}]}]}" \
       > "$(get --artifacts)/r2/run.json" ;;
   *) echo "stub dotnet: unexpected $verb" >&2; exit 2 ;;
 esac
@@ -340,6 +348,45 @@ def single_job_with_separate_corpus(d: Path) -> None:
     # One green app is far below the real greenFloor: the gate's verdict and
     # exit status come through.
     assert run.returncode != 0 and stats["baseline"] == "failed", run.stderr[-2000:]
+
+
+def shard_with_runner_local_oracle(d: Path) -> None:
+    """Run the real shard script with a process double for the SDK and CLI.
+
+    The producer lists three closures; the validator has four. A failed
+    local capture must not fall back to the producer's stale oracle.
+    """
+    root = d / "local-oracle"
+    (root / "migrated" / ".nugs").mkdir(parents=True)
+    manifest = root / "runs" / "r1"
+    manifest.mkdir(parents=True)
+    (manifest / "run.json").write_text("{}")
+    (root / "migrate-run-dir.txt").write_text(str(manifest))
+    (root / "csharp-tests").mkdir()
+    (root / "csharp-tests" / "cases").write_text("three closures")
+    stub = d / "oracle-bin"
+    stub.mkdir()
+    (stub / "dotnet").write_text(STUB_DOTNET)
+    (stub / "dotnet").chmod(0o755)
+    env = dict(os.environ, PATH=f"{stub}:{os.environ['PATH']}",
+               SELFMIG_GATE_ROOT=str(root), SELFMIG_SOURCE_ROOT=str(HERE.parent),
+               STUB_LOG=str(d / "oracle-validate.log"), STUB_CASES="four closures")
+    for capture_fails in (False, True):
+        env["STUB_CAPTURE_FAIL"] = "1" if capture_fails else "0"
+        run = subprocess.run(
+            ["bash", str(HERE / "run-cs2gs-selfmig-validate.sh"), "local", "src/A/A.csproj"],
+            capture_output=True, text=True, env=env)
+        assert run.returncode == 0, run.stderr
+        shard = root / "shard-local"
+        result = json.loads((shard / "shard-run.json").read_text())["apps"][0]
+        assert result["succeeded"] is not capture_fails, (result, run.stdout, run.stderr)
+        if not capture_fails:
+            args = (shard / "csharp-tests" / "capture-args").read_text().splitlines()
+            assert args[args.index("--app") + 1:] == ["src/A/A.csproj"], args
+            assert args[args.index("--config") + 1] == "Release", args
+        else:
+            assert result["stages"][-1]["status"] == "failed", result
+            assert not (shard / "csharp-tests" / "cases").exists()
 
 
 main()

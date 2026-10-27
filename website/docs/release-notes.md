@@ -16,11 +16,15 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Member queries in the semantic model** ([#5307](https://github.com/DavidObando/gsharp/issues/5307), ADR-0212 slice S4). `SemanticModel.LookupMembers(position, type, name)` returns the members of a type that a member access can name, and `SemanticModel.GetMemberGroup(node)` returns the candidates that overload resolution considered for a call. Imported members answer as symbols with types read through the nullability readers. Member completion, the hover member fallback, and Go to Definition on imported members now use these queries, and `ImportedClrMemberResolver` is removed. Signature help lists one signature for each candidate, including imported overloads, and the hover overload count of a call is the size of its group. Completion no longer lists private or protected members from outside their type.
 
+- **Nightly test oracles use the validation runner** (issue #5443). Each migration shard captures its selected C# test names locally. Different hosted targeting-pack inventories no longer cause false extra theory rows. Name and duplicate-count comparisons remain unchanged.
+
 - **Go to implementation reports each implementer in its own file** (issue #5329). `textDocument/implementation` now returns every implementing type under the URI of the file that declares it, not the URI of the requested document.
 
 - **Incremental reuse re-points enum and delegate declarations** (issue #5324). A body-only edit that shifts text now updates the declaration syntax of enums, nested enums, and delegates, including constructed delegates and enums. Go-to-definition on an enum no longer reads the previous tree.
 
 - **Imported record projections use their declaring constructors** (issue #5435). Structural spreads, casts, and implicit projections no longer select source-emitted constructors for imported records. They retain the selected open constructor identity, constructed owner, optional defaults, and single evaluation.
+
+- **Imported data members keep derived name hiding** (issue #5436). Member reads, writes, and property patterns now select the nearest eligible field or property before imported aggregate tables flatten inheritance. A derived property no longer reads an inherited same-name field. Base-typed access keeps the base member.
 
 - **Generic map expression-tree parameters** ([#5430](https://github.com/DavidObando/gsharp/issues/5430)): `map[K,V]` parameters now use the canonical `Dictionary[K,V]` type token instead of reporting `GS9998`. Map signatures and tokens retain generic owners, nested arguments, and nullable value types. Map literals inside expression-tree lambdas still report `GS0473`.
 

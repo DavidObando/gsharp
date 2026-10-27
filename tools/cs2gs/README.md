@@ -169,15 +169,21 @@ the same work split across runners.
 cs2gs migrate --corpus "$repo" --out /tmp/migrated --artifacts /tmp/runs \
   --config Release --translate-only --exclude ...
 
-# List every C# test project's cases once (issue #4633).
-cs2gs capture-test-oracle --corpus "$repo" --out /tmp/csharp-tests --exclude ...
-
 # N independent shards over the SAME migrated tree.
+# Run capture and validation on the SAME runner (issues #4633 and #5443).
+cs2gs capture-test-oracle --corpus "$repo" --out /tmp/shard1/csharp-tests \
+  --app test/Example.Tests/Example.Tests.csproj --exclude ...
 cs2gs validate --corpus "$repo" --migrated /tmp/migrated \
   --artifacts /tmp/shard1 --manifests /tmp/runs/<runId> \
-  --csharp-test-oracle /tmp/csharp-tests \
-  --config Release --exclude ... --shard 1/6
+  --csharp-test-oracle /tmp/shard1/csharp-tests \
+  --config Release --exclude ... --app test/Example.Tests/Example.Tests.csproj
 ```
+
+Each shard captures only its selected apps. An existing non-test app needs no
+oracle; an unknown app ID is an error. Capture failure leaves no oracle for
+that app, so validation fails closed. Do not copy test-name oracles between
+runners: installed targeting packs can change environment-dependent theory rows.
+The comparator retains exact names and duplicate counts.
 
 `validate` refuses to run without `--csharp-test-oracle`, unless
 `--count-only-test-parity` says explicitly that per-test-name parity is being

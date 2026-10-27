@@ -41,10 +41,11 @@ name: cs2gs-apps-nightly
 #                     (build/run-cs2gs-selfmig-migrate.sh). Translation is not
 #                     sharded: TranslateStage cross-checks linked sources across
 #                     projects, which needs every project in one run. It also
-#                     captures the C# test oracle and plans the shards.
+#                     plans the shards.
 #   csharp-validate   N shards, each running compile/ILVerify/test-parity for
 #                     its own apps against the migrated tree
-#                     (build/run-cs2gs-selfmig-validate.sh).
+#                     (build/run-cs2gs-selfmig-validate.sh). Each shard captures
+#                     its C# test oracle on the same runner before validation.
 #   csharp-aggregate  merges the shard results, applies the baseline
 #                     (build/run-cs2gs-selfmig-gate.sh) and writes the leg's
 #                     result. Runs even when the translate job or a shard
@@ -263,8 +264,6 @@ jobs:
             ${{ env.SELFMIG_GATE_ROOT }}/migrate.log
             ${{ env.SELFMIG_GATE_ROOT }}/metrics.json
             ${{ env.SELFMIG_GATE_ROOT }}/migrate-run-dir.txt
-            ${{ env.SELFMIG_GATE_ROOT }}/csharp-tests/**
-            ${{ env.SELFMIG_GATE_ROOT }}/capture-test-oracle.log
 
   csharp-validate:
     name: gsharp-csharp (validate ${{ matrix.name }})
@@ -326,6 +325,8 @@ jobs:
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/shard-costs.json
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/polished.tar.gz
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/validate.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/capture-test-oracle.log
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/csharp-tests/**
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/*.json
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/report.html
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/runs/**/sdk.build.log
