@@ -2677,6 +2677,9 @@ internal partial class ExpressionBinder {
         }
         let constructor = ImportedTypeSymbol.FindPrimaryConstructor(clrType, aggregate.PrimaryConstructorParameters)
         if constructor == nil {
+            if !ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _) {
+                return BindImportedClassLiteralExpression(syntax, clrType, resultType)
+            }
             Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
             return BoundErrorExpression(syntax)
         }
@@ -2725,8 +2728,21 @@ internal partial class ExpressionBinder {
         for var index = 0; index < arguments.Length; index++ {
             if arguments[index] == nil {
                 let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor, index)
-                arguments[index] = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, parameterType) ??
-                    BoundDefaultExpression(syntax, parameterType)
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    syntax,
+                    aggregate,
+                    aggregate.PrimaryConstructorParameters[index],
+                    parameterType
+                )
+                if zero == nil &&
+                    parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                    parameterType
+                    .ClrType
+                    ?.IsArray == true {
+                    Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
+                    return BoundErrorExpression(syntax)
+                }
+                arguments[index] = zero ?? BoundDefaultExpression(syntax, parameterType)
             }
         }
         let construction = BoundClrConstructorCallExpression(

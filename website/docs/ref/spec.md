@@ -1470,6 +1470,8 @@ Struct literals use `TypeName{Field: value}`. Data structs also support copy/upd
 
 Imported generic data-class literals preserve explicit type arguments, including nullable positions. Positional members supply the imported primary constructor's inputs; other members initialize the constructed instance. Primary inputs evaluate once in their written order, then construction runs once, then other initializers run in their written order. A primary input cannot follow a braced member or content element. For example, `C[string?]{Value: nil}` preserves `string?` both at the constructor input and when reading `Value`.
 
+Omitted collection inputs use the declaration's collection-shape metadata when available. An omitted nonnullable CLR array input without sufficient shape is diagnosed, including libraries without class collection-shape metadata. Explicit array inputs and nullable omissions remain legal. Foreign records without a matching primary signature retain the available parameterless-constructor/member-initializer path.
+
 Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created.
 
 ### Collection initializers

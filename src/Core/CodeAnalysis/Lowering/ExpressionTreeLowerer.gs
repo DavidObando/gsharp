@@ -1752,18 +1752,6 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                     UpcastToExpression(this.TranslateExpression(property.Value, parameterMap))
                 )
             )
-            case clrProperty is BoundClrPropertyAssignmentExpression when ReferencesReceiver(
-                clrProperty.Receiver,
-                receiver
-            ): BoundClrStaticCallExpression(
-                clrProperty.Syntax,
-                ExpressionBindMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberAssignment), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](
-                    BuildMemberInfoConstant(clrProperty.Member),
-                    UpcastToExpression(this.TranslateExpression(clrProperty.Value, parameterMap))
-                )
-            )
             default: default(BoundClrStaticCallExpression?)
         }
         return binding != nil
@@ -2242,12 +2230,6 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
             )
         }
-
-        private func BuildMemberInfoConstant(member MemberInfo) BoundExpression -> BoundLiteralExpression(
-            nil,
-            member,
-            ReflectionMemberInfoTypeSymbol
-        )
 
         private func BuildUserFieldInfoLookup(ownerType TypeSymbol, memberName string) BoundExpression {
             return BoundImportedInstanceCallExpression(

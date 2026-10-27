@@ -722,6 +722,84 @@ System.Console.WriteLine(distinct.Value == nil)
     }
 
     @Fact
+    func ImportedGenericDataClassLiteral_ForeignRecordWithoutPrimarySignatureUsesDefaultConstructor() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+namespace ImportedLiteral5419;
+public record Box<T> {
+    public Box() { System.Console.WriteLine("default"); }
+    public Box(string Value) => throw new System.InvalidOperationException("not primary");
+    public T Value { get; init; } = default!;
+}`, "Contract")
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import ImportedLiteral5419
+let value = Box[int32]{Value: 7}
+System.Console.WriteLine(value.Value)
+let call = Box[int32]()
+System.Console.WriteLine(call.Value)
+`, "ForeignDefault", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("default\n7\ndefault\n0\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_UnknownCollectionOmissionsAreDiagnosedAndExplicitInputsWork() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package CollectionLiteral5419
+public data class SliceBox[T](Items []int32)
+public data class FixedBox[T](Items [3]int32)
+`, "CollectionLiteral5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import CollectionLiteral5419
+let sliceValue = SliceBox[int32]{Items: []int32{}}
+System.Console.WriteLine(sliceValue.Items.Length)
+let fixedValue = FixedBox[int32]{Items: [3]int32{}}
+System.Console.WriteLine(fixedValue.Items.Length)
+System.Console.WriteLine(fixedValue.Items[2])
+`, "CollectionOmission", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("0\n3\n0\n", fixture.Run(dll))
+        for name in[]string{"SliceBox", "FixedBox"} {
+            let (code, output) = fixture.TryCompile(
+                "import CollectionLiteral5419\nlet value = " + name + "[int32]{}",
+                "MissingShape",
+                true,
+                "/r:" + contract
+            )
+            Assert.Equal(1, code)
+            Assert.True(output.Contains("MissingShape.gs(2,13,2,21): error GS0267", StringComparison.Ordinal), output)
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingShape.dll")))
+        }
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_UnknownNonnullableArrayOmissionIsDiagnosed() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+namespace ImportedLiteral5419;
+public record Box<T>(int[] Items);
+public record NullableBox<T>(int[]? Items);`, "Contract")
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import ImportedLiteral5419
+let value = NullableBox[int32]{}
+System.Console.WriteLine(value.Items == nil)
+let provided = Box[int32]{Items: []int32{7}}
+System.Console.WriteLine(provided.Items[0])
+`, "NullableArray", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("True\n7\n", fixture.Run(dll))
+        let (code, output) = fixture.TryCompile(
+            "import ImportedLiteral5419\nlet value = Box[int32]{}",
+            "MissingShape",
+            true,
+            "/r:" + contract
+        )
+        Assert.Equal(1, code)
+        Assert.True(output.Contains("MissingShape.gs(2,13,2,16): error GS0267", StringComparison.Ordinal), output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingShape.dll")))
+    }
+
+    @Fact
     func ImportedGenericDataClassLiteral_ExpressionTreeDefersArgumentsAndConstruction() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.Compile(`package TreeLiteral5419
@@ -739,7 +817,9 @@ public class Trace {
         }
     }
 }
-public data class Box[T](Value T)
+public data class Box[T](Value T) {
+    public var Extra int32
+}
 public data class Pair[T](First T, Second T) {
     public var Extra T?
     public let Stamp int32 = Trace.Construct()
@@ -748,8 +828,10 @@ public data class Pair[T](First T, Second T) {
         let dll = fixture.Compile(`import System
 import System.Linq.Expressions
 import TreeLiteral5419
-let simple Expression[Func[Box[int32]]] = () -> Box[int32]{Value: 7}
-Console.WriteLine(simple.Compile()().Value)
+let simple Expression[Func[Box[int32]]] = () -> Box[int32]{Value: 7, Extra: 2}
+let simpleValue = simple.Compile()()
+Console.WriteLine(simpleValue.Value)
+Console.WriteLine(simpleValue.Extra)
 let tree Expression[Func[Pair[string?]]] = () -> Pair[string?]{
     Second: Trace.Input("second"),
     First: Trace.Input("first"),
@@ -767,7 +849,7 @@ Console.WriteLine(Trace.Count)
 `, "TreeConsumer", true, "/r:" + contract)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
         Assert.Equal(
-            "7\n0\n0\nsecond\nfirst\nconstructor\nextra\nTrue\n1\nsecond\nfirst\nconstructor\nextra\n2\n2\n",
+            "7\n2\n0\n0\nsecond\nfirst\nconstructor\nextra\nTrue\n1\nsecond\nfirst\nconstructor\nextra\n2\n2\n",
             fixture.Run(dll)
         )
     }
