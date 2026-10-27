@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
+- **CI diagnostics:** Add an explicitly head-gated, dump-free `core-remainder` crash-sequence diagnostic with bounded, sanitized metadata artifacts. A healthy observation is not a correction for the unresolved crash. Part of #5393.
+
 - **Explicit reference assemblies resolve by metadata name** (issue #5421). Transitive signatures now resolve supplied assemblies independently of their filenames, including `/refout` paths such as `Library.ref.dll`. The resolver retains first-reference precedence and missing-dependency diagnostics. Cached images retain the winning reference's original path for documentation and source navigation. Case-sensitive filesystem paths retain distinct images. Host fallback and target core-library selection use metadata identity instead of filenames. Consumers no longer lose members because a supplied dependency has a different file basename.
 
 - **Imported generic fields preserve sound collection zeros** (issue #5412). Source fields retain required empty collections inside imported value types, including symbolic generic arguments. Exported parents preserve these obligations for later consumers. Initialization does not replay nested scalar defaults or constructors. Unsupported external reconstruction of readonly fields reports located `GS0127` diagnostics without an image. Explicit raw defaults remain unchanged.

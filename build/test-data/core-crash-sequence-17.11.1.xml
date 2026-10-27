@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Benign metadata fixture derived from microsoft/vstest v17.11.1 Constants.cs
+     and XmlReaderWriter.WriteTestSequence, not a product execution or capture. -->
+<TestSequence>
+  <Test Name="GSharp.Core.Tests.Demo.Run" DisplayName="Run(PRIVATE_THEORY_OUTPUT_CANARY)" Source="/fixture/GSharp.Core.Tests.dll" Completed="True" />
+  <Test Name="GSharp.Core.Tests.Demo.Other" DisplayName="Other(PRIVATE_THEORY_OUTPUT_CANARY)" Source="/fixture/GSharp.Core.Tests.dll" Completed="True" />
+  <Test Name="GSharp.Core.Tests.Demo.Run" DisplayName="Run(PRIVATE_THEORY_OUTPUT_CANARY)" Source="/fixture/GSharp.Core.Tests.dll" Completed="False" />
+</TestSequence>

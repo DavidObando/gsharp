@@ -193,11 +193,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover-tests.outputs.matrix) }}
+    env:
+      GSHARP_5393_PRIVATE_ROUTE: >-
+        ${{ github.event_name == 'pull_request' &&
+            github.repository == 'DavidObando/gsharp' &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.head_ref == 'fix/p0-5393-b12435c5-r2' &&
+            matrix.name == 'core-remainder' }}
+      # Requires a separate, exact-head observation approval.
+      GSHARP_5393_DIAGNOSTIC: >-
+        ${{ github.event_name == 'pull_request' &&
+            github.repository == 'DavidObando/gsharp' &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.head_ref == 'fix/p0-5393-b12435c5-r2' &&
+            matrix.name == 'core-remainder' && github.run_attempt == 1 &&
+            github.event.action == 'opened' &&
+            vars.GSHARP_5393_INITIAL_HEAD != '' &&
+            github.event.pull_request.head.sha == vars.GSHARP_5393_INITIAL_HEAD }}
 
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Require the separately approved diagnostic head
+        if: env.GSHARP_5393_PRIVATE_ROUTE == 'true' && env.GSHARP_5393_DIAGNOSTIC != 'true'
+        run: |
+          echo "No diagnostic observation is approved for this head and attempt."
+          exit 70
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
@@ -259,6 +282,7 @@ jobs:
         run: python3 build/ci-projects.py build --projects "$PROJECTS"
 
       - name: Test
+        if: env.GSHARP_5393_PRIVATE_ROUTE != 'true'
         env:
           MSBUILDDISABLENODEREUSE: 1
           TEST_FILTER: ${{ matrix.filter }}
@@ -291,12 +315,62 @@ jobs:
             dotnet test "$project" "${args[@]}"
           done
 
+      - name: Test with dump-free sequence
+        id: test5393
+        if: env.GSHARP_5393_DIAGNOSTIC == 'true'
+        timeout-minutes: 16
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+          TEST_FILTER: ${{ matrix.filter }}
+          TEST_PROJECTS: ${{ matrix.project }}
+          GSHARP_5393_INITIAL_HEAD: ${{ vars.GSHARP_5393_INITIAL_HEAD }}
+          DOTNET_DbgEnableMiniDump: 0
+          COMPlus_DbgEnableMiniDump: 0
+        run: |
+          python3 -B build/test-core-crash-diagnostics.py
+          python3 build/core-crash-diagnostics.py prepare
+          ulimit -c 0
+          unset CS2GS_TEST_SOURCE_ROOT
+          set +e
+          timeout --signal=TERM --kill-after=10s 900s \
+            dotnet test "$TEST_PROJECTS" \
+              --configuration Release --no-build --no-restore \
+              --logger "trx;LogFileName=core-remainder.trx" \
+              --results-directory out/5393-ci/private/results \
+              --filter "$TEST_FILTER" --blame \
+              >out/5393-ci/private/test.stdout 2>out/5393-ci/private/test.stderr
+          status=$?
+          printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Normalize core diagnostics
+        id: diagnostic5393
+        if: always() && env.GSHARP_5393_DIAGNOSTIC == 'true'
+        timeout-minutes: 2
+        env:
+          TEST_EXIT_CODE: ${{ steps.test5393.outputs.exit_code }}
+          TEST_FILTER: ${{ matrix.filter }}
+          TEST_PROJECTS: ${{ matrix.project }}
+          GSHARP_5393_INITIAL_HEAD: ${{ vars.GSHARP_5393_INITIAL_HEAD }}
+        run: python3 build/core-crash-diagnostics.py finish
+
       - name: Upload test results
-        if: always()
+        if: always() && env.GSHARP_5393_PRIVATE_ROUTE != 'true'
         uses: actions/upload-artifact@v5
         with:
           name: test-results-${{ matrix.name }}
           path: TestResults/**/*
+
+      - name: Upload sanitized core diagnostics
+        if: always() && env.GSHARP_5393_DIAGNOSTIC == 'true' && steps.diagnostic5393.outcome == 'success'
+        uses: actions/upload-artifact@v5
+        with:
+          name: core-diagnostics-5393
+          if-no-files-found: error
+          path: |
+            TestResults/5393/summary.json
+            TestResults/5393/provenance.json
+            TestResults/5393/test-sequence.json
 
   # The `tests` shards are `--filter` expressions over substrings of the
   # fully-qualified test name, and substring matching does not compose the way

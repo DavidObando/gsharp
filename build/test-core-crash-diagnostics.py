@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Metadata-only privacy and outcome contracts for the scoped #5393 diagnostic."""
+
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parent.parent
+CANARY = "PRIVATE_THEORY_OUTPUT_CANARY"
+TEST_ID = "11111111-1111-1111-1111-111111111111"
+EXECUTION_ID = "22222222-2222-2222-2222-222222222222"
+TRX = f"""<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+<TestDefinitions><UnitTest id="{TEST_ID}"><TestMethod
+ className="GSharp.Core.Tests.Demo" name="Run" /></UnitTest></TestDefinitions>
+<Results><UnitTestResult testId="{TEST_ID}" executionId="{EXECUTION_ID}"
+ outcome="Passed" testName="{CANARY}"><Output><StdOut>{CANARY}</StdOut></Output>
+</UnitTestResult></Results>
+<ResultSummary outcome="Completed"><Counters total="1" executed="1" passed="1"
+ failed="0" error="0" aborted="0"/></ResultSummary>
+<ResultFiles><ResultFile path="{CANARY}"/></ResultFiles></TestRun>"""
+
+
+def load_helper():
+    path = Path(os.environ.get(
+        "GSHARP_5393_METADATA_HELPER", ROOT / "build/core-crash-diagnostics.py"))
+    spec = importlib.util.spec_from_file_location("core_crash_diagnostics", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class WorkflowTests(unittest.TestCase):
+    def workflow(self):
+        return Path(os.environ.get(
+            "GSHARP_5393_METADATA_WORKFLOW", ROOT / ".github/workflows/build.yml")).read_text()
+
+    def test_raw_upload_is_excluded_independently_of_test_success(self):
+        workflow = self.workflow()
+        upload = workflow.split("      - name: Upload test results\n", 1)[1]
+        self.assertIn("env.GSHARP_5393_PRIVATE_ROUTE != 'true'", upload.split("\n\n", 1)[0])
+        self.assertIn("      - name: Upload sanitized core diagnostics\n", workflow)
+        sanitized = workflow.split("      - name: Upload sanitized core diagnostics\n", 1)[1]
+        self.assertIn("steps.diagnostic5393.outcome == 'success'", sanitized.split("\n\n", 1)[0])
+        for name in ("summary.json", "provenance.json", "test-sequence.json"):
+            self.assertIn("TestResults/5393/" + name, sanitized.split("\n\n", 1)[0])
+        self.assertNotIn("*", sanitized.split("\n\n", 1)[0])
+
+    def test_route_requires_an_explicit_head_and_keeps_fixture_behavior(self):
+        workflow = self.workflow()
+        self.assertIn("vars.GSHARP_5393_INITIAL_HEAD", workflow)
+        self.assertIn("github.event.pull_request.head.sha", workflow)
+        self.assertIn("github.run_attempt == 1", workflow)
+        self.assertIn("No diagnostic observation is approved for this head and attempt.", workflow)
+        diagnostic = workflow.split("      - name: Test with dump-free sequence\n", 1)[1]
+        diagnostic = diagnostic.split("      - name: Normalize core diagnostics\n", 1)[0]
+        for forbidden in ("ulimit -f", "RLIMIT_FSIZE", "TMPDIR", "DOTNET_CLI_HOME",
+                          "--blame-crash", "--blame-hang", "--diag", "umask"):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn("--blame", diagnostic)
+        self.assertIn('exit "$status"', diagnostic)
+        self.assertIn("--blame-hang --blame-hang-timeout 2m --blame-hang-dump-type mini",
+                      workflow)
+
+
+class NormalizerTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+        work = ROOT / "out/5393-r2/implementation/metadata-work"
+        work.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(dir=work)
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.metadata = {"schema_version": 1, "actual_loaded_modules": None}
+        mocked = patch.object(self.helper, "provenance", return_value=self.metadata)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        self.helper.prepare(self.root)
+        self.private = self.root / "out/5393-ci/private"
+        (self.private / "test.stdout").write_text(CANARY)
+        (self.private / "test.stderr").write_text(CANARY)
+        (self.private / "results/core-remainder.trx").write_text(TRX)
+
+    def read(self, name):
+        return json.loads((self.root / "TestResults/5393" / name).read_text())
+
+    def sequence(self):
+        source = ROOT / "build/test-data/core-crash-sequence-17.11.1.xml"
+        shutil.copyfile(source, self.private / "results/Sequence_fixture.xml")
+
+    def assert_not_published(self):
+        self.assertFalse((self.root / "TestResults/5393").exists())
+
+    def test_healthy_nonempty_trx_without_sequence_is_nonreproduction(self):
+        self.helper.finish(self.root, 0)
+        summary = self.read("summary.json")
+        self.assertEqual(summary["classification"], "bounded-nonreproduction")
+        self.assertEqual(summary["wrapper_exit"], 0)
+        self.assertFalse(summary["sequence_present"])
+        self.assertIsNone(self.read("test-sequence.json")["sequences"])
+        self.assertFalse(self.private.exists())
+
+    def test_only_the_owned_result_directory_and_logs_have_private_modes(self):
+        self.assertEqual(stat.S_IMODE(self.private.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((self.private / "results").stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((self.private / "test.stdout").stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((self.private / "test.stderr").stat().st_mode), 0o600)
+
+    def test_pinned_sequence_preserves_repetition_order_and_drops_private_data(self):
+        self.sequence()
+        self.helper.finish(self.root, 1)
+        sequence = self.read("test-sequence.json")["sequences"][0]["occurrences"]
+        self.assertEqual([row["method"] for row in sequence],
+                         ["GSharp.Core.Tests.Demo.Run", "GSharp.Core.Tests.Demo.Other",
+                          "GSharp.Core.Tests.Demo.Run"])
+        self.assertEqual([row["completed"] for row in sequence], [True, True, False])
+        self.assertTrue(all(row["test_id"] is None and row["execution_id"] is None
+                            for row in sequence))
+        results = self.read("test-sequence.json")["results"]
+        self.assertEqual(results[0]["test_id"], TEST_ID)
+        self.assertEqual(results[0]["execution_id"], EXECUTION_ID)
+        self.assertEqual(results[0]["method"], "GSharp.Core.Tests.Demo.Run")
+        published = self.root / "TestResults/5393"
+        self.assertEqual({p.name for p in published.iterdir()},
+                         {"summary.json", "provenance.json", "test-sequence.json"})
+        self.assertNotIn(CANARY, "".join(p.read_text() for p in published.iterdir()))
+        self.assertNotIn("/fixture", "".join(p.read_text() for p in published.iterdir()))
+        self.assertFalse(self.private.exists())
+
+    def test_abort_without_sequence_records_an_attribution_gap(self):
+        (self.private / "test.stderr").write_text("Test Run Aborted.")
+        self.helper.finish(self.root, 1)
+        summary = self.read("summary.json")
+        self.assertEqual(summary["classification"], "process-failure")
+        self.assertEqual(summary["attribution"], "gap")
+        self.assertEqual(summary["diagnostic_state"], "incomplete")
+        self.assertIsNone(self.read("test-sequence.json")["sequences"])
+        self.assertFalse(summary["original_issue_fixed"])
+
+    def test_timeout_does_not_invent_a_child_exit_or_green(self):
+        self.helper.finish(self.root, 124)
+        summary = self.read("summary.json")
+        self.assertEqual(summary["classification"], "timeout-status")
+        self.assertEqual(summary["wrapper_exit"], 124)
+        self.assertIsNone(summary["actual_dotnet_test_exit"])
+        self.assertIsNone(summary["actual_testhost_exit"])
+
+    def test_missing_trx_on_nonzero_exit_is_explicitly_incomplete(self):
+        (self.private / "results/core-remainder.trx").unlink()
+        self.helper.finish(self.root, 1)
+        summary = self.read("summary.json")
+        self.assertIsNone(summary["counters"])
+        self.assertEqual(summary["diagnostic_state"], "incomplete")
+        self.assertIsNone(self.read("test-sequence.json")["results"])
+
+    def test_missing_step_status_cleans_private_data_without_publication(self):
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, None)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_zero_tests_cannot_be_a_successful_nonreproduction(self):
+        (self.private / "results/core-remainder.trx").write_text(
+            TRX.replace('executed="1"', 'executed="0"'))
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, 0)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_unknown_sequence_attributes_are_not_copied(self):
+        self.sequence()
+        path = self.private / "results/Sequence_fixture.xml"
+        path.write_text(path.read_text().replace('Completed="False"',
+                                                f'Completed="False" Secret="{CANARY}"'))
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, 1)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_names_with_arguments_are_explicitly_unknown_not_published(self):
+        self.sequence()
+        path = self.private / "results/Sequence_fixture.xml"
+        path.write_text(path.read_text().replace(
+            'Name="GSharp.Core.Tests.Demo.Other"',
+            f'Name="GSharp.Core.Tests.Demo.Other({CANARY})"'))
+        self.helper.finish(self.root, 1)
+        document = self.read("test-sequence.json")
+        self.assertIsNone(document["sequences"][0]["occurrences"][1]["method"])
+        self.assertNotIn(CANARY, json.dumps(document))
+
+    def test_entities_and_oversized_xml_fail_closed(self):
+        path = self.private / "results/core-remainder.trx"
+        path.write_text('<!DOCTYPE TestRun [<!ENTITY x "private">]>' + TRX)
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, 1)
+        self.assert_not_published()
+        self.assertFalse(self.private.exists())
+
+    def test_external_attachment_is_rejected_without_reading_it(self):
+        (self.private / "results/unexpected.dmp").write_text(CANARY)
+        original_read = self.helper.read
+        read_names = []
+
+        def guarded_read(path, *args):
+            read_names.append(path.name)
+            return original_read(path, *args)
+
+        with patch.object(self.helper, "read", side_effect=guarded_read):
+            with self.assertRaises(self.helper.DiagnosticError):
+                self.helper.finish(self.root, 1)
+        self.assertNotIn("unexpected.dmp", read_names)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_parser_input_bound_is_not_a_product_file_limit(self):
+        with patch.object(self.helper, "MAX_INPUT", 32):
+            with self.assertRaises(self.helper.DiagnosticError):
+                self.helper.finish(self.root, 1)
+        self.assert_not_published()
+
+    def test_total_input_bound_is_enforced_across_files(self):
+        with patch.object(self.helper, "MAX_TOTAL_INPUT", len(TRX.encode()) + 8):
+            with self.assertRaises(self.helper.DiagnosticError):
+                self.helper.finish(self.root, 1)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_symlink_is_rejected_without_touching_its_target(self):
+        outside = self.root / "outside.xml"
+        outside.write_text(CANARY)
+        (self.private / "results/Sequence_link.xml").symlink_to(outside)
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, 1)
+        self.assertEqual(outside.read_text(), CANARY)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_cleanup_failure_prevents_publication(self):
+        with patch.object(self.helper.shutil, "rmtree", side_effect=OSError(CANARY)):
+            with self.assertRaises(self.helper.DiagnosticError):
+                self.helper.finish(self.root, 0)
+        self.assert_not_published()
+
+    def test_unowned_private_directory_is_not_deleted(self):
+        (self.private / ".owner").unlink()
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, 1)
+        self.assertTrue(self.private.exists())
+        self.assertEqual((self.private / "test.stdout").read_text(), CANARY)
+        self.assert_not_published()
+
+    def test_public_artifact_bound_prevents_partial_publication(self):
+        with patch.dict(self.helper.OUTPUT_LIMITS, {"test-sequence.json": 16}):
+            with self.assertRaises(self.helper.DiagnosticError):
+                self.helper.finish(self.root, 0)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_private_provenance_tampering_is_not_passthrough(self):
+        path = self.private / "provenance.json"
+        path.write_text(json.dumps({**self.metadata, "environment": CANARY}))
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.finish(self.root, 0)
+        self.assertFalse(self.private.exists())
+        self.assert_not_published()
+
+    def test_authorization_is_specific_to_one_approved_head(self):
+        head = "1" * 40
+        environment = {
+            "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REPOSITORY": "DavidObando/gsharp",
+            "GITHUB_HEAD_REF": "fix/p0-5393-b12435c5-r2", "GITHUB_RUN_ATTEMPT": "1",
+            "GSHARP_5393_INITIAL_HEAD": head,
+        }
+        event = {"action": "opened", "pull_request": {"head": {
+            "sha": head, "repo": {"full_name": "DavidObando/gsharp"}}}}
+        self.helper.authorize(environment, event)
+        for changed in ({"GSHARP_5393_INITIAL_HEAD": ""},
+                        {"GSHARP_5393_INITIAL_HEAD": "2" * 40},
+                        {"GITHUB_RUN_ATTEMPT": "2"}):
+            with self.subTest(changed=changed):
+                with self.assertRaises(self.helper.DiagnosticError):
+                    self.helper.authorize({**environment, **changed}, event)
+        with self.assertRaises(self.helper.DiagnosticError):
+            self.helper.authorize(environment, {**event, "action": "reopened"})
+
+
+class ProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+        work = ROOT / "out/5393-r2/implementation/metadata-work"
+        work.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(dir=work)
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.package = self.root / "packages/gsharp.net.sdk/0.5.212"
+        self.compiler = self.file(self.package / "tools/compiler/gsc.dll")
+        self.task = self.file(self.package / "tools/task/Gsharp.NET.Sdk.dll")
+        (self.package / "build").mkdir()
+        self.first = self.file(self.root / "framework/First.dll")
+        self.second = self.file(self.root / "framework/Second.dll")
+        self.stamp = self.root / "out/obj/Core.Tests/Release/repository-build-tools.cache"
+        hashes = [str(path) + "|" + hashlib.sha256(path.read_bytes()).hexdigest().upper()
+                  for path in (self.compiler, self.task)]
+        compiler_property = str(self.package / "build") + r"/..\tools\compiler\gsc.dll"
+        records = [f"COMPILER:{compiler_property}", f"TASK:{self.task}", *hashes,
+                   f"SOURCE:{CANARY}", *(f"REFERENCE:{path}" for path in
+                                        (self.first, self.second, self.first))]
+        self.stamp.parent.mkdir(parents=True)
+        self.stamp.write_text("\n".join(records))
+        for name in ("GSharp.Core.Tests.dll", "GSharp.Core.dll",
+                     "Gsharp.Runtime.Channels.dll", "Gsharp.Runtime.Values.dll",
+                     "GSharp.Core.Tests.deps.json", "GSharp.Core.Tests.runtimeconfig.json"):
+            self.file(self.root / "out/bin/Release/Core.Tests" / name)
+        dotnet = self.file(self.root / "framework/dotnet")
+        mocked_command = patch.object(self.helper.shutil, "which", return_value=str(dotnet))
+        mocked_command.start()
+        self.addCleanup(mocked_command.stop)
+        (self.root / ".github/workflows").mkdir(parents=True)
+        (self.root / ".github/workflows/build.yml").write_text("benign metadata fixture")
+        (self.root / "global.json").write_text(json.dumps({
+            "sdk": {"version": "10.0.300", "rollForward": "latestFeature"},
+            "msbuild-sdks": {"Gsharp.NET.Sdk": "0.5.212"}}))
+        head = "1" * 40
+        event = self.root / "event.json"
+        event.write_text(json.dumps({"action": "opened", "pull_request": {
+            "head": {"sha": head, "repo": {"full_name": "DavidObando/gsharp"}},
+            "base": {"sha": "2" * 40}}}))
+        environment = {
+            "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REPOSITORY": "DavidObando/gsharp",
+            "GITHUB_HEAD_REF": "fix/p0-5393-b12435c5-r2", "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_RUN_ID": "123", "GSHARP_5393_INITIAL_HEAD": head,
+            "GITHUB_EVENT_PATH": str(event), "NUGET_PACKAGES": str(self.root / "packages"),
+            "DOTNET_ROOT": str(self.root / "framework"),
+            "TEST_PROJECTS": "test/Core.Tests/Core.Tests.gsproj",
+            "TEST_FILTER": self.helper.FILTER}
+        mocked_environment = patch.dict(os.environ, environment)
+        mocked_environment.start()
+        self.addCleanup(mocked_environment.stop)
+
+        def git(command, **kwargs):
+            self.assertEqual(command[0], "git")
+            output = (("3" * 40 + "\n" + "4" * 40 + "\n" + "5" * 40 + "\n").encode()
+                      if "show" in command else b"")
+            return subprocess.CompletedProcess(command, 0, stdout=output, stderr=b"")
+
+        mocked_git = patch.object(self.helper.subprocess, "run", side_effect=git)
+        mocked_git.start()
+        self.addCleanup(mocked_git.stop)
+
+    def file(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"Benign metadata placeholder; not a PE or executable.")
+        return path
+
+    def test_existing_build_stamp_preserves_all_declared_reference_occurrences(self):
+        metadata = self.helper.provenance(self.root)
+        self.assertEqual([row["name"] for row in metadata["reference_images"]],
+                         ["First.dll", "Second.dll", "First.dll"])
+        self.assertEqual(metadata["checkout_sha"], "3" * 40)
+        self.assertEqual(metadata["pull_request_head"], "1" * 40)
+        self.assertIsNone(metadata["response_file_sha256"])
+        self.assertIsNone(metadata["actual_testhost_runtime"])
+        self.assertNotIn(CANARY, json.dumps(metadata))
+        self.assertNotIn(str(self.root), json.dumps(metadata))
+
+    def test_stamp_hash_mismatch_stops_prepare_before_private_test_output(self):
+        self.compiler.write_bytes(b"Changed benign metadata.")
+        with self.assertRaisesRegex(self.helper.DiagnosticError, "tool-input-changed"):
+            self.helper.prepare(self.root)
+        self.assertFalse((self.root / self.helper.PRIVATE).exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
