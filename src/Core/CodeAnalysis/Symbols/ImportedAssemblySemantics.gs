@@ -360,8 +360,8 @@ internal shared class ImportedAssemblySemantics {
 
     // Issue #2291: the record's POSITIONAL primary constructor is the public
     // instance constructor (other than the synthesized copy constructor,
-    // `.ctor(SameType)`) whose parameters name-match, 1:1 and in order, a
-    // public auto-property of the record (the shape every C#
+    // `.ctor(SameType)`) whose open parameter signatures and names match
+    // public auto-properties of the record (the shape every C#
     // `record`/`record struct` positional declaration produces). A record
     // with no positional parameters (e.g. `record struct Empty;`) has no such
     // constructor — <c>with</c> then has nothing to set, which still compiles
@@ -370,8 +370,13 @@ internal shared class ImportedAssemblySemantics {
         Names ImmutableArray[string],
         FieldTokens ImmutableArray[int32]
     ) {
+        let definition = if type.IsGenericType {
+            type.GetGenericTypeDefinition()
+        } else {
+            type
+        }
         let autoProperties = Dictionary[string, PropertyInfo](StringComparer.Ordinal)
-        for property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+        for property in definition.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
             if property.GetMethod != nil && property.SetMethod != nil && property.GetIndexParameters().Length == 0 {
                 autoProperties.Add(property.Name, property)
             }
@@ -381,11 +386,11 @@ internal shared class ImportedAssemblySemantics {
         }
         var bestMatch ConstructorInfo? = nil
         var bestParameters = Array.Empty[ParameterInfo]()
-        for ctor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance) {
+        for ctor in definition.GetConstructors(BindingFlags.Public | BindingFlags.Instance) {
             let parameters = ctor.GetParameters()
             // Skip the synthesized copy constructor — it never denotes the
             // positional shape.
-            if parameters.Length == 1 && ClrTypeUtilities.AreSame(parameters[0].ParameterType, type) {
+            if parameters.Length == 1 && ClrTypeUtilities.AreSame(parameters[0].ParameterType, definition) {
                 continue
             }
             if parameters.Length == 0 || parameters.Length <= bestParameters.Length {
@@ -393,7 +398,9 @@ internal shared class ImportedAssemblySemantics {
             }
             var allParametersMatch = true
             for parameter in parameters {
-                if !autoProperties.ContainsKey(parameter.Name ?? string.Empty) {
+                if !autoProperties.TryGetValue(parameter.Name ?? string.Empty, out var property) ||
+                    !ClrNullability
+                    .GetSignatureType(parameter).Equals(ClrNullability.GetSignatureType(property)) {
                     allParametersMatch = false
                     break
                 }
@@ -411,7 +418,10 @@ internal shared class ImportedAssemblySemantics {
         for parameter in bestParameters {
             let name string? = parameter.Name
             namesBuilder.Add(name ?? string.Empty)
-            let backingField = type.GetField("<$name>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance)
+            let backingField = definition.GetField(
+                "<$name>k__BackingField",
+                BindingFlags.NonPublic | BindingFlags.Instance
+            )
             tokensBuilder.Add(backingField?.MetadataToken ?? 0)
         }
         return (namesBuilder.ToImmutable(), tokensBuilder.ToImmutable())

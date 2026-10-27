@@ -723,6 +723,124 @@ System.Console.WriteLine(distinct.Value == nil)
         Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "Abstract.dll")))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_SpreadUsesPrimaryConstructor(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "SpreadContract5419.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+namespace SpreadContract5419;
+public static class Trace {
+    public static T Construct<T>(T value) {
+        System.Console.WriteLine("constructor");
+        return value;
+    }
+}
+public sealed class Source<T>(T value) {
+    public T Value {
+        get { System.Console.WriteLine("get"); return value; }
+    }
+}
+public record Box<T>(T Value) {
+    public Box() : this(default(T)!) { System.Console.WriteLine("default"); }
+    public T Seen { get; } = Trace.Construct(Value);
+    private int extra;
+    public int Extra {
+        get => extra;
+        set { System.Console.WriteLine("tail-write"); extra = value; }
+    }
+}`, "SpreadContract5419", reference)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import SpreadContract5419
+func Input() Source[int32] {
+    Console.WriteLine("source")
+    return Source[int32](7)
+}
+func Tail() int32 {
+    Console.WriteLine("tail")
+    return 2
+}
+let value = Box[int32]{...Input(), Extra: Tail()}
+Console.WriteLine(value.Value)
+Console.WriteLine(value.Seen)
+Console.WriteLine(value.Extra)
+let overridden = Box[int32]{...Input(), Value: 9, Extra: Tail()}
+Console.WriteLine(overridden.Value)
+Console.WriteLine(overridden.Seen)
+let call = Box[int32](11)
+Console.WriteLine(call.Seen)
+`, "SpreadPrimary", true, "/r:" +
+                if referenceAssembly {
+                reference
+            } else {
+                contract
+            })
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal(
+            "source\nget\nconstructor\ntail\ntail-write\n7\n7\n2\nsource\nconstructor\ntail\ntail-write\n9\n9\nconstructor\n11\n",
+            fixture.Run(dll)
+        )
+        let generic = fixture.Compile(`import SpreadContract5419
+data struct Point(X int32)
+func Project[T](source Source[T]) Box[T] -> Box[T]{...source}
+let nullable = Project[string?](Source[string?](nil))
+System.Console.WriteLine(nullable.Seen == nil)
+let point = Project[Point](Source[Point](Point{X: 5}))
+System.Console.WriteLine(point.Seen.X)
+`, "GenericSpreadPrimary", true, "/r:" +
+                if referenceAssembly {
+                reference
+            } else {
+                contract
+            })
+        IlVerifier.Verify(generic, additionalReferences: []string{contract})
+        Assert.Equal("get\nconstructor\nTrue\nget\nconstructor\n5\n", fixture.Run(generic))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_RejectsLongerForeignOverloadAsPrimary(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "OverloadContract5419.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+namespace OverloadContract5419;
+public record Box<T>(T Value) {
+    public int Extra { get; set; }
+    public Box(int Value, int Extra) : this(default(T)!) {
+        throw new System.InvalidOperationException("not primary");
+    }
+}`, "OverloadContract5419", reference)
+        IlVerifier.Verify(contract)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let dll = fixture.Compile(`import OverloadContract5419
+let nullable = Box[string?]{Value: nil}
+System.Console.WriteLine(nullable.Value == nil)
+let number = Box[int32]{Value: 7, Extra: 2}
+System.Console.WriteLine(number.Value)
+System.Console.WriteLine(number.Extra)
+let call = Box[string?](nil)
+System.Console.WriteLine(call.Value == nil)
+`, "LongerOverload", true, "/r:" + selected)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("True\n7\n2\nTrue\n", fixture.Run(dll))
+        let (code, output) = fixture.TryCompile(
+            "import OverloadContract5419\nlet value = Box[string]{Value: nil}",
+            "RejectedOverload",
+            true,
+            "/r:" + selected
+        )
+        Assert.Equal(1, code)
+        Assert.True(output.Contains("RejectedOverload.gs(2,32,2,35): error GS0155", StringComparison.Ordinal), output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "RejectedOverload.dll")))
+    }
+
     @Fact
     func ImportedGenericDataClassLiteral_ForeignRecordWithoutPrimarySignatureUsesDefaultConstructor() {
         using let fixture = NativeSliceLanguageTests.Fixture()

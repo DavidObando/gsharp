@@ -3381,6 +3381,7 @@ internal class ConversionClassifier {
         }
         plan = resolvedPlan
         let ownsDataInitialization = resolvedPlan.Construction.UserType?.UsesConstructorOwnedDataConstruction == true
+        let usesPrimaryConstruction = ownsDataInitialization || resolvedPlan.Construction.UserType is {IsClass: true}
         if ownsDataInitialization && !BoundStructLiteralExpression.ValidateDataConstructor(
             resolvedPlan.Construction.UserType!!,
             Diagnostics,
@@ -3415,7 +3416,7 @@ internal class ConversionClassifier {
                 if !explicitValues.TryGetValue(name, out var value) || explicitReads!!.ContainsKey(name) {
                     continue
                 }
-                if ownsDataInitialization && !plan!!.ConstructorSlots.Any(
+                if usesPrimaryConstruction && !plan!!.ConstructorSlots.Any(
                     (slot StructuralProjectionSlot) -> slot.Name == name
                 ) {
                     explicitReads!!.Add(name, value)
@@ -3454,7 +3455,7 @@ internal class ConversionClassifier {
             )
         }
         var initializerSlots = plan!!.InitializerSlots
-        if ownsDataInitialization && !explicitOrder.IsDefaultOrEmpty {
+        if usesPrimaryConstruction && !explicitOrder.IsDefaultOrEmpty {
             let ordered = ImmutableArray.CreateBuilder[StructuralProjectionSlot](initializerSlots.Length)
             ordered.AddRange(
                 initializerSlots.Where((slot StructuralProjectionSlot) -> explicitNames?.Contains(slot.Name) != true)

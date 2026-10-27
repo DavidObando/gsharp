@@ -473,8 +473,11 @@ internal shared class StructuralProjectionPlanner {
         var constructor ConstructorInfo? = nil
         var constructorParameters = Array.Empty[ParameterInfo]()
         // The aggregate supplies construction metadata, not the symbolic target identity.
-        let dataType = if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
-            aggregate!!.UsesConstructorOwnedDataConstruction {
+        var dataType = if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
+            (
+            aggregate!!.UsesConstructorOwnedDataConstruction ||
+                aggregate is {IsClass: true, HasPrimaryConstructor: true}
+        ) {
             aggregate
         } else {
             default(StructSymbol?)
@@ -488,8 +491,20 @@ internal shared class StructuralProjectionPlanner {
             }
         }
         if dataType != nil {
-            constructor = dataType.GetDataConstructionConstructor()
-        } else if !clrType.IsValueType {
+            constructor = if dataType.IsClass {
+                ImportedTypeSymbol.FindPrimaryConstructor(clrType, dataType.PrimaryConstructorParameters)
+            } else {
+                dataType.GetDataConstructionConstructor()
+            }
+            if dataType.IsClass && constructor == nil {
+                if ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _) {
+                    failure = "Type '$target' has no applicable primary constructor."
+                    return false
+                }
+                dataType = nil
+            }
+        }
+        if dataType == nil && !clrType.IsValueType {
             constructor = parameterlessConstructor
             if constructor == nil {
                 for candidate in constructors {
@@ -505,7 +520,7 @@ internal shared class StructuralProjectionPlanner {
                     constructorParameters = candidateParameters
                 }
             }
-        } else {
+        } else if dataType == nil {
             constructor = parameterlessConstructor
             if constructor == nil {
                 for candidate in constructors {
@@ -932,7 +947,7 @@ internal shared class StructuralProjectionPlanner {
                     property.Name,
                     StructuralProjectionSourceMember(
                         property.Name,
-                        ClrNullability.GetPropertyTypeSymbol(property),
+                        MemberLookup.GetClrPropertyTypeSymbol(source, property),
                         clrMember: property
                     )
                 )
@@ -944,7 +959,7 @@ internal shared class StructuralProjectionPlanner {
                     field.Name,
                     StructuralProjectionSourceMember(
                         field.Name,
-                        ClrNullability.GetFieldTypeSymbol(field),
+                        MemberLookup.GetClrFieldTypeSymbol(source, field),
                         clrMember: field
                     )
                 )
