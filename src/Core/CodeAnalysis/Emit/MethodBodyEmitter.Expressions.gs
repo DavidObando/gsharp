@@ -676,6 +676,87 @@ internal partial class MethodBodyEmitter {
                 // MethodBase.GetMethodFromHandle(...) ; castclass MethodInfo`.
                 this.EmitMethodInfoLiteral(method)
             }
+            case member is BoundClrPropertyAccessExpression {
+                let receiverType = member.ConstrainedInterfaceType ??
+                    member.StaticContainerType ??
+                    member
+                    .Receiver
+                    ?.Type
+                var owner TypeSymbol? = nil
+                if receiverType != nil {
+                    var imported = MemberLookup.GetProjectionReceiverImportedType(receiverType)
+                    if imported == nil && MemberLookup.TryGetSymbolicOpenReceiverView(
+                        receiverType,
+                        out var symbolicReceiver
+                    ) {
+                        imported = symbolicReceiver
+                    }
+                    if imported != nil {
+                        owner = MemberLookup.GetClrMemberDeclaringTypeSymbol(imported, member.Member)
+                    }
+                }
+                if member.Member is PropertyInfo property {
+                    var methodReference EntityHandle? = nil
+                    if this.GetNullablePropertyGetterReference(property, receiverType) is {} nullableGetter {
+                        owner = receiverType
+                        methodReference = EntityHandle(nullableGetter)
+                    }
+                    this.EmitMethodInfoLiteral(
+                        Invariant.Required(
+                            if property.GetMethod is {IsPublic: true} getter {
+                                getter
+                            } else {
+                                property.SetMethod ?? property.GetMethod
+                            },
+                            "a selected CLR property has an accessor",
+                            expression: "property.GetMethod or property.SetMethod"
+                        ),
+                        owner,
+                        methodReference
+                    )
+                } else if member.Member is FieldInfo field {
+                    this.il.OpCode(ILOpCode.Ldtoken)
+                    this.il.Token(
+                        if owner != nil {
+                            this.outer.memberRefs.GetFieldReference(field, owner)
+                        } else {
+                            this.outer.memberRefs.GetFieldReference(field)
+                        }
+                    )
+                    this.il.OpCode(ILOpCode.Ldtoken)
+                    this.il.Token(
+                        if owner != nil {
+                            this.outer.memberRefs.GetTypeOfToken(owner)
+                        } else {
+                            this
+                                .outer
+                                .memberRefs
+                                .GetTypeReference(
+                                Invariant.Required(
+                                    field.DeclaringType,
+                                    "a selected CLR field has a declaring type",
+                                    expression: "field.DeclaringType"
+                                )
+                            )
+                        }
+                    )
+                    this.il.Call(
+                        this
+                            .outer
+                            .memberRefs
+                            .GetMethodReference(
+                            BclMember.Method(
+                                typeof(FieldInfo),
+                                "GetFieldFromHandle",
+                                typeof(RuntimeFieldHandle),
+                                typeof(RuntimeTypeHandle)
+                            )
+                        )
+                    )
+                } else {
+                    throw NotSupportedException("A CLR member literal requires a property or field.")
+                }
+            }
             case constructor is BoundConstructorCallExpression {
                 // Keep constructor identity and its closed owner until metadata emission.
                 let token = if constructor.StructType.ClrType != nil {
@@ -717,17 +798,23 @@ internal partial class MethodBodyEmitter {
         this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(ConstructorInfo)))
     }
 
-    private func EmitMethodInfoLiteral(method MethodInfo) {
+    private func EmitMethodInfoLiteral(
+        method MethodInfo,
+        containingTypeSymbol TypeSymbol? = nil,
+        methodReference EntityHandle? = nil
+    ) {
         this.il.OpCode(ILOpCode.Ldtoken)
-        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(method))
+        this.il.Token(methodReference ?? this.outer.memberRefs.GetMethodEntityHandle(method, containingTypeSymbol))
         // The CLR requires the 2-arg GetMethodFromHandle(RuntimeMethodHandle,
         // RuntimeTypeHandle) overload whenever the declaring type is a
         // generic instantiation (e.g. a user operator on `Money<Currency>`);
         // the 1-arg overload throws ArgumentException at run time for those.
-        // A generic-type-DEFINITION declaring type never occurs here because
-        // operator methods are only ever reached through a closed (fully
-        // substituted) receiver type.
-        if method.DeclaringType is {IsGenericType: true} declaringType {
+        // Symbolic owners supply their constructed TypeSpec below.
+        if containingTypeSymbol != nil {
+            this.il.OpCode(ILOpCode.Ldtoken)
+            this.il.Token(this.outer.memberRefs.GetTypeOfToken(containingTypeSymbol))
+            this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference())
+        } else if method.DeclaringType is {IsGenericType: true} declaringType {
             this.il.OpCode(ILOpCode.Ldtoken)
             this.il.Token(this.outer.memberRefs.GetTypeReference(declaringType))
             this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference())

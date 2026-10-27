@@ -275,6 +275,7 @@ func Run() int32 {
             method!!.Invoke(
                 nil,
                 []object{
+                    typeof(object),
                     ImmutableArray[FieldSymbol].Empty,
                     ImmutableArray[PropertySymbol].Empty,
                     fieldByToken,

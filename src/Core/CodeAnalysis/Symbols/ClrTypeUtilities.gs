@@ -469,6 +469,30 @@ shared class ClrTypeUtilities {
         (t Type) -> t.GetProperties(flags)
     )
 
+    /// Retains the nearest eligible declaration for each property name.
+    internal func SafeGetNearestProperties(
+        type Type,
+        flags BindingFlags,
+        eligible(PropertyInfo) -> bool
+    )[]PropertyInfo {
+        let properties = List[PropertyInfo]()
+        let names = HashSet[string](StringComparer.Ordinal)
+        var current Type? = type
+        while current != nil {
+            for property in SafeGetProperties(current, flags | BindingFlags.DeclaredOnly) {
+                if eligible(property) && names.Add(property.Name) {
+                    properties.Add(property)
+                }
+            }
+            try {
+                current = current.BaseType
+            } catch (exception Exception) when IsMetadataLoadFailure(exception) {
+                break
+            }
+        }
+        return properties.ToArray()
+    }
+
     /// Enumerates a type's fields tolerantly (issue #338): fields whose type
     /// cannot be loaded under the reference context are skipped.
     /// @param type The type to enumerate.

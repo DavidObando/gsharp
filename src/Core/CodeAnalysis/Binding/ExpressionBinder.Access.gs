@@ -686,48 +686,12 @@ internal partial class ExpressionBinder {
                 }
                 let mangled = prefix + "." + typeSimpleName + "`" + arity.ToString()
                 if $scope.References!!.TryResolveType(mangled, out var openType) {
-                    let clrArgs = [arity]Type
-                    let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](arity)
-                    var argsResolved = true
-                    var hasSymbolicArg = false
-                    for var i = 0; i < arity; i++ {
-                        let ta TypeSymbol? = bindTypeClause(typeArgumentList.Arguments[i])
-                        if ta == nil {
-                            argsResolved = false
-                            break
-                        }
-                        symbolic.Add(ta)
-                        if ta.ClrType == nil {
-                            // Issue #313 / #671: in-scope type parameter or
-                            // user-defined G# type argument — close with a
-                            // System.Object placeholder and preserve the
-                            // symbolic argument for the emitter to recover.
-                            hasSymbolicArg = true
-                            clrArgs[i] = $scope.References!!.GetCoreType("System.Object")
-                            continue
-                        }
-                        // Issue #3962: a fixed-length array `[N]T` HAS a CLR type
-                        // (`T[]`), but it is the same one `[]T` and every other
-                        // length carry, so the declared length survives only in
-                        // the symbol. Retain it, or `List[[3]int32]` and
-                        // `List[[4]int32]` resolve to one cached symbol here too.
-                        // Issue #4024: the SLICE spelling `[]T` shares that
-                        // backing and is retained by the same gate, so a
-                        // fully-qualified
-                        // `System.Collections.Generic.List[[]int32]()` is
-                        // distinguishable from a metadata `List<int[]>`.
-                        if TypeSymbol.ContainsSourceArrayShape(ta) {
-                            hasSymbolicArg = true
-                        }
-                        // Type arguments resolve to gsc-host CLR types (e.g.
-                        // primitives map to host typeof(...)), but openType may
-                        // come from the resolver's isolated MetadataLoadContext.
-                        // MakeGenericType requires every argument to share the
-                        // open generic's load context, so project each argument
-                        // onto the resolver's reference set first.
-                        clrArgs[i] = $scope.References!!.MapClrTypeToReferences(ta.ClrType)!!
-                    }
-                    if !argsResolved {
+                    if !TryResolveClrConstructionTypeArgs(
+                        typeArgumentList,
+                        out var clrArgs,
+                        out var symbolic,
+                        out var hasSymbolicArg
+                    ) {
                         continue
                     }
                     // Issue #4032 (review finding 1): a static member reached
@@ -739,7 +703,7 @@ internal partial class ExpressionBinder {
                         Diagnostics,
                         openType,
                         clrArgs,
-                        symbolic.ToImmutable(),
+                        symbolic,
                         typeArgumentList.Location
                     ) {
                         return false
@@ -748,7 +712,7 @@ internal partial class ExpressionBinder {
                         clrType = openType!!.MakeGenericType(clrArgs)
                         if hasSymbolicArg {
                             openGenericDefinition = openType
-                            symbolicTypeArgs = symbolic.MoveToImmutable()
+                            symbolicTypeArgs = symbolic
                         }
                         return true
                     } catch (ArgumentException) {

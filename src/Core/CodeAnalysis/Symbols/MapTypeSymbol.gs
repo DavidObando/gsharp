@@ -197,6 +197,10 @@ class MapTypeSymbol : TypeSymbol {
         }
 
         private func MakeClrType(keyType TypeSymbol, valueType TypeSymbol) Type? {
+            // Nested generic arguments must use the same symbolic projection as direct type parameters (ADR-0087).
+            if TypeSymbol.ContainsTypeParameter(keyType) || TypeSymbol.ContainsTypeParameter(valueType) {
+                return nil
+            }
             if keyType.ClrType == nil || valueType.ClrType == nil {
                 return nil
             }
