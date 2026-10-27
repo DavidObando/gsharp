@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Incremental reuse re-points enum and delegate declarations** (issue #5324). A body-only edit that shifts text now updates the declaration syntax of enums, nested enums, and delegates, including constructed delegates and enums. Go-to-definition on an enum no longer reads the previous tree.
+
 - **Imported record projections use their declaring constructors** (issue #5435). Structural spreads, casts, and implicit projections no longer select source-emitted constructors for imported records. They retain the selected open constructor identity, constructed owner, optional defaults, and single evaluation.
 
 - **Generic map expression-tree parameters** ([#5430](https://github.com/DavidObando/gsharp/issues/5430)): `map[K,V]` parameters now use the canonical `Dictionary[K,V]` type token instead of reporting `GS9998`. Map signatures and tokens retain generic owners, nested arguments, and nullable value types. Map literals inside expression-tree lambdas still report `GS0473`.

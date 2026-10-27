@@ -30,6 +30,7 @@ class DelegateTypeSymbol : TypeSymbol {
     private var parameters ImmutableArray[ParameterSymbol]
     private var returnType TypeSymbol
     private var signatureVersion int32
+    private var declarationSyntax DelegateDeclarationSyntax
 
     /// Initializes a new instance of the (cref:DelegateTypeSymbol) class.
     /// @param name The delegate type name (the identifier from `type Name = …`).
@@ -55,7 +56,7 @@ class DelegateTypeSymbol : TypeSymbol {
             parameters
         }
         this.returnType = returnType ?? TypeSymbol.Void
-        Declaration = declaration
+        declarationSyntax = declaration
     }
 
     /// Gets the package the delegate is declared in.
@@ -84,9 +85,23 @@ class DelegateTypeSymbol : TypeSymbol {
         }
     }
 
-    /// Gets the declaring syntax node.
-    prop Declaration DelegateDeclarationSyntax {
-        get;
+    /// Gets the declaring syntax node. A constructed delegate reads its definition's node, so a
+    /// re-point of the definition (issue #5324) reaches every cached construction.
+    prop Declaration DelegateDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(
+        definition,
+        this
+    ) {
+        definition.Declaration
+    } else {
+        declarationSyntax
+    }
+
+    /// Re-points this reused delegate at the matching declaration in the edited tree (issue #5324).
+    /// Only the backing syntax changes; the symbol identity is preserved. Call it only from
+    /// (cref:Binding.IncrementalGlobalScopeReuse).
+    /// @param declaration The corresponding declaration in the re-parsed tree.
+    internal func RepointDeclaration(declaration DelegateDeclarationSyntax) {
+        declarationSyntax = declaration
     }
 
     /// ```xmldoc
