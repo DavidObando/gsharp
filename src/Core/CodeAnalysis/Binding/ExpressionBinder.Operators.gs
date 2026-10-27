@@ -2468,16 +2468,15 @@ internal partial class ExpressionBinder {
         // Issues #1144 / #5415: adapt an integer literal to the other operand's
         // integer type when its value is representable (ADR-0129).
         // The other operand can also be a literal. Out-of-range values remain unadapted.
-        if boundOperator == nil {
+        // Integer-valued enum members must retain their enum static types.
+        if boundOperator == nil && IsIntegerType(boundLeft.Type) && IsIntegerType(boundRight.Type) {
             if boundLeft is BoundLiteralExpression leftLit &&
                 IsIntegerLiteralValue(leftLit.Value) &&
-                IsIntegerType(boundRight.Type) &&
                 TryAdaptIntegerLiteral(leftLit.Value, boundRight.Type, out var adaptedLeftValue) {
                 boundLeft = BoundLiteralExpression(boundLeft.Syntax, adaptedLeftValue)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
             } else if boundRight is BoundLiteralExpression rightLit &&
                 IsIntegerLiteralValue(rightLit.Value) &&
-                IsIntegerType(boundLeft.Type) &&
                 TryAdaptIntegerLiteral(rightLit.Value, boundLeft.Type, out var adaptedRightValue) {
                 boundRight = BoundLiteralExpression(boundRight.Syntax, adaptedRightValue)
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)

@@ -20,6 +20,25 @@ import Xunit
 /// asserted — including an unsigned-arithmetic check to confirm the literal is
 /// emitted as the unsigned operand type (not int32).
 open class Issue1144LiteralIntAdaptEmitTests {
+    @Theory
+    @InlineData("Color.Green == 1", int32(25), int32(27))
+    @InlineData("1 == Color.Green", int32(15), int32(17))
+    @InlineData("Color.Green / 2", int32(25), int32(26))
+    @InlineData("2 / Color.Green", int32(15), int32(16))
+    func EnumLiteralOperands_RetainTheirStaticTypes(expression string, start int32, end int32) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = "package EnumLiteral\n" + "enum Color { Green = 1 }\n" + "func F() -> " + expression
+        let (code, diagnostics) = fixture.TryCompile(source, "EnumLiteral", false)
+        Assert.NotEqual(0, code)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "EnumLiteral.dll")))
+        let error = Assert.Single(Regex.Matches(diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0129", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal(start.ToString(), error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal(end.ToString(), error.Groups[4].Value)
+    }
+
     @Fact
     func BothLiteralOperands_AdaptRepresentableValues_AndRejectInvalidConversions() {
         using let fixture = NativeSliceLanguageTests.Fixture()
