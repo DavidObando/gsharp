@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Imported record projections use their declaring constructors** (issue #5435). Structural spreads, casts, and implicit projections no longer select source-emitted constructors for imported records. They retain the selected open constructor identity, constructed owner, optional defaults, and single evaluation.
+
 - **Generic map expression-tree parameters** ([#5430](https://github.com/DavidObando/gsharp/issues/5430)): `map[K,V]` parameters now use the canonical `Dictionary[K,V]` type token instead of reporting `GS9998`. Map signatures and tokens retain generic owners, nested arguments, and nullable value types. Map literals inside expression-tree lambdas still report `GS0473`.
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.

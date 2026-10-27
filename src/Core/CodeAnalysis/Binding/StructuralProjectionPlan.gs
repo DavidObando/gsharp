@@ -244,6 +244,22 @@ internal shared class StructuralProjectionPlanner {
             }
             return false
         }
+        // Imported record aggregates describe metadata, not constructors emitted by this compilation.
+        if target is StructSymbol{IsClass: true} && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            target.ClrType,
+            nil,
+            out _
+        ) {
+            return TryCreateClrTargetPlan(
+                source,
+                target,
+                sourceMembers,
+                strict,
+                explicitMemberNames,
+                out plan,
+                out failure
+            )
+        }
         return if target is StructSymbol userTarget {
             TryCreateUserTargetPlan(
                 source,
