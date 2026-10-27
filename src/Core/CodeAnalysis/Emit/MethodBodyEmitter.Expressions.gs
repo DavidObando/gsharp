@@ -682,12 +682,18 @@ internal partial class MethodBodyEmitter {
                     member
                     .Receiver
                     ?.Type
-                var owner = if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
-                    receiverType
-                ) is {} imported {
-                    MemberLookup.GetClrMemberDeclaringTypeSymbol(imported, member.Member)
-                } else {
-                    default(TypeSymbol?)
+                var owner TypeSymbol? = nil
+                if receiverType != nil {
+                    var imported = MemberLookup.GetProjectionReceiverImportedType(receiverType)
+                    if imported == nil && MemberLookup.TryGetSymbolicOpenReceiverView(
+                        receiverType,
+                        out var symbolicReceiver
+                    ) {
+                        imported = symbolicReceiver
+                    }
+                    if imported != nil {
+                        owner = MemberLookup.GetClrMemberDeclaringTypeSymbol(imported, member.Member)
+                    }
                 }
                 if member.Member is PropertyInfo property {
                     var methodReference EntityHandle? = nil

@@ -1047,6 +1047,40 @@ Console.WriteLine(lowerValue.mark)
     }
 
     @Fact
+    func ImportedGenericDataClassLiteral_ExpressionTreePreservesSymbolicCollectionAccessorOwner() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package MapTree5419
+import System
+import System.Collections.Generic
+import System.Linq.Expressions
+public class Reader {
+    shared {
+        public func Read[K,V](value map[K,V]) Expression[Func[int32]] -> () -> value.Count
+        public func Closed(value map[string,int32]) Expression[Func[int32]] -> () -> value.Count
+        public func DictionaryRead[K,V](value Dictionary[K,V]) Expression[Func[int32]] -> () -> value.Count
+        public func Ordinary[K,V](value map[K,V]) int32 -> value.Count
+    }
+}
+`, "MapTree5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import MapTree5419
+struct Point { public var Value int32 }
+let values = map[string,int32]{"key": 7}
+System.Console.WriteLine(Reader.Closed(values).Compile()())
+System.Console.WriteLine(Reader.DictionaryRead[string,int32](values).Compile()())
+System.Console.WriteLine(Reader.Ordinary[string,int32](values))
+let read = Reader.Read[string,int32](values).Compile()
+System.Console.WriteLine(read())
+values["second"] = 8
+System.Console.WriteLine(read())
+System.Console.WriteLine(Reader.Read[string,Point](map[string,Point]{"key": Point{Value: 7}}).Compile()())
+System.Console.WriteLine(Reader.Read[string,string?](map[string,string?]{"key": nil}).Compile()())
+`, "MapTreeConsumer", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("1\n1\n1\n1\n2\n1\n1\n", fixture.Run(dll))
+    }
+
+    @Fact
     func ImportedGenericDataClassLiteral_ExpressionTreePreservesConstrainedReceiverOwner() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.Compile(`package ConstrainedTree5419
