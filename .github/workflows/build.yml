@@ -216,12 +216,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require the separately approved diagnostic head
-        if: env.GSHARP_5393_PRIVATE_ROUTE == 'true' && env.GSHARP_5393_DIAGNOSTIC != 'true'
-        run: |
-          echo "No diagnostic observation is approved for this head and attempt."
-          exit 70
-
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
@@ -314,6 +308,24 @@ jobs:
             esac
             dotnet test "$project" "${args[@]}"
           done
+
+      - name: Test core without diagnostic collection
+        if: env.GSHARP_5393_PRIVATE_ROUTE == 'true' && env.GSHARP_5393_DIAGNOSTIC != 'true'
+        timeout-minutes: 16
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+          TEST_FILTER: ${{ matrix.filter }}
+          TEST_PROJECTS: ${{ matrix.project }}
+          DOTNET_DbgEnableMiniDump: 0
+          COMPlus_DbgEnableMiniDump: 0
+        run: |
+          python3 -B build/test-core-crash-diagnostics.py
+          ulimit -c 0
+          python3 build/core-crash-diagnostics.py test
+
+      - name: Remove private core validation output
+        if: always() && env.GSHARP_5393_PRIVATE_ROUTE == 'true' && env.GSHARP_5393_DIAGNOSTIC != 'true'
+        run: python3 build/core-crash-diagnostics.py cleanup
 
       - name: Test with dump-free sequence
         id: test5393

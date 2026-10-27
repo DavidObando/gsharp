@@ -225,6 +225,37 @@ def prepare(root):
         os.close(descriptor)
 
 
+def test_without_collection(root):
+    require(os.environ.get("TEST_PROJECTS") == "test/Core.Tests/Core.Tests.gsproj"
+            and os.environ.get("TEST_FILTER") == FILTER, "test-shape")
+    safe_parents(root, PRIVATE)
+    private = root / PRIVATE
+    require(not private.exists(), "already-used")
+    private.mkdir(parents=True, mode=0o700)
+    (private / ".owner").write_bytes(OWNER)
+    environment = {**os.environ, "DOTNET_DbgEnableMiniDump": "0",
+                   "COMPlus_DbgEnableMiniDump": "0"}
+    environment.pop("CS2GS_TEST_SOURCE_ROOT", None)
+    try:
+        with os.fdopen(os.open(private / "test.stdout",
+                               os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600),
+                       "wb") as stdout, os.fdopen(os.open(
+                           private / "test.stderr",
+                           os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600),
+                           "wb") as stderr:
+            result = subprocess.run(
+                ["timeout", "--signal=TERM", "--kill-after=10s", "900s",
+                 "dotnet", "test", "test/Core.Tests/Core.Tests.gsproj",
+                 "--configuration", "Release", "--no-build", "--no-restore",
+                 "--filter", FILTER],
+                cwd=root, env=environment, stdout=stdout, stderr=stderr)
+        status = result.returncode if result.returncode >= 0 else 128 - result.returncode
+        print("Core validation wrapper exit: " + str(status))
+        return status
+    finally:
+        cleanup(root)
+
+
 def xml(data):
     text = data.decode("utf-8-sig")
     require("\x00" not in text and "<!DOCTYPE" not in text.upper()
@@ -467,11 +498,15 @@ def finish(root, exit_code):
 
 def main():
     root = Path(__file__).resolve().parent.parent
-    os.umask(0o077)
     try:
         require(len(sys.argv) == 2, "command")
+        if sys.argv[1] == "test":
+            return test_without_collection(root)
+        os.umask(0o077)
         if sys.argv[1] == "prepare":
             prepare(root)
+        elif sys.argv[1] == "cleanup":
+            cleanup(root)
         elif sys.argv[1] == "finish":
             value = os.environ.get("TEST_EXIT_CODE", "")
             finish(root, int(value) if re.fullmatch(r"[0-9]{1,3}", value) else None)

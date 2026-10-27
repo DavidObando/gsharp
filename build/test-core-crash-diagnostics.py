@@ -3,14 +3,17 @@
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
@@ -68,7 +71,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(predicate, eligibility)
         self.assertNotIn("'opened'", eligibility)
         self.assertNotIn("'reopened'", eligibility)
-        self.assertIn("No diagnostic observation is approved for this head and attempt.", workflow)
+        self.assertNotIn("      - name: Require the separately approved diagnostic head\n", workflow)
         diagnostic = workflow.split("      - name: Test with dump-free sequence\n", 1)[1]
         diagnostic = diagnostic.split("      - name: Normalize core diagnostics\n", 1)[0]
         for forbidden in ("ulimit -f", "RLIMIT_FSIZE", "TMPDIR", "DOTNET_CLI_HOME",
@@ -78,6 +81,127 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('exit "$status"', diagnostic)
         self.assertIn("--blame-hang --blame-hang-timeout 2m --blame-hang-dump-type mini",
                       workflow)
+
+    def test_unarmed_route_runs_tests_without_collecting_or_publishing(self):
+        workflow = self.workflow()
+        ordinary = workflow.split("      - name: Test core without diagnostic collection\n", 1)[1]
+        ordinary = ordinary.split("      - name: Test with dump-free sequence\n", 1)[0]
+        self.assertIn("env.GSHARP_5393_PRIVATE_ROUTE == 'true' && "
+                      "env.GSHARP_5393_DIAGNOSTIC != 'true'", ordinary)
+        self.assertIn("ulimit -c 0", ordinary)
+        self.assertIn("DOTNET_DbgEnableMiniDump: 0", ordinary)
+        self.assertIn("COMPlus_DbgEnableMiniDump: 0", ordinary)
+        self.assertIn("python3 build/core-crash-diagnostics.py test", ordinary)
+        self.assertIn("if: always() && env.GSHARP_5393_PRIVATE_ROUTE == 'true' && "
+                      "env.GSHARP_5393_DIAGNOSTIC != 'true'", ordinary)
+        self.assertIn("python3 build/core-crash-diagnostics.py cleanup", ordinary)
+        for forbidden in ("--blame", "--logger", " prepare", " finish", "upload-artifact",
+                          "GSHARP_5393_INITIAL_HEAD", "ulimit -f", "umask"):
+            self.assertNotIn(forbidden, ordinary)
+
+
+class OrdinaryValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+        work = ROOT / "out/5393-r2/implementation/metadata-work"
+        work.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(dir=work)
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        environment = patch.dict(os.environ, {
+            "TEST_PROJECTS": "test/Core.Tests/Core.Tests.gsproj",
+            "TEST_FILTER": self.helper.FILTER,
+            "CS2GS_TEST_SOURCE_ROOT": CANARY,
+            "DOTNET_DbgEnableMiniDump": "1", "COMPlus_DbgEnableMiniDump": "1"})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_full_workload_preserves_failure_status_and_cleans_private_output(self):
+        for exit_code in (0, 23, 124, 137, -9):
+            with self.subTest(exit_code=exit_code):
+                def run(command, **kwargs):
+                    self.assertEqual(command, [
+                        "timeout", "--signal=TERM", "--kill-after=10s", "900s",
+                        "dotnet", "test", "test/Core.Tests/Core.Tests.gsproj",
+                        "--configuration", "Release", "--no-build", "--no-restore",
+                        "--filter", self.helper.FILTER])
+                    self.assertEqual(kwargs["cwd"], self.root)
+                    for name in ("DOTNET_DbgEnableMiniDump", "COMPlus_DbgEnableMiniDump"):
+                        self.assertEqual(kwargs["env"][name], "0")
+                    self.assertNotIn("CS2GS_TEST_SOURCE_ROOT", kwargs["env"])
+                    for stream in (kwargs["stdout"], kwargs["stderr"]):
+                        self.assertEqual(stat.S_IMODE(os.fstat(stream.fileno()).st_mode), 0o600)
+                        stream.write(CANARY.encode())
+                    self.assertEqual(stat.S_IMODE(
+                        (self.root / self.helper.PRIVATE).stat().st_mode), 0o700)
+                    return subprocess.CompletedProcess(command, exit_code)
+
+                output = io.StringIO()
+                with patch.object(self.helper.subprocess, "run", side_effect=run) as runner:
+                    with redirect_stdout(output):
+                        status = self.helper.test_without_collection(self.root)
+                runner.assert_called_once()
+                self.assertEqual(status, exit_code if exit_code >= 0 else 128 - exit_code)
+                self.assertNotIn(CANARY, output.getvalue())
+                self.assertFalse((self.root / self.helper.PRIVATE).exists())
+                self.assertFalse((self.root / self.helper.PUBLIC).exists())
+
+    def test_cli_preserves_exit_without_raw_output_or_artifacts(self):
+        program = self.root / "build/core-crash-diagnostics.py"
+        program.parent.mkdir()
+        program.write_bytes(Path(self.helper.__file__).read_bytes())
+        tools = self.root / "tools"
+        tools.mkdir()
+        timeout = tools / "timeout"
+        timeout.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                           "if os.umask(0o022) != 0o022: sys.exit(24)\n"
+                           f"print({CANARY!r})\nprint({CANARY!r}, file=sys.stderr)\n"
+                           "sys.exit(23)\n")
+        timeout.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, "-B", str(program), "test"], cwd=self.root,
+            env={**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"]},
+            capture_output=True, text=True, umask=0o022)
+        self.assertEqual(result.returncode, 23)
+        self.assertIn("Core validation wrapper exit: 23", result.stdout)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.assertFalse((self.root / self.helper.PRIVATE).exists())
+        self.assertFalse((self.root / self.helper.PUBLIC).exists())
+
+    def test_cleanup_cli_removes_interrupted_private_output(self):
+        program = self.root / "build/core-crash-diagnostics.py"
+        program.parent.mkdir()
+        program.write_bytes(Path(self.helper.__file__).read_bytes())
+        private = self.root / self.helper.PRIVATE
+        private.mkdir(parents=True, mode=0o700)
+        (private / ".owner").write_bytes(self.helper.OWNER)
+        (private / "test.stdout").write_text(CANARY)
+        result = subprocess.run(
+            [sys.executable, "-B", str(program), "cleanup"], cwd=self.root,
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.assertFalse(private.exists())
+        self.assertFalse((self.root / self.helper.PUBLIC).exists())
+
+    def test_wrong_workload_is_rejected_before_launch(self):
+        for changed in ({"TEST_PROJECTS": "test/Compiler.Tests/Compiler.Tests.gsproj"},
+                        {"TEST_FILTER": "FullyQualifiedName~OneTest"}):
+            with self.subTest(changed=changed), patch.dict(os.environ, changed):
+                with patch.object(self.helper.subprocess, "run") as runner:
+                    with self.assertRaisesRegex(self.helper.DiagnosticError, "^test-shape$"):
+                        self.helper.test_without_collection(self.root)
+                runner.assert_not_called()
+                self.assertFalse((self.root / self.helper.PRIVATE).exists())
+
+    def test_cleanup_failure_cannot_report_success(self):
+        with patch.object(self.helper.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 0)):
+            with patch.object(self.helper, "cleanup", side_effect=OSError(CANARY)):
+                with redirect_stdout(io.StringIO()):
+                    with self.assertRaises(OSError):
+                        self.helper.test_without_collection(self.root)
+        self.assertFalse((self.root / self.helper.PUBLIC).exists())
 
 
 class NormalizerTests(unittest.TestCase):
