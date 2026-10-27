@@ -166,7 +166,20 @@ partial class SemanticModel {
             return OrderMemberGroup(group.ToImmutable())
         }
         let single = GetTokenSymbol(token)
-        return if single == nil {
+        // A call through a local function value names a variable; any other variable or type is no member.
+        let calledVariable = single is VariableSymbol && token.Parent is CallExpressionSyntax{Callee: nil}
+        return if single == nil ||
+            (
+            !calledVariable &&
+                single is not(
+                FunctionSymbol or
+                    ImportedFunctionSymbol or
+                    PropertySymbol or
+                    FieldSymbol or
+                    EventSymbol or
+                    EnumMemberSymbol
+            )
+        ) {
             ImmutableArray[Symbol].Empty
         } else {
             ImmutableArray.Create(single)

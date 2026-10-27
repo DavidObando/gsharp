@@ -8222,6 +8222,7 @@ type static class GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay : Syste
   method public static String ToDisplayString(System.Type clrType, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
   method public static String ToTypeDisplayString(GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
   method public static String ToTypeDisplayString(System.Type type)
+  method public static String ToTypeDisplayString(System.Type type, Boolean qualifyNames)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(GSharp.Core.CodeAnalysis.Symbols.Symbol symbol, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format, GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = null)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(System.Reflection.MemberInfo member, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)
   method public static System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayPart> ToDisplayParts(System.Type clrType, GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplayFormat format)

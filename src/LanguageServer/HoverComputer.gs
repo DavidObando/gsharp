@@ -1069,7 +1069,7 @@ shared class SignatureHelpComputer {
                 .GetLogicalParameters(imported.Method)
                 .Select(
                 (p ParameterInfo) -> ParameterInformation{
-                    Label: "${p.Name} ${SymbolDisplay.ToDisplayString(p.ParameterType, SymbolDisplayFormat.Signature)}"
+                    Label: "${p.Name} ${SymbolDisplay.ToTypeDisplayString(p.ParameterType, SymbolDisplayFormat.Signature.QualifyNames)}"
                 }
             )
                 .ToList()

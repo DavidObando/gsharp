@@ -122,6 +122,14 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func MemberGroup_LocalAndTypeNames_AreEmpty() {
+        for text in[]string{"c", "Util"} {
+            let name = Names(Trees[0].Root).First((n NameExpressionSyntax) -> n.IdentifierToken.Text == text)
+            Assert.True(ModelOf(name).GetMemberGroup(name).IsEmpty, text)
+        }
+    }
+
+    @Fact
     func MemberGroup_ArgumentProbe_DoesNotReplaceTheCalleesGroup() {
         // The method-group argument is resolved against the Console overloads inside the call.
         let group = Group("PProbe")

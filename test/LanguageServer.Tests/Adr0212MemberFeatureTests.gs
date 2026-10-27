@@ -42,6 +42,12 @@ open class Adr0212MemberFeatureTests {
         )
         let labels = help!!.Signatures.Select((s SignatureInformation) -> s.Label).ToList()
         Assert.Equal(labels.Count, labels.Distinct().Count())
+        for signature in help!!.Signatures {
+            Assert.All(
+                signature.Parameters,
+                (p ParameterInformation) -> Assert.Contains(p.Label, signature.Label, StringComparison.Ordinal)
+            )
+        }
         // The overload that the call resolved to is the active one: WriteLine(string).
         Assert.Contains("string", labels[help!!.ActiveSignature], StringComparison.Ordinal)
     }
