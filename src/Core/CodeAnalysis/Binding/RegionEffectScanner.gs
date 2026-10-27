@@ -77,7 +77,10 @@ internal sealed class RegionEffectScanner {
     /// `for` clause and the collection of a range loop run once before the region and are not in
     /// it. The record is cached per loop.
     /// @param loop A loop statement, or a labeled statement that holds one.
-    func ScanLoop(loop SyntaxNode) RegionEffects {
+    /// @param iterationRunsUserCode Whether the iteration of a range loop runs user code (`MoveNext`,
+    /// `Current`, disposal). The binder knows it from the collection's type, which syntax does not show; it
+    /// is `false` for an array, a slice or a string. It only applies to the loop itself, not to a nested one.
+    func ScanLoop(loop SyntaxNode, iterationRunsUserCode bool = true) RegionEffects {
         var node = loop
         while node is LabeledStatementSyntax labeled {
             node = labeled.Statement
@@ -91,7 +94,7 @@ internal sealed class RegionEffectScanner {
             topLevelCache.Add(node, nested)
             return nested
         }
-        let result = ScanFresh(node, true)
+        let result = ScanFresh(node, true, iterationRunsUserCode)
         topLevelCache.Add(node, result)
         if sameWhenNested {
             nestedCache.Add(node, result)
@@ -125,7 +128,7 @@ internal sealed class RegionEffectScanner {
         return result
     }
 
-    private func ScanFresh(node SyntaxNode, topLevel bool) RegionEffects {
+    private func ScanFresh(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) RegionEffects {
         let savedScopes = scopes
         let savedCurrent = current
         let savedClosure = closureDepth
@@ -136,7 +139,7 @@ internal sealed class RegionEffectScanner {
         closureDepth = 0
         patternNames = HashSet[string]()
         let before = NodesVisited
-        VisitLoop(node, topLevel)
+        VisitLoop(node, topLevel, iterationRunsUserCode)
         current.NodesVisited = NodesVisited - before
         Regions++
         let result = current
@@ -655,7 +658,7 @@ internal sealed class RegionEffectScanner {
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
     // `for` clause and the collection of a range loop are outside it (table T3, T5).
-    private func VisitLoop(node SyntaxNode, topLevel bool) {
+    private func VisitLoop(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) {
         switch node.Kind {
             case SyntaxKind.WhileStatement {
                 let loop = cast[WhileStatementSyntax](node)
@@ -694,7 +697,9 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.ForRangeStatement {
                 let loop = cast[ForRangeStatementSyntax](node)
-                RecordIteration(false)
+                if iterationRunsUserCode {
+                    RecordIteration(false)
+                }
                 if !topLevel {
                     Visit(loop.Collection)
                 }
@@ -706,7 +711,9 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.ForTupleRangeStatement {
                 let loop = cast[ForTupleRangeStatementSyntax](node)
-                RecordIteration(false)
+                if iterationRunsUserCode {
+                    RecordIteration(false)
+                }
                 if !topLevel {
                     Visit(loop.Collection)
                 }
@@ -952,6 +959,12 @@ internal sealed class RegionEffectScanner {
             case literal is LiteralExpressionSyntax {
                 if literal.LiteralToken.Kind != SyntaxKind.NilKeyword {
                     proof = RegionWriteProof.NonNilLiteral
+                    // The type of a type-test fact must accept the literal: only a string literal proves one.
+                    typeName = if literal.LiteralToken.Kind == SyntaxKind.StringToken {
+                        "string"
+                    } else {
+                        nil
+                    }
                 }
             }
             case call is CallExpressionSyntax {

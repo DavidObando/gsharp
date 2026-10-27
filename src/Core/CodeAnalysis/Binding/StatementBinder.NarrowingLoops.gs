@@ -247,7 +247,9 @@ internal partial class StatementBinder {
                     why = "literal-into-value-type"
                     return false
                 }
-                if factKind == "type-test" && !ConvertsImplicitly(TypeSymbol.String, narrowedType) {
+                // The literal proves a type-test fact only when its own type converts to the fact's type.
+                if factKind == "type-test" &&
+                    (write.ConstructedTypeName != "string" || !ConvertsImplicitly(TypeSymbol.String, narrowedType)) {
                     why = "literal-type-differs"
                     return false
                 }
@@ -343,7 +345,11 @@ internal partial class StatementBinder {
                 indirectCall = true
             }
         }
-        let mayMutateReferenceStorage = memberWrite || readLike || indirectCall
+        // A member read is an unknown getter, which the table classes as a call (ADR-0208 R14). Amendment A3
+        // (#5292) keeps the fact of a by-reference parameter across a call, so a read does not write the
+        // storage that such a parameter names. It still removes member-bearing paths and the facts of an
+        // alias of an element or a member.
+        let mayMutateReferenceStorage = memberWrite || indirectCall
         let mayMutateAnyRoot = callLike || readLike
         let callRule = if callLike {
             "W4"
@@ -484,49 +490,42 @@ internal partial class StatementBinder {
         return RegionKillDecision(false, "-", "-")
     }
 
-    /// The loop comparison of slice L0. [`body`](paramref) is the body of a loop that was bound once
-    /// under the entry facts of [`snapshots`](paramref).
-    private func ReportLoopComparison(
-        body StatementSyntax,
-        snapshots[]Dictionary[AccessPath, TypeSymbol],
-        frameCount int32,
-        invalidations List[(FrameIndex int32, Path AccessPath)]
-    ) {
+    /// ADR-0213 section 6 (slice L1): applies the lower bound `Lower(S, R)` of the loop whose body is
+    /// [`body`](paramref) to the frames, before the header and the body are bound. `S` is the facts of the
+    /// frames, `R` the region of the loop. A fact that the consumer rule of section 7 removes leaves its
+    /// frame, and stays out of it after the loop. The external callable aliases that the region may
+    /// reassign leave their set. When `GSHARP_NARROWING_COMPARE` is set, the decision for every fact goes
+    /// to the `.loops` report.
+    private func ApplyLoopEntryLowerBound(body StatementSyntax, iterationRunsUserCode bool) {
         let loop = body.Parent
+        let frameCount = binderCtx.NarrowedVariables.Count
+        let invalidations = List[(FrameIndex int32, Path AccessPath)]()
         if loop == nil || RegionEffectKindTable.Classify(loop.Kind) != RegionEffectClass.Loop {
-            NarrowingComparison.ReportLoopSummary(body.Location, -1, 0, 0, "no-loop-parent")
+            // A loop that the walker cannot name has no region to scan: every fact is removed (rule W6).
+            for var i = frameCount - 1; i >= 0; i-- {
+                for path in binderCtx.NarrowedVariables[i].Keys {
+                    invalidations.Add((i, path))
+                }
+            }
+            InvalidateInheritedNarrowings(invalidations)
+            externalCallableAliases.Clear()
+            CompilationMeasurements.Count("narrowing.region-facts-killed", cast[int64](invalidations.Count))
+            if NarrowingComparison.LoopsEnabled {
+                NarrowingComparison.ReportLoopSummary(body.Location, invalidations.Count, invalidations.Count, 0, "no-loop-parent")
+            }
+            return
+        }
+        if HeaderIsLiteralFalse(loop) {
+            // No back edge: the body runs once from the entry state, or never.
             return
         }
         let scanner = GetRegionScanner()
         let visitedBefore = scanner.NodesVisited
         let regionsBefore = scanner.Regions
-        let effects = scanner.ScanLoop(loop)
+        let effects = scanner.ScanLoop(loop, iterationRunsUserCode)
         if scanner.Regions != regionsBefore {
             CompilationMeasurements.Count("narrowing.region-walks")
             CompilationMeasurements.Count("narrowing.region-nodes", cast[int64](scanner.NodesVisited - visitedBefore))
-        }
-        // S: the facts of the frames the loop inherits, the innermost frame first.
-        let paths = List[AccessPath]()
-        let types = List[TypeSymbol]()
-        let frameIndexes = List[int32]()
-        for var i = Math.Min(frameCount, snapshots.Length) - 1; i >= 0; i-- {
-            for entry in snapshots[i] {
-                var seen = false
-                for existing in paths {
-                    if existing.Equals(entry.Key) {
-                        seen = true
-                        break
-                    }
-                }
-                if !seen {
-                    paths.Add(entry.Key)
-                    types.Add(entry.Value)
-                    frameIndexes.Add(i)
-                }
-            }
-        }
-        if paths.Count == 0 {
-            return
         }
         let resolved = ResolveRegionWrites(effects)
         var filterNames HashSet[string]? = nil
@@ -536,59 +535,60 @@ internal partial class StatementBinder {
                 filterNames = CollectEnclosingFilterNames(filters)
             }
         }
-        var killedByBoth = 0
-        var keptByBoth = 0
+        // S: the facts of the frames. A path that two frames hold is reported once, for the innermost frame.
+        let reported = List[AccessPath]()
+        var factCount = 0
+        var killedCount = 0
         var memberReadsWithLiveFacts = 0
         let location = loop.Location
-        for var i = 0; i < paths.Count; i++ {
-            let path = paths[i]
-            var oldKilled = false
-            for (frameIndex, killedPath) in invalidations {
-                if frameIndex == frameIndexes[i] && killedPath.Equals(path) {
-                    oldKilled = true
-                    break
+        for var i = frameCount - 1; i >= 0; i-- {
+            for entry in binderCtx.NarrowedVariables[i] {
+                let path = entry.Key
+                let decision = DecideRegionKill(path, entry.Value, effects, resolved, filterNames)
+                if decision.Killed {
+                    invalidations.Add((i, path))
                 }
-            }
-            let decision = DecideRegionKill(path, types[i], effects, resolved, filterNames)
-            if decision.Killed {
-                CompilationMeasurements.Count("narrowing.region-facts-killed")
-            }
-            if oldKilled && decision.Killed {
-                killedByBoth++
-            } else if !oldKilled && !decision.Killed {
-                keptByBoth++
-            } else if decision.Killed {
-                NarrowingComparison.ReportLoopDisagreement(
-                    location,
-                    path.ToString(),
-                    FactKind(path, types[i]),
-                    "old-kept/new-killed",
-                    decision.Rule,
-                    decision.Row
-                )
-            } else {
-                // The walker keeps a fact that today's analysis removes. Rule P7 explains the
-                // construction forms (row R7 (d)). Anything else is a defect of the ADR.
-                var rowText = "UNCLASSIFIED"
-                var ruleText = "none"
-                for var r = 0; r < resolved.Roots.Count; r++ {
-                    if SameRoot(resolved.Roots[r], path.Root) {
-                        ruleText = "P7(kept)"
-                        rowText = "R7 d"
+                var seen = false
+                for existing in reported {
+                    if existing.Equals(path) {
+                        seen = true
+                        break
                     }
                 }
-                NarrowingComparison.ReportLoopDisagreement(
-                    location,
-                    path.ToString(),
-                    FactKind(path, types[i]),
-                    "old-killed/new-kept",
-                    ruleText,
-                    rowText
+                if seen {
+                    continue
+                }
+                reported.Add(path)
+                factCount++
+                if decision.Killed {
+                    killedCount++
+                    CompilationMeasurements.Count("narrowing.region-facts-killed")
+                }
+                if effects.MemberReadCount > 0 && MayBeMutatedByUnknownCallable(path) {
+                    memberReadsWithLiveFacts++
+                }
+                if NarrowingComparison.LoopsEnabled && decision.Killed {
+                    NarrowingComparison.ReportLoopKill(
+                        location,
+                        path.ToString(),
+                        FactKind(path, entry.Value),
+                        decision.Rule,
+                        decision.Row
+                    )
+                }
+            }
+        }
+        InvalidateInheritedNarrowings(invalidations)
+        // ADR-0213 section 13: a function value that the region may reassign is no longer external at the
+        // loop header, so a call in the loop can reach a closure.
+        if effects.ContainsUnknownKind || effects.ContainsPointerWrite {
+            externalCallableAliases.Clear()
+        } else if externalCallableAliases.Count > 0 && resolved.Roots.Count > 0 {
+            externalCallableAliases.RemoveWhere(
+                (alias VariableSymbol) -> resolved.Roots.Any(
+                    (written VariableSymbol) -> SameRoot(written, alias) || MayShareStorage(written, alias)
                 )
-            }
-            if effects.MemberReadCount > 0 && MayBeMutatedByUnknownCallable(path) {
-                memberReadsWithLiveFacts++
-            }
+            )
         }
         if effects.MemberReadCount > 0 {
             CompilationMeasurements.Count("narrowing.region-member-reads", cast[int64](effects.MemberReadCount))
@@ -599,18 +599,48 @@ internal partial class StatementBinder {
                 )
             }
         }
-        NarrowingComparison.ReportLoopSummary(
-            location,
-            paths.Count,
-            killedByBoth,
-            keptByBoth,
-            "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
-        )
+        if NarrowingComparison.LoopsEnabled {
+            NarrowingComparison.ReportLoopSummary(
+                location,
+                factCount,
+                killedCount,
+                factCount - killedCount,
+                "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
+            )
+        }
     }
 
-    /// Row R7 (f): the facts that the header of a loop proves when the loop ends and that no frame
-    /// holds after the loop today. The report lists the `!!` sites after the loop on the same path.
-    private func ReportLoopExitGain(loopBody StatementSyntax, condition BoundExpression?) {
+    // A loop whose condition is the literal `false` has no back edge (`while false`, `do { } while false`),
+    // so its body is bound under the state at its entry.
+    private func HeaderIsLiteralFalse(loop SyntaxNode) bool {
+        var condition ExpressionSyntax? = nil
+        switch loop.Kind {
+            case SyntaxKind.WhileStatement { condition = cast[WhileStatementSyntax](loop).Condition }
+            case SyntaxKind.ForConditionStatement { condition = cast[ForConditionStatementSyntax](loop).Condition }
+            case SyntaxKind.ForClauseStatement { condition = cast[ForClauseStatementSyntax](loop).Condition }
+            case SyntaxKind.DoWhileStatement { condition = cast[DoWhileStatementSyntax](loop).Condition }
+            default { }
+        }
+        while condition is ParenthesizedExpressionSyntax parenthesized {
+            condition = parenthesized.Expression
+        }
+        return condition is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.FalseKeyword
+    }
+
+    // The facts that the header of a loop proves when the loop ends, by loop statement. Row R7 (f).
+    private let loopExitFacts Dictionary[SyntaxNode, Dictionary[AccessPath, TypeSymbol]] = Dictionary[
+        SyntaxNode,
+        Dictionary[AccessPath, TypeSymbol]
+    ]()
+
+    /// Row R7 (f), table 9 column `Exit state`: a loop without a `break` ends only when its header is
+    /// false, so the facts that the condition proves false hold after the loop whatever the body wrote.
+    /// The header is bound under the lower bound of the loop, so each fact holds on every iteration.
+    /// A fact that the condition itself may remove is dropped, as for a statement (rule A2).
+    /// @remarks A loop with a `break` keeps today's exit (no fact is added): the states of the `break`
+    /// statements are not recorded yet, so the join of table 9 cannot be taken. The same holds in a
+    /// function with a user label or `goto` (#4285).
+    private func RecordLoopExitFacts(loopBody StatementSyntax, condition BoundExpression?) {
         if condition == nil {
             return
         }
@@ -619,23 +649,64 @@ internal partial class StatementBinder {
             return
         }
         let elseFacts = ComputeConditionNarrowing(condition).Else
-        if elseFacts == nil {
+        if elseFacts == nil || elseFacts.Count == 0 {
             return
         }
-        let location = loop.Location
         let hasBreak = ContainsBreakFor(loopBody)
+        if NarrowingComparison.LoopsEnabled {
+            for entry in elseFacts {
+                // The frames hold the state after the loop. A fact that they hold is not a gain.
+                if binderCtx.NarrowedVariables.Query(entry.Key) != nil {
+                    continue
+                }
+                let text = if entry.Key.HasMembers {
+                    ""
+                } else {
+                    entry.Key.Root.Name
+                }
+                NarrowingComparison.ReportLoopExitGain(
+                    loop.Location,
+                    entry.Key.ToString(),
+                    hasBreak,
+                    FindBangSitesAfter(loop, text)
+                )
+            }
+        }
+        if hasBreak || binderCtx.FunctionContainsUserGotoOrLabel {
+            return
+        }
+        let header = NewCollector(nil, externalCallableAliases)
+        header.VisitExpression(condition)
+        let facts = Dictionary[AccessPath, TypeSymbol]()
         for entry in elseFacts {
-            // The frames hold the state after the loop. A fact that they hold is not a gain.
-            if binderCtx.NarrowedVariables.Query(entry.Key) != nil {
-                continue
+            let path = entry.Key
+            let removed = header.AssignsRoot(path.Root) ||
+                MayBeMutatedByUnknownWrite(header, path) ||
+                (header.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
+                DropsOnMemberMutation(path, header)
+            if !removed {
+                facts[path] = entry.Value
             }
-            let text = if entry.Key.HasMembers {
-                ""
-            } else {
-                entry.Key.Root.Name
-            }
-            let sites = FindBangSitesAfter(loop, text)
-            NarrowingComparison.ReportLoopExitGain(location, entry.Key.ToString(), hasBreak, sites)
+        }
+        if facts.Count > 0 {
+            loopExitFacts[loop] = facts
+        }
+    }
+
+    /// Adds the facts that the header of the loop statement [`syntax`](paramref) proves on exit to
+    /// [`persistentFrame`](paramref). It runs after the statement's invalidation, which removes the
+    /// roots that the body writes: the exit state is the state of the header, not of the body.
+    private func ApplyLoopExitNarrowings(syntax SyntaxNode, persistentFrame NarrowingFrame) {
+        var node = syntax
+        while node is LabeledStatementSyntax labeled {
+            node = labeled.Statement
+        }
+        if !loopExitFacts.TryGetValue(node, out var facts) {
+            return
+        }
+        loopExitFacts.Remove(node)
+        for entry in facts {
+            SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
         }
     }
 

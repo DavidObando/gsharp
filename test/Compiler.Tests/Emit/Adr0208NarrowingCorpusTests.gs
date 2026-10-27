@@ -180,7 +180,19 @@ open class Adr0208NarrowingCorpusTests {
                 "h7_conditional_address_repeats_ref_argument",
                 "h8_nested_annotation_by_ref_parameters_overlap",
                 "h9_nested_type_parameter_by_ref_parameters_overlap",
-                "out-alias_out_ref_alias"
+                "out-alias_out_ref_alias",
+                "q12_exit_gain",
+                "q13_exit_gain_bang",
+                "q14_enclosing_filter_reenters_loop",
+                "q3_loop_escaped_closure",
+                "q4_shadow_let_in_loop",
+                "q5a_source_getter_in_loop",
+                "q5b_imported_getter_in_loop",
+                "q5c_imported_getter_closure_root",
+                "q5d_hidden_field_getter",
+                "q7_while_exit_state",
+                "q8_do_while",
+                "q9_loop_in_goto_span"
             },
             names
         )
@@ -312,7 +324,7 @@ func Run(n int32) string {
     }
     return last
 }
-func Main() { Console.WriteLine(Run(2)) }`, "", "run", "animal", ""}
+func Main() { Console.WriteLine(Run(2)) }`, "", "run", "dog", "ADR-0213 R7 (d) (L1)"}
             yield[]object{"cA_filter_write", `func Get() string? { return "a" }
 func Clear(ref s string?) bool {
     s = nil
@@ -671,7 +683,7 @@ func Run(c bool, n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(true, 3)) }`, "", "run", "0", ""}
+func Main() { Console.WriteLine(Run(true, 3)) }`, "GS0158@8:27", "reject", "", "ADR-0213 R7 (a) (L1)"}
             yield[]object{"e2_loop_exitwrite", `func Get() string? { return nil }
 func Run(c bool, n int32) int32 {
     var s string? = Get()
@@ -704,7 +716,7 @@ func Run(n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(3)) }`, "", "run", "0", ""}
+func Main() { Console.WriteLine(Run(3)) }`, "GS0158@10:30", "reject", "", "ADR-0213 R7 (b) (L1)"}
             yield[]object{"e4_loop_nullable_reassign", `class Node {
     var Value int32
     var Next Node?
@@ -1200,6 +1212,227 @@ func Main() {
     var x C? = nil
     Run(out x, ref x)
 }`, "GS0159@6:15", "reject", "", ""}
+            yield[]object{"q3_loop_escaped_closure", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) { h.Callback() }
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += x.Value
+        Wrapper(h)
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0129@16:15 GS0158@16:20", "reject", "", "ADR-0213 R7 (c) (L1)"}
+            yield[]object{"q4_shadow_let_in_loop", `import System
+func Get() string? { return "xy" }
+func Consume(n int32) { }
+func Run(n int32) int32 {
+    var s string? = "abc"
+    if s == nil { return 0 }
+    for var i = 0; i < n; i++ {
+        let s string? = Get()
+        if s == nil { continue }
+        Consume(s.Length)
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(Run(2)) }`, "", "run", "3", ""}
+            yield[]object{"q5a_source_getter_in_loop", `import System
+class Pet {
+    prop Name string -> "rex"
+}
+class Box {
+    let Pet Pet?
+    init(pet Pet?) { Pet = pet }
+}
+class Counter {
+    var hits int32 = 0
+    prop Count int32 {
+        get {
+            hits++
+            return hits
+        }
+    }
+}
+func Consume(n int32) { }
+func Run(b Box, x Counter, n int32) int32 {
+    if b.Pet == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        Consume(x.Count)
+        total = total + b.Pet.Name.Length
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(Box(Pet()), Counter(), 2)) }`, "GS0158@24:31", "reject", "", ""}
+            yield[]object{"q5b_imported_getter_in_loop", `import System
+import System.Text
+class Pet {
+    prop Name string -> "rex"
+}
+class Box {
+    let Pet Pet?
+    init(pet Pet?) { Pet = pet }
+}
+func Consume(n int32) { }
+func Run(b Box, sb StringBuilder, n int32) int32 {
+    if b.Pet == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        Consume(sb.Length)
+        total = total + b.Pet.Name.Length
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(Box(Pet()), StringBuilder(), 2)) }`, "GS0158@16:31", "reject", "", ""}
+            yield[]object{"q5c_imported_getter_closure_root", `import System
+import System.Text
+class C {
+    var Value int32 = 1
+}
+func Run(sb StringBuilder, n int32) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        let len = sb.Length
+        total = total + x.Value + len
+    }
+    clear()
+    return total
+}
+func Main() { Console.WriteLine(Run(StringBuilder(), 2)) }`, "GS0158@13:27", "reject", "", "ADR-0213 R7 (e) (L1)"}
+            yield[]object{"q5d_hidden_field_getter", `import System
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    var Count int32 = 1
+}
+class Derived : Base {
+    let clear () -> void
+    init(c () -> void) { clear = c }
+    prop Count int32 {
+        get {
+            clear()
+            return 0
+        }
+    }
+}
+func Run(n int32) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let b Base = Derived(clear)
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + x.Value
+        if b is Derived {
+            let c = b.Count
+            total = total + c
+        }
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(2)) }`, "GS0158@25:27", "reject", "", "ADR-0213 R7 (e) (L1)"}
+            yield[]object{"q7_while_exit_state", `import System
+func Next(s string) string? { return if s.Length > 3 { nil } else { s + "a" } }
+func Run(c bool) int32 {
+    var s string? = "a"
+    while s != nil {
+        if c { break }
+        s = Next(s)
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(Run(false)) }`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"q8_do_while", `import System
+func Next(s string) string? { return if s.Length > 3 { nil } else { s + "a" } }
+func Run() int32 {
+    var s string? = "a"
+    if s == nil { return 0 }
+    var n = 0
+    do {
+        n = n + s.Length
+        s = Next(s)
+    } while n < 10
+    return n
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@8:19 GS0154@9:18", "reject", "", ""}
+            yield[]object{"q9_loop_in_goto_span", `import System
+func Get() string? { return "xy" }
+func Run(n int32) int32 {
+    var s string? = "abc"
+    var i = 0
+    if s == nil { return 0 }
+    Again:
+    i = i + s.Length
+    for var k = 0; k < 2; k++ {
+        s = nil
+    }
+    s = Get()
+    if i < n { goto Again }
+    return i
+}
+func Main() { Console.WriteLine(Run(5)) }`, "GS0158@8:15", "reject", "", ""}
+            yield[]object{"q12_exit_gain", `import System
+func Get(c bool) string? { return if c { nil } else { "ab" } }
+func Run(c bool) int32 {
+    var s string? = Get(c)
+    while s == nil {
+        s = "ok"
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "", "run", "2", "ADR-0213 R7 (f) (L1)"}
+            yield[]object{"q13_exit_gain_bang", `import System
+func Get(c bool) string? { return if c { nil } else { "ab" } }
+func Run(c bool) int32 {
+    var s string? = Get(c)
+    while s == nil {
+        s = "ok"
+    }
+    return s!!.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0536@8:13", "run", "2", "ADR-0213 R7 (f) (L1)"}
+            yield[]object{"q14_enclosing_filter_reenters_loop", `import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = "abc"
+    var n = 0
+    if s == nil { return 0 }
+    try {
+        while s.Length > 0 && n < 2 {
+            n++
+            try {
+                try {
+                    throw FormatException("f")
+                } finally {
+                    throw InvalidOperationException("g")
+                }
+            } catch (InvalidOperationException) {
+            }
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+    return n
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@11:17", "reject", "", "#5315, ADR-0213 W8 (L1)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

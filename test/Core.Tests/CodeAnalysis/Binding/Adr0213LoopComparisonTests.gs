@@ -13,18 +13,19 @@ import System.Collections.Generic
 import System.Linq
 import Xunit
 
-/// ADR-0213 section 20, slice L0: the loop comparison. The binder computes the lower bound of a loop
-/// from the walker and compares it with what today's back-edge analysis removes. Each test compiles a
-/// probe of the ADR as a library and checks the `.loops` report: `L` lines for a disagreement, `T` for the
-/// agreeing facts of a loop, `X` for a fact that the header proves on exit, `S` for a backward-jump span.
-/// A row records the line, the path, the fact kind, the direction, the rule and the row of section 16.
+/// ADR-0213 sections 6 and 20, slices L0 and L1: the lower bound of a loop. The binder computes it from
+/// the walker, removes the facts it names before the loop is bound, and reports each decision. Each test
+/// compiles a probe of the ADR as a library and checks the `.loops` report: `K` lines for a fact the loop
+/// removes, `T` for the counts of a loop (facts, removed, kept), `X` for a fact that the header proves on
+/// exit, `S` for a backward-jump span. A row records the line, the path, the fact kind, the rule and the
+/// row of section 16.
 open class Adr0213LoopComparisonTests {
     @Theory
     @MemberData("Rows")
     func EveryRow_GivesItsReport(name string, source string, expected string, agreeing string) {
-        let actual = string.Join(" ; ", Capture(source, "L"))
+        let actual = string.Join(" ; ", Capture(source, "K"))
         Assert.True(expected == actual, "${name}: expected [${expected}] but found [${actual}]")
-        // The facts of each loop that the walker and today's analysis treat alike: `facts/killed by both/kept by both`.
+        // The facts of each loop: `facts/removed/kept`.
         let counts = Capture(source, "T").Select((line string) -> string.Join("/", line.Split('|').Skip(1).Take(3)))
         let actualAgreeing = string.Join(",", counts.OrderBy((text string) -> text, StringComparer.Ordinal))
         Assert.True(agreeing == actualAgreeing, "${name}: expected loops [${agreeing}] but found [${actualAgreeing}]")
@@ -94,9 +95,9 @@ func Run(n int32) int32 {
     }
 
     @Fact
-    func ASpanInALoopThatIsBoundTwiceIsReportedOnce() {
-        // The first label sits in a loop that the binder binds twice. The registration of the discarded
-        // bind goes with its reports, so the second bind reports the span, once.
+    func ASpanInALoopWhoseFactIsRemovedIsReportedOnce() {
+        // The first label sits in a loop whose fact the lower bound removes. The loop binds once, and the span
+        // is reported once.
         NarrowingComparison.BeginCapture()
         using let measurements = CompilationMeasurements.Start("test")
         var lines = List[string]()
@@ -211,20 +212,6 @@ func Run(n int32) int32 {
         )
     }
 
-    @Fact
-    func NoOldKilledNewKeptRowIsUnclassified() {
-        // Differential check over every row: a fact that today's analysis removes and the walker keeps
-        // must be explained by rule P7 (row R7 (d)). Anything else is a defect of ADR-0213.
-        for row in Rows() {
-            let lines = Capture(cast[string](row[1]), "L")
-            for line in lines {
-                if line.Contains("old-killed/new-kept") {
-                    Assert.Contains("R7 d", line)
-                }
-            }
-        }
-    }
-
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(
@@ -283,7 +270,7 @@ func Run(c bool, n int32) int32 {
         }
     }
     return total
-}`, "7|s|nullability|old-kept/new-killed|P7(no-proof)|R7 a", "1/0/0")
+}`, "7|s|nullability|P7(no-proof)|R7 a", "1/1/0")
             Add("e3-call-reassignment (R7 b)", `package T
 func Get() string? { return nil }
 func Make() string { return "x" }
@@ -296,7 +283,7 @@ func Run(n int32) int32 {
         s = Make()
     }
     return total
-}`, "8|s|nullability|old-kept/new-killed|P7(call)|R7 b", "1/0/0")
+}`, "8|s|nullability|P7(call)|R7 b", "1/1/0")
             Add("variable-reassignment (R7 b)", `package T
 func Get() string? { return nil }
 func Run(n int32) int32 {
@@ -309,7 +296,7 @@ func Run(n int32) int32 {
         s = fresh
     }
     return total
-}`, "8|s|nullability|old-kept/new-killed|P7(variable)|R7 b", "1/0/0")
+}`, "8|s|nullability|P7(variable)|R7 b", "1/1/0")
             Add("constructor-reassignment-is-kept", `package T
 class Box { var V int32 = 1 }
 func Get() Box? { return nil }
@@ -336,7 +323,7 @@ func Run(n int32, a Animal?) int32 {
         }
     }
     return total
-}`, "8|x|type-test|old-killed/new-kept|P7(kept)|R7 d", "1/0/0")
+}`, "", "1/0/1")
             Add("literal-reassignment-is-kept", `package T
 func Get() string? { return nil }
 func Run(n int32) int32 {
@@ -360,7 +347,7 @@ func Run(ref path string?, n int32) int32 {
     }
     return total
 }`, "", "1/0/1")
-            Add("W5-member-read-kills-a-by-reference-parameter (R7 e)", `package T
+            Add("W5-member-read-keeps-a-by-reference-parameter (A3)", `package T
 func Run(ref path string?, n int32) int32 {
     if path == nil { return 0 }
     var total = 0
@@ -368,7 +355,7 @@ func Run(ref path string?, n int32) int32 {
         total = total + path.Length
     }
     return total
-}`, "5|path|nullability|old-kept/new-killed|W5(alias-class)|R7 e", "1/0/0")
+}`, "", "1/0/1")
             Add("R11-call-kills-a-global", `package T
 import System
 var g string? = nil
@@ -382,7 +369,7 @@ func Run(n int32) int32 {
         total = total + 1
     }
     return total
-}`, "", "1/1/0")
+}`, "9|g|nullability|W4(unknown-write)|R7 c", "1/1/0")
             Add("member-path-dies-on-a-call", `package T
 class Pet { var Name string = "p" }
 class Box {
@@ -398,7 +385,7 @@ func Run(b Box, n int32) int32 {
         total = total + 1
     }
     return total
-}`, "", "1/1/0")
+}`, "11|b.Pet|member|W4(member-path)|R7 c", "1/1/0")
             Add("d4-loop-form-alias-write", `package T
 class C { var Value int32 = 1 }
 func Run(n int32) int32 {
@@ -411,7 +398,7 @@ func Run(n int32) int32 {
         x = nil
     }
     return total
-}`, "", "1/1/0")
+}`, "8|a|nullability|W3(shares-storage)|-", "1/1/0")
             Add("q3-loop-escaped-closure", `import System
 class C {
     var Value int32 = 1
@@ -432,7 +419,7 @@ func Run() int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run()) }`, "15|x|nullability|old-kept/new-killed|W4(unknown-write)|R7 c", "1/0/0")
+func Main() { Console.WriteLine(Run()) }`, "15|x|nullability|W4(unknown-write)|R7 c", "1/1/0")
             Add("q4-shadow-let-in-loop", `import System
 func Get() string? { return "xy" }
 func Consume(n int32) { }
@@ -464,7 +451,7 @@ func Run(sb StringBuilder, n int32) int32 {
     clear()
     return total
 }
-func Main() { Console.WriteLine(Run(StringBuilder(), 2)) }`, "11|x|nullability|old-kept/new-killed|W5(unknown-write)|R7 e", "1/0/0")
+func Main() { Console.WriteLine(Run(StringBuilder(), 2)) }`, "11|x|nullability|W5(unknown-write)|R7 e", "1/1/0")
             Add("q5d-hidden-field-getter", `import System
 class C {
     var Value int32 = 1
@@ -497,7 +484,7 @@ func Run(n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(2)) }`, "24|x|nullability|old-kept/new-killed|W5(unknown-write)|R7 e", "1/0/0")
+func Main() { Console.WriteLine(Run(2)) }`, "24|x|nullability|W5(unknown-write)|R7 e", "1/1/0")
             Add("q14-enclosing-filter-reenters-loop", `import System
 func Clear(ref s string?) bool {
     s = nil
@@ -524,7 +511,7 @@ func Run() int32 {
     }
     return n
 }
-func Main() { Console.WriteLine(Run()) }`, "11|s|nullability|old-kept/new-killed|W8|R10", "1/0/0")
+func Main() { Console.WriteLine(Run()) }`, "11|s|nullability|W8|R10", "1/1/0")
             Add("out-alias-write-through-a-by-reference-parameter", `package T
 func Run(ref s string?, n int32) int32 {
     if s == nil { return 0 }
@@ -534,7 +521,7 @@ func Run(ref s string?, n int32) int32 {
         s = "ab"
     }
     return total
-}`, "", "1/1/0")
+}`, "5|s|nullability|P7(root-not-exact-storage)|R7 b", "1/1/0")
             Add("W8-no-handler-no-filter-write", `package T
 func Get() string? { return nil }
 func Run(n int32) int32 {
@@ -562,7 +549,7 @@ func Run(n int32) int32 {
         let clear = func() { s = nil }
     }
     return total
-}`, "7|s|nullability|old-kept/new-killed|P7(no-proof)|R7 b", "1/0/0")
+}`, "7|s|nullability|P7(no-proof)|R7 b", "1/1/0")
             Add("W3-ref-argument-writes-the-root", `package T
 func Clear(ref s string?) { s = nil }
 func Get() string? { return nil }
@@ -575,7 +562,7 @@ func Run(n int32) int32 {
         Clear(ref s)
     }
     return total
-}`, "", "1/1/0")
+}`, "8|s|nullability|P7(written-through-reference)|R7 b", "1/1/0")
             Add("Q4-pattern-variable-reassignment", `package T
 func Get() string? { return nil }
 func Run(v object?, n int32) int32 {
@@ -589,7 +576,7 @@ func Run(v object?, n int32) int32 {
         }
     }
     return total
-}`, "7|cur|nullability|old-kept/new-killed|P7(variable:pattern-bound)|R7 b", "1/0/0")
+}`, "7|cur|nullability|P7(variable:pattern-bound)|R7 b", "1/1/0")
             Add("A3-one-storage-passed-twice-through-a-ref-local", `package T
 
 func Clear2(ref x string?, ref y string?) {
@@ -606,7 +593,7 @@ func Run(ref a string?, ref b string?, n int32) int32 {
         Clear2(ref b, ref c)
     }
     return total
-}`, "", "1/1/0")
+}`, "12|a|nullability|W3(shares-storage)|-", "1/1/0")
             return rows
         }
     }

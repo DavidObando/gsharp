@@ -631,10 +631,9 @@ internal partial class StatementBinder {
             labelName,
             out breakLabel,
             out continueLabel,
-            bindIteration: func ()(Body BoundStatement, Tail BoundStatement?, Condition BoundExpression?) {
-                // #4129: the header executes again too. Keeping its first binding
-                // retained stale casts and pattern-variable identities after #2943
-                // rebound only the body.
+            bindIteration: func () BoundStatement {
+                // The header executes on every iteration, so it is bound inside the loop's
+                // label scope under the lower bound of the loop (ADR-0213 section 6, I6).
                 $scope = BoundScope(headerParentScope)
                 try {
                     boundCondition = if conditionSyntax == nil {
@@ -654,7 +653,7 @@ internal partial class StatementBinder {
                         patternWhenTrue,
                         () -> BindConditionedLoopBodyCore(boundCondition, bodySyntax)
                     )
-                    return (boundBody, boundPost, boundCondition)
+                    return boundBody
                 } finally {
                     $scope = headerParentScope
                 }
@@ -662,9 +661,7 @@ internal partial class StatementBinder {
         )
         condition = boundCondition
         post = boundPost
-        if NarrowingComparison.LoopsEnabled {
-            ReportLoopExitGain(bodySyntax, boundCondition)
-        }
+        RecordLoopExitFacts(bodySyntax, boundCondition)
         return body
     }
 
@@ -732,13 +729,12 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            bindIteration: func ()(Body BoundStatement, Tail BoundStatement?, Condition BoundExpression?) {
+            bindIteration: func () BoundStatement {
                 $scope = BoundScope(enclosingScope)
                 let loopScope = $scope
                 try {
                     clauses.Clear()
                     let localsForFrame = List[(Variable VariableSymbol, Underlying TypeSymbol)]()
-                    let declarations = ImmutableArray.CreateBuilder[BoundStatement]()
                     var hasChannelGate = false
                     for binding in bindingSyntaxes {
                         // ADR-0174 D3: channel gates short-circuit in source order
@@ -746,7 +742,6 @@ internal partial class StatementBinder {
                         if IsChannelReceiveSyntax(binding.Initializer, out var receive) {
                             let channelClause = BindWhileLetChannelClause(binding, receive, enclosingScope, loopScope)
                             clauses.Add(channelClause)
-                            declarations.AddRange(channelClause.Declarations)
                             hasChannelGate |= channelClause.Gate != nil
                             continue
                         }
@@ -756,15 +751,13 @@ internal partial class StatementBinder {
                             loopScope
                         )
                         clauses.Add(WhileLetChannelClause(ImmutableArray.Create(declaration), Gate: nil))
-                        declarations.Add(declaration)
                         if variable != nil && underlying != nil {
                             localsForFrame.Add((variable, underlying))
                         }
                     }
                     condition = BuildNilCheckChain(originatingSyntax, localsForFrame) ??
                         BoundLiteralExpression(originatingSyntax, hasChannelGate, TypeSymbol.Bool)
-                    let declarationBlock = BoundBlockStatement(originatingSyntax, declarations.ToImmutable())
-                    return (BindConditionedLoopBodyCore(condition, bodySyntax), declarationBlock, condition)
+                    return BindConditionedLoopBodyCore(condition, bodySyntax)
                 } finally {
                     $scope = enclosingScope
                 }
@@ -958,7 +951,7 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            bindIteration: () -> {
+            bindIteration: func () BoundStatement {
                 $scope = BoundScope(headerParentScope)
                 try {
                     condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
@@ -967,16 +960,14 @@ internal partial class StatementBinder {
                         "a loop body has a bound statement",
                         expression: "BindStatement(bodySyntax)"
                     )
-                    return (boundBody, nil, condition)
+                    return boundBody
                 } finally {
                     $scope = headerParentScope
                 }
             }
         )
         $scope = $scope.Pop()
-        if NarrowingComparison.LoopsEnabled {
-            ReportLoopExitGain(bodySyntax, condition)
-        }
+        RecordLoopExitFacts(bodySyntax, condition)
         let bodyLabel = BoundLabel("body${binderCtx.LabelCounter}")
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundLabelStatement(originatingSyntax, bodyLabel))
