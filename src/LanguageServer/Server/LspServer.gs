@@ -1521,12 +1521,19 @@ class LspServer {
                     structSym.Declaration is {} structDeclaration &&
                     reported
                     .Add(structSym) {
-                    locations.Add(
-                        Location{
-                            Uri: request.TextDocument.Uri,
-                            Range: SemanticLookup.ToRange(structDeclaration.Identifier)
-                        }
-                    )
+                    // The location belongs to the tree that declares the struct, not to the request's document.
+                    // A partial type is reported at its canonical declaration, which can be in another tree
+                    // than the part visited here, so the URI comes from that declaration's own tree.
+                    let declaringTree = structDeclaration.SyntaxTree
+                    let declaringFile = declaringTree.Text?.FileName
+                    let uri = if object.ReferenceEquals(declaringTree, content.SyntaxTree) || string.IsNullOrEmpty(
+                        declaringFile
+                    ) {
+                        request.TextDocument.Uri
+                    } else {
+                        DocumentUri.FromFileSystemPath(declaringFile!!) ?? request.TextDocument.Uri
+                    }
+                    locations.Add(Location{Uri: uri, Range: SemanticLookup.ToRange(structDeclaration.Identifier)})
                 }
             }
         }
