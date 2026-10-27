@@ -33,10 +33,13 @@ class Issue5426WarningPromotionDriverTests {
         let reference = Path.Combine(fixture.Directory, "Warning.ref.dll")
         let pdb = Path.ChangeExtension(image, ".pdb")
         File.WriteAllText(source, "Console.Write(\"tls5426\")\nfunc Main() { }\n")
-        let references = Directory
-            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+        let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        let references = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")))
+            .Split(Path.PathSeparator)
+            .Where((path string) -> Path.GetDirectoryName(path) == runtimeDirectory)
             .OrderBy((path string) -> path, StringComparer.Ordinal)
             .ToArray()
+        Assert.NotEmpty(references)
         let arguments = List[string]{
             typeof(Program).Assembly.Location,
             source,
