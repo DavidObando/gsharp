@@ -140,7 +140,7 @@ func Main() {
         fixture.Compile(source, "TupleConstant", true, "/deterministic+", "/debug:none")
         Assert.Equal(first, File.ReadAllBytes(dll))
 
-        for expression in[]string{"-1", "other", "stored.Item1"} {
+        for expression in[]string{"-1", "other", "stored.Item1", "int64(nint(4294967296L))"} {
             let rejected = "package Rejected\n" +
                 "func Equal(value uint64?, other int32, stored (int32, int32)) bool -> " +
                 "(value, 9) == (" +

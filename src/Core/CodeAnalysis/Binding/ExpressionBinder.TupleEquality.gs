@@ -241,11 +241,11 @@ internal partial class ExpressionBinder {
 
     private func PreserveTupleElementConstant(element BoundExpression, source BoundExpression?) BoundExpression {
         // Spilling removes constant identity. Recover only proven integer constants, never storage reads or effects (#5399).
-        if source != nil && IsIntegerType(source.Type) && ConstantExpressionEvaluator.TryEvaluate(
+        if source != nil && IsIntegerType(source.Type) && !ConstantExpressionEvaluator.TryFindNativeInteger(
             source,
-            out var value
+            out _
         ) &&
-            IsIntegerLiteralValue(value) {
+            ConstantExpressionEvaluator.TryEvaluate(source, out var value) && IsIntegerLiteralValue(value) {
             return BoundLiteralExpression(source.Syntax, value, source.Type)
         }
         return element

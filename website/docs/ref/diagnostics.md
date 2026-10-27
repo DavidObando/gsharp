@@ -1051,6 +1051,7 @@ unsigned operands: `(value, 9) == (0, 9)` accepts `value uint32?`.
 Both operands run once, left before right, before element comparisons start.
 An incompatible element pair reports GS0129 at the tuple operator.
 Values read from tuple storage do not become constants.
+Constant recovery does not fold native-width conversions.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|
