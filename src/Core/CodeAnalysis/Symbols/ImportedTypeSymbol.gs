@@ -570,16 +570,20 @@ class ImportedTypeSymbol : TypeSymbol {
                 fieldByToken[field.MetadataToken] = fieldSymbol
             }
             let propertyBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
-            for property in ClrTypeUtilities.SafeGetProperties(type, bindingFlags) {
-                if property.GetIndexParameters().Length != 0 {
-                    continue
-                }
+            for property in ClrTypeUtilities.SafeGetNearestProperties(
+                type,
+                bindingFlags,
+                (property PropertyInfo) -> property.GetIndexParameters()
+                    .Length == 0 &&
+                    (
+                    property.GetMethod is {} getter &&
+                        IsVisible(getter, includeInternal) ||
+                        property.SetMethod is {} setter &&
+                        IsVisible(setter, includeInternal)
+                )
+            ) {
                 let getter MethodInfo? = property.GetMethod
                 let setter MethodInfo? = property.SetMethod
-                if (getter == nil || !IsVisible(getter, includeInternal)) &&
-                    (setter == nil || !IsVisible(setter, includeInternal)) {
-                    continue
-                }
                 let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
                 propertyBuilder.Add(
                     PropertySymbol(

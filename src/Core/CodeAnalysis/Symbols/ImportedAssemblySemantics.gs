@@ -378,10 +378,15 @@ internal shared class ImportedAssemblySemantics {
             type
         }
         let autoProperties = Dictionary[string, PropertyInfo](StringComparer.Ordinal)
-        for property in definition.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
-            if property.GetMethod != nil && property.SetMethod != nil && property.GetIndexParameters().Length == 0 {
-                autoProperties.Add(property.Name, property)
-            }
+        for property in ClrTypeUtilities.SafeGetNearestProperties(
+            definition,
+            BindingFlags.Public | BindingFlags.Instance,
+            (property PropertyInfo) -> property.GetMethod != nil &&
+                property.SetMethod != nil &&
+                property
+                .GetIndexParameters().Length == 0
+        ) {
+            autoProperties.Add(property.Name, property)
         }
         if autoProperties.Count == 0 {
             return (ImmutableArray[string].Empty, ImmutableArray[int32].Empty, ImmutableArray[PropertyInfo].Empty)

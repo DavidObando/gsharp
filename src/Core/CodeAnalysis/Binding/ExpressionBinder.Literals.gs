@@ -1771,8 +1771,8 @@ internal partial class ExpressionBinder {
                         $scope.References,
                         out var dataClass
                     ) &&
-                        dataClass is StructSymbol{IsClass: true} importedDataClass {
-                        return BindImportedDataClassLiteral(
+                        dataClass is StructSymbol{IsClass: true} {
+                        return BindImportedTypeLiteralExpression(
                             syntax,
                             closedImportedType,
                             ImportedTypeSymbol.GetConstructed(
@@ -1780,7 +1780,6 @@ internal partial class ExpressionBinder {
                                 importedCandidate.ClassType,
                                 literalSymbolicArguments
                             ),
-                            importedDataClass,
                             resolveTypeOnly
                         )
                     }
@@ -2659,6 +2658,18 @@ internal partial class ExpressionBinder {
         )
     } else if clrType.IsValueType {
         BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
+    } else if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregateClass) &&
+        aggregateClass is StructSymbol{IsClass: true} dataClass {
+        BindImportedDataClassLiteral(
+            syntax,
+            clrType,
+            resultTypeOverride as ImportedTypeSymbol ?? ImportedTypeSymbol.GetWithoutNullability(
+                clrType,
+                NullabilityFreeReason.ResolvedTypeName
+            ),
+            dataClass,
+            resolveTypeOnly: false
+        )
     } else {
         BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride)
     }

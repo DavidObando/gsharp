@@ -908,6 +908,113 @@ System.Console.WriteLine(call.Selected)
         Assert.Equal("True\nprimary\n9\nprimary\nTrue\nprimary\n", fixture.Run(generic))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_PrimaryPropertyHidesInheritedProperty(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "HiddenProperty5419.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+namespace HiddenProperty5419;
+public record Base {
+    public int Value { get; init; }
+}
+public record Box<T>(T Value) : Base {
+    public new T Value { get; init; } = Value;
+    public string Selected { get; } = "primary";
+    public Box(int Value) : this(default(T)!) { Selected = "secondary"; }
+}`, "HiddenProperty5419", reference)
+        IlVerifier.Verify(contract)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let dll = fixture.Compile(`import HiddenProperty5419
+data struct Point(X int32)
+func Build[T](value T) Box[T] -> Box[T]{Value: value}
+let number = Box[int32]{Value: 7}
+System.Console.WriteLine(number.Value)
+System.Console.WriteLine(number.Selected)
+let nullable = Build[string?](nil)
+System.Console.WriteLine(nullable.Value == nil)
+System.Console.WriteLine(nullable.Selected)
+let point = Build[Point](Point{X: 9})
+System.Console.WriteLine(point.Value.X)
+System.Console.WriteLine(point.Selected)
+`, "HiddenPrimaryProperty", true, "/r:" + selected)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("7\nprimary\nTrue\nprimary\n9\nprimary\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ImportedGenericDataClassLiteral_QualifiedNamesUseCanonicalConstruction(csharp bool, referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "QualifiedContract5419.ref.dll")
+        let contract = if csharp {
+            fixture.CompileCSharpWithReference(`#nullable enable
+namespace QualifiedContract5419;
+public record Box<T>(T Value) {
+    public Box() : this(default(T)!) { }
+    public T Seen { get; } = Value;
+}`, "QualifiedContract5419", reference)
+        } else {
+            fixture.Compile(`package QualifiedContract5419
+public data class Box[T](Value T) {
+    public let Seen T = Value
+}`, "QualifiedContract5419", false, "/refout:" + reference)
+        }
+        IlVerifier.Verify(contract)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let dll = fixture.Compile(`import QualifiedContract5419
+let qualified = QualifiedContract5419.Box[int32]{Value: 7}
+System.Console.WriteLine(qualified.Value)
+System.Console.WriteLine(qualified.Seen)
+let simple = Box[int32]{Value: 8}
+System.Console.WriteLine(simple.Seen)
+`, "QualifiedPrimary", true, "/r:" + selected)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("7\n7\n8\n", fixture.Run(dll))
+        let generic = fixture.Compile(`import QualifiedContract5419
+data struct Point(X int32)
+func Build[T](value T) QualifiedContract5419.Box[T] -> QualifiedContract5419.Box[T]{Value: value}
+let nullable = Build[string?](nil)
+System.Console.WriteLine(nullable.Seen == nil)
+let point = Build[Point](Point{X: 9})
+System.Console.WriteLine(point.Seen.X)
+let spread = QualifiedContract5419.Box[string?]{...nullable}
+System.Console.WriteLine(spread.Seen == nil)
+let call = QualifiedContract5419.Box[string?](nil)
+System.Console.WriteLine(call.Seen == nil)
+`, "QualifiedGenericPrimary", true, "/r:" + selected)
+        IlVerifier.Verify(generic, additionalReferences: []string{contract})
+        Assert.Equal("True\n9\nTrue\nTrue\n", fixture.Run(generic))
+        let negativeReference = System.IO.Path.Combine(fixture.Directory, "QualifiedRejected.ref.dll")
+        let negativePdb = System.IO.Path.Combine(fixture.Directory, "QualifiedRejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "let value = QualifiedContract5419.Box[string?]{Value: nil}\nlet narrowed string = value.Value",
+            "QualifiedRejected",
+            true,
+            "/r:" + selected,
+            "/refout:" + negativeReference,
+            "/debug:portable",
+            "/pdb:" + negativePdb
+        )
+        Assert.Equal(1, code)
+        Assert.True(output.Contains("QualifiedRejected.gs(2,23,2,34): error GS0155", StringComparison.Ordinal), output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "QualifiedRejected.dll")))
+        Assert.False(System.IO.File.Exists(negativeReference))
+        Assert.False(System.IO.File.Exists(negativePdb))
+    }
+
     @Fact
     func ImportedGenericDataClassLiteral_UnknownCollectionOmissionsAreDiagnosedAndExplicitInputsWork() {
         using let fixture = NativeSliceLanguageTests.Fixture()
