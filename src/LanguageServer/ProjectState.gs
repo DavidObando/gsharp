@@ -38,6 +38,7 @@ open class ProjectState {
     private var referenceSourcePath string?
     private var referenceSourceMtimeUtc DateTime = DateTime.MinValue
     private var nextReferenceDiscoveryUtc DateTime = DateTime.MinValue
+    private var assemblyName string?
     private var cachedResolver ReferenceResolver?
     private var resolverReferences IReadOnlyList[string]?
     private var gsAnalyzerSourceMtimeUtc DateTime = DateTime.MinValue
@@ -71,8 +72,31 @@ open class ProjectState {
     /// the implicit project for loose files and most unit-test scaffolding);
     /// (cref:WorkspaceInitializer) populates it for every project parsed
     /// out of a `.gsproj`. Cross-project Go-to-Definition consults this
-    /// via (cref:WorkspaceState.TryGetProjectByOutputAssembly).
-    prop AssemblyName string?
+    /// via (cref:WorkspaceState.TryGetProjectByOutputAssembly). Every
+    /// (cref:Compilation) this project builds carries it as
+    /// (cref:Compilation.AssemblyName), so `InternalsVisibleTo` friendship is
+    /// evaluated against the same consumer name `gsc` receives (ADR-0212 S6b).
+    /// A null, empty, or whitespace name leaves the compilation's name unset,
+    /// which grants no friendship. Changing the name rebuilds the compilation.
+    prop AssemblyName string? {
+        get -> assemblyName
+        set {
+            lock compilationLock {
+                if !string.Equals(assemblyName, value, StringComparison.Ordinal) {
+                    assemblyName = value
+                    Invalidate()
+                    // The resolver carries the consumer name for friend checks, and a successor copies its
+                    // predecessor's name. So a new name retires the cached compilation (the next GetCompilation
+                    // binds from scratch, even when the project has no references and so no resolver) and
+                    // drops the resolver.
+                    RetireCompilation_NoLock()
+                    compilation = nil
+                    cachedResolver = nil
+                    resolverReferences = nil
+                }
+            }
+        }
+    }
 
     /// Gets or sets the project's effective `RootNamespace` (ADR-0142,
     /// issue #2200), parsed from the `.gsproj` by (cref:ProjectDiscovery)
@@ -357,6 +381,11 @@ open class ProjectState {
             Compilation(resolver, trees)
         } else {
             Compilation(trees)
+        }
+        // Before the first GlobalScope read: imported visibility is cached per consumer name (ADR-0212 S6b).
+        // Successors copy the name from their predecessor, so this is the only place the server sets it.
+        if !string.IsNullOrWhiteSpace(assemblyName) {
+            created.AssemblyName = assemblyName
         }
         created.IncrementalBodyReuse = incrementalBodyReuse
         return created

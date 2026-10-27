@@ -147,6 +147,39 @@ class Cache {
         Assert.Equal("entries", staticField.Location.Text!!.ToString(staticField.Location.Span))
     }
 
+    /// Issue #5324: a body-only edit that shifts text must re-point enum and delegate declarations
+    /// at the edited tree, including constructed delegate references and nested enums.
+    @Fact
+    func BodyOnlyEdit_RepointsEnumAndDelegateDeclarations() {
+        const template = `package P
+func Run() int32 {
+    %BODY%
+}
+enum Color { Red, Green }
+delegate Handler[T](value T) T;
+class Holder[T] {
+    enum Mode { On, Off }
+}`
+        let original = Parse("A.gs", template.Replace("%BODY%", "return 1"))
+        let scope_ = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(original))
+        let edited = Parse("A.gs", template.Replace("%BODY%", "let shifted = 10\n    return shifted"))
+        let constructed = DelegateTypeSymbol.Construct(
+            scope_.Delegates.Single(),
+            ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32)
+        )
+        let nested = scope_.Enums.Single((e EnumSymbol) -> e.Name == "Mode")
+        let constructedEnum = EnumSymbol.ConstructNested(nested, ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32))
+        Assert.NotSame(nested, constructedEnum)
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope_, original, edited))
+        Assert.Equal(2, scope_.Enums.Length)
+        for enumSymbol in scope_.Enums {
+            Assert.Same(edited, enumSymbol.Declaration.SyntaxTree)
+        }
+        Assert.Same(edited, scope_.Delegates.Single().Declaration.SyntaxTree)
+        Assert.Same(edited, constructed.Declaration.SyntaxTree)
+        Assert.Same(edited, constructedEnum.Declaration.SyntaxTree)
+    }
+
     /// ADR-0195 / issue #4674: a `shared class` is bound from a normalized copy of its
     /// parsed declaration, so a body-only edit in a file that holds one must still be
     /// repointed (not fall back to a full bind), including for a shared class nested in an

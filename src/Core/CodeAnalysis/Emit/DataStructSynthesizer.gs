@@ -901,8 +901,11 @@ internal class DataStructSynthesizer {
                         return true
                     }
                 }
-                throw InvalidOperationException(
-                    "Class '${structSym.Name}' has no accessible copy constructor for imported direct base '${importedBase.Name}'."
+                EmitDiagnosticException.Wrap(
+                    structSym.Declaration,
+                    InvalidOperationException(
+                        "Class '${structSym.Name}' has no accessible copy constructor for imported direct base '${importedBase.Name}'."
+                    )
                 )
             }
             return false

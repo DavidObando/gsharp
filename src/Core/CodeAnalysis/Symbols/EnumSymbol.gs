@@ -14,6 +14,7 @@ import System.Diagnostics.CodeAnalysis
 /// Represents a user-defined enum type backed by (cref:int).
 class EnumSymbol : TypeSymbol {
     private var members ImmutableArray[EnumMemberSymbol]
+    private var declarationSyntax EnumDeclarationSyntax
 
     /// Initializes a new instance of the (cref:EnumSymbol) class.
     /// @param name The enum type name.
@@ -23,7 +24,7 @@ class EnumSymbol : TypeSymbol {
     init(name string, accessibility Accessibility, packageName string, declaration EnumDeclarationSyntax) : base(name) {
         Accessibility = accessibility
         PackageName = packageName
-        Declaration = declaration
+        declarationSyntax = declaration
         members = ImmutableArray[EnumMemberSymbol].Empty
         Definition = this
     }
@@ -48,9 +49,23 @@ class EnumSymbol : TypeSymbol {
     /// ```
     override prop IsValueType bool -> true
 
-    /// Gets the declaring syntax node.
-    prop Declaration EnumDeclarationSyntax {
-        get;
+    /// Gets the declaring syntax node. A constructed nested enum reads its definition's node, so a
+    /// re-point of the definition (issue #5324) reaches every cached construction.
+    prop Declaration EnumDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(
+        definition,
+        this
+    ) {
+        definition.Declaration
+    } else {
+        declarationSyntax
+    }
+
+    /// Re-points this reused enum at the matching declaration in the edited tree (issue #5324).
+    /// Only the backing syntax changes; the symbol identity is preserved. Call it only from
+    /// (cref:Binding.IncrementalGlobalScopeReuse).
+    /// @param declaration The corresponding declaration in the re-parsed tree.
+    internal func RepointDeclaration(declaration EnumDeclarationSyntax) {
+        declarationSyntax = declaration
     }
 
     /// ```xmldoc
