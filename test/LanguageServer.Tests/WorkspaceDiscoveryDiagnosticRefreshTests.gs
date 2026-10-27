@@ -126,12 +126,26 @@ class Example {
                     0,
                     8,
                     (_ int32) -> {
-                        Assert.Equal(typeof(Uri), BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, token))?.DeclaringType)
-                        Assert.Equal(name, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(currentCompilation, currentToken))?.Name)
+                        Assert.Equal(
+                            typeof(Uri),
+                            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, token))
+                                ?.DeclaringType
+                        )
+                        Assert.Equal(
+                            name,
+                            BoundSemantics.GetMemberInfo(
+                                BoundSemantics.GetImportedSymbol(currentCompilation, currentToken)
+                            )
+                                ?.Name
+                        )
                         Assert.Contains(snapshot.SyntaxTree, compilation.SyntaxTrees)
                         Assert.Equal(source, snapshot.SyntaxTree.Text.ToString())
                         if !object.ReferenceEquals(current.SyntaxTree, snapshot.SyntaxTree) {
-                            Assert.Null(BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(currentCompilation, token)))
+                            Assert.Null(
+                                BoundSemantics.GetMemberInfo(
+                                    BoundSemantics.GetImportedSymbol(currentCompilation, token)
+                                )
+                            )
                         }
                     }
                 )

@@ -444,7 +444,6 @@ async sequence[T]
     private func FormatType(type TypeSymbol) string {
         return type?.Name ?? "void"
     }
-
 }
 
 /// A rendered hover documentation section: an optional bold heading and a Markdown body.
@@ -667,7 +666,12 @@ shared class DefinitionComputer {
                 typeLocation != nil {
                 return []Location{typeLocation}
             }
-            if MemberTokenResolver.TryResolveImportedMember(content.SyntaxTree, compilation, token, out var clrMember) &&
+            if MemberTokenResolver.TryResolveImportedMember(
+                content.SyntaxTree,
+                compilation,
+                token,
+                out var clrMember
+            ) &&
                 clrMember != nil &&
                 TryResolveClrMember(workspace, clrMember, out var memberLocation) &&
                 memberLocation != nil {
@@ -1014,7 +1018,7 @@ shared class SignatureHelpComputer {
         if active < 0 && resolved is ImportedFunctionSymbol resolvedImported {
             active = candidates.FindIndex(
                 (c Symbol) -> c is ImportedFunctionSymbol imported && imported.Method.MetadataToken ==
-                    resolvedImported.Method.MetadataToken
+                resolvedImported.Method.MetadataToken
             )
         }
         active = Math.Max(active, 0)
@@ -1562,16 +1566,48 @@ shared class CompletionComputer {
         let boundReceiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, leftName)
         switch receiver {
             case variable is VariableSymbol {
-                AddMembers(items, seen, content, compilation, offset, boundReceiverType ?? variable.Type, staticMembers: false)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? variable.Type,
+                    staticMembers: false
+                )
             }
             case property is PropertySymbol {
-                AddMembers(items, seen, content, compilation, offset, boundReceiverType ?? property.Type, staticMembers: false)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? property.Type,
+                    staticMembers: false
+                )
             }
             case field is FieldSymbol {
-                AddMembers(items, seen, content, compilation, offset, boundReceiverType ?? field.Type, staticMembers: false)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? field.Type,
+                    staticMembers: false
+                )
             }
             case event is EventSymbol {
-                AddMembers(items, seen, content, compilation, offset, boundReceiverType ?? event.Type, staticMembers: false)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? event.Type,
+                    staticMembers: false
+                )
             }
             case typeSymbol is TypeSymbol {
                 AddMembers(items, seen, content, compilation, offset, typeSymbol, staticMembers: true)

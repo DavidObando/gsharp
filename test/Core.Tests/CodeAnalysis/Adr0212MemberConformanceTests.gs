@@ -186,15 +186,21 @@ open class Adr0212MemberConformanceTests {
             if IsExtension(bound) {
                 return true
             }
-            if receiverType is SliceTypeSymbol or ArrayTypeSymbol or MapTypeSymbol or ChannelTypeSymbol or SequenceTypeSymbol {
+            if receiverType is SliceTypeSymbol or
+                ArrayTypeSymbol or
+                MapTypeSymbol or
+                ChannelTypeSymbol or
+                SequenceTypeSymbol {
                 return true
             }
             if ImportedOf(bound) is {} imported {
                 if receiverType is StructSymbol {
                     return true
                 }
-                if imported.DeclaringType is {} declaring && receiverType.ClrType is {} receiverClr &&
-                    declaring.IsInterface && !declaring.IsEquivalentTo(receiverClr) {
+                if imported.DeclaringType is {} declaring &&
+                    receiverType.ClrType is {} receiverClr &&
+                    declaring.IsInterface &&
+                    !declaring.IsEquivalentTo(receiverClr) {
                     return true
                 }
             }

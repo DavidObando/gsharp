@@ -68,7 +68,9 @@ internal shared class MemberTokenResolver {
             overloadCount = Math.Max(1, BoundSemantics.GetMemberGroup(compilation, token).Length)
             return true
         }
-        for context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)) {
+        for context in FindAccessorMemberContexts(tree, token).Concat(
+            FindObjectInitializerMemberContexts(tree, token)
+        ) {
             var receiver ResolvedReceiver? = nil
             if token.Parent?.Parent is MemberCollectionElementSyntax {
                 if InferInitializerReceiverType(tree, compilation, context.ReceiverExpression) is {} initializerType {
@@ -91,7 +93,9 @@ internal shared class MemberTokenResolver {
             if chosen != nil {
                 member = chosen
                 overloadCount = if chosen is FunctionSymbol or ImportedFunctionSymbol {
-                    candidates.Count((c Symbol) -> c is FunctionSymbol or ImportedFunctionSymbol && IsStatic(c) == IsStatic(chosen))
+                    candidates.Count(
+                        (c Symbol) -> c is FunctionSymbol or ImportedFunctionSymbol && IsStatic(c) == IsStatic(chosen)
+                    )
                 } else {
                     1
                 }
@@ -135,9 +139,7 @@ internal shared class MemberTokenResolver {
     // A property, then a field, then an event, then the first method: the order of the former
     // reflection walk. Members of an imported type must match the receiver kind; a source member need not.
     private func Choose(candidates ImmutableArray[Symbol], staticMembers bool) Symbol? {
-        let usable = candidates.Where(
-            (c Symbol) -> !BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers
-        )
+        let usable = candidates.Where((c Symbol) -> !BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers)
             .ToList()
         let preferred = usable.Where((c Symbol) -> IsStatic(c) == staticMembers).ToList()
         let pool = if preferred.Count > 0 {
@@ -145,17 +147,23 @@ internal shared class MemberTokenResolver {
         } else {
             usable
         }
-        return pool.FirstOrDefault((c Symbol) -> c is PropertySymbol) ??
-            pool.FirstOrDefault((c Symbol) -> c is FieldSymbol) ??
-            pool.FirstOrDefault((c Symbol) -> c is EventSymbol) ??
-            pool.FirstOrDefault((c Symbol) -> c is FunctionSymbol or ImportedFunctionSymbol) ??
+        return pool.FirstOrDefault((c Symbol) -> c is PropertySymbol) ?? pool.FirstOrDefault(
+            (c Symbol) -> c is FieldSymbol
+        ) ??
+            pool.FirstOrDefault((c Symbol) -> c is EventSymbol) ?? pool.FirstOrDefault(
+            (c Symbol) -> c is FunctionSymbol or ImportedFunctionSymbol
+        ) ??
             pool.FirstOrDefault()
     }
 
     /// The type that a receiver expression has, and whether the expression names the type itself.
     private data class ResolvedReceiver(Type TypeSymbol, StaticMembers bool) : IEquatable[ResolvedReceiver] { }
 
-    private func ResolveReceiver(tree SyntaxTree, compilation Compilation, expression ExpressionSyntax) ResolvedReceiver? {
+    private func ResolveReceiver(
+        tree SyntaxTree,
+        compilation Compilation,
+        expression ExpressionSyntax
+    ) ResolvedReceiver? {
         // A value receiver's bound (flow) type first.
         if BoundSemantics.GetExpressionType(compilation, expression) is {} boundType {
             return ResolvedReceiver(boundType, StaticMembers: false)
@@ -200,7 +208,8 @@ internal shared class MemberTokenResolver {
                     outer.Type,
                     memberName
                 )
-                if Choose(members, outer.StaticMembers) is {} intermediate && TypeOfValue(intermediate) is {} memberType {
+                if Choose(members, outer.StaticMembers) is {} intermediate &&
+                    TypeOfValue(intermediate) is {} memberType {
                     return ResolvedReceiver(memberType, StaticMembers: false)
                 }
                 return nil
@@ -211,7 +220,12 @@ internal shared class MemberTokenResolver {
         }
     }
 
-    private func ImportedTypeByName(tree SyntaxTree, compilation Compilation, name string, StaticMembers bool) ResolvedReceiver? {
+    private func ImportedTypeByName(
+        tree SyntaxTree,
+        compilation Compilation,
+        name string,
+        StaticMembers bool
+    ) ResolvedReceiver? {
         let imported Type? = SemanticLookup.ResolveImportedClrType(tree, compilation, name)
         return if imported == nil {
             default(ResolvedReceiver?)
@@ -259,8 +273,18 @@ internal shared class MemberTokenResolver {
             yield break
         }
         for accessor in FindNodes[AccessorExpressionSyntax](tree.Root).Where(
-            (a AccessorExpressionSyntax) -> a.RightPart.Span.Start <= token.Span.Start &&
-                token.Span.End <= a.RightPart.Span.End
+            (a AccessorExpressionSyntax) -> a
+                .RightPart
+                .Span
+                .Start <= token
+                .Span
+                .Start &&
+                token
+                .Span
+                .End <= a
+                .RightPart
+                .Span
+                .End
         )
             .OrderBy((a AccessorExpressionSyntax) -> a.Span.Length) {
             if TryResolveAccessorMemberContext(
@@ -361,8 +385,16 @@ internal shared class MemberTokenResolver {
             (
             candidate != nil &&
                 token != nil &&
-                candidate.Span.Start == token.Span.Start &&
-                candidate.Span.End == token.Span.End &&
+                candidate
+                .Span
+                .Start == token
+                .Span
+                .Start &&
+                candidate
+                .Span
+                .End == token
+                .Span
+                .End &&
                 string.Equals(candidate.Text, token.Text, StringComparison.Ordinal)
         )
     }

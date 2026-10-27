@@ -61,7 +61,10 @@ open class Adr0212MemberQueryTests {
     @Fact
     func MemberGroup_DeclaredMethods_AreTheMethodsOfTheReceiverType() {
         let group = Group("PCat")
-        Assert.Equal([]string{"Purr(int32)", "Purr(string)"}, group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray())
+        Assert.Equal(
+            []string{"Purr(int32)", "Purr(string)"},
+            group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
     }
 
     @Fact
@@ -76,7 +79,10 @@ open class Adr0212MemberQueryTests {
     @Fact
     func MemberGroup_InterfaceCall_ListsTheInterfaceMethodsNotItsPrivateHelpers() {
         let group = Group("PInterface")
-        Assert.Equal([]string{"Read(int32)", "Read(string)"}, group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray())
+        Assert.Equal(
+            []string{"Read(int32)", "Read(string)"},
+            group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
     }
 
     @Fact
@@ -91,18 +97,26 @@ open class Adr0212MemberQueryTests {
     @Fact
     func MemberGroup_TypeParameterWithConstraint_ListsTheMethodsOfTheConstraint() {
         let group = Group("PConstraint")
-        Assert.Equal([]string{"Read(int32)", "Read(string)"}, group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray())
+        Assert.Equal(
+            []string{"Read(int32)", "Read(string)"},
+            group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
     }
 
     @Fact
     func MemberGroup_PartialType_ListsThePartsByFilePath() {
         let group = Group("PPartial")
-        Assert.Equal([]string{"Go(int32)", "Go(string)", "Go(bool)"}, group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray())
+        Assert.Equal(
+            []string{"Go(int32)", "Go(string)", "Go(bool)"},
+            group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
     }
 
     @Fact
     func MemberGroup_FieldRead_IsTheMemberAlone() {
-        let name = Names(Trees[0].Root).Last((n NameExpressionSyntax) -> n.IdentifierToken.Text == "Legs" && n.Span.End <= Position("PProperty"))
+        let name = Names(Trees[0].Root).Last(
+            (n NameExpressionSyntax) -> n.IdentifierToken.Text == "Legs" && n.Span.End <= Position("PProperty")
+        )
         let only = Assert.Single(ModelOf(name).GetMemberGroup(name))
         Assert.IsType[FieldSymbol](only)
         Assert.Equal("Legs", only.Name)
@@ -227,12 +241,15 @@ open class Adr0212MemberQueryTests {
         let model = ModelOf(Trees[0].Root)
         let position = Position("PLookup")
         let directory = Assert.Single(
-            model.LookupMembers(position, ImportedTypeSymbol.Get(typeof(System.IO.Path)), "GetDirectoryName")
+            model
+                .LookupMembers(position, ImportedTypeSymbol.Get(typeof(System.IO.Path)), "GetDirectoryName")
                 .OfType[ImportedFunctionSymbol]()
                 .Where((f ImportedFunctionSymbol) -> f.Method.GetParameters()[0].ParameterType == typeof(string))
         )
         Assert.IsType[NullableTypeSymbol](directory.Type)
-        let newLine = Assert.Single(model.LookupMembers(position, ImportedTypeSymbol.Get(typeof(Environment)), "NewLine"))
+        let newLine = Assert.Single(
+            model.LookupMembers(position, ImportedTypeSymbol.Get(typeof(Environment)), "NewLine")
+        )
         Assert.IsNotType[NullableTypeSymbol](cast[PropertySymbol](newLine).Type)
     }
 
@@ -252,7 +269,11 @@ open class Adr0212MemberQueryTests {
 
     shared {
         private func Describe(function FunctionSymbol) string {
-            return function.Name + "(" + string.Join(", ", function.Parameters.Select((p ParameterSymbol) -> p.Type.Name)) + ")"
+            return function.Name + "(" + string.Join(
+                ", ",
+                function.Parameters.Select((p ParameterSymbol) -> p.Type.Name)
+            ) +
+                ")"
         }
 
         private const FileA string = `package Members
@@ -344,7 +365,7 @@ partial class Parts {
 }
 `
 
-        private let Trees []SyntaxTree = []SyntaxTree{
+        private let Trees[]SyntaxTree = []SyntaxTree{
             SyntaxTree.Parse(SourceText.From(FileA, "a.gs")),
             SyntaxTree.Parse(SourceText.From(FileB, "b.gs"))
         }
@@ -374,7 +395,13 @@ partial class Parts {
             let lineStart = FileA.LastIndexOf('\n', position - 1) + 1
             var best CallExpressionSyntax? = nil
             for call in Calls(Trees[0].Root) {
-                if call.Span.Start >= lineStart && call.Span.End <= position && (best == nil || call.Span.End >= best.Span.End) {
+                if call
+                    .Span
+                    .Start >= lineStart &&
+                    call
+                    .Span
+                    .End <= position &&
+                    (best == nil || call.Span.End >= best.Span.End) {
                     best = call
                 }
             }

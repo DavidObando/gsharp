@@ -4232,6 +4232,8 @@ type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
   method public GSharp.Core.CodeAnalysis.TypeInfo GetReceiverTypeInfo(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(System.Threading.CancellationToken cancellationToken = null)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> GetMemberGroup(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> LookupMembers(Int32 position, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, String name = null, System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> LookupSymbols(Int32 position, String name = null, System.Threading.CancellationToken cancellationToken = null)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }
@@ -4435,6 +4437,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.EventSymbol : GSharp.Core.Cod
   method public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax get_RaiseBodySyntax()
   method public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax get_RemoveBodySyntax()
   method public GSharp.Core.CodeAnalysis.Syntax.EventDeclarationSyntax get_Declaration()
+  method public System.Reflection.EventInfo get_ImportedMember()
   method public System.Reflection.MethodInfo get_ExplicitInterfaceAddSlot()
   method public System.Reflection.MethodInfo get_ExplicitInterfaceRaiseSlot()
   method public System.Reflection.MethodInfo get_ExplicitInterfaceRemoveSlot()
@@ -4482,6 +4485,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.EventSymbol : GSharp.Core.Cod
   property public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax RaiseBodySyntax { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.BlockStatementSyntax RemoveBodySyntax { get; set; }
   property public GSharp.Core.CodeAnalysis.Syntax.EventDeclarationSyntax Declaration { get; }
+  property public System.Reflection.EventInfo ImportedMember { get; }
   property public System.Reflection.MethodInfo ExplicitInterfaceAddSlot { get; set; }
   property public System.Reflection.MethodInfo ExplicitInterfaceRaiseSlot { get; set; }
   property public System.Reflection.MethodInfo ExplicitInterfaceRemoveSlot { get; set; }
@@ -4501,6 +4505,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.FieldSymbol : GSharp.Core.Cod
   method public Int32 get_FixedBufferLength()
   method public Object get_ConstantValue()
   method public System.Nullable`1<Int32> get_ExplicitOffset()
+  method public System.Reflection.FieldInfo get_ImportedMember()
   method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean isReadOnly = false, Boolean isStatic = false, Boolean isConst = false, Boolean isEventBackingField = false, GSharp.Core.CodeAnalysis.Syntax.SyntaxNode declaration = null)
   method public Void SetConstantValue(Object value)
   method public Void SetExplicitOffset(Int32 offset)
@@ -4521,6 +4526,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.FieldSymbol : GSharp.Core.Cod
   property public Object ConstantValue { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> DeclaringSyntaxNodes { get; }
   property public System.Nullable`1<Int32> ExplicitOffset { get; }
+  property public System.Reflection.FieldInfo ImportedMember { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.FunctionPointerTypeSymbol : GSharp.Core.CodeAnalysis.Symbols.TypeSymbol
   method public Boolean get_IsManaged()
   method public Boolean get_IsUnmanagedExtended()
@@ -5045,6 +5051,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.PropertySymbol : GSharp.Core.
   method public System.Reflection.MethodInfo get_ExplicitInterfaceSetterSlot()
   method public System.Reflection.MethodInfo get_ExternalOverriddenGetter()
   method public System.Reflection.MethodInfo get_ExternalOverriddenSetter()
+  method public System.Reflection.PropertyInfo get_ImportedMember()
   method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, Boolean hasGetter, Boolean hasSetter, Boolean isAutoProperty, Boolean isVirtual, Boolean isOverride, String setterParameterName = "value", Boolean isStatic = false, GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax declaration = null, Boolean isInitOnly = false, System.Nullable`1<GSharp.Core.CodeAnalysis.Symbols.Accessibility> getterAccessibility = null, System.Nullable`1<GSharp.Core.CodeAnalysis.Symbols.Accessibility> setterAccessibility = null, System.Nullable`1<Boolean> metadataIsAbstract = null)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_IsIndexer(Boolean value)
   method public Void modreq(System.Runtime.CompilerServices.IsExternalInit) set_Parameters(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> value)
@@ -5100,6 +5107,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.PropertySymbol : GSharp.Core.
   property public System.Reflection.MethodInfo ExplicitInterfaceSetterSlot { get; set; }
   property public System.Reflection.MethodInfo ExternalOverriddenGetter { get; set; }
   property public System.Reflection.MethodInfo ExternalOverriddenSetter { get; set; }
+  property public System.Reflection.PropertyInfo ImportedMember { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.RectangularArrayTypeSymbol : GSharp.Core.CodeAnalysis.Symbols.TypeSymbol
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ElementType()
   method public Int32 get_Rank()

@@ -157,7 +157,10 @@ class Holder BASE_TYPE {
                 Assert.Equal("CompletionContracts.Api", selected.Method.DeclaringType?.FullName)
                 Assert.Equal("System.Int32", selected.Method.GetParameters()[0].ParameterType.FullName)
                 Assert.Equal("CompletionContracts", selected.Method.Module.Assembly.GetName().Name)
-                Assert.Equal(selected.Method, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, token)))
+                Assert.Equal(
+                    selected.Method,
+                    BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, token))
+                )
                 argument = selected.Arguments[0]
             }
             Assert.Same(
@@ -176,7 +179,9 @@ class Holder BASE_TYPE {
             Assert.Empty(following.Method.GetParameters())
             Assert.Equal(
                 following.Method,
-                BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+                BoundSemantics.GetMemberInfo(
+                    BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+                )
             )
             AssertIndexedHover(
                 content,
@@ -299,7 +304,9 @@ class HolderOWNER_GENERIC {
         )
         Assert.Equal(
             typeof(string).GetMethod("ToString", Type.EmptyTypes),
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
         )
         AssertIndexedHover(
             content,
@@ -352,11 +359,15 @@ class Holder {
         let method = typeof(int32).GetMethod("ToString", Type.EmptyTypes)
         Assert.Equal(
             method,
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 1)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 1))
+            )
         )
         Assert.Equal(
             method,
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
         )
         AssertIndexedHover(
             content,
@@ -480,7 +491,9 @@ class Holder {
         let method = typeof(System.Uri).GetMethod("ToString", Type.EmptyTypes)
         Assert.Equal(
             method,
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 1)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 1))
+            )
         )
         AssertIndexedHover(
             content,
@@ -490,7 +503,9 @@ class Holder {
         )
         Assert.Equal(
             method,
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
         )
         AssertIndexedHover(
             content,
@@ -612,12 +627,18 @@ async func AuthoredCaller() {
             model.GetBoundNode(Assert.IsType[CallExpressionSyntax](authoredToken.Parent))
         )
         Assert.Equal(bridge.Function.Method, authored.Function.Method)
-        Assert.Equal(authored.Function.Method, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, authoredToken)))
+        Assert.Equal(
+            authored.Function.Method,
+            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, authoredToken))
+        )
         let token = TokenAt(content, source, "Values(1)", 0)
         Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
         Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
         let authoredAsyncToken = TokenAt(content, source, "Wait[", 1)
-        Assert.Equal(authored.Function.Method, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, authoredAsyncToken)))
+        Assert.Equal(
+            authored.Function.Method,
+            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, authoredAsyncToken))
+        )
         Assert.IsType[BoundImportedCallExpression](
             model.GetBoundNode(Assert.IsType[CallExpressionSyntax](authoredAsyncToken.Parent))
         )
@@ -636,7 +657,9 @@ async func AuthoredCaller() {
         if chained {
             Assert.Equal(
                 typeof(string).GetMethod("ToString", Type.EmptyTypes),
-                BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+                BoundSemantics.GetMemberInfo(
+                    BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+                )
             )
             AssertIndexedHover(
                 content,
@@ -783,7 +806,9 @@ class HolderGENERIC {
         }
         Assert.Equal(
             typeof(string).GetProperty("Length"),
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "Length", 0)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "Length", 0))
+            )
         )
         Assert.Same(
             owner.Fields.Single((f FieldSymbol) -> f.Name == "Other"),
@@ -927,7 +952,9 @@ CALLER_MODIFIERfunc Run(ch chan[string]) {
             let method = typeof(string).GetMethod("ToString", Type.EmptyTypes)
             Assert.Equal(
                 method,
-                BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+                BoundSemantics.GetMemberInfo(
+                    BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+                )
             )
             AssertIndexedHover(
                 content,
@@ -1007,7 +1034,9 @@ class Holder {
         let method = typeof(int32).GetMethod("ToString", Type.EmptyTypes)
         Assert.Equal(
             method,
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
         )
         AssertIndexedHover(
             content,
@@ -1082,10 +1111,17 @@ func Run() {
             compilation.GetSemanticModel(content.SyntaxTree).GetBoundNode(root!!)
         )
         let expected = plain.Method
-        Assert.Equal(expected, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()", 1))))
         Assert.Equal(
             expected,
-            BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()", 1))
+            )
+        )
+        Assert.Equal(
+            expected,
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+            )
         )
         let plainHover = Assert.IsType[Hover](
             HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "ToString()", 1))
@@ -1190,11 +1226,15 @@ func Run[T StaticContracts.IDerivedTYPE_ARGUMENTS]() {
             Assert.Equal(expected, outer.Method)
             Assert.Equal(
                 expected,
-                BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0)))
+                BoundSemantics.GetMemberInfo(
+                    BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "ToString()[^1]", 0))
+                )
             )
             Assert.Equal(
                 selected.ClrMethod,
-                BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "Make()", 0)))
+                BoundSemantics.GetMemberInfo(
+                    BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "Make()", 0))
+                )
             )
             AssertIndexedHover(
                 content,
@@ -2010,12 +2050,7 @@ func Run(memory MEMORY_TYPE) string {
                 signature
             )
             Assert.True(
-                MemberTokenResolver.TryResolveImportedMember(
-                    content.SyntaxTree,
-                    compilation,
-                    token,
-                    out var navigation
-                )
+                MemberTokenResolver.TryResolveImportedMember(content.SyntaxTree, compilation, token, out var navigation)
             )
             Assert.Equal(property, navigation)
         }
@@ -2633,7 +2668,12 @@ func Run() {
         Assert.Empty(compilation.BoundProgram.Diagnostics)
         let field = typeof(decimal).GetField("Zero")
         Assert.True(field?.IsInitOnly)
-        Assert.Equal(field, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "Zero.ToString", 0))))
+        Assert.Equal(
+            field,
+            BoundSemantics.GetMemberInfo(
+                BoundSemantics.GetImportedSymbol(compilation, TokenAt(content, source, "Zero.ToString", 0))
+            )
+        )
         let method = typeof(decimal).GetMethod("ToString", Type.EmptyTypes)
         let token = TokenAt(content, source, "ToString()[^1]", 0)
         Assert.Equal(method, BoundSemantics.GetMemberInfo(BoundSemantics.GetImportedSymbol(compilation, token)))

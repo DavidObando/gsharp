@@ -78,10 +78,12 @@ partial class SemanticModel {
                     result
                 )
                 for clrInterface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared) {
-                    AddClrMembers(ImportedTypeSymbol.GetWithoutNullability(
+                    AddClrMembers(
+                        ImportedTypeSymbol.GetWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure),
                         clrInterface,
-                        NullabilityFreeReason.TypeStructure
-                    ), clrInterface, name, result)
+                        name,
+                        result
+                    )
                 }
             }
             case enumeration is EnumSymbol {
@@ -213,16 +215,18 @@ partial class SemanticModel {
             if member is ImportedFunctionSymbol imported {
                 ordered.Add((member, owner, string.Empty, imported.Method.MetadataToken))
             } else if member is FunctionSymbol{Declaration: {} declaration} {
-                ordered.Add((member, owner, declaration.SyntaxTree.Text?.FileName ?? string.Empty, declaration.Span.Start))
+                ordered.Add(
+                    (member, owner, declaration.SyntaxTree.Text?.FileName ?? string.Empty, declaration.Span.Start)
+                )
             } else {
                 ordered.Add((member, owner, string.Empty, int32.MaxValue))
             }
         }
         return ordered
-            .OrderBy((e (Symbol Symbol, Owner int32, File string, Start int32)) -> e.Owner)
-            .ThenBy((e (Symbol Symbol, Owner int32, File string, Start int32)) -> e.File, StringComparer.Ordinal)
-            .ThenBy((e (Symbol Symbol, Owner int32, File string, Start int32)) -> e.Start)
-            .Select((e (Symbol Symbol, Owner int32, File string, Start int32)) -> e.Symbol)
+            .OrderBy((e(Symbol Symbol, Owner int32, File string, Start int32)) -> e.Owner)
+            .ThenBy((e(Symbol Symbol, Owner int32, File string, Start int32)) -> e.File, StringComparer.Ordinal)
+            .ThenBy((e(Symbol Symbol, Owner int32, File string, Start int32)) -> e.Start)
+            .Select((e(Symbol Symbol, Owner int32, File string, Start int32)) -> e.Symbol)
             .ToImmutableArray()
     }
 
@@ -296,12 +300,7 @@ partial class SemanticModel {
         result.Add(member)
     }
 
-    private func AddClrMembers(
-        receiver TypeSymbol,
-        clrType Type,
-        name string?,
-        result ImmutableArray[Symbol].Builder
-    ) {
+    private func AddClrMembers(receiver TypeSymbol, clrType Type, name string?, result ImmutableArray[Symbol].Builder) {
         const flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
             if property.GetIndexParameters().Length == 0 && (name == nil || property.Name == name) {
@@ -334,7 +333,10 @@ partial class SemanticModel {
             UnwrapNullability(receiverType)
         }
         let key = (member, receiver)
-        return importedMembers.GetOrAdd(key, (k (MemberInfo, TypeSymbol?)) -> CreateImportedMemberSymbol(receiver, member))
+        return importedMembers.GetOrAdd(
+            key,
+            (k(MemberInfo, TypeSymbol?)) -> CreateImportedMemberSymbol(receiver, member)
+        )
     }
 
     private let importedMembers ConcurrentDictionary[(MemberInfo, TypeSymbol?), Symbol] = ConcurrentDictionary[
@@ -422,7 +424,7 @@ partial class SemanticModel {
     }
 
     // The most accessible of the accessors, as C# reports a property's declared accessibility.
-    private func ClrAccessibility(accessors []MethodInfo) Accessibility {
+    private func ClrAccessibility(accessors[]MethodInfo) Accessibility {
         if accessors.Any((a MethodInfo) -> a.IsPublic) {
             return Accessibility.Public
         }
