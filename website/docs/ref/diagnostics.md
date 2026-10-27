@@ -1046,6 +1046,12 @@ Tuple
 of the same arity. Comparing tuples of different arities is an error rather
 than a constant `false`, matching C#.
 
+Element comparisons retain integer constant conversions, including nullable
+unsigned operands: `(value, 9) == (0, 9)` accepts `value uint32?`.
+Both operands run once, left before right, before element comparisons start.
+An incompatible element pair reports GS0129 at the tuple operator.
+Values read from tuple storage do not become constants.
+
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0539 | Error | `Tuple equality requires operands of equal arity: '<left>' has arity <n> but '<right>' has arity <m>.` | `(1, 2) == (1, 2, 3)` |

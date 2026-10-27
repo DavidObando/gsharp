@@ -9,6 +9,8 @@ import GSharp.Compiler.Tests
 import System
 import System.Diagnostics
 import System.IO
+import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #3501 / ADR-0171: emit coverage for tuple equality (`==` /
@@ -96,6 +98,107 @@ Console.WriteLine(none == none2)
 Console.WriteLine(some == (7, "x"))`
         let output = CompileAndRun(source)
         Assert.Equal("False${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func TupleEquality_UnsignedNullableConstants_PreserveValuesAndRejectNonconstants() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package TupleConstant
+import System
+func Equal(value uint32?) bool -> (value, 9) == (0, 9)
+func Different(value uint32?) bool -> (0, 9) != (value, 9)
+func Main() {
+    Console.WriteLine(Equal(nil))
+    Console.WriteLine(Equal(0u))
+    Console.WriteLine(Equal(1u))
+    Console.WriteLine(Equal(4294967295))
+    Console.WriteLine(Different(nil))
+    Console.WriteLine(Different(0u))
+    Console.WriteLine(Different(4294967295))
+    var upper uint32? = 4294967295
+    Console.WriteLine((upper, 9) == (4294967295, 9))
+    var wide uint64? = 18446744073709551615
+    Console.WriteLine((wide, 9) == (18446744073709551615, 9))
+    Console.WriteLine(((upper, 9), 1) == ((4294967295, 9), 1))
+    Console.WriteLine((upper, 9) != (4294967295, 9))
+    Console.WriteLine((1, 9) == (1L, 9))
+    Console.WriteLine((upper, 9) != (1 - 1, 9))
+}`, "TupleConstant", true, "/deterministic+", "/debug:none")
+        IlVerifier.Verify(dll)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "False\nTrue\nFalse\nFalse\nTrue\nFalse\nTrue\nTrue\nTrue\nTrue\nFalse\nTrue\nTrue\n".Replace(
+                    "\n",
+                    Environment.NewLine,
+                    StringComparison.Ordinal
+                )
+            ),
+            fixture.RunBytes(dll)
+        )
+        let first = File.ReadAllBytes(dll)
+        let source = File.ReadAllText(Path.Combine(fixture.Directory, "TupleConstant.gs"))
+        fixture.Compile(source, "TupleConstant", true, "/deterministic+", "/debug:none")
+        Assert.Equal(first, File.ReadAllBytes(dll))
+
+        for expression in[]string{"-1", "other", "stored.Item1"} {
+            let rejected = "package Rejected\n" +
+                "func Equal(value uint64?, other int32, stored (int32, int32)) bool -> " +
+                "(value, 9) == (" +
+                expression +
+                ", 9)"
+            let (code, diagnostics) = fixture.TryCompile(rejected, "Rejected", false)
+            Assert.NotEqual(0, code)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            let error = Assert.Single(Regex.Matches(diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+            Assert.Equal("GS0129", error.Groups[5].Value)
+            Assert.Equal("2", error.Groups[1].Value)
+            Assert.Equal("82", error.Groups[2].Value)
+            Assert.Equal("2", error.Groups[3].Value)
+            Assert.Equal("84", error.Groups[4].Value)
+        }
+    }
+
+    @Fact
+    func TupleEquality_ConstantProjection_PreservesOperandEffectsAndSnapshots() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package TupleEffects
+import System
+class State {
+    shared {
+        var Value uint32 = 0
+    }
+}
+func Tag(tag string) int32 {
+    Console.Write(tag)
+    return 9
+}
+func Produce(tag string) (uint32?, int32) {
+    Console.Write(tag)
+    State.Value = 1
+    return (0u, 9)
+}
+func Main() {
+    Console.WriteLine(Produce("L") == (0, Tag("R")))
+    Console.WriteLine((0, Tag("L")) != Produce("R"))
+    Console.WriteLine(Produce("L") == Produce("R"))
+    State.Value = 0
+    Console.WriteLine((State.Value, Tag("L")) == Produce("R"))
+    Console.WriteLine(State.Value)
+    var missing uint32? = nil
+    Console.WriteLine((missing, Tag("L")) == (0, Tag("R")))
+    Console.WriteLine(((missing, Tag("L")), 1) != ((+0, Tag("R")), 1))
+}`, "TupleEffects", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "LRTrue\nLRFalse\nLRTrue\nLRTrue\n1\nLRFalse\nLRTrue\n".Replace(
+                    "\n",
+                    Environment.NewLine,
+                    StringComparison.Ordinal
+                )
+            ),
+            fixture.RunBytes(dll)
+        )
     }
 
     @Fact
