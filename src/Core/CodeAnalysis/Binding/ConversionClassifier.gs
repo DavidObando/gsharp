@@ -3381,6 +3381,11 @@ internal class ConversionClassifier {
         }
         plan = resolvedPlan
         let ownsDataInitialization = resolvedPlan.Construction.UserType?.UsesConstructorOwnedDataConstruction == true
+        let usesPrimaryConstruction = ownsDataInitialization || resolvedPlan.Construction.UserType is {IsClass: true}
+        // Check collection omissions before applying optional-call defaults.
+        let usesPrimaryZero = ownsDataInitialization ||
+            usesPrimaryConstruction &&
+            constructionSyntax is StructLiteralExpressionSyntax
         if ownsDataInitialization && !BoundStructLiteralExpression.ValidateDataConstructor(
             resolvedPlan.Construction.UserType!!,
             Diagnostics,
@@ -3415,7 +3420,7 @@ internal class ConversionClassifier {
                 if !explicitValues.TryGetValue(name, out var value) || explicitReads!!.ContainsKey(name) {
                     continue
                 }
-                if ownsDataInitialization && !plan!!.ConstructorSlots.Any(
+                if usesPrimaryConstruction && !plan!!.ConstructorSlots.Any(
                     (slot StructuralProjectionSlot) -> slot.Name == name
                 ) {
                     explicitReads!!.Add(name, value)
@@ -3432,29 +3437,47 @@ internal class ConversionClassifier {
         }
         let constructorArguments = ImmutableArray.CreateBuilder[BoundExpression](plan!!.ConstructorSlots.Length)
         for slot in plan!!.ConstructorSlots {
-            if ownsDataInitialization && slot.Source == nil && explicitNames?.Contains(slot.Name) != true &&
+            if usesPrimaryZero && slot.Source == nil && explicitNames?.Contains(slot.Name) != true &&
                 resolvedPlan
                 .Construction
                 .UserType!!
                 .PrimaryConstructorParameters
                 .FirstOrDefault((parameter ParameterSymbol) -> parameter.Name == slot.Name) is {} parameter {
-                constructorArguments.Add(
-                    MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
-                        expression.Syntax,
-                        resolvedPlan.Construction.UserType!!,
-                        parameter,
-                        slot.TargetType
-                    ) ??
-                        BoundDefaultExpression(expression.Syntax, slot.TargetType)
+                let owner = resolvedPlan.Construction.UserType!!
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    constructionSyntax ?? expression.Syntax,
+                    owner,
+                    parameter,
+                    out var missingDeclarationShape,
+                    slot.TargetType,
+                    if owner.IsClass {
+                        resolvedPlan.Construction.ClrConstructor
+                    } else {
+                        default(ConstructorInfo?)
+                    }
                 )
-                continue
+                if missingDeclarationShape && slot.TargetType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                    Diagnostics.ReportNoApplicableOverload(
+                        if constructionSyntax is StructLiteralExpressionSyntax literal {
+                            literal.TypeIdentifier.Location
+                        } else {
+                            diagnosticLocation
+                        },
+                        owner.Name
+                    )
+                    return BoundErrorExpression(expression.Syntax)
+                }
+                if zero != nil || ownsDataInitialization {
+                    constructorArguments.Add(zero ?? BoundDefaultExpression(expression.Syntax, slot.TargetType))
+                    continue
+                }
             }
             constructorArguments.Add(
                 BindStructuralProjectionSlot(diagnosticLocation, expression.Syntax, sourceTemp, slot, explicitReads)
             )
         }
         var initializerSlots = plan!!.InitializerSlots
-        if ownsDataInitialization && !explicitOrder.IsDefaultOrEmpty {
+        if usesPrimaryConstruction && !explicitOrder.IsDefaultOrEmpty {
             let ordered = ImmutableArray.CreateBuilder[StructuralProjectionSlot](initializerSlots.Length)
             ordered.AddRange(
                 initializerSlots.Where((slot StructuralProjectionSlot) -> explicitNames?.Contains(slot.Name) != true)

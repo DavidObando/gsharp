@@ -153,26 +153,60 @@ internal shared class MagicCollectionZeroValue {
         owner StructSymbol,
         parameter ParameterSymbol,
         parameterType TypeSymbol? = nil
+    ) BoundExpression? -> TrySynthesizePrimaryArgument(syntax, owner, parameter, out _, parameterType)
+
+    internal func TrySynthesizePrimaryArgument(
+        syntax SyntaxNode?,
+        owner StructSymbol,
+        parameter ParameterSymbol,
+        out missingDeclarationShape bool,
+        parameterType TypeSymbol? = nil,
+        constructor ConstructorInfo? = nil
     ) BoundExpression? {
-        if owner.ClrType is not{} imported || !ImportedAssemblySemantics.TryGetMagicCollectionFields(
-            imported,
-            out var kinds
-        ) {
-            return TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
+        missingDeclarationShape = false
+        let type = parameterType ?? parameter.Type
+        if owner.ClrType is {} imported {
+            let index = owner.PrimaryConstructorParameters.IndexOf(parameter)
+            let field = owner.GetDataConstructionPrimaryField(imported, index)
+            if field != nil && ImportedAssemblySemantics.TryGetMagicCollectionFields(imported, out var kinds) &&
+                kinds!!
+                .TryGetValue(field.Name, out var kind) {
+                return TrySynthesizeEmptyInstanceFromMarker(
+                    field,
+                    kind,
+                    parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
+                )
+            }
+            if constructor != nil {
+                let declaration = if imported.IsGenericType && !imported.IsGenericTypeDefinition {
+                    ClrTypeUtilities.FindMetadataDefinition(
+                        imported.GetGenericTypeDefinition(),
+                        constructor,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    ) as ConstructorInfo
+                } else {
+                    constructor
+                }
+                if declaration == nil {
+                    missingDeclarationShape = true
+                    return nil
+                }
+                // Only whole-slot parameters preserve constructed collection shapes without declaration metadata.
+                let declaredType = declaration.GetParameters()[index].ParameterType
+                let collectionShape = declaredType.IsArray || MapTypeSymbol.TryGetMapShape(type, out _, out _) ||
+                    SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+                    type.StripToBareShape(),
+                    out var definition,
+                    out _
+                ) &&
+                    definition.IsSameAs(typeof(IEnumerable[_]))
+                if !declaredType.IsGenericParameter && collectionShape {
+                    missingDeclarationShape = true
+                    return nil
+                }
+            }
         }
-        let field = owner.GetDataConstructionPrimaryField(
-            imported,
-            owner.PrimaryConstructorParameters.IndexOf(parameter)
-        )
-        return if field != nil && kinds!!.TryGetValue(field.Name, out var kind) {
-            TrySynthesizeEmptyInstanceFromMarker(
-                field,
-                kind,
-                parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
-            )
-        } else {
-            TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
-        }
+        return TrySynthesizeEmptyInstance(syntax, type)
     }
 
     internal func CanSynthesizeInTypeZeroConstructor(owner StructSymbol) bool {
