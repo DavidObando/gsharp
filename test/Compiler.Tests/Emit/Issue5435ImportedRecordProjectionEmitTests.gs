@@ -41,7 +41,7 @@ System.Console.WriteLine(ScalarBox(11).Extra)
                 contract
             })
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
-        Assert.Equal(Encoding.UTF8.GetBytes("7\n9\n9\n"), fixture.RunBytes(dll))
+        Assert.Equal(ConsoleBytes("7\n9\n9\n"), fixture.RunBytes(dll))
     }
 
     @Theory
@@ -128,7 +128,7 @@ Print(Box[string]{...Input(), Tail: Tail(), Value: Override()})
         let projected = "source\nget-value\nconstructor\nget-tail\nset-tail\npayload\n0\nTrue\n9\n2\n"
         let overridden = "source\noverride\nconstructor\ntail\nset-tail\noverride\n0\nTrue\n9\n3\n"
         Assert.Equal(
-            Encoding.UTF8.GetBytes(projected + projected + projected + projected + projected + overridden),
+            ConsoleBytes(projected + projected + projected + projected + projected + overridden),
             fixture.RunBytes(dll)
         )
     }
@@ -162,5 +162,9 @@ let value = ScalarBox{...Source{Other: 7}}
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
         Assert.False(File.Exists(referenceOutput))
         Assert.False(File.Exists(pdb))
+    }
+
+    private func ConsoleBytes(value string)[]uint8 {
+        return Encoding.UTF8.GetBytes(value.Replace("\n", Environment.NewLine, StringComparison.Ordinal))
     }
 }
