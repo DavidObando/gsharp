@@ -72,7 +72,7 @@ class BoundStructLiteralExpression : BoundExpression {
         get;
     }
 
-    override prop Type TypeSymbol -> StructType
+    override prop Type TypeSymbol -> CopySource?.Type ?? StructType
     override prop Kind BoundNodeKind -> BoundNodeKind.StructLiteralExpression
 
     internal prop CallsPrimaryConstructor bool -> !IsZeroInitialization &&

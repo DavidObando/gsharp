@@ -291,7 +291,7 @@ internal class MethodBodyPlanner {
                 continue
             }
             let slot = localTypes.Count
-            localTypes.Add(literal.StructType)
+            localTypes.Add(literal.Type)
             Debug.Assert(
                 !structLiteralSlots.ContainsKey(literal),
                 "Bound struct literal node aliased across emit positions; rekey structLiteralSlots by (node, parentContext) if lowering ever shares nodes."
