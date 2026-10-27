@@ -919,6 +919,94 @@ System.Console.WriteLine(value.Value == nil)
         Assert.Equal("7\n1\nTrue\n", fixture.Run(dll))
     }
 
+    @Theory
+    @InlineData("MapBox", "int32", false)
+    @InlineData("SequenceBox", "int32", false)
+    @InlineData("MapBox", "Point", false)
+    @InlineData("SequenceBox", "Point", false)
+    @InlineData("MapBox", "U", true)
+    @InlineData("SequenceBox", "U", true)
+    func ImportedGenericDataClassLiteral_DeclaredMapOrSequenceOmissionIsDiagnosed(
+        name string,
+        element string,
+        inGenericFunction bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package ReferenceCollection5419
+public data class MapBox[T](Items map[string,T])
+public data class SequenceBox[T](Items sequence[T])
+public data class NullableMapBox[T](Items map[string,T]?)
+public data class NullableSequenceBox[T](Items (sequence[T])?)
+public data class ArgumentBox[T](Items T)
+`, "ReferenceCollection5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import ReferenceCollection5419
+struct Point { public var Value int32 }
+func Shapes[U](item U) {
+    let mapValue = ArgumentBox[map[string,U]]{}
+    System.Console.WriteLine(mapValue.Items.Count)
+    let sequenceValue = ArgumentBox[sequence[U]]{}
+    System.Console.WriteLine(System.Linq.Enumerable.Count[U](sequenceValue.Items))
+    let explicitMap = MapBox[U]{Items: map[string,U]{"key": item}}
+    System.Console.WriteLine(explicitMap.Items.Count)
+    let explicitSequence = SequenceBox[U]{Items: []U{item}}
+    System.Console.WriteLine(System.Linq.Enumerable.Count[U](explicitSequence.Items))
+    let nullableMap = NullableMapBox[U]{}
+    System.Console.WriteLine(nullableMap.Items == nil)
+    let nullableSequence = NullableSequenceBox[U]{}
+    System.Console.WriteLine(nullableSequence.Items == nil)
+}
+Shapes[int32](7)
+Shapes[Point](Point{Value: 7})
+let call = MapBox[int32](map[string,int32]{})
+System.Console.WriteLine(call.Items.Count)
+`, "KnownReferenceShapes", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("0\n0\n1\n1\nTrue\nTrue\n0\n0\n1\n1\nTrue\nTrue\n0\n", fixture.Run(dll))
+        let source = "import ReferenceCollection5419\nstruct Point { public var Value int32 }\n" +
+            if inGenericFunction {
+            "func Make[U]() {\n    let value = " + name + "[" + element + "]{}\n}\n"
+        } else {
+            "let value = " + name + "[" + element + "]{}\n"
+        }
+        let referenceDirectory = System.IO.Path.Combine(fixture.Directory, "ref")
+        System.IO.Directory.CreateDirectory(referenceDirectory)
+        let reference = System.IO.Path.Combine(referenceDirectory, "MissingReferenceShape.dll")
+        let pdb = System.IO.Path.Combine(fixture.Directory, "MissingReferenceShape.pdb")
+        let (code, output) = fixture.TryCompile(
+            source,
+            "MissingReferenceShape",
+            true,
+            "/r:" + contract,
+            "/refout:" + reference,
+            "/debug:portable",
+            "/pdb:" + pdb
+        )
+        Assert.Equal(1, code)
+        let line = if inGenericFunction {
+            4
+        } else {
+            3
+        }
+        let column = if inGenericFunction {
+            17
+        } else {
+            13
+        }
+        Assert.True(
+            output.Contains(
+                "MissingReferenceShape.gs(" + line.ToString() + "," + column.ToString() + "," + line.ToString() +
+                    "," +
+                    (column + name.Length).ToString() + "): error GS0267",
+                StringComparison.Ordinal
+            ),
+            output
+        )
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingReferenceShape.dll")))
+        Assert.False(System.IO.File.Exists(reference))
+        Assert.False(System.IO.File.Exists(pdb))
+    }
+
     @Fact
     func ImportedGenericDataClassLiteral_ExpressionTreePreservesSelectedPropertyIdentity() {
         using let fixture = NativeSliceLanguageTests.Fixture()

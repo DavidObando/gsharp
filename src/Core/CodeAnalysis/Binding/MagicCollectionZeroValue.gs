@@ -164,6 +164,7 @@ internal shared class MagicCollectionZeroValue {
         constructor ConstructorInfo? = nil
     ) BoundExpression? {
         missingDeclarationShape = false
+        let type = parameterType ?? parameter.Type
         if owner.ClrType is {} imported {
             let index = owner.PrimaryConstructorParameters.IndexOf(parameter)
             let field = owner.GetDataConstructionPrimaryField(imported, index)
@@ -186,14 +187,26 @@ internal shared class MagicCollectionZeroValue {
                 } else {
                     constructor
                 }
-                // CLR arrays do not retain declaration lengths. A whole-slot T retains its argument's shape.
-                if declaration == nil || declaration.GetParameters()[index].ParameterType.IsArray {
+                if declaration == nil {
+                    missingDeclarationShape = true
+                    return nil
+                }
+                // Only whole-slot parameters preserve constructed collection shapes without declaration metadata.
+                let declaredType = declaration.GetParameters()[index].ParameterType
+                let collectionShape = declaredType.IsArray || MapTypeSymbol.TryGetMapShape(type, out _, out _) ||
+                    SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+                    type.StripToBareShape(),
+                    out var definition,
+                    out _
+                ) &&
+                    definition.IsSameAs(typeof(IEnumerable[_]))
+                if !declaredType.IsGenericParameter && collectionShape {
                     missingDeclarationShape = true
                     return nil
                 }
             }
         }
-        return TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
+        return TrySynthesizeEmptyInstance(syntax, type)
     }
 
     internal func CanSynthesizeInTypeZeroConstructor(owner StructSymbol) bool {
