@@ -230,10 +230,18 @@ internal partial class ExpressionBinder {
             receiverType.ClrType,
             $scope.References
         )
-        let aggregate StructSymbol? = switch normalized {
+        var aggregate StructSymbol? = switch normalized {
             case structType is StructSymbol: structType
             case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol structType}: structType
             default: default(StructSymbol?)
+        }
+        // Admission needs a data shape; lowering retains the exact receiver type.
+        if aggregate == nil && receiverType.ClrType is {} clrType && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            clrType,
+            $scope.References,
+            out var importedAggregate
+        ) {
+            aggregate = importedAggregate
         }
         return if aggregate?.IsData == true {
             aggregate

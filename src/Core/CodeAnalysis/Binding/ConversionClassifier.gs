@@ -243,7 +243,26 @@ internal class ConversionClassifier {
         targetType,
         strict,
         explicitValues,
-        explicitOrder
+        explicitOrder,
+        constructionSyntax: nil
+    )
+
+    func BindStructuralProjection(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        targetType TypeSymbol,
+        strict bool,
+        explicitValues IReadOnlyDictionary[string, BoundExpression]?,
+        explicitOrder ImmutableArray[string],
+        constructionSyntax SyntaxNode?
+    ) BoundExpression -> BindStructuralProjectionCore(
+        diagnosticLocation,
+        expression,
+        targetType,
+        strict,
+        explicitValues,
+        explicitOrder,
+        constructionSyntax
     )
 
     /// Checks whether an implicit user conversion should outrank structural projection.
@@ -957,7 +976,8 @@ internal class ConversionClassifier {
                 projectionTargetType,
                 strict: true,
                 explicitValues: nil,
-                explicitOrder: default(ImmutableArray[string])
+                explicitOrder: default(ImmutableArray[string]),
+                constructionSyntax: nil
             )
             return if object.ReferenceEquals(projectionTargetType, type) || projected is BoundErrorExpression {
                 projected
@@ -3322,7 +3342,8 @@ internal class ConversionClassifier {
         targetType TypeSymbol,
         strict bool,
         explicitValues IReadOnlyDictionary[string, BoundExpression]?,
-        explicitOrder ImmutableArray[string]
+        explicitOrder ImmutableArray[string],
+        constructionSyntax SyntaxNode?
     ) BoundExpression {
         let explicitNames = if explicitValues == nil {
             default(HashSet[string]?)
@@ -3357,7 +3378,7 @@ internal class ConversionClassifier {
         if ownsDataInitialization && !BoundStructLiteralExpression.ValidateDataConstructor(
             resolvedPlan.Construction.UserType!!,
             Diagnostics,
-            expression.Syntax,
+            constructionSyntax ?? expression.Syntax,
             getCurrentFunction(),
             resolvedPlan
                 .Construction

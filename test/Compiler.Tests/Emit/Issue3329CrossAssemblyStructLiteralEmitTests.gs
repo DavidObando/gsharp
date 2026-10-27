@@ -1672,7 +1672,7 @@ let bad = GenericLegacy[Local]{...source}`, "genericlegacy", executable: true, "
                 selected, "/refout:" + genericLegacyReference)
         Assert.NotEqual(0, genericLegacyCode)
         Assert.True(
-            genericLegacyOutput.Contains("genericlegacy.gs(5,35,5,41): error GS0267:", StringComparison.Ordinal),
+            genericLegacyOutput.Contains("genericlegacy.gs(5,11,5,24): error GS0267:", StringComparison.Ordinal),
             genericLegacyOutput
         )
         Assert.Equal(1, genericLegacyOutput.Split("error GS0267:", StringSplitOptions.None).Length - 1)

@@ -2553,7 +2553,8 @@ internal partial class ExpressionBinder {
                 boundTarget.Type,
                 strict: false,
                 explicitValues: failedValues,
-                explicitOrder: failedOrder.ToImmutable()
+                explicitOrder: failedOrder.ToImmutable(),
+                constructionSyntax: syntax
             )
         }
         plan = resolvedPlan
@@ -2599,7 +2600,8 @@ internal partial class ExpressionBinder {
             boundTarget.Type,
             strict: false,
             explicitValues: values,
-            explicitOrder: order.ToImmutable()
+            explicitOrder: order.ToImmutable(),
+            constructionSyntax: syntax
         )
     }
 
