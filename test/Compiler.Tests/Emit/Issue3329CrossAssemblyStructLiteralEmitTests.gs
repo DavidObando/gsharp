@@ -789,6 +789,7 @@ let bad = GenericForeign[Local]{...Unrelated{Other: 4}}`
     @InlineData(true)
     func ConstructorOwnedReview_QualifiedPrimaryPopulation(useReferenceAssembly bool) {
         const library = `package population5296
+import System.Collections.Generic
 public class Effects {
     shared {
         public var Trace string = ""
@@ -801,6 +802,7 @@ public class Effects {
 public data struct Box(Items []int32) {
     public var X int32 = Effects.Mark("D", 7)
 }
+public data struct ListBox(Items List[int32])
 public func Local() Box -> Box{Items: {Effects.Mark("E", 4)}}`
         const source = `import population5296
 import System
@@ -812,10 +814,38 @@ catch (ex Exception) { Console.WriteLine(Effects.Trace + ":" + ex.GetType().Name
 Effects.Trace = ""
 try { let second = population5296.Box{Items: {Effects.Mark("E", 4)}} }
 catch (ex Exception) { Console.WriteLine(Effects.Trace + ":" + ex.GetType().Name) }`
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
+        let producer = fixture.Compile(library, "population5296", executable: false, "/refout:" + reference)
+        IlVerifier.Verify(producer)
+        let selected = if useReferenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        let consumer = fixture.Compile(source, "consumer", executable: true, "/r:" + selected)
+        IlVerifier.Verify(consumer, []string{producer})
         Assert.Equal(
             ExpectedConsoleBytes("DE:NotSupportedException\nDE:NotSupportedException\nDE:NotSupportedException\n"),
-            CompileAndRunExact(source, library, "population5296", useReferenceAssembly)
+            fixture.RunBytes(consumer)
         )
+        for value in[]string{"{1}", "List[int32]()"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "duplicate.ref.dll")
+            let (code, output) = fixture.TryCompile(
+                "import population5296\nimport System.Collections.Generic\nlet bad = population5296.ListBox{Items: List[int32](), Items: " +
+                    value +
+                    "}",
+                "duplicate",
+                executable: true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("duplicate.gs(3,56,3,61): error GS0102:", output)
+            Assert.Equal(1, output.Split("error GS0102:", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "duplicate.dll")))
+            Assert.False(File.Exists(rejectedReference))
+        }
     }
 
     @Theory

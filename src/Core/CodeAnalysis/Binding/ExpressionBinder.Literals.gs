@@ -2938,6 +2938,7 @@ internal partial class ExpressionBinder {
             let memberName = initSyntax.FieldIdentifier.ValueText
             if constructorMembers?.Contains(memberName) == true &&
                 initSyntax.Value is not CollectionInitializerExpressionSyntax{Target: nil} {
+                seen.Add(memberName)
                 continue
             }
             if !seen.Add(memberName) {
