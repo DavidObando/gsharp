@@ -123,11 +123,16 @@ class Unrelated {
                 }
             )
             // Both implementers are found, whichever order the project lists its files in. Every location
-            // carries the request's document, as before; the ranges are the declared names.
+            // carries the URI of the file that declares it; the ranges are the declared names.
             // A partial type is reported once, not once per part.
             Assert.Equal(2, found.Length)
             let starts = found.Select((l Location) -> l.Range.Start.Line).OrderBy((line int32) -> line).ToArray()
             Assert.Equal([]int32{2, 6}, starts)
+            let circleUri = DocumentUri.FromFileSystemPath(Path.Combine(projDir, "b_circles.gs"))!!
+            let circle = found.Single((l Location) -> l.Range.Start.Line == 2)
+            let square = found.Single((l Location) -> l.Range.Start.Line == 6)
+            Assert.Equal(circleUri.ToString(), circle.Uri!!.ToString())
+            Assert.Equal(uri.ToString(), square.Uri!!.ToString())
         } finally {
             Directory.Delete(rootDir, true)
         }

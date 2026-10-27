@@ -1521,9 +1521,16 @@ class LspServer {
                     structSym.Declaration is {} structDeclaration &&
                     reported
                     .Add(structSym) {
+                    // The location belongs to the tree that declares the struct, not to the request's document.
+                    let declaringFile = tree.Text?.FileName
+                    let uri = if object.ReferenceEquals(tree, content.SyntaxTree) || string.IsNullOrEmpty(declaringFile) {
+                        request.TextDocument.Uri
+                    } else {
+                        DocumentUri.FromFileSystemPath(declaringFile!!) ?? request.TextDocument.Uri
+                    }
                     locations.Add(
                         Location{
-                            Uri: request.TextDocument.Uri,
+                            Uri: uri,
                             Range: SemanticLookup.ToRange(structDeclaration.Identifier)
                         }
                     )
