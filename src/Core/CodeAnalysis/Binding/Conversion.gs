@@ -1284,7 +1284,9 @@ class Conversion {
             if fromClr != nil && toClr != nil && NumericWideningLattice.IsNumericPrimitive(fromClr) &&
                 NumericWideningLattice
                 .IsNumericPrimitive(toClr) {
-                if NumericWideningLattice.IsWidening(fromClr, toClr) {
+                // Issue #5400: numeric widening does not implicitly discard value optionality.
+                if !NullableLifting.IsAnyValueTypeNullable(from as NullableTypeSymbol) &&
+                    NumericWideningLattice.IsWidening(fromClr, toClr) {
                     return Conversion.Implicit
                 }
                 return Conversion.Explicit
