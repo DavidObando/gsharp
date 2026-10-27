@@ -879,23 +879,29 @@ internal class ConversionClassifier {
         if conversion.RequiresPlatformNilCheck {
             return BindPlatformCoercionCheck(diagnosticLocation, expression, type!!)
         }
-        // Issue #2732: Nullable<T>.ClrType aliases T, but its IL stack shape
-        // remains Nullable<T>. Lower an explicit nullable-to-underlying
-        // conversion to the existing `!!` unwrap before async hoisting.
-        if expression.Type is NullableTypeSymbol sourceNullable &&
-            (
-            NullableLifting.IsValueTypeNullable(sourceNullable) || NullableLifting.IsUserValueTypeNullable(
-                sourceNullable
-            )
+        // Issues #2732/#5400: extract the nullable value before conversion and async hoisting.
+        // The shared unwrap throws InvalidOperationException for a missing value.
+        if expression.Type is NullableTypeSymbol sourceNullable && NullableLifting.IsAnyValueTypeNullable(
+            sourceNullable
         ) &&
-            Conversion
-            .ClassifyNonStructural(sourceNullable.UnderlyingType, type!!).IsIdentity {
+            type is not NullableTypeSymbol &&
+            !Conversion.IsReferenceLikeTarget(type!!) && Conversion.ClassifyNonStructural(
+            sourceNullable.UnderlyingType,
+            type!!
+        )
+            .Exists {
             let unwrap = Invariant.Required(
                 BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type),
                 "nullable-to-underlying conversion has a bound bang-bang operator",
                 expression: "BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type)"
             )
-            return BoundUnaryExpression(nil, unwrap, expression)
+            return BindConversion(
+                diagnosticLocation,
+                BoundUnaryExpression(nil, unwrap, expression){IsConversionUnwrap = true},
+                type,
+                allowExplicit: true,
+                callParameter
+            )
         }
         if conversion.IsStructuralProjection {
             if TryResolveUserDefinedSymbolConversion(

@@ -412,6 +412,15 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let operand = UpcastToExpression(this.TranslateExpression(unary.Operand, parameterMap))
+        // Issue #5400: a synthesized nullable extraction remains a conversion in expression trees.
+        if unary.IsConversionUnwrap {
+            return BoundClrStaticCallExpression(
+                unary.Syntax,
+                ExpressionConvertMethod,
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(UnaryExpression), NullabilityFreeReason.TypeLiteral),
+                ImmutableArray.Create[BoundExpression](operand, CreateTypeOf(unary.Type))
+            )
+        }
         // Issue #3349: a reference-type null-assertion is pure static annotation
         // — the CLR has no distinct `T?`, so there is nothing to emit. Erase it
         // and hand the operand's own tree through unchanged.

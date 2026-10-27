@@ -253,7 +253,11 @@ internal shared class ExpressionTreeRestrictionValidator {
                         LocationOf(unary.Syntax),
                         "a nullability-oblivious value used where a non-null type is required"
                     )
-                } else if unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion && IsNullableValueTypeAssertion(unary) {
+                } else if unary
+                    .Op
+                    .Kind == BoundUnaryOperatorKind.NullAssertion &&
+                    !unary.IsConversionUnwrap &&
+                    IsNullableValueTypeAssertion(unary) {
                     // Issue #3349: `!!` is only unrepresentable in an expression
                     // tree when it strips a nullable VALUE type — `T?` to `T` is a
                     // real CLR conversion (`Nullable<T>.Value`) with no
