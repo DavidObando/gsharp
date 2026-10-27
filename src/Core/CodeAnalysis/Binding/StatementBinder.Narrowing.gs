@@ -4413,8 +4413,7 @@ internal partial class StatementBinder {
                 node is LambdaExpressionSyntax ||
                 node is AnonymousClassExpressionSyntax ||
                 (node is FunctionDeclarationSyntax && !object.ReferenceEquals(node, root)) {
-                CollectAssignedNamesAndMemberMutation(node, names)
-                CollectNullCoalescingTargetNames(node, names)
+                CollectEscapingAssignedNames(node, names)
                 CollectRefArgumentNames(node, names)
                 CollectAddressOfNames(node, names)
                 return
@@ -4424,14 +4423,122 @@ internal partial class StatementBinder {
             }
         }
 
-        // `x ??= v` is a write the shared assigned-name walker does not model.
-        private func CollectNullCoalescingTargetNames(node SyntaxNode, names HashSet[string]) {
-            if node is NullCoalescingAssignmentExpressionSyntax coalescing {
-                CollectAllNames(coalescing.Target, names)
+        // #5456: the names that a closure assigns and that another closure or the enclosing function can see. A
+        // name that resolves to a declaration inside the assigning closure is private to one run of that closure
+        // (a nested closure is another closure), so no escaped closure can write it. A name without such a
+        // declaration counts, as does every shape this walk does not model.
+        private func CollectEscapingAssignedNames(node SyntaxNode, names HashSet[string]) {
+            switch node {
+                case a is AssignmentExpressionSyntax {
+                    AddIfEscaping(a.IdentifierToken.ValueText, a, names)
+                }
+                case EventSubscriptionExpressionSyntax{
+                    IsIncrementDecrement: true,
+                    LeftHandSide: NameExpressionSyntax incName
+                } inc {
+                    AddIfEscaping(incName.IdentifierToken.ValueText, inc, names)
+                }
+                case m is MultiAssignmentStatementSyntax {
+                    for t in m.Targets {
+                        if t is NameExpressionSyntax ne {
+                            AddIfEscaping(ne.IdentifierToken.ValueText, ne, names)
+                        }
+                    }
+                }
+                // `x ??= v` is a write the shared assigned-name walker does not model.
+                case coalescing is NullCoalescingAssignmentExpressionSyntax {
+                    if coalescing.Target is NameExpressionSyntax target {
+                        AddIfEscaping(target.IdentifierToken.ValueText, coalescing, names)
+                    } else {
+                        CollectAllNames(coalescing.Target, names)
+                    }
+                }
             }
             for child in node.GetChildren() {
-                CollectNullCoalescingTargetNames(child, names)
+                CollectEscapingAssignedNames(child, names)
             }
+        }
+
+        private func AddIfEscaping(name string, site SyntaxNode, names HashSet[string]) {
+            if !IsDeclaredByAssigningClosure(name, site) {
+                names.Add(name)
+            }
+        }
+
+        private func IsScopeOwner(node SyntaxNode) bool -> node is FunctionLiteralExpressionSyntax or
+            LambdaExpressionSyntax or
+            AnonymousClassExpressionSyntax or
+            FunctionDeclarationSyntax or
+            ConstructorDeclarationSyntax or
+            PropertyAccessorSyntax or
+            EventAccessorSyntax or
+            DeinitDeclarationSyntax
+
+        private func ScopeOwnerOf(node SyntaxNode) SyntaxNode? {
+            for var ancestor SyntaxNode? = node.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
+                if IsScopeOwner(ancestor) {
+                    return ancestor
+                }
+            }
+            return nil
+        }
+
+        // Whether the nearest declaration of [`name`](paramref) that is in scope at [`site`](paramref) is a local or
+        // a parameter of the closure that holds the site. Only a variable declaration and a parameter count: an
+        // unmodelled declaration (a pattern variable, a loop variable) gives false and keeps the name.
+        private func IsDeclaredByAssigningClosure(name string, site SyntaxNode) bool {
+            let assigning = ScopeOwnerOf(site)
+            if assigning == nil {
+                return false
+            }
+            let siteStart = site.Span.Start
+            for var ancestor SyntaxNode? = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
+                var declaration SyntaxNode? = nil
+                var declarationStart = -1
+                for child in ancestor.GetChildren() {
+                    if child is VariableDeclarationSyntax variable && string.Equals(
+                        variable.Identifier.ValueText,
+                        name,
+                        StringComparison.Ordinal
+                    ) &&
+                        child
+                        .Span
+                        .Start <= siteStart &&
+                        child
+                        .Span
+                        .Start > declarationStart {
+                        declaration = child
+                        declarationStart = child.Span.Start
+                    }
+                }
+                if declaration == nil && IsScopeOwner(ancestor) {
+                    declaration = FindParameter(ancestor, ancestor, name)
+                }
+                if declaration != nil {
+                    return object.ReferenceEquals(ScopeOwnerOf(declaration), assigning)
+                }
+            }
+            return false
+        }
+
+        private func FindParameter(owner SyntaxNode, node SyntaxNode, name string) SyntaxNode? {
+            for child in node.GetChildren() {
+                if child is ParameterSyntax{Identifier: {} identifier} parameter && string.Equals(
+                    identifier.ValueText,
+                    name,
+                    StringComparison.Ordinal
+                ) &&
+                    object.ReferenceEquals(ScopeOwnerOf(child), owner) {
+                    return child
+                }
+                if !IsScopeOwner(child) {
+                    let found = FindParameter(owner, child, name)
+                    if found != nil {
+                        return found
+                    }
+                }
+            }
+            return nil
         }
 
         // `out x` / `ref x` inside a closure lets the callee write the local.

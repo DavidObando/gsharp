@@ -207,7 +207,10 @@ open class Adr0208NarrowingCorpusTests {
                 "o5_callback_literal_passed_to_named_function",
                 "o6_callback_run_through_another_callback",
                 "o7_root_never_assigned_by_a_closure_keeps_the_fact",
-                "out-alias_out_ref_alias"
+                "out-alias_out_ref_alias",
+                "q1_5456_closure_own_local_survives_unknown_callable",
+                "q2_5456_nested_closure_assigns_enclosing_closure_local",
+                "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable"
             },
             names
         )
@@ -1626,6 +1629,63 @@ Done:
     return settings
 }
 func Main() { Console.WriteLine(Make[Setup](0).Ready) }`, "", "run", "True", ""}
+            yield[]object{"q1_5456_closure_own_local_survives_unknown_callable", `import System
+
+class Rec {
+    var Id string = "a"
+}
+func Find() Rec? { return Rec{} }
+func Pick() () -> void { return func() { } }
+func Run(c () -> void) { c() }
+func Main() {
+    Run(() -> {
+        var hit Rec? = nil
+        hit = Find()
+        if hit == nil { return }
+        let f = Pick()
+        f()
+        Console.WriteLine(hit.Id)
+    })
+}`, "", "run", "a", ""}
+            yield[]object{"q2_5456_nested_closure_assigns_enclosing_closure_local", `import System
+
+class Rec {
+    var Id string = "a"
+}
+func Find() Rec? { return Rec{} }
+func Pick(g () -> void) () -> void { return g }
+func Run(c () -> void) { c() }
+func Main() {
+    Run(() -> {
+        var hit Rec? = nil
+        hit = Find()
+        let clear = func() { hit = nil }
+        if hit == nil { return }
+        let f = Pick(clear)
+        f()
+        Console.WriteLine(hit.Id)
+    })
+}`, "GS0158@17:31", "reject", "", ""}
+            yield[]object{"q3_5456_closure_own_local_in_nested_block_survives_unknown_callable", `import System
+
+class Rec {
+    var Id string = "a"
+}
+func Find() Rec? { return Rec{} }
+func Pick() () -> void { return func() { } }
+func Run(c () -> void) { c() }
+func Main() {
+    Run(() -> {
+        for var i = 0; i < 1; i++ {
+            var hit Rec? = nil
+            hit = Find()
+            if hit == nil { return }
+            let f = Pick()
+            f()
+            Console.WriteLine(hit.Id)
+        }
+    })
+}`, "", "run", "a", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Narrowing treats a closure's own locals as private** (issue #5456). A local that a closure declares and only that closure assigns is no longer in the closure-assigned set. An unknown callable no longer removes its narrowing. A write from a nested closure, or to a variable the closure does not declare, still counts. No current diagnostic or emitted output changes in `src/Core`, Core.Tests, gsc or the pinned Oahu inputs.
+
 - **Nightly test oracles use the validation runner** (issue #5443). Each migration shard captures its selected C# test names locally. Different hosted targeting-pack inventories no longer cause false extra theory rows. Name and duplicate-count comparisons remain unchanged.
 
 - **Go to implementation reports each implementer in its own file** (issue #5329). `textDocument/implementation` now returns every implementing type under the URI of the file that declares it, not the URI of the requested document.
