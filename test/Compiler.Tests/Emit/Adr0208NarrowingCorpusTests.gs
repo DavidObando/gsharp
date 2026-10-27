@@ -24,6 +24,9 @@ import Xunit
 /// pinned run-time crashes (bugs #5168, #5170 and #5171). Each fix flipped its
 /// rows in the same change, and they now record GS0158.
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
+/// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
+/// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1, n1, o1, o2 and o3 (issue #5206, amendment A1). They now
+/// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
     /// compiles verifies and runs it.
@@ -171,19 +174,44 @@ open class Adr0208NarrowingCorpusTests {
                 "h15_ref_local_alias_repeats_ref_argument",
                 "h16_ref_local_alias_passed_twice",
                 "h17_conditional_ref_argument_of_imported_call",
+                "h1_assign_in_exiting_branch_new_fact",
                 "h1_by_ref_param_survives_calls",
+                "h2_call_in_exiting_branch_member_path",
                 "h2_limitation_call_with_container_operand",
+                "h3_call_in_condition_before_fact",
                 "h3_limitation_call_writes_global",
+                "h3b_unknown_call_in_condition_before_fact",
+                "h4_call_in_then_branch_member_path",
                 "h4_same_variable_two_ref_arguments",
                 "h5_generic_by_ref_parameters_may_overlap",
+                "h5_strengthening_gain",
+                "h6_call_in_condition_kills_entry_member_path",
                 "h6_null_assertion_repeats_ref_argument",
                 "h7_conditional_address_repeats_ref_argument",
+                "h7_getter_in_exiting_branch_kills_member_path",
                 "h8_nested_annotation_by_ref_parameters_overlap",
                 "h9_nested_type_parameter_by_ref_parameters_overlap",
+                "i1_5206_type_test_against_unrelated_interface",
+                "i2_5206_goto_join_keeps_declared_type",
+                "j1_else_if_chain_nary_join",
+                "k1_legacy_lift_keeps_the_stronger_join",
+                "k2_header_write_before_branch_read",
+                "l1_condition_call_kills_alias_fact",
+                "l2_condition_call_kills_member_path_on_alias",
+                "m1_unrelated_interface_refinement",
+                "n1_boxed_value_type_test",
+                "o1_callback_after_test_replaces_root",
+                "o2_callback_in_or_arm_replaces_root",
+                "o3_callback_in_else_if_replaces_root",
+                "o4_stored_callback_run_by_named_function",
+                "o5_callback_literal_passed_to_named_function",
+                "o6_callback_run_through_another_callback",
+                "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias",
                 "q12_exit_gain",
                 "q13_exit_gain_bang",
                 "q14_enclosing_filter_reenters_loop",
+                "q14b_filter_write_reenters_loop_retested",
                 "q3_loop_escaped_closure",
                 "q4_shadow_let_in_loop",
                 "q5a_source_getter_in_loop",
@@ -518,7 +546,7 @@ func Run() int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0158@7:14", "reject", "", "R3 (accepted after)"}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "0", ""}
             yield[]object{"e11_bang_narrows", `func Get() string? { return nil }
 func Run() int32 {
     var s string? = Get()
@@ -666,7 +694,7 @@ func Run2(b Box) int32 {
     if b.Name == nil { return 0 }
     return b.Name.Length
 }
-func Main() { Console.WriteLine(Run(Box("ab"))) }`, "GS0158@7:19", "reject", "", "R5 (accepted after)"}
+func Main() { Console.WriteLine(Run(Box("ab"))) }`, "", "run", "2", ""}
             yield[]object{"e2b_loop_read_before_exitwrite", `func Get() string? { return nil }
 func Run(c bool, n int32) int32 {
     var s string? = Get()
@@ -777,14 +805,14 @@ func Run3(b Box) string {
     if b.Pet !is Dog { return "" }
     return b.Pet.Bark()
 }
-func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@13:18", "reject", "", "R1 (Run2 accepted after)"}
+func Main() { Console.WriteLine(Run2(Box(Dog()))) }`, "", "run", "woof", ""}
             yield[]object{"e8_else_exit", `func Get() string? { return nil }
 func Run() int32 {
     let s string? = Get()
     if s != nil { Console.WriteLine("y") } else { return 0 }
     return s.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0158@5:14", "reject", "", "R1 (accepted after)"}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "0", ""}
             yield[]object{"e9_switch_assign_join", `func Run(k int32) int32 {
     var s string? = nil
     switch k {
@@ -808,7 +836,7 @@ func Run(x Animal?, c bool) string {
     }
     return x.Name
 }
-func Main() { Console.WriteLine(Run(Dog(), true)) }`, "GS0158@12:14", "reject", "", "R1 (accepted after)"}
+func Main() { Console.WriteLine(Run(Dog(), true)) }`, "", "run", "a", ""}
             yield[]object{"f2_ref_element_alias", `class C {
     var Value int32 = 1
 }
@@ -879,7 +907,7 @@ func Run(x Animal) string {
     if x is Dog { } else { return "" }
     return x.Name
 }
-func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "animal", "R1 (b): prints dog after"}
+func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "dog", ""}
             yield[]object{"g1_three_predecessor_goto", `open class Animal {
     var Name string = "a"
 }
@@ -938,7 +966,7 @@ func Run(x IA) string {
     if x is Both { } else { return "" }
     return Factory.Take(x)
 }
-func Main() { Console.WriteLine(Run(Both())) }`, "", "run", "IA", "R1 (c): GS0266 after"}
+func Main() { Console.WriteLine(Run(Both())) }`, "GS0266@12:20", "reject", "", ""}
             yield[]object{"g5_yield_after_guard", `func Get() string? { return "a" }
 func Items() sequence[int32] {
     var s string? = Get()
@@ -1212,6 +1240,405 @@ func Main() {
     var x C? = nil
     Run(out x, ref x)
 }`, "GS0159@6:15", "reject", "", ""}
+            yield[]object{"h1_assign_in_exiting_branch_new_fact", `func Get() string? { return nil }
+func Run() int32 {
+    var t = Get()
+    if t == nil {
+        t = "x"
+        return 1
+    }
+    return t.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@8:14", "reject", "", "R2 (accepted after)"}
+            yield[]object{"h2_call_in_exiting_branch_member_path", `open class Animal { var Name string = "" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Log() { }
+func Run(b Box) string {
+    if b.Pet is Dog {
+    } else {
+        Log()
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", "R2 (accepted after)"}
+            yield[]object{"h3_call_in_condition_before_fact", `open class Animal { var Name string = "" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Ready() bool { return true }
+func Run(b Box) string {
+    if Ready() && b.Pet is Dog {
+    } else {
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "", "run", "woof", ""}
+            yield[]object{"h4_call_in_then_branch_member_path", `open class Animal { var Name string = "" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Log() { }
+func Run(b Box) string {
+    if b.Pet is Dog {
+        Log()
+    } else {
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", ""}
+            yield[]object{"h5_strengthening_gain", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x == nil { return "" }
+    if x is Dog {
+    } else {
+        return ""
+    }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog())) }`, "", "run", "woof", ""}
+            yield[]object{"j1_else_if_chain_nary_join", `open class Animal { var Name string = "a" }
+class Dog : Animal { }
+class Cat : Animal { }
+func Run(x object?, k int32) string {
+    if k == 0 {
+        if x !is Animal { return "" }
+    } else if k == 1 {
+        if x !is Dog { return "" }
+    } else {
+        if x !is Cat { return "" }
+    }
+    return x.Name
+}
+func Main() { Console.WriteLine(Run(Dog(), 1)) }`, "", "run", "a", ""}
+            yield[]object{"h6_call_in_condition_kills_entry_member_path", `open class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Ready() bool { return true }
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Ready() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "GS0158@13:18", "reject", "", "R14 (the condition call kills; stays rejected)"}
+            yield[]object{"k1_legacy_lift_keeps_the_stronger_join", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(a Animal, c bool) string {
+    var x Animal? = a
+    if c {
+        if x !is Dog { return "" }
+    } else {
+        if x !is Dog { return "" }
+    }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog(), true)) }`, "", "run", "woof", ""}
+            yield[]object{"k2_header_write_before_branch_read", `func Get() string? { return "a" }
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    if Clear(ref s) {
+        return s.Length
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14", "nre", "", "#5249, header effects before the branches (slice 4): GS0158 after"}
+            yield[]object{"h7_getter_in_exiting_branch_kills_member_path", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    prop Count int32 -> 1
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    if b.Pet is Dog {
+    } else {
+        let n = b.Count
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", "R2 (accepted after)"}
+            yield[]object{"l1_condition_call_kills_alias_fact", `class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) bool {
+    xs[0] = nil
+    return true
+}
+func Run(ref a C?, xs []C?) int32 {
+    if a != nil && Clear(xs) {
+    } else {
+        return 0
+    }
+    return a.Value
+}
+func Main() {
+    var xs = []C?{C{}}
+    Console.WriteLine(Run(ref xs[0], xs))
+}`, "GS0158@13:14", "reject", "", ""}
+            yield[]object{"m1_unrelated_interface_refinement", `interface IA {
+    func Id() string;
+}
+interface IB {
+    func Extra() string;
+}
+class Both : IA, IB {
+    func Id() string { return "id" }
+    func Extra() string { return "extra" }
+}
+func Run(x IA?) string {
+    if x == nil { return "" }
+    if x is IB {
+    } else {
+        return ""
+    }
+    return x.Extra()
+}
+func Main() { Console.WriteLine(Run(Both())) }`, "", "run", "extra", ""}
+            yield[]object{"h3b_unknown_call_in_condition_before_fact", `open class Animal { var Name string = "a" }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    let ready = func() bool { return true }
+    if ready() && b.Pet is Dog {
+    } else {
+        return ""
+    }
+    return b.Pet.Bark()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "", "run", "woof", ""}
+            yield[]object{"l2_condition_call_kills_member_path_on_alias", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Clear(xs []Box) bool {
+    xs[0] = Box(nil)
+    return true
+}
+func Run(ref b Box, xs []Box) string {
+    if b.Pet != nil && Clear(xs) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() {
+    var xs = []Box{Box(Pet())}
+    Console.WriteLine(Run(ref xs[0], xs))
+}`, "GS0158@15:18", "reject", "", ""}
+            yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
+    if x == nil { return 0 }
+    if x is int32 {
+    } else {
+        return 0
+    }
+    return x
+}
+func Main() { Console.WriteLine(Run(5)) }`, "", "run", "5", ""}
+            yield[]object{"o1_callback_after_test_replaces_root", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run() string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return true
+    }
+    if b.Pet != nil && clear() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:18", "reject", "", ""}
+            yield[]object{"o2_callback_in_or_arm_replaces_root", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run() string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return false
+    }
+    if b.Pet == nil || clear() {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@15:18", "reject", "", ""}
+            yield[]object{"o3_callback_in_else_if_replaces_root", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run(c bool) string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return true
+    }
+    if c {
+        return ""
+    } else if b.Pet != nil && clear() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(false)) }`, "GS0158@18:18", "reject", "", ""}
+            yield[]object{"o4_stored_callback_run_by_named_function", `import System.Collections.Generic
+class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Fire(hs List[() -> bool]) bool {
+    for h in hs { h() }
+    return true
+}
+func Run() string {
+    var b = Box(Pet())
+    let handlers = List[() -> bool]()
+    handlers.Add(func() bool {
+        b = Box(nil)
+        return true
+    })
+    if b.Pet != nil && Fire(handlers) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@22:18", "reject", "", ""}
+            yield[]object{"o5_callback_literal_passed_to_named_function", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Use(f () -> bool) bool { return f() }
+func Run() string {
+    var b = Box(Pet())
+    if b.Pet != nil && Use(func() bool {
+        b = Box(nil)
+        return true
+    }) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:18", "reject", "", ""}
+            yield[]object{"o6_callback_run_through_another_callback", `class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run() string {
+    var b = Box(Pet())
+    let clear = func() bool {
+        b = Box(nil)
+        return true
+    }
+    let again = func() bool { return clear() }
+    if b.Pet != nil && again() {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@17:18", "reject", "", ""}
+            yield[]object{"o7_root_never_assigned_by_a_closure_keeps_the_fact", `import System.Collections.Generic
+class Pet { var Name string = "a" }
+class Box {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Fire(hs List[() -> bool]) bool {
+    for h in hs { h() }
+    return true
+}
+func Run() string {
+    var b = Box(Pet())
+    let handlers = List[() -> bool]()
+    handlers.Add(func() bool { return true })
+    if b.Pet != nil && Fire(handlers) {
+    } else {
+        return ""
+    }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "a", ""}
+            yield[]object{"i1_5206_type_test_against_unrelated_interface", `interface IInit {
+    func Init();
+}
+class Plain {
+    var Ready bool = false
+}
+class Setup : IInit {
+    var Ready bool = false
+    func Init() { Ready = true }
+}
+func Make[T class init()]() T {
+    var settings T? = nil
+    settings = T()
+    if settings is IInit init {
+        init.Init()
+    }
+    return settings
+}
+func Main() {
+    Console.WriteLine(Make[Plain]().Ready)
+    Console.WriteLine(Make[Setup]().Ready)
+}`, "", "run", "False|True", ""}
+            yield[]object{"i2_5206_goto_join_keeps_declared_type", `interface IInit {
+    func Init();
+}
+class Setup : IInit {
+    var Ready bool = false
+    func Init() { Ready = true }
+}
+func Make[T class init()](k int32) T {
+    var settings T? = nil
+    settings = T()
+    if k == 0 {
+        if settings is IInit init {
+            init.Init()
+            goto Done
+        }
+    }
+Done:
+    return settings
+}
+func Main() { Console.WriteLine(Make[Setup](0).Ready) }`, "", "run", "True", ""}
             yield[]object{"q3_loop_escaped_closure", `import System
 class C {
     var Value int32 = 1
@@ -1433,6 +1860,33 @@ func Run() int32 {
     return n
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@11:17", "reject", "", "#5315, ADR-0213 W8 (L1)"}
+            yield[]object{"q14b_filter_write_reenters_loop_retested", `import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = "abc"
+    var n = 0
+    if s == nil { return 0 }
+    try {
+        while s != nil && s.Length > 0 && n < 2 {
+            n++
+            try {
+                try {
+                    throw FormatException("f")
+                } finally {
+                    throw InvalidOperationException("g")
+                }
+            } catch (InvalidOperationException) {
+            }
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+    return n
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "#5315, ADR-0213 W8 (L1)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

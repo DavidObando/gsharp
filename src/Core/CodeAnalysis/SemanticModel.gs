@@ -147,6 +147,24 @@ partial class SemanticModel {
             .TryGetValue(interfaceDeclaration.Identifier, out var declaredInterface) {
             return declaredInterface
         }
+        // A part of a nested partial type: the binder merged it in place (#5340).
+        if node is StructDeclarationSyntax partStruct && object.ReferenceEquals(partStruct.SyntaxTree, syntaxTree) &&
+            index
+            .Value
+            .TypesByPartStart
+            .TryGetValue(partStruct.Identifier.Span.Start, out var declaredPartStruct) {
+            return declaredPartStruct
+        }
+        if node is InterfaceDeclarationSyntax partInterface && object.ReferenceEquals(
+            partInterface.SyntaxTree,
+            syntaxTree
+        ) &&
+            index
+            .Value
+            .TypesByPartStart
+            .TryGetValue(partInterface.Identifier.Span.Start, out var declaredPartInterface) {
+            return declaredPartInterface
+        }
         return nil
     }
 
@@ -337,7 +355,8 @@ partial class SemanticModel {
         TypeClauseTokens Dictionary[SyntaxToken, TypeSymbol],
         LocalDeclarations ImmutableArray[(Anchor SyntaxNode, Local Symbol)],
         LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]],
-        TypesByIdentifier Dictionary[SyntaxToken, Symbol]
+        TypesByIdentifier Dictionary[SyntaxToken, Symbol],
+        TypesByPartStart Dictionary[int32, Symbol]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -529,12 +548,18 @@ partial class SemanticModel {
             // A shared class's declaration node is a copy the binder made when it moved the members
             // into the shared block; the identifier token is the same object in both.
             let structsByIdentifier = Dictionary[SyntaxToken, Symbol](ReferenceEqualityComparer.Instance)
+            // The binder merges the parts of a nested partial type in place, so the tree no longer lists
+            // them. Each part is found by the start of its identifier instead (#5340).
+            let typesByPartStart = Dictionary[int32, Symbol]()
             for declaredStruct in program.Structs {
                 if declaredStruct.Declaration is {} structDeclaration && object.ReferenceEquals(
                     structDeclaration.Identifier.SyntaxTree,
                     tree
                 ) {
                     structsByIdentifier.TryAdd(structDeclaration.Identifier, declaredStruct)
+                }
+                if declaredStruct.Declaration is {} mergedStruct {
+                    RecordPartStarts(mergedStruct.PartialPartLocations, tree, declaredStruct, typesByPartStart)
                 }
                 // Every part of a partial type resolves to the merged type: the merged declaration
                 // lists the identifier location of each part.
@@ -562,6 +587,9 @@ partial class SemanticModel {
                     tree
                 ) {
                     structsByIdentifier.TryAdd(interfaceDeclaration.Identifier, declaredInterface)
+                }
+                if declaredInterface.Declaration is {} mergedInterface {
+                    RecordPartStarts(mergedInterface.PartialPartLocations, tree, declaredInterface, typesByPartStart)
                 }
                 if declaredInterface.Declaration is {} merged && !merged.PartialPartLocations.IsDefaultOrEmpty {
                     for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
@@ -595,6 +623,20 @@ partial class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
+            // The `shared { init { ... } }` bodies are not in the function table (#5340).
+            for declaredStruct in program.Structs {
+                if declaredStruct.Declaration is {} initDeclaration && object.ReferenceEquals(
+                    initDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) &&
+                    !declaredStruct
+                    .StaticInitializerStatements
+                    .IsDefaultOrEmpty {
+                    for statement in declaredStruct.StaticInitializerStatements {
+                        walker.Visit(statement)
+                    }
+                }
+            }
             SemanticModel.RecordSymbolTypeClauses(declaredBySyntax, tree, typeClauseTokens)
             let localDeclarations = SemanticModel.CollectLocalDeclarations(declaredBySyntax)
             compilation.WorkBudget.CancellationToken.ThrowIfCancellationRequested()
@@ -607,8 +649,29 @@ partial class SemanticModel {
                 typeClauseTokens,
                 localDeclarations,
                 SemanticModel.GroupByName(localDeclarations),
-                structsByIdentifier
+                structsByIdentifier,
+                typesByPartStart
             )
+        }
+
+        private func RecordPartStarts(
+            locations ImmutableArray[TextLocation],
+            tree SyntaxTree,
+            declared Symbol,
+            typesByPartStart Dictionary[int32, Symbol]
+        ) {
+            if locations.IsDefaultOrEmpty {
+                return
+            }
+            for location in locations {
+                // An unnamed tree has no path to compare: its text identifies it.
+                if object.ReferenceEquals(location.Text, tree.Text) || SourcePathIdentity.AreSame(
+                    location.FileName,
+                    tree.Text?.FileName
+                ) {
+                    typesByPartStart.TryAdd(location.Span.Start, declared)
+                }
+            }
         }
 
         private func EnumerateDeclaredSymbols(program BoundProgram, globalScope BoundGlobalScope) sequence[Symbol] {

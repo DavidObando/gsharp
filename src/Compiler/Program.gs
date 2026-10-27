@@ -716,38 +716,38 @@ open class Program {
                 }
             }
             var result EmitResult
-            {
-                using let peStream = File.Create(outputPath)
-                {
-                    using let refStream = if string.IsNullOrEmpty(refOutputPath) {
-                        default(FileStream?)
-                    } else {
-                        File.Create(refOutputPath!!)
-                    }
-                    {
-                        using let pdbStream = if pdbOutputPath == nil {
-                            default(FileStream?)
-                        } else {
-                            File.Create(pdbOutputPath)
-                        }
-                        {
-                            using let docStream = if string.IsNullOrEmpty(documentationOutputPath) {
-                                default(FileStream?)
-                            } else {
-                                File.Create(documentationOutputPath!!)
-                            }
-                            result = compilation.Emit(
-                                peStream,
-                                pdbStream,
-                                refStream,
-                                docStream,
-                                args.AssemblyName,
-                                args.Version,
-                                GetTargetFrameworkMoniker(args.TargetFramework)
-                            )
-                        }
-                    }
+            let createdOutputs = List[string]()
+            try {
+                using let peStream = CreateOutput(outputPath, createdOutputs)
+                using let refStream = if string.IsNullOrEmpty(refOutputPath) {
+                    default(FileStream?)
+                } else {
+                    CreateOutput(refOutputPath!!, createdOutputs)
                 }
+                using let pdbStream = if pdbOutputPath == nil {
+                    default(FileStream?)
+                } else {
+                    CreateOutput(pdbOutputPath, createdOutputs)
+                }
+                using let docStream = if string.IsNullOrEmpty(documentationOutputPath) {
+                    default(FileStream?)
+                } else {
+                    CreateOutput(documentationOutputPath!!, createdOutputs)
+                }
+                result = compilation.Emit(
+                    peStream,
+                    pdbStream,
+                    refStream,
+                    docStream,
+                    args.AssemblyName,
+                    args.Version,
+                    GetTargetFrameworkMoniker(args.TargetFramework)
+                )
+            } catch {
+                for path in createdOutputs {
+                    TryDelete(path)
+                }
+                rethrow
             }
             // ADR-0169: run G# analyzers over the same compilation (BoundProgram
             // is cached, so this does not re-bind) and merge their diagnostics
@@ -862,13 +862,29 @@ open class Program {
             return result
         }
 
+        private func CreateOutput(path string, createdOutputs List[string]) FileStream {
+            try {
+                let stream = FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)
+                createdOutputs.Add(path)
+                return stream
+            } catch (IOException) when File.Exists(path) {
+                let target = File.ResolveLinkTarget(path, returnFinalTarget: true)
+                if target != nil && !target.Exists {
+                    // Track a new dangling-link target without deleting the existing link.
+                    return CreateOutput(target.FullName, createdOutputs)
+                }
+                // Keep the existing overwrite policy without claiming ownership of an existing file.
+                return FileStream(path, FileMode.Truncate, FileAccess.ReadWrite, FileShare.None)
+            }
+        }
+
         private func TryDelete(path string) {
             try {
                 File.Delete(path)
             } catch (IOException) {
                 // Best-effort cleanup; ignore.
 
-            }
+            } catch (UnauthorizedAccessException) { }
         }
 
         private func WriteRuntimeConfig(assemblyPath string, targetFramework string?) {
