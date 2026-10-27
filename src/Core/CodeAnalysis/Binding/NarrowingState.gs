@@ -322,12 +322,23 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             if !conversion.Exists || !conversion.IsImplicit || conversion.IsStructuralProjection {
                 return false
             }
-            return if held.ClrType is {} heldClr && joined.ClrType is {} joinedClr {
-                ClrTypeUtilities.IsAssignableByName(joinedClr, heldClr)
-            } else {
-                joined is InterfaceSymbol
+            if held.ClrType is {} heldClr && joined.ClrType is {} joinedClr {
+                return ClrTypeUtilities.IsAssignableByName(joinedClr, heldClr)
             }
+            // A same-compilation value type (a source struct or enum) has no CLR type yet. The
+            // implicit conversion above proved it converts, so only a boxing target is left to
+            // tell from a user-defined conversion: an interface, `object`, `ValueType` or `Enum`.
+            return joined is InterfaceSymbol || IsBoxingBase(joined.ClrType)
         }
+
+        private func IsBoxingBase(clr Type?) bool -> clr != nil &&
+            (
+            clr.IsInterface || ClrTypeInspector.IsSameAs(clr, typeof(object)) || ClrTypeInspector.IsSameAs(
+                clr,
+                typeof(ValueType)
+            ) ||
+                ClrTypeInspector.IsSameAs(clr, typeof(Enum))
+        )
 
         /// Gets the state with no facts at a reachable point.
         prop Empty NarrowingState -> emptyState

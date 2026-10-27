@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Text
 import Xunit
@@ -123,6 +124,25 @@ open class Adr0208NarrowingStateTests {
         Assert.False(NarrowingState.IsNoStrongerThan(int32, nullableInt32))
         // A numeric widening is a different fact, not a weaker one.
         Assert.False(NarrowingState.IsNoStrongerThan(TypeSymbol.Int64, int32))
+        // A same-compilation struct has no CLR type: boxing targets still add nothing, and the
+        // struct stays stronger than what it boxes to.
+        let point = StructSymbol(
+            "Point",
+            ImmutableArray[FieldSymbol].Empty,
+            Accessibility.Public,
+            declaration: nil,
+            packageName: "test"
+        )
+        Assert.Null(point.ClrType)
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.Object, point))
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.FromClrType(typeof(ValueType)), point))
+        Assert.False(NarrowingState.IsNoStrongerThan(point, TypeSymbol.Object))
+        Assert.False(NarrowingState.IsNoStrongerThan(TypeSymbol.String, point))
+        // Imported value types and enums box to ValueType, Enum and their interfaces.
+        let dayOfWeek = TypeSymbol.FromClrType(typeof(DayOfWeek))
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.FromClrType(typeof(Enum)), dayOfWeek))
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.FromClrType(typeof(IComparable)), dayOfWeek))
+        Assert.False(NarrowingState.IsNoStrongerThan(dayOfWeek, TypeSymbol.FromClrType(typeof(Enum))))
     }
 
     @Fact
