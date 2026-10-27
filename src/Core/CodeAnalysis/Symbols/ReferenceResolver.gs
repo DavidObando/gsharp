@@ -1060,7 +1060,7 @@ class ReferenceResolver : IDisposable {
     }
 
     /// A (cref:MetadataAssemblyResolver) that resolves from a supplied
-    /// set of paths (via an inner (cref:PathAssemblyResolver)) and, when
+    /// set of images indexed by their metadata assembly names and, when
     /// that fails, degrades gracefully: instead of allowing the
     /// (cref:MetadataLoadContext) to surface an exception for an
     /// unresolved transitive dependency, it records the offending simple name
@@ -1074,6 +1074,9 @@ class ReferenceResolver : IDisposable {
         private let assemblyPaths Dictionary[string, string] = Dictionary[string, string](
             StringComparer.OrdinalIgnoreCase
         )
+        private let assemblyNamesByPath Dictionary[string, string] = Dictionary[string, string](
+            StringComparer.OrdinalIgnoreCase
+        )
         private let unresolved HashSet[string] = HashSet[string](StringComparer.OrdinalIgnoreCase)
         private let gate object = SystemObject()
 
@@ -1083,16 +1086,28 @@ class ReferenceResolver : IDisposable {
             // This prevents MSBuild CopyRefAssembly from being blocked (#853).
             for path in paths {
                 let fullPath = Path.GetFullPath(path)
-                let fileName = Path.GetFileNameWithoutExtension(fullPath)
-                if !assemblyBytes.ContainsKey(fileName) {
+                if !assemblyNamesByPath.ContainsKey(fullPath) {
                     try {
                         let bytes = if shared.Contains(fullPath) {
                             SharedHostAssemblyBytes.GetOrAdd(fullPath, ReadAssemblyBytes)
                         } else {
                             ReadAssemblyBytes(fullPath)
                         }
-                        assemblyBytes[fileName] = bytes
-                        assemblyPaths[fileName] = fullPath
+                        using let pe = PEReader(ImmutableCollectionsMarshal.AsImmutableArray(bytes))
+                        if !pe.HasMetadata {
+                            continue
+                        }
+                        let reader = pe.GetMetadataReader()
+                        if !reader.IsAssembly {
+                            continue
+                        }
+                        let simpleName = reader.GetString(reader.GetAssemblyDefinition().Name)
+                        assemblyNamesByPath[fullPath] = simpleName
+                        // Keep the first supplied image for each name, before host fallback images.
+                        if !assemblyBytes.ContainsKey(simpleName) {
+                            assemblyBytes[simpleName] = bytes
+                            assemblyPaths[simpleName] = fullPath
+                        }
                     } catch (ex Exception) when ex is IOException ||
                         ex is UnauthorizedAccessException ||
                         ex is BadImageFormatException {
@@ -1122,9 +1137,9 @@ class ReferenceResolver : IDisposable {
         /// Loads an assembly by path into the given (cref:MetadataLoadContext)
         /// using in-memory bytes (no file handle held open).
         func LoadFromPath(context MetadataLoadContext, path string) Assembly {
-            let fileName = Path.GetFileNameWithoutExtension(path)
             var asm Assembly
-            if assemblyBytes.TryGetValue(fileName, out var bytes) {
+            let bytes = GetImageFromPath(path)
+            if bytes != nil {
                 asm = context.LoadFromByteArray(bytes)
                 ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
             } else {
@@ -1144,6 +1159,13 @@ class ReferenceResolver : IDisposable {
         func GetImage(simpleName string)([]uint8)? {
             if assemblyBytes.TryGetValue(simpleName, out var image) {
                 return image
+            }
+            return nil
+        }
+
+        func GetImageFromPath(path string)([]uint8)? {
+            if assemblyNamesByPath.TryGetValue(Path.GetFullPath(path), out var simpleName) {
+                return GetImage(simpleName)
             }
             return nil
         }
@@ -1537,8 +1559,8 @@ class ReferenceResolver : IDisposable {
                 return Default()
             }
             // Augment the resolver with the gsc host's trusted platform assemblies
-            // as a *fallback*. User-supplied paths take precedence because the
-            // PathAssemblyResolver iterates in order, so any BCL assembly the user
+            // as a *fallback*. The resolver registers supplied identities first.
+            // Any BCL assembly the user
             // brings (e.g. from a target framework ref pack) wins over the host
             // copy. The host fallback only kicks in for dependencies the user did
             // not enumerate (typical when a user DLL pulls in extra BCL pieces).
@@ -1685,7 +1707,7 @@ class ReferenceResolver : IDisposable {
                 )
             }
             for path in resolverPaths {
-                let image = supplier.GetImage(Path.GetFileNameWithoutExtension(path))
+                let image = supplier.GetImageFromPath(path)
                 // The context loads a dependency only when a signature needs it, and skips an unreadable one.
                 // The set skips it at construction, so one bad dependency does not hide the others.
                 if image != nil && seen.Add(image) && HasAssemblyMetadata(image) {

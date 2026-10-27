@@ -7,10 +7,14 @@ package GSharp.Compiler.Tests.Emit
 import GSharp.Compiler
 import System
 import System.Collections.Generic
+import System.Diagnostics
 import System.IO
+import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
+import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #2870 — `MemberDefEmitter.EmitPropertyGetter`/`EmitPropertySetter`
@@ -28,6 +32,102 @@ import Xunit
 /// `PropertySymbol.IsAbstract` true, marked the declaring type abstract,
 /// and produced `GS0386` at every construction site.
 open class Issue2870ReferenceAssemblyOverrideSlotEmitTests {
+    @Theory
+    @InlineData("nullablecopy5296.ref.dll")
+    @InlineData("unrelated.contract.dll")
+    @InlineData("bridge.contract.dll")
+    func TransitiveSignaturesResolveExplicitReferenceIdentityRegardlessOfFileName(referenceFileName string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        Assert.NotEmpty(references)
+        let contracts = Path.Combine(fixture.Directory, "contracts")
+        Directory.CreateDirectory(contracts)
+        let producer = Path.Combine(fixture.Directory, "nullablecopy5296.dll")
+        let producerReference = Path.Combine(contracts, referenceFileName)
+        let bridge = Path.Combine(fixture.Directory, "LiteralBridge5419.dll")
+        let bridgeContracts = Path.Combine(contracts, "bridge")
+        Directory.CreateDirectory(bridgeContracts)
+        let bridgeReference = Path.Combine(bridgeContracts, "bridge.contract.dll")
+        let producerResult = CompileStandalone(
+            fixture.Directory,
+            "nullablecopy5296",
+            "package nullablecopy5296\npublic data class C[T](Value T)",
+            references,
+            "/refout:" + producerReference
+        )
+        Assert.True(producerResult.Code == 0, producerResult.Diagnostics)
+        let bridgeResult = CompileStandalone(fixture.Directory, "LiteralBridge5419", `package LiteralBridge5419
+import nullablecopy5296
+public class Bridge { shared { public func Make() C[string?] -> C[string?](nil) } }`, references, "/r:" +
+                producer, "/refout:" + bridgeReference)
+        Assert.True(bridgeResult.Code == 0, bridgeResult.Diagnostics)
+        let verifierReferences = references.Concat([]string{producer, bridge}).ToArray()
+        for image in[]string{producer, producerReference, bridge, bridgeReference} {
+            VerifyStrictImage(image, verifierReferences)
+        }
+        let producerBytes = File.ReadAllBytes(producerReference)
+        let bridgeBytes = File.ReadAllBytes(bridgeReference)
+        const consumer = `import LiteralBridge5419
+let value = Bridge.Make()
+System.Console.WriteLine(value.Value == nil)`
+        for useReferences in[]bool{false, true} {
+            let extra = []string{
+                "/target:exe",
+                "/r:" + if useReferences {
+                    bridgeReference
+                } else {
+                    bridge
+                },
+                "/r:" + if useReferences {
+                    producerReference
+                } else {
+                    producer
+                },
+                "/refout:" + Path.Combine(fixture.Directory, "Consumer.ref.dll")
+            }
+            let result = CompileStandalone(fixture.Directory, "Consumer", consumer, references, extra)
+            Assert.True(result.Code == 0, result.Diagnostics)
+            Assert.DoesNotContain("nullablecopy5296,", result.Diagnostics, StringComparison.Ordinal)
+            let image = Path.Combine(fixture.Directory, "Consumer.dll")
+            let firstImage = File.ReadAllBytes(image)
+            let firstPdb = File.ReadAllBytes(Path.ChangeExtension(image, ".pdb"))
+            let firstReference = File.ReadAllBytes(Path.Combine(fixture.Directory, "Consumer.ref.dll"))
+            let repeat = CompileStandalone(fixture.Directory, "Consumer", consumer, references, extra)
+            Assert.True(repeat.Code == 0, repeat.Diagnostics)
+            Assert.Equal(firstImage, File.ReadAllBytes(image))
+            Assert.Equal(firstPdb, File.ReadAllBytes(Path.ChangeExtension(image, ".pdb")))
+            Assert.Equal(firstReference, File.ReadAllBytes(Path.Combine(fixture.Directory, "Consumer.ref.dll")))
+            VerifyStrictImage(image, verifierReferences)
+            Assert.Equal(Encoding.UTF8.GetBytes("True\n"), fixture.RunBytes(image))
+        }
+        Assert.Equal(producerBytes, File.ReadAllBytes(producerReference))
+        Assert.Equal(bridgeBytes, File.ReadAllBytes(bridgeReference))
+        let rejected = CompileStandalone(
+            fixture.Directory,
+            "Rejected",
+            consumer,
+            references,
+            "/target:exe",
+            "/r:" + bridgeReference,
+            "/refout:" + Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        )
+        Assert.NotEqual(0, rejected.Code)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.ref.dll")))
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.pdb")))
+        let errors = Regex.Matches(rejected.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+        Assert.Equal(2, errors.Count)
+        Assert.Equal("GS0159", errors[0].Groups[5].Value)
+        Assert.Equal("(2,20,2,26): error GS0159:", errors[0].Value)
+        Assert.Equal("GS0158", errors[1].Groups[5].Value)
+        Assert.Equal("(3,32,3,37): error GS0158:", errors[1].Value)
+        Assert.Contains("warning GS9100:", rejected.Diagnostics, StringComparison.Ordinal)
+        Assert.Contains("nullablecopy5296", rejected.Diagnostics, StringComparison.Ordinal)
+    }
+
     @Fact
     func OverridingDataClassProperty_HasNoNewSlotInEitherAssembly() {
         const source = `package i2870a
@@ -160,6 +260,56 @@ open class Root {
     }
 
     shared {
+        private func VerifyStrictImage(image string, references[]string) {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                references,
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+        }
+
+        private func CompileStandalone(
+            directory string,
+            name string,
+            source string,
+            references[]string,
+            extra ...string
+        )(Code int32, Diagnostics string) {
+            let sourcePath = Path.Combine(directory, name + ".gs")
+            File.WriteAllText(sourcePath, source)
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = directory
+            }
+            for argument in[]string{
+                typeof(Program).Assembly.Location,
+                "/target:library",
+                "/targetframework:net10.0",
+                "/deterministic+",
+                "/debug:portable",
+                "/out:" + Path.Combine(directory, name + ".dll"),
+                sourcePath
+            }
+                .Concat(references.Select((path string) -> "/r:" + path)).Concat(extra) {
+                start.ArgumentList.Add(argument)
+            }
+            using let process = Process.Start(start)!!
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(30000) {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+                Assert.Fail("Standalone compiler exceeded its deadline.")
+            }
+            return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult())
+        }
+
         private func AssertNoNewSlot(assemblyPath string, typeName string, methodName string) {
             let attributes = ReadMethodAttributes(assemblyPath, typeName, methodName)
             Assert.True(
