@@ -239,9 +239,30 @@ abstract class BoundExpression : BoundNode {
         }
     }
 
+    // A copy of the same call keeps the candidates that overload resolution recorded (ADR-0212 slice S4).
+    internal func CopyMemberGroupTo(copy BoundExpression) {
+        if this is BoundCallOperationExpression source &&
+            copy is BoundCallOperationExpression target &&
+            target
+            .MemberGroup
+            .IsDefault &&
+            !source
+            .MemberGroup
+            .IsDefault &&
+            object.ReferenceEquals(source.Syntax, target.Syntax) &&
+            source
+            .CalledFunction
+            .Name == target
+            .CalledFunction
+            .Name {
+            target.MemberGroup = source.MemberGroup
+        }
+    }
+
     // Only fresh same-read copies and the compiler's verified constant fold invoke this.
     // Arbitrary virtual replacements do not inherit another read's authority.
     internal func CopyStaticQualifierTo(copy BoundExpression) {
+        CopyMemberGroupTo(copy)
         if StaticQualifierType == nil || copy.StaticQualifierType != nil {
             return
         }

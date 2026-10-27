@@ -82,6 +82,10 @@ shared class HoverComputer {
     /// @param symbol The symbol to render.
     /// @returns The compact signature label.
     func FormatSymbol(symbol Symbol) string {
+        // An imported method renders from its reflected signature, so each overload has its own label.
+        if symbol is ImportedFunctionSymbol imported {
+            return SymbolDisplay.ToDisplayString(imported.Method, SymbolDisplayFormat.Signature)
+        }
         return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
     }
 
@@ -1005,7 +1009,11 @@ shared class SignatureHelpComputer {
         // One signature per candidate that overload resolution considered (ADR-0212 slice S4); the
         // overload the call resolved to is the active one.
         let group = BoundSemantics.GetMemberGroup(compilation, funcToken)
-        let resolved = SemanticLookup.ResolveSymbol(compilation, funcToken, ct)
+        let resolved = BoundSemantics.GetImportedSymbol(compilation, funcToken) ?? SemanticLookup.ResolveSymbol(
+            compilation,
+            funcToken,
+            ct
+        )
         let candidates = group.Where((g Symbol) -> g is FunctionSymbol or ImportedFunctionSymbol).ToList()
         if candidates.Count == 0 && resolved is FunctionSymbol single {
             candidates.Add(single)

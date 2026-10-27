@@ -113,6 +113,33 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func MemberGroup_QualifiedStaticCall_ListsTheSharedOverloads() {
+        let group = Group("PStatic")
+        Assert.Equal(
+            []string{"Make(int32)", "Make(string)"},
+            group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
+    }
+
+    @Fact
+    func LookupMembers_ImportedLiteralField_CarriesItsConstant() {
+        let model = ModelOf(Trees[0].Root)
+        let max = Assert.Single(
+            model.LookupMembers(Position("PLookup"), ImportedTypeSymbol.Get(typeof(int32)), "MaxValue")
+        )
+        Assert.Equal(int32.MaxValue, cast[FieldSymbol](max).ConstantValue)
+    }
+
+    @Fact
+    func LookupMembers_ImportedConcreteVirtualProperty_IsNotAbstract() {
+        let model = ModelOf(Trees[0].Root)
+        let message = Assert.Single(
+            model.LookupMembers(Position("PLookup"), ImportedTypeSymbol.Get(typeof(Exception)), "Message")
+        )
+        Assert.False(cast[PropertySymbol](message).IsAbstract)
+    }
+
+    @Fact
     func MemberGroup_FieldRead_IsTheMemberAlone() {
         let name = Names(Trees[0].Root).Last(
             (n NameExpressionSyntax) -> n.IdentifierToken.Text == "Legs" && n.Span.End <= Position("PProperty")
@@ -332,6 +359,13 @@ class Cat {
     func Purr(a string) int32 { return 0 }
 }
 
+class Util {
+    shared {
+        func Make(a int32) int32 { return a }
+        func Make(a string) int32 { return 0 }
+    }
+}
+
 partial class Parts {
     func Go(a int32) int32 { return a }
     func Go(a string) int32 { return 0 }
@@ -351,6 +385,7 @@ func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder) {
     r.Read(1) // PInterface
     b.Put(1) // PBoxed
     p.Go(1) // PPartial
+    Util.Make(1) // PStatic
     // PLookup
 }
 `

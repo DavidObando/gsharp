@@ -204,13 +204,14 @@ partial class SemanticModel {
     // methods follow metadata order and source functions follow their file path (ordinal) and start, so
     // a partial type or a package's free functions do not depend on the order files were bound in.
     private func OrderMemberGroup(group ImmutableArray[Symbol]) ImmutableArray[Symbol] {
-        let ownerOrder = Dictionary[string, int32](StringComparer.Ordinal)
+        let owners = List[object]()
         let ordered = List[(Symbol Symbol, Owner int32, File string, Start int32)]()
         for member in group {
-            let ownerName = OwnerNameOf(member)
-            if !ownerOrder.TryGetValue(ownerName, out var owner) {
-                owner = ownerOrder.Count
-                ownerOrder[ownerName] = owner
+            let ownerKey = OwnerKeyOf(member)
+            var owner = owners.FindIndex((o object) -> object.Equals(o, ownerKey))
+            if owner < 0 {
+                owner = owners.Count
+                owners.Add(ownerKey)
             }
             if member is ImportedFunctionSymbol imported {
                 ordered.Add((member, owner, string.Empty, imported.Method.MetadataToken))
@@ -230,10 +231,25 @@ partial class SemanticModel {
             .ToImmutableArray()
     }
 
-    private func OwnerNameOf(member Symbol) string -> switch member {
-        case imported is ImportedFunctionSymbol: imported.Method.DeclaringType?.FullName ?? string.Empty
-        case function is FunctionSymbol: (function.ReceiverType ?? function.StaticOwnerType)?.Name ?? string.Empty
-        default: string.Empty
+    // An owner is a type, not a name: `A.D` and `B.D` are two owners. A constructed type keeps its definition.
+    private func OwnerKeyOf(member Symbol) object -> switch member {
+        case imported is ImportedFunctionSymbol: cast[object](imported.Method.DeclaringType)
+        case function is FunctionSymbol: OwnerOf(function)
+        default: cast[object](member)
+    }
+
+    private func OwnerOf(function FunctionSymbol) object {
+        let owner TypeSymbol? = function.ReceiverType ?? function.StaticOwnerType
+        if owner is StructSymbol structure {
+            return structure.Definition ?? structure
+        }
+        if owner is InterfaceSymbol declared {
+            return declared.Definition ?? declared
+        }
+        if owner != nil {
+            return owner
+        }
+        return function.Package ?? cast[object](function)
     }
 
     private func UnwrapNullability(type TypeSymbol) TypeSymbol {
@@ -374,7 +390,8 @@ partial class SemanticModel {
                     isAutoProperty: false,
                     isVirtual: accessor?.IsVirtual == true,
                     isOverride: false,
-                    isStatic: accessor?.IsStatic == true
+                    isStatic: accessor?.IsStatic == true,
+                    metadataIsAbstract: accessor?.IsAbstract == true
                 )
                 symbol.ImportedMember = property
                 symbol.AnchorContainingType(declaringType)
@@ -390,6 +407,9 @@ partial class SemanticModel {
                     isConst: field.IsLiteral
                 )
                 symbol.ImportedMember = field
+                if field.IsLiteral {
+                    symbol.SetConstantValue(field.GetRawConstantValue())
+                }
                 symbol.AnchorContainingType(declaringType)
                 return symbol
             }
@@ -478,6 +498,14 @@ partial class SemanticModel {
             }
         }
 
+        private func IsStaticMember(member Symbol) bool -> switch member {
+            case field is FieldSymbol: field.IsStatic
+            case property is PropertySymbol: property.IsStatic
+            case clrEvent is EventSymbol: clrEvent.IsStatic
+            case function is FunctionSymbol: function.IsStatic || function.StaticOwnerType != nil
+            default: false
+        }
+
         func CanAccess(member Symbol, receiver TypeSymbol) bool {
             let accessibility = switch member {
                 case field is FieldSymbol: field.Accessibility
@@ -490,6 +518,18 @@ partial class SemanticModel {
                 return true
             }
             let declaring = member.ContainingType ?? receiver
+            // The binder rejects a protected instance member read through a receiver of the base type (GS0379).
+            if accessibility == Accessibility.Protected &&
+                enclosingFunction != nil &&
+                !IsStaticMember(member) &&
+                AccessibilityChecker.ViolatesProtectedReceiverRule(
+                accessibility,
+                declaring,
+                receiver,
+                enclosingFunction
+            ) {
+                return false
+            }
             if declaring is InterfaceSymbol {
                 return AccessibilityChecker.IsAccessible(accessibility, declaring, enclosingFunction)
             }

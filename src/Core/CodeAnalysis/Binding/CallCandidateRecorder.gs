@@ -73,6 +73,11 @@ internal shared class CallCandidateRecorder {
         }
         var node BoundExpression? = bound
         for var depth = 0; depth < 8 && node != nil; depth++ {
+            // A suspending call wraps the user's invocation as its logical operand.
+            if node.LogicalCompletionOperand is {} logical {
+                node = logical
+                continue
+            }
             if node is BoundCallOperationExpression call {
                 if call.MemberGroup.IsDefault {
                     call.MemberGroup = Select(frame, call.CalledFunction)

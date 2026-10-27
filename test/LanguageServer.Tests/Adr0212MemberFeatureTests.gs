@@ -32,6 +32,21 @@ open class Adr0212MemberFeatureTests {
     }
 
     @Fact
+    func SignatureHelp_LabelsEveryImportedOverloadDifferently() {
+        let call = "Console.WriteLine("
+        let content = LanguageServerTestHelpers.Content(Source)
+        let position = LanguageServerTestHelpers.PositionOf(Source, call)
+        let help = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            Position(position.Line, position.Character + call.Length)
+        )
+        let labels = help!!.Signatures.Select((s SignatureInformation) -> s.Label).ToList()
+        Assert.Equal(labels.Count, labels.Distinct().Count())
+        // The overload that the call resolved to is the active one: WriteLine(string).
+        Assert.Contains("string", labels[help!!.ActiveSignature], StringComparison.Ordinal)
+    }
+
+    @Fact
     func SignatureHelp_ListsEveryOverloadOfASourceFunction() {
         let call = "Pick("
         let content = LanguageServerTestHelpers.Content(Source)

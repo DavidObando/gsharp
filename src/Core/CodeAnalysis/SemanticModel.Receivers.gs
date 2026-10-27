@@ -831,19 +831,11 @@ partial class SemanticModel {
     /// Gets the imported member a bound call or read refers to, as the symbol (cref:LookupMembers) answers.
     private func ReferencedImportedSymbol(node BoundExpression) Symbol? {
         return switch node {
-            case instanceCall is BoundImportedInstanceCallExpression: ImportedMemberSymbol(
-                instanceCall.Receiver.Type,
-                instanceCall.Method
-            )
-            case importedCall is BoundImportedCallExpression: ImportedMemberSymbol(
-                importedCall.StaticContainerType,
-                importedCall.Function.Method
-            )
-            case staticCall is BoundClrStaticCallExpression: ImportedMemberSymbol(nil, staticCall.Method)
-            case BoundConstrainedStaticCallExpression{ClrMethod: {} clrMethod} constrained: ImportedMemberSymbol(
-                constrained.ConstrainedInterfaceType,
-                clrMethod
-            )
+            // The callee symbol keeps the call's own return type, which reflection erases.
+            case call is BoundCallOperationExpression when call is BoundImportedInstanceCallExpression or
+                BoundImportedCallExpression or
+                BoundClrStaticCallExpression: call.CalledFunction
+            case BoundConstrainedStaticCallExpression{ClrMethod: {}} constrained: constrained.CalledFunction
             case access is BoundClrPropertyAccessExpression: ImportedMemberSymbol(
                 access.Receiver?.Type ?? access.StaticContainerType,
                 access.Member
