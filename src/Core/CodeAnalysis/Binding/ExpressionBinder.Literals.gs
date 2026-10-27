@@ -1780,7 +1780,8 @@ internal partial class ExpressionBinder {
                                 importedCandidate.ClassType,
                                 literalSymbolicArguments
                             ),
-                            importedDataClass
+                            importedDataClass,
+                            resolveTypeOnly
                         )
                     }
                     // Issue #4042: a RETAINED symbolic argument with no faithful
@@ -2666,8 +2667,12 @@ internal partial class ExpressionBinder {
         syntax StructLiteralExpressionSyntax,
         clrType Type,
         resultType ImportedTypeSymbol,
-        aggregate StructSymbol
+        aggregate StructSymbol,
+        resolveTypeOnly bool
     ) BoundExpression {
+        if resolveTypeOnly {
+            return BoundDefaultExpression(syntax, resultType)
+        }
         if clrType.IsAbstract {
             Diagnostics.ReportCannotInstantiateAbstractType(syntax.TypeIdentifier.Location, aggregate.Name)
             return BoundErrorExpression(syntax)

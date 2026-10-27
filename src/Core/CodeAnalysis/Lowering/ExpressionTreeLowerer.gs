@@ -364,45 +364,30 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         property BoundClrPropertyAccessExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        let memberName = property.Member.Name
-        let ownerType = property.StaticContainerType ?? TypeSymbol.FromClrTypeWithoutNullability(
-            Invariant.Required(
-                property.Member.DeclaringType,
-                "a CLR property has a declaring type",
-                expression: "property.Member.DeclaringType"
-            ),
-            NullabilityFreeReason.TypeStructure
-        )
         let isField = property.Member is FieldInfo
-        let staticMethod = if isField {
-            ExpressionFieldStaticMethod
-        } else {
-            ExpressionPropertyStaticMethod
-        }
-        let instanceMethod = if isField {
-            ExpressionFieldInstanceMethod
-        } else {
-            ExpressionPropertyInstanceMethod
-        }
-        if property.Receiver == nil {
-            return BoundClrStaticCallExpression(
-                property.Syntax,
-                staticMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](
-                    BoundLiteralExpression(nil, nil, TypeSymbol.Null),
-                    CreateTypeOf(ownerType),
-                    BoundLiteralExpression(nil, memberName, TypeSymbol.String)
-                )
-            )
-        }
         return BoundClrStaticCallExpression(
             property.Syntax,
-            instanceMethod,
+            if isField {
+                ExpressionFieldInfoMethod
+            } else {
+                ExpressionPropertyAccessorMethod
+            },
             TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create[BoundExpression](
-                UpcastToExpression(this.TranslateExpression(property.Receiver!!, parameterMap)),
-                BoundLiteralExpression(nil, memberName, TypeSymbol.String)
+                if property.Receiver == nil {
+                    cast[BoundExpression](BoundLiteralExpression(nil, nil, TypeSymbol.Null))
+                } else {
+                    UpcastToExpression(this.TranslateExpression(property.Receiver, parameterMap))
+                },
+                BoundLiteralExpression(
+                    nil,
+                    property,
+                    if isField {
+                        ReflectionFieldInfoTypeSymbol
+                    } else {
+                        ReflectionMethodInfoTypeSymbol
+                    }
+                )
             )
         )
     }
@@ -1931,11 +1916,11 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             typeof(Type),
             typeof(string)
         )
-        private let ExpressionPropertyInstanceMethod MethodInfo = GetRequiredMethod(
+        private let ExpressionFieldInfoMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
-            "Property",
+            "Field",
             typeof(Expression),
-            typeof(string)
+            typeof(FieldInfo)
         )
         private let ExpressionPropertyInfoMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
@@ -1943,12 +1928,11 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             typeof(Expression),
             typeof(PropertyInfo)
         )
-        private let ExpressionPropertyStaticMethod MethodInfo = GetRequiredMethod(
+        private let ExpressionPropertyAccessorMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
             "Property",
             typeof(Expression),
-            typeof(Type),
-            typeof(string)
+            typeof(MethodInfo)
         )
         private let ExpressionIndexerPropertyMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),

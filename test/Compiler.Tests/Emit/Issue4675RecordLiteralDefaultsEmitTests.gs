@@ -800,6 +800,63 @@ System.Console.WriteLine(provided.Items[0])
     }
 
     @Fact
+    func ImportedGenericDataClassLiteral_SpreadTypeProbePreservesExplicitCollectionInputs() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package SpreadLiteral5419
+public data class Box[T](Items []int32, Value T)
+`, "SpreadLiteral5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import SpreadLiteral5419
+let source = Box[string?]([]int32{1}, nil)
+let value Box[string?] = Box[string?]{...source, Items: []int32{7}}
+System.Console.WriteLine(value.Items[0])
+System.Console.WriteLine(source.Items[0])
+System.Console.WriteLine(value.Value == nil)
+`, "SpreadConsumer", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("7\n1\nTrue\n", fixture.Run(dll))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_ExpressionTreePreservesSelectedPropertyIdentity() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedLiteral5419;
+public record Box<T>(T Value) {
+    public int Extra { get; set; }
+    public int extra { get; set; }
+    public int Mark;
+    public int mark;
+}`, "Contract")
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import System.Linq.Expressions
+import ImportedLiteral5419
+func Deferred[T](value T) Expression[Func[Box[T]]] -> () -> Box[T]{Value: value, Extra: 2, Mark: 4}
+let simple Expression[Func[Box[int32]]] = () -> Box[int32]{Value: 7, Extra: 2, Mark: 4}
+let value = simple.Compile()()
+Console.WriteLine(value.Value)
+Console.WriteLine(value.Extra)
+Console.WriteLine(value.extra)
+Console.WriteLine(value.Mark)
+Console.WriteLine(value.mark)
+let generic = Deferred[string?](nil).Compile()()
+Console.WriteLine(generic.Value == nil)
+Console.WriteLine(generic.Extra)
+Console.WriteLine(generic.extra)
+Console.WriteLine(generic.Mark)
+Console.WriteLine(generic.mark)
+let lower Expression[Func[Box[int32]]] = () -> Box[int32]{Value: 9, extra: 3, mark: 5}
+let lowerValue = lower.Compile()()
+Console.WriteLine(lowerValue.Extra)
+Console.WriteLine(lowerValue.extra)
+Console.WriteLine(lowerValue.Mark)
+Console.WriteLine(lowerValue.mark)
+`, "PropertyIdentity", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("7\n2\n0\n4\n0\nTrue\n2\n0\n4\n0\n0\n3\n0\n5\n", fixture.Run(dll))
+    }
+
+    @Fact
     func ImportedGenericDataClassLiteral_ExpressionTreeDefersArgumentsAndConstruction() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.Compile(`package TreeLiteral5419

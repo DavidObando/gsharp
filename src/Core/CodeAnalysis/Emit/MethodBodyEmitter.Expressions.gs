@@ -676,6 +676,71 @@ internal partial class MethodBodyEmitter {
                 // MethodBase.GetMethodFromHandle(...) ; castclass MethodInfo`.
                 this.EmitMethodInfoLiteral(method)
             }
+            case member is BoundClrPropertyAccessExpression {
+                let receiverType = member.StaticContainerType ?? member.Receiver?.Type
+                let owner = if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
+                    receiverType
+                ) is {} imported {
+                    MemberLookup.GetClrMemberDeclaringTypeSymbol(imported, member.Member)
+                } else {
+                    default(TypeSymbol?)
+                }
+                if member.Member is PropertyInfo property {
+                    this.EmitMethodInfoLiteral(
+                        Invariant.Required(
+                            if property.GetMethod is {IsPublic: true} getter {
+                                getter
+                            } else {
+                                property.SetMethod ?? property.GetMethod
+                            },
+                            "a selected CLR property has an accessor",
+                            expression: "property.GetMethod or property.SetMethod"
+                        ),
+                        owner
+                    )
+                } else if member.Member is FieldInfo field {
+                    this.il.OpCode(ILOpCode.Ldtoken)
+                    this.il.Token(
+                        if owner != nil {
+                            this.outer.memberRefs.GetFieldReference(field, owner)
+                        } else {
+                            this.outer.memberRefs.GetFieldReference(field)
+                        }
+                    )
+                    this.il.OpCode(ILOpCode.Ldtoken)
+                    this.il.Token(
+                        if owner != nil {
+                            this.outer.memberRefs.GetTypeOfToken(owner)
+                        } else {
+                            this
+                                .outer
+                                .memberRefs
+                                .GetTypeReference(
+                                Invariant.Required(
+                                    field.DeclaringType,
+                                    "a selected CLR field has a declaring type",
+                                    expression: "field.DeclaringType"
+                                )
+                            )
+                        }
+                    )
+                    this.il.Call(
+                        this
+                            .outer
+                            .memberRefs
+                            .GetMethodReference(
+                            BclMember.Method(
+                                typeof(FieldInfo),
+                                "GetFieldFromHandle",
+                                typeof(RuntimeFieldHandle),
+                                typeof(RuntimeTypeHandle)
+                            )
+                        )
+                    )
+                } else {
+                    throw NotSupportedException("A CLR member literal requires a property or field.")
+                }
+            }
             case constructor is BoundConstructorCallExpression {
                 // Keep constructor identity and its closed owner until metadata emission.
                 let token = if constructor.StructType.ClrType != nil {
@@ -717,9 +782,9 @@ internal partial class MethodBodyEmitter {
         this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(ConstructorInfo)))
     }
 
-    private func EmitMethodInfoLiteral(method MethodInfo) {
+    private func EmitMethodInfoLiteral(method MethodInfo, containingTypeSymbol TypeSymbol? = nil) {
         this.il.OpCode(ILOpCode.Ldtoken)
-        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(method))
+        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(method, containingTypeSymbol))
         // The CLR requires the 2-arg GetMethodFromHandle(RuntimeMethodHandle,
         // RuntimeTypeHandle) overload whenever the declaring type is a
         // generic instantiation (e.g. a user operator on `Money<Currency>`);
@@ -727,7 +792,11 @@ internal partial class MethodBodyEmitter {
         // A generic-type-DEFINITION declaring type never occurs here because
         // operator methods are only ever reached through a closed (fully
         // substituted) receiver type.
-        if method.DeclaringType is {IsGenericType: true} declaringType {
+        if containingTypeSymbol != nil {
+            this.il.OpCode(ILOpCode.Ldtoken)
+            this.il.Token(this.outer.memberRefs.GetTypeOfToken(containingTypeSymbol))
+            this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference())
+        } else if method.DeclaringType is {IsGenericType: true} declaringType {
             this.il.OpCode(ILOpCode.Ldtoken)
             this.il.Token(this.outer.memberRefs.GetTypeReference(declaringType))
             this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference())

@@ -1472,7 +1472,9 @@ Imported generic data-class literals preserve explicit type arguments, including
 
 Omitted collection inputs use the declaration's collection-shape metadata when available. An omitted nonnullable CLR array input without sufficient shape is diagnosed, including libraries without class collection-shape metadata. Explicit array inputs and nullable omissions remain legal. Foreign records without a matching primary signature retain the available parameterless-constructor/member-initializer path.
 
-Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created.
+Structural spreads resolve the exact constructed target type before validating construction. Explicit primary inputs remain available during that validation.
+
+Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created. Deferred CLR field and property accesses retain the selected member and declaring-type identity, including case-distinct names.
 
 ### Collection initializers
 
