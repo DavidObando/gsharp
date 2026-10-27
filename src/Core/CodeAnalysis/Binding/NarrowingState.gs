@@ -9,6 +9,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 
 /// The narrowing facts that hold at one program point (ADR-0208 sections 6
 /// and 7).
@@ -282,6 +283,63 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
     }
 
     shared {
+        /// Whether the fact [`joined`](paramref) adds nothing to the fact [`held`](paramref): the held
+        /// type is the joined type, or converts to it without changing what the value is. The one
+        /// comparison behind a gain (ADR-0208 A1): a joined type that fails it is a new or a stronger
+        /// fact, and a joined type that passes it must never replace the held fact.
+        ///
+        /// | held | joined | adds nothing |
+        /// | --- | --- | --- |
+        /// | `T` | `T` | yes |
+        /// | `Dog` | `Animal` (reference upcast) | yes |
+        /// | `Animal` | `Dog` | no (stronger) |
+        /// | `IA` | `IB` (unrelated interface) | no (a different test) |
+        /// | `int32` | `object`, `ValueType` or an interface it implements (boxing) | yes |
+        /// | `int32` | `int32?` | yes |
+        /// | `object` | `int32` | no (stronger) |
+        /// | `int32?` | `int32` | no (stronger) |
+        /// | `int32` | `int64` (numeric widening) | no (a different fact) |
+        /// @param held The type of the fact that is already held.
+        /// @param joined The type that a join proved.
+        /// @returns `true` when [`joined`](paramref) is no stronger than [`held`](paramref).
+        internal func IsNoStrongerThan(joined TypeSymbol, held TypeSymbol) bool {
+            if object.Equals(held, joined) || Conversion.IsRepresentationPreservingImplicit(held, joined) {
+                return true
+            }
+            if joined is NullableTypeSymbol nullable && object.Equals(held, nullable.UnderlyingType) {
+                return true
+            }
+            return IsBoxedSupertype(held, joined)
+        }
+
+        // A value type is also a fact about the object it boxes to: `object`, `ValueType` and the
+        // interfaces it implements say less than the value type itself.
+        private func IsBoxedSupertype(held TypeSymbol, joined TypeSymbol) bool {
+            if Conversion.IsReferenceLikeTarget(held) || !Conversion.IsReferenceLikeTarget(joined) {
+                return false
+            }
+            let conversion = Conversion.Classify(held, joined)
+            if !conversion.Exists || !conversion.IsImplicit || conversion.IsStructuralProjection {
+                return false
+            }
+            if held.ClrType is {} heldClr && joined.ClrType is {} joinedClr {
+                return ClrTypeUtilities.IsAssignableByName(joinedClr, heldClr)
+            }
+            // A same-compilation value type (a source struct or enum) has no CLR type yet. The
+            // implicit conversion above proved it converts, so only a boxing target is left to
+            // tell from a user-defined conversion: an interface, `object`, `ValueType` or `Enum`.
+            return joined is InterfaceSymbol || IsBoxingBase(joined.ClrType)
+        }
+
+        private func IsBoxingBase(clr Type?) bool -> clr != nil &&
+            (
+            clr.IsInterface || ClrTypeInspector.IsSameAs(clr, typeof(object)) || ClrTypeInspector.IsSameAs(
+                clr,
+                typeof(ValueType)
+            ) ||
+                ClrTypeInspector.IsSameAs(clr, typeof(Enum))
+        )
+
         /// Gets the state with no facts at a reachable point.
         prop Empty NarrowingState -> emptyState
 
@@ -320,10 +378,10 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         }
 
         /// Merge (ADR-0208 section 6) over ALL predecessors of a merge point
-        /// at once. A path survives with the incoming type that every other
-        /// incoming type converts to, else with the declared non-null type of
-        /// a plain root when every incoming type preserves its representation
-        /// into it, else it is dropped. External-callable facts intersect.
+        /// at once. A path that every reachable predecessor holds survives
+        /// with the incoming type that every other incoming type converts to,
+        /// else with its declared non-null type (cref:JoinTypes). A path that
+        /// some predecessor lacks is dropped. External-callable facts intersect.
         /// Unreachable predecessors are skipped. Callers must not fold this
         /// pairwise: the result for `Dog`, `Cat` and `Animal` on `x object?`
         /// is `Animal`, while a binary fold gives `object`.
@@ -371,10 +429,11 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             return result
         }
 
-        /// The type of one path after a join (ADR-0069 issue #4989 addendum):
-        /// the first incoming type that every incoming type converts to
-        /// without changing representation, else the declared non-null type
-        /// of a plain root when all of them convert to it, else `nil`.
+        /// The type of one path after a join (ADR-0069 issue #4989 addendum and
+        /// ADR-0208 amendment A1): the first incoming type that every incoming
+        /// type converts to without changing representation, else the declared
+        /// non-null type of the path (cref:DeclaredNonNullType).
+        /// Every incoming type is a fact, so the declared type is always sound.
         /// The forward-`goto` join and the shadow join share this one rule.
         /// @param path The joined path.
         /// @param sourceTypes The incoming types, in source order.
@@ -390,21 +449,46 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             if commonType != nil {
                 return commonType
             }
+            return DeclaredNonNullType(path)
+        }
+
+        /// The declared type of the storage that [`path`](paramref) names, with
+        /// one nullable layer removed (ADR-0208 section 6, amendment A1). A plain
+        /// root gives its own type. A member path gives the type of its last
+        /// link, read from the source symbol or through the CLR nullability
+        /// reader. A member whose declared type names a type parameter, or
+        /// whose CLR declaring type is generic, gives `nil`, because the
+        /// path does not record the receiver's type arguments.
+        /// @param path The path.
+        /// @returns The declared non-null type, or `nil` when it is not known.
+        func DeclaredNonNullType(path AccessPath) TypeSymbol? {
+            var declared TypeSymbol? = path.Root.Type
             if path.HasMembers {
-                return nil
+                declared = DeclaredTypeOfLink(path.Members[path.Members.Length - 1])
+                if declared == nil || TypeSymbol.ContainsTypeParameter(declared) {
+                    return nil
+                }
             }
-            let declaredType = if path.Root.Type is NullableTypeSymbol nullable {
-                nullable.UnderlyingType
-            } else {
-                path.Root.Type
+            if declared is NullableTypeSymbol nullable {
+                return nullable.UnderlyingType
             }
-            return if sourceTypes.All(
-                (source TypeSymbol) -> Conversion.IsRepresentationPreservingImplicit(source, declaredType)
-            ) {
-                declaredType
-            } else {
-                default(TypeSymbol?)
+            return declared
+        }
+
+        private func DeclaredTypeOfLink(link PathMember) TypeSymbol? {
+            if link.SourceSymbol is FieldSymbol field {
+                return field.Type
             }
+            if link.SourceSymbol is PropertySymbol property {
+                return property.Type
+            }
+            if link.ClrMember is FieldInfo clrField && clrField.DeclaringType?.IsGenericType != true {
+                return ClrNullability.GetFieldTypeSymbol(clrField)
+            }
+            if link.ClrMember is PropertyInfo clrProperty && clrProperty.DeclaringType?.IsGenericType != true {
+                return ClrNullability.GetPropertyTypeSymbol(clrProperty)
+            }
+            return nil
         }
     }
 }

@@ -361,12 +361,10 @@ internal partial class StatementBinder {
         }
         // ADR-0208 R10 (#5168): a statement that runs user code or catches a replacement exception can
         // run after a filter of an enclosing try, so the filter writes join the statement effects.
-        var filterNames HashSet[string]? = nil
-        if statementCollector != nil && (statementCollector.MayMutateMemberPaths || statementCollector.ContainsTry) {
-            let filters = CollectCatchFiltersAbove(statementSyntax)
-            if filters.Count > 0 {
-                filterNames = CollectEnclosingFilterNames(filters)
-            }
+        let filterNames = if statementCollector != nil {
+            EnclosingFilterNames(statementSyntax, statementCollector)
+        } else {
+            default(HashSet[string]?)
         }
         if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots && filterNames == nil {
             return
@@ -384,23 +382,20 @@ internal partial class StatementBinder {
                 let drop = (
                     filterNames != nil && (filterNames.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key))
                 ) ||
-                    (statementCollector != nil && MayBeMutatedByUnknownWrite(statementCollector, key)) ||
-                    (dropGlobalRoots && key.Root is GlobalVariableSymbol && !key.Root.IsReadOnly) ||
                     (
                     if statementCollector != nil {
-                        statementCollector.AssignsRoot(key.Root)
+                        StatementKillsPath(
+                            statementCollector,
+                            key,
+                            dropAllMemberPaths,
+                            statementCollector.MayMutateReferenceStorage
+                        )
                     } else {
                         assignedRoots!!.Any(
                             (assigned VariableSymbol) -> object.ReferenceEquals(assigned, key.Root) ||
                                 MayShareStorage(assigned, key.Root)
-                        )
-                    }
-                ) ||
-                    (
-                    if statementCollector != nil {
-                        DropsOnMemberMutation(key, dropAllMemberPaths, statementCollector.MayMutateReferenceStorage)
-                    } else {
-                        DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
+                        ) ||
+                            DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
                     }
                 )
                 if drop {
@@ -422,6 +417,32 @@ internal partial class StatementBinder {
             }
         }
     }
+
+    // The names that the filters of enclosing `try` statements write, when the statement
+    // can run after one of them; otherwise `nil`.
+    private func EnclosingFilterNames(statementSyntax SyntaxNode, effects AssignedRootsCollector) HashSet[string]? {
+        if !effects.MayMutateMemberPaths && !effects.ContainsTry {
+            return nil
+        }
+        let filters = CollectCatchFiltersAbove(statementSyntax)
+        return if filters.Count > 0 {
+            CollectEnclosingFilterNames(filters)
+        } else {
+            default(HashSet[string]?)
+        }
+    }
+
+    // The one rule for the facts that a statement kills: a root it assigns, a root
+    // an unknown write reaches, a mutable global when it can write one, and every
+    // member path when it can mutate one (ADR-0069 #1180, #2943).
+    private func StatementKillsPath(
+        effects AssignedRootsCollector,
+        path AccessPath,
+        dropAllMemberPaths bool,
+        dropReferenceStorage bool
+    ) bool -> MayBeMutatedByUnknownWrite(effects, path) ||
+        (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
+        effects.AssignsRoot(path.Root) || DropsOnMemberMutation(path, dropAllMemberPaths, dropReferenceStorage)
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,
