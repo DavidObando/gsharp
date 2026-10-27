@@ -1015,6 +1015,112 @@ System.Console.WriteLine(call.Seen == nil)
         Assert.False(System.IO.File.Exists(negativePdb))
     }
 
+    @Theory
+    @InlineData("ArrayBox", "[]int32{}", "value.Items.Length", false)
+    @InlineData("ArrayBox", "[]int32{}", "value.Items.Length", true)
+    @InlineData("MapBox", "map[string,int32]{}", "value.Items.Count", false)
+    @InlineData("MapBox", "map[string,int32]{}", "value.Items.Count", true)
+    @InlineData("SequenceBox", "[]int32{}", "System.Linq.Enumerable.Count[int32](value.Items)", false)
+    @InlineData("SequenceBox", "[]int32{}", "System.Linq.Enumerable.Count[int32](value.Items)", true)
+    func ImportedGenericDataClassLiteral_SpreadOptionalPrimaryCollectionsRequireShape(
+        box string,
+        supplied string,
+        count string,
+        referenceAssembly bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "SpreadOmission5419.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+using System.Collections.Generic;
+namespace SpreadOmission5419;
+public record ArrayBox<T>(int Value, T[] Items = null!);
+public record MapBox<T>(int Value, Dictionary<string,T> Items = null!);
+public record SequenceBox<T>(int Value, IEnumerable<T> Items = null!);
+public record ArgumentBox<T>(int Value, T Items = default!);
+public record NullableBox<T>(int Value, T[]? Items = null);
+public record ScalarBox<T>(int Value, int Extra = 9);
+public class ProjectionBox<T> {
+    public ProjectionBox(int Value, int Extra = 9) { this.Value = Value; this.Extra = Extra; }
+    public int Value { get; }
+    public int Extra { get; }
+}
+`, "SpreadOmission5419", reference)
+        IlVerifier.Verify(contract)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let controls = fixture.Compile((`import SpreadOmission5419
+struct Source { public var Value int32 }
+let source = Source{Value: 7}
+let value = BOX[int32]{...source, Items: SUPPLIED}
+System.Console.WriteLine(value.Value)
+System.Console.WriteLine(COUNT)
+let nullable = NullableBox[int32]{...source}
+System.Console.WriteLine(nullable.Items == nil)
+let call = BOX[int32](7)
+System.Console.WriteLine(System.Object.ReferenceEquals(call.Items, nil))
+`).Replace(
+                "BOX",
+                box,
+                StringComparison.Ordinal
+            ).Replace(
+                "SUPPLIED",
+                supplied,
+                StringComparison.Ordinal
+            ).Replace("COUNT", count, StringComparison.Ordinal), "SpreadControls", true, "/r:" + selected)
+        IlVerifier.Verify(controls, additionalReferences: []string{contract})
+        Assert.Equal("7\n0\nTrue\nTrue\n", fixture.Run(controls))
+        let negativeReference = System.IO.Path.Combine(fixture.Directory, "SpreadRejected.ref.dll")
+        let negativePdb = System.IO.Path.Combine(fixture.Directory, "SpreadRejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import SpreadOmission5419\nstruct Source { public var Value int32 }\nlet value = " +
+                box +
+                "[int32]{...Source{Value: 7}}",
+            "SpreadRejected",
+            true,
+            "/r:" + selected,
+            "/refout:" + negativeReference,
+            "/debug:portable",
+            "/pdb:" + negativePdb
+        )
+        Assert.Equal(1, code)
+        Assert.True(
+            output.Contains(
+                "SpreadRejected.gs(3,13,3," + (13 + box.Length).ToString() + "): error GS0267",
+                StringComparison.Ordinal
+            ),
+            output
+        )
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "SpreadRejected.dll")))
+        Assert.False(System.IO.File.Exists(negativeReference))
+        Assert.False(System.IO.File.Exists(negativePdb))
+        let knownShapes = fixture.Compile(`import SpreadOmission5419
+struct Source { public var Value int32 }
+struct Point { public var X int32 }
+func Known[U]() {
+    let source = Source{Value: 7}
+    let sliceValue = ArgumentBox[[]U]{...source}
+    System.Console.WriteLine(sliceValue.Items.Length)
+    let fixedValue = ArgumentBox[[3]U]{...source}
+    System.Console.WriteLine(fixedValue.Items.Length)
+    let mapValue = ArgumentBox[map[string,U]]{...source}
+    System.Console.WriteLine(mapValue.Items.Count)
+    let sequenceValue = ArgumentBox[sequence[U]]{...source}
+    System.Console.WriteLine(System.Linq.Enumerable.Count[U](sequenceValue.Items))
+}
+Known[int32]()
+Known[Point]()
+let source = Source{Value: 7}
+System.Console.WriteLine(ScalarBox[int32]{...source}.Extra)
+System.Console.WriteLine(cast[ProjectionBox[int32]](source).Extra)
+System.Console.WriteLine(ScalarBox[int32](7).Extra)
+`, "KnownSpreadShapes", true, "/r:" + selected)
+        IlVerifier.Verify(knownShapes, additionalReferences: []string{contract})
+        Assert.Equal("0\n3\n0\n0\n0\n3\n0\n0\n0\n9\n9\n", fixture.Run(knownShapes))
+    }
+
     @Fact
     func ImportedGenericDataClassLiteral_UnknownCollectionOmissionsAreDiagnosedAndExplicitInputsWork() {
         using let fixture = NativeSliceLanguageTests.Fixture()
