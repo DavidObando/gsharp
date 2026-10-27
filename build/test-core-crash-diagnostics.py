@@ -12,12 +12,14 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CANARY = "PRIVATE_THEORY_OUTPUT_CANARY"
 TEST_ID = "11111111-1111-1111-1111-111111111111"
 EXECUTION_ID = "22222222-2222-2222-2222-222222222222"
+# Counter attributes match VSTest 17.11.1 TestRunSummary (58dbd027217ac035a4e9114c9213b11dc0e988bd).
 TRX = f"""<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
 <TestDefinitions><UnitTest id="{TEST_ID}"><TestMethod
  className="GSharp.Core.Tests.Demo" name="Run" /></UnitTest></TestDefinitions>
@@ -25,7 +27,9 @@ TRX = f"""<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/201
  outcome="Passed" testName="{CANARY}"><Output><StdOut>{CANARY}</StdOut></Output>
 </UnitTestResult></Results>
 <ResultSummary outcome="Completed"><Counters total="1" executed="1" passed="1"
- failed="0" error="0" aborted="0"/></ResultSummary>
+ failed="0" error="0" timeout="0" aborted="0" inconclusive="0"
+ passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0"
+ warning="0" completed="0" inProgress="0" pending="0"/></ResultSummary>
 <ResultFiles><ResultFile path="{CANARY}"/></ResultFiles></TestRun>"""
 
 
@@ -104,6 +108,7 @@ class NormalizerTests(unittest.TestCase):
         summary = self.read("summary.json")
         self.assertEqual(summary["classification"], "bounded-nonreproduction")
         self.assertEqual(summary["wrapper_exit"], 0)
+        self.assertEqual(summary["counters"]["inProgress"], 0)
         self.assertFalse(summary["sequence_present"])
         self.assertIsNone(self.read("test-sequence.json")["sequences"])
         self.assertFalse(self.private.exists())
@@ -168,9 +173,12 @@ class NormalizerTests(unittest.TestCase):
         self.assert_not_published()
 
     def test_zero_tests_cannot_be_a_successful_nonreproduction(self):
-        (self.private / "results/core-remainder.trx").write_text(
-            TRX.replace('executed="1"', 'executed="0"'))
-        with self.assertRaises(self.helper.DiagnosticError):
+        empty = ET.fromstring(TRX)
+        empty.find(self.helper.NS + "ResultSummary/" + self.helper.NS + "Counters").attrib.update(
+            {"total": "0", "executed": "0", "passed": "0", "failed": "0"})
+        empty.find(self.helper.NS + "Results").clear()
+        (self.private / "results/core-remainder.trx").write_bytes(ET.tostring(empty))
+        with self.assertRaisesRegex(self.helper.DiagnosticError, "^invalid-successful-trx$"):
             self.helper.finish(self.root, 0)
         self.assertFalse(self.private.exists())
         self.assert_not_published()

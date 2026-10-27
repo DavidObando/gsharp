@@ -30,7 +30,7 @@ OUTCOMES = {"Passed", "Failed", "Completed", "Aborted", "Error", "NotExecuted",
             "PassedButRunAborted", "Pending"}
 COUNTERS = {"total", "executed", "passed", "failed", "error", "timeout", "aborted",
             "notRunnable", "notExecuted", "disconnected", "warning",
-            "passedButRunAborted", "pending", "completed", "inconclusive"}
+            "passedButRunAborted", "pending", "completed", "inconclusive", "inProgress"}
 
 
 class DiagnosticError(Exception):

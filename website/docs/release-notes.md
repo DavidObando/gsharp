@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
-- **CI diagnostics:** Add an explicitly head-gated, dump-free `core-remainder` crash-sequence diagnostic with bounded, sanitized metadata artifacts. A healthy observation is not a correction for the unresolved crash. Part of #5393.
+- **CI diagnostics:** Add an explicitly head-gated, dump-free `core-remainder` crash-sequence diagnostic with bounded, sanitized metadata artifacts. The normalizer accepts all reviewed VSTest TRX counters, including `inProgress`, and rejects empty successful runs. A healthy observation is not a correction for the unresolved crash. Part of #5393.
 
 - **Captured generic values retain constraint dependencies** (issue #5427). Generated capture boxes and closures now declare parameters referenced transitively by their constraints. Dependent bounds retain their generated owner and declaration order, including expression-tree captures and nested generic owners.
 
