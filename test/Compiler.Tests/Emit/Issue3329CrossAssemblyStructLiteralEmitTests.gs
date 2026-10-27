@@ -38,6 +38,192 @@ open class Issue3329CrossAssemblyStructLiteralEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ConstructorOwnedReview_SymbolicSpreadPhases(useReferenceAssembly bool) {
+        const library = `package spreadphase5296
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public var Throws bool
+        public func Default() int32 {
+            Trace = Trace + "D"
+            if Throws { throw System.InvalidOperationException("default") }
+            return 7
+        }
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct Box[T](Value T) {
+    public var X int32 = Effects.Default()
+    public var Y int32
+    public init() { Effects.Trace = Effects.Trace + "P" }
+}
+public data struct Optional[T](Value T, Count int32 = 5) { public var X int32 = Effects.Default() }`
+        const source = `import spreadphase5296
+import System
+data struct Local { public var N int32 }
+data struct Source[T](Value T)
+data struct LocalOptional[T](Value T, Count int32 = 5) { public var X int32 = Effects.Default() }
+func ReadSource() Source[Local] {
+    Effects.Trace = Effects.Trace + "S"
+    return Source[Local]{Value: Local{N: 5}}
+}
+func Make[T](value T) Box[T] {
+    let source = Source[T]{Value: value}
+    return Box[T]{...source, X: Effects.Mark("E", 9)}
+}
+let source = Source[Local]{Value: Local{N: 3}}
+let first = Box[Local]{...source, X: Effects.Mark("E", 9)}
+Console.WriteLine(first.Value.N.ToString() + ":" + first.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let second = Make[Local](Local{N: 4})
+Console.WriteLine(second.Value.N.ToString() + ":" + second.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Effects.Throws = true
+try {
+    let bad = Box[Local]{...source, X: Effects.Mark("E", 9)}
+    Console.WriteLine(bad.X)
+} catch (error InvalidOperationException) {
+    Console.WriteLine(Effects.Trace + ":" + error.Message)
+}
+Effects.Throws = false
+Effects.Trace = ""
+let ordered = Box[Local]{...ReadSource(), Y: Effects.Mark("F", 10), X: Effects.Mark("E", 9)}
+Console.WriteLine(ordered.Value.N.ToString() + "/" + ordered.X.ToString() + "/" + ordered.Y.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let optional = Optional[Local]{...source, X: Effects.Mark("E", 9)}
+Console.WriteLine(optional.Value.N.ToString() + "/" + optional.Count.ToString() + "/" + optional.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let localOptional = LocalOptional[Local]{...source, X: Effects.Mark("E", 9)}
+Console.WriteLine(localOptional.Value.N.ToString() + "/" + localOptional.Count.ToString() + "/" + localOptional.X.ToString() + ":" + Effects.Trace)`
+        Assert.Equal(
+            ExpectedConsoleBytes("3:9:DE\n4:9:DE\nD:default\n5/9/10:SDFE\n3/0/9:DE\n3/0/9:DE\n"),
+            CompileAndRunExact(source, library, "spreadphase5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConstructorOwnedReview_AsyncConstructionPhases(useReferenceAssembly bool) {
+        const library = `package asyncphase5296
+import System.Threading.Tasks
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public var Throws bool
+        public func Default() int32 {
+            Trace = Trace + "D"
+            if Throws { throw System.InvalidOperationException("default") }
+            return 7
+        }
+        public async func MarkAsync(mark string, value int32) int32 {
+            Trace = Trace + mark
+            await Task.Delay(1)
+            return value
+        }
+        public func Mark(mark string, value int32) int32 {
+            Trace = Trace + mark
+            return value
+        }
+    }
+}
+public data struct S {
+    public var X int32 = Effects.Default()
+    public var Y int32
+    public prop Z int32 { get; set; }
+    public init() { Effects.Trace = Effects.Trace + "B" }
+}
+public data struct P(A int32) { public var X int32 = Effects.Default() }
+public data struct G[T](Value T) {
+    public var X int32 = Effects.Default()
+    public prop Y int32 { get; set; }
+}`
+        const source = `import asyncphase5296
+import System
+data struct Local {
+    public var X int32 = Effects.Default()
+    public var Y int32
+    public init() { Effects.Trace = Effects.Trace + "L" }
+}
+data struct LocalValue { public var N int32 }
+async func ReadLocal() LocalValue {
+    Effects.Trace = Effects.Trace + "A"
+    await System.Threading.Tasks.Task.Delay(1)
+    return LocalValue{N: 5}
+}
+async func Make[T](value T) G[T] {
+    return G[T]{Value: value, X: await Effects.MarkAsync("E", 9), Y: await Effects.MarkAsync("F", 10)}
+}
+async func Run() {
+    let first = S{X: await Effects.MarkAsync("E", 9)}
+    Console.WriteLine(first.X.ToString() + ":" + Effects.Trace)
+    Effects.Trace = ""
+    let second = Local{X: await Effects.MarkAsync("E", 8)}
+    Console.WriteLine(second.X.ToString() + ":" + Effects.Trace)
+    Effects.Trace = ""
+    let primary = P{X: await Effects.MarkAsync("E", 9), A: await Effects.MarkAsync("A", 3)}
+    Console.WriteLine(primary.A.ToString() + "/" + primary.X.ToString() + ":" + Effects.Trace)
+    Effects.Trace = ""
+    let nonawait = P{X: Effects.Mark("E", 8), A: await Effects.MarkAsync("A", 4)}
+    Console.WriteLine(nonawait.A.ToString() + "/" + nonawait.X.ToString() + ":" + Effects.Trace)
+    Effects.Trace = ""
+    let symbolic = G[LocalValue]{X: await Effects.MarkAsync("E", 9), Value: await ReadLocal(), Y: await Effects.MarkAsync("F", 10)}
+    Console.WriteLine(symbolic.Value.N.ToString() + "/" + symbolic.X.ToString() + "/" + symbolic.Y.ToString() + ":" + Effects.Trace)
+    Effects.Trace = ""
+    let generic = await Make[LocalValue](LocalValue{N: 6})
+    Console.WriteLine(generic.Value.N.ToString() + "/" + generic.X.ToString() + "/" + generic.Y.ToString() + ":" + Effects.Trace)
+    Effects.Trace = ""
+    try {
+        let bad = S{X: throw InvalidOperationException("field"), Y: await Effects.MarkAsync("E", 9)}
+        Console.WriteLine(bad.Y)
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Trace + ":" + error.Message)
+    }
+    Effects.Trace = ""
+    try {
+        let bad = S{Z: throw InvalidOperationException("property"), Y: await Effects.MarkAsync("E", 9)}
+        Console.WriteLine(bad.Y)
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Trace + ":" + error.Message)
+    }
+    Effects.Trace = ""
+    try {
+        let bad = Local{X: throw InvalidOperationException("field"), Y: await Effects.MarkAsync("E", 9)}
+        Console.WriteLine(bad.Y)
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Trace + ":" + error.Message)
+    }
+    Effects.Trace = ""
+    Effects.Throws = true
+    try {
+        let bad = S{X: await Effects.MarkAsync("E", 9)}
+        Console.WriteLine(bad.X)
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Trace + ":" + error.Message)
+    }
+    Effects.Trace = ""
+    try {
+        let bad = Local{X: await Effects.MarkAsync("E", 9)}
+        Console.WriteLine(bad.X)
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Trace + ":" + error.Message)
+    }
+}
+Run().GetAwaiter().GetResult()`
+        Assert.Equal(
+            ExpectedConsoleBytes(
+                "9:DBE\n8:DLE\n3/9:ADE\n4/8:ADE\n5/9/10:ADEF\n6/9/10:DEF\nDB:field\nDB:property\nDL:field\nD:default\nD:default\n"
+            ),
+            CompileAndRunExact(source, library, "asyncphase5296", useReferenceAssembly)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ConstructorOwnedReview_RecursiveSymbolicCollectionZeros(useReferenceAssembly bool) {
         const library = `package recursive5296
 public data struct Child[T] {
@@ -1391,12 +1577,14 @@ public record struct Authored {
     public int X = 7;
     public Authored() { X = 8; }
 }
-public record struct GenericCollection<T>(T[] Items);`
+public record struct GenericCollection<T>(T[] Items);
+public struct GenericLegacy<T> { public readonly T Value; }`
         let probe = fixture.CompileCSharp(declarations, "Probe")
         var legacyToken = 0
         var collectionToken = 0
         var nullableCollectionToken = 0
         var genericCollectionToken = 0
+        var genericLegacyToken = 0
         {
             using let stream = File.OpenRead(probe)
             using let pe = PEReader(stream)
@@ -1431,6 +1619,14 @@ public record struct GenericCollection<T>(T[] Items);`
                     ) == "GenericCollection`1"
                 )
             )
+            genericLegacyToken = MetadataTokens.GetToken(
+                Assert.Single(
+                    reader.TypeDefinitions,
+                    (handle TypeDefinitionHandle) -> reader.GetString(
+                        reader.GetTypeDefinition(handle).Name
+                    ) == "GenericLegacy`1"
+                )
+            )
         }
         let reference = Path.Combine(fixture.Directory, "producer.ref.dll")
         let producer = fixture.CompileCSharpWithReference(
@@ -1447,6 +1643,9 @@ public record struct GenericCollection<T>(T[] Items);`
                 "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" +
                 genericCollectionToken.ToString(System.Globalization.CultureInfo.InvariantCulture) +
                 "|struct|1|Items:0|closed\")]\n" +
+                "[assembly: System.Reflection.AssemblyMetadata(\"GSharp.TypeSemantics\", \"" +
+                genericLegacyToken.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "|struct|1||closed\")]\n" +
                 declarations,
             "legacy5296",
             reference
@@ -1464,6 +1663,21 @@ let bad = Legacy{}`, "rejected", executable: true, "/r:" + selected, "/refout:" 
         Assert.True(output.Contains("rejected.gs(2,11,2,17): error GS0267:", StringComparison.Ordinal), output)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
         Assert.False(File.Exists(rejectedReference))
+        let genericLegacyReference = Path.Combine(fixture.Directory, "genericlegacy.ref.dll")
+        let (genericLegacyCode, genericLegacyOutput) = fixture.TryCompile(`import legacy5296
+data struct Local { public var N int32 }
+data struct Source(Value Local)
+let source = Source{Value: Local{N: 1}}
+let bad = GenericLegacy[Local]{...source}`, "genericlegacy", executable: true, "/r:" +
+                selected, "/refout:" + genericLegacyReference)
+        Assert.NotEqual(0, genericLegacyCode)
+        Assert.True(
+            genericLegacyOutput.Contains("genericlegacy.gs(5,35,5,41): error GS0267:", StringComparison.Ordinal),
+            genericLegacyOutput
+        )
+        Assert.Equal(1, genericLegacyOutput.Split("error GS0267:", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "genericlegacy.dll")))
+        Assert.False(File.Exists(genericLegacyReference))
         let rejectedCollectionReference = Path.Combine(fixture.Directory, "rejectedcollection.ref.dll")
         let (collectionCode, collectionOutput) = fixture.TryCompile(`import legacy5296
 let bad = Collection{}`, "rejectedcollection", executable: true, "/r:" +

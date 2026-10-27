@@ -14,6 +14,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Lowering
 import System.Linq
+import System.Reflection
 
 /// Rewrites an async method body so that every (cref:BoundAwaitExpression)
 /// appears only at statement top-level — either as a (cref:BoundExpressionStatement)
@@ -2528,6 +2529,110 @@ shared class SpillSequenceSpiller {
                         )
                     }
                 )
+            }
+            if structLiteral.CallsDataConstructor && structLiteral.Initializers.Any(
+                (initializer BoundFieldInitializer) -> HasAwait(initializer.Value)
+            ) {
+                let primary = HashSet[BoundFieldInitializer]()
+                if structLiteral.CallsPrimaryConstructor {
+                    for parameter in structLiteral.StructType.PrimaryConstructorParameters {
+                        primary.Add(
+                            Invariant.Required(
+                                structLiteral.GetPrimaryArgument(parameter.Name),
+                                "primary literal arguments are prepared before spilling",
+                                expression: "structLiteral.GetPrimaryArgument(parameter.Name)"
+                            )
+                        )
+                    }
+                }
+                let members = structLiteral
+                    .Initializers
+                    .Where((initializer BoundFieldInitializer) -> !primary.Contains(initializer))
+                    .ToImmutableArray()
+                if !members.IsEmpty {
+                    // Materialize the value, not its address, before spilling caller members.
+                    let receiver = MakeSpillTemp(structLiteral.Type)
+                    let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+                    statements.Add(
+                        BoundVariableDeclaration(
+                            nil,
+                            receiver,
+                            BoundStructLiteralExpression(
+                                nil,
+                                structLiteral.StructType,
+                                structLiteral
+                                    .Initializers
+                                    .Where((initializer BoundFieldInitializer) -> primary.Contains(initializer))
+                                    .ToImmutableArray(),
+                                nil,
+                                structLiteral.IsZeroInitialization,
+                                structLiteral.ResultType
+                            )
+                        )
+                    )
+                    for initializer in members {
+                        let assignment BoundExpression = if structLiteral.StructType.ClrType is {} clrType {
+                            let member MemberInfo? = if initializer.Field is {} field {
+                                clrType.GetField(
+                                    field.Name,
+                                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                                )
+                            } else {
+                                clrType.GetProperty(
+                                    initializer.Property!!.Name,
+                                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                                )
+                            }
+                            BoundClrPropertyAssignmentExpression(
+                                nil,
+                                BoundVariableExpression(nil, receiver),
+                                Invariant.Required(
+                                    member,
+                                    "an imported initializer has reflected storage",
+                                    expression: "member"
+                                ),
+                                initializer.Value,
+                                if member is FieldInfo fieldInfo {
+                                    MemberLookup.GetClrFieldTypeSymbol(structLiteral.Type, fieldInfo)
+                                } else {
+                                    MemberLookup.GetClrPropertyTypeSymbol(
+                                        structLiteral.Type,
+                                        Invariant.Required(
+                                            member as PropertyInfo,
+                                            "a non-field initializer has a reflected property",
+                                            expression: "member as PropertyInfo"
+                                        )
+                                    )
+                                },
+                                staticContainerType: nil
+                            )
+                        } else if initializer.Field is {} field {
+                            BoundFieldAssignmentExpression(
+                                nil,
+                                receiver,
+                                initializer.FieldDeclaringType ?? structLiteral.StructType,
+                                field,
+                                initializer.Value
+                            )
+                        } else {
+                            BoundPropertyAssignmentExpression(
+                                nil,
+                                BoundVariableExpression(nil, receiver),
+                                structLiteral.StructType,
+                                Invariant.Required(
+                                    initializer.Property,
+                                    "a non-field initializer targets a property",
+                                    expression: "initializer.Property"
+                                ),
+                                initializer.Value
+                            )
+                        }
+                        statements.Add(BoundExpressionStatement(nil, assignment))
+                    }
+                    return SpillBlockExpression(
+                        BoundBlockExpression(nil, statements.ToImmutable(), BoundVariableExpression(nil, receiver))
+                    )
+                }
             }
             let values = ImmutableArray.CreateBuilder[BoundExpression](structLiteral.Initializers.Length)
             if structLiteral.CopySource != nil {

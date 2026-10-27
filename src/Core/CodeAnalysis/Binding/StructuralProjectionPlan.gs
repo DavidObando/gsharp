@@ -472,6 +472,14 @@ internal shared class StructuralProjectionPlanner {
         }
         var constructor ConstructorInfo? = nil
         var constructorParameters = Array.Empty[ParameterInfo]()
+        // The aggregate supplies construction metadata, not the symbolic target identity.
+        let dataType = if ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _) &&
+            ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
+            aggregate!!.UsesConstructorOwnedDataConstruction {
+            aggregate
+        } else {
+            default(StructSymbol?)
+        }
         let constructors = ClrTypeUtilities.SafeGetConstructors(clrType, PublicInstance)
         var parameterlessConstructor ConstructorInfo? = nil
         for candidate in constructors {
@@ -480,7 +488,9 @@ internal shared class StructuralProjectionPlanner {
                 break
             }
         }
-        if !clrType.IsValueType {
+        if dataType != nil {
+            constructor = dataType.GetDataConstructionConstructor()
+        } else if !clrType.IsValueType {
             constructor = parameterlessConstructor
             if constructor == nil {
                 for candidate in constructors {
@@ -599,11 +609,11 @@ internal shared class StructuralProjectionPlanner {
         plan = StructuralProjectionPlan(
             source,
             target,
-            StructuralProjectionConstruction(constructionKind, clrConstructor: constructor),
+            StructuralProjectionConstruction(constructionKind, userType: dataType, clrConstructor: constructor),
             constructorSlots.ToImmutable(),
             initializerSlots.ToImmutable()
         )
-        return HasMappedSlot(plan!!, explicitNames)
+        return HasMappedSlot(plan!!, explicitNames) || (dataType != nil && constructor == nil)
     }
 
     private func TryCreateSlot(

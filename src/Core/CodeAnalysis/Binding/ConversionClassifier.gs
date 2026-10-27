@@ -3405,11 +3405,40 @@ internal class ConversionClassifier {
         }
         let constructorArguments = ImmutableArray.CreateBuilder[BoundExpression](plan!!.ConstructorSlots.Length)
         for slot in plan!!.ConstructorSlots {
+            if ownsDataInitialization && slot.Source == nil && explicitNames?.Contains(slot.Name) != true &&
+                resolvedPlan
+                .Construction
+                .UserType!!
+                .PrimaryConstructorParameters
+                .FirstOrDefault((parameter ParameterSymbol) -> parameter.Name == slot.Name) is {} parameter {
+                constructorArguments.Add(
+                    MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                        expression.Syntax,
+                        resolvedPlan.Construction.UserType!!,
+                        parameter,
+                        slot.TargetType
+                    ) ??
+                        BoundDefaultExpression(expression.Syntax, slot.TargetType)
+                )
+                continue
+            }
             constructorArguments.Add(
                 BindStructuralProjectionSlot(diagnosticLocation, expression.Syntax, sourceTemp, slot, explicitReads)
             )
         }
-        if (ownsDataInitialization || plan!!.Construction.Kind == StructuralProjectionConstructionKind.UserDefault) &&
+        var initializerSlots = plan!!.InitializerSlots
+        if ownsDataInitialization && !explicitOrder.IsDefaultOrEmpty {
+            let ordered = ImmutableArray.CreateBuilder[StructuralProjectionSlot](initializerSlots.Length)
+            ordered.AddRange(
+                initializerSlots.Where((slot StructuralProjectionSlot) -> explicitNames?.Contains(slot.Name) != true)
+            )
+            for name in explicitOrder {
+                ordered.AddRange(initializerSlots.Where((slot StructuralProjectionSlot) -> slot.Name == name))
+            }
+            initializerSlots = ordered.ToImmutable()
+        }
+        if targetType is StructSymbol &&
+            (ownsDataInitialization || plan!!.Construction.Kind == StructuralProjectionConstructionKind.UserDefault) &&
             plan!!
             .Construction
             .UserType is {IsClass: false} userType {
@@ -3431,19 +3460,6 @@ internal class ConversionClassifier {
                         )
                     }
                 )
-            }
-            var initializerSlots = plan!!.InitializerSlots
-            if ownsDataInitialization && !explicitOrder.IsDefaultOrEmpty {
-                let ordered = ImmutableArray.CreateBuilder[StructuralProjectionSlot](initializerSlots.Length)
-                ordered.AddRange(
-                    initializerSlots.Where(
-                        (slot StructuralProjectionSlot) -> explicitNames?.Contains(slot.Name) != true
-                    )
-                )
-                for name in explicitOrder {
-                    ordered.AddRange(initializerSlots.Where((slot StructuralProjectionSlot) -> slot.Name == name))
-                }
-                initializerSlots = ordered.ToImmutable()
             }
             for slot in initializerSlots {
                 let value = BindStructuralProjectionSlot(
@@ -3561,7 +3577,7 @@ internal class ConversionClassifier {
             targetType
         )
         statements.Add(BoundVariableDeclaration(expression.Syntax, targetTemp, construction))
-        for slot in plan!!.InitializerSlots {
+        for slot in initializerSlots {
             let receiver = BoundVariableExpression(expression.Syntax, targetTemp)
             let value = BindStructuralProjectionSlot(
                 diagnosticLocation,

@@ -1263,6 +1263,8 @@ Constructor-owned field initialization follows these rules. Plain struct literal
   A delegating constructor does not repeat the delegated initialization plan.
   Remaining member expressions run once after construction, immediately before each assignment.
   Member assignments and collection population retain their written order.
+  The same phases apply to structural spreads with symbolic generic arguments and across `await`:
+  construct the receiver before evaluating an awaited nonprimary member value.
 * A data struct's declaration default still runs when the caller overwrites that field.
   Its allocations, effects, and exceptions remain observable.
   A throwing default prevents later member expressions from running.
