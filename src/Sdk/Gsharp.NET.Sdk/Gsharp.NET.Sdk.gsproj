@@ -33,8 +33,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" Version="17.13.9" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.13.9" PrivateAssets="all" />
-    <!-- Close the netstandard facade and ConfigurationManager metadata references for gsc. -->
-    <PackageReference Include="System.CodeDom" Version="8.0.0" PrivateAssets="all" />
+    <!-- Close ConfigurationManager's metadata references for gsc. -->
     <PackageReference Include="System.Security.Permissions" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
 

@@ -1082,7 +1082,7 @@ open class CompilerWorkerTests : IDisposable {
         Assert.NotEmpty(references)
         let source = Path.Combine(directory, "closure.gs")
         File.WriteAllText(source, "func Value() int32 -> 42\n")
-        for missing in[]string{"", "System.CodeDom", "System.Security.Permissions"} {
+        for missing in[]string{"", "System.Security.Permissions"} {
             let name = if missing.Length == 0 {
                 "complete"
             } else {
@@ -1127,6 +1127,39 @@ open class CompilerWorkerTests : IDisposable {
                 Assert.False(File.Exists(reference))
                 Assert.False(File.Exists(pdb))
             }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RealBuildTask_OptionalFrameworkForwarders_AreNotMissing(shared bool) {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "func Value() int32 -> 42\n")
+        let compiler = SecurityElement.Escape(CompilerPath())
+        let taskAssembly = SecurityElement.Escape(typeof(BuildTask).Assembly.Location)
+        let basePath = SecurityElement.Escape(directory)
+        let references = string.Join(
+            "",
+            RuntimeReferences().Select((path string) -> "<Refs Include=\"${SecurityElement.Escape(path)}\"/>")
+        )
+        let project = Path.Combine(directory, "forwarders.proj")
+        File.WriteAllText(
+            project,
+            "<Project><UsingTask AssemblyFile=\"$taskAssembly\" TaskName=\"Gsharp.NET.Sdk.Tools.BuildTask\"/>" +
+                "<ItemGroup><Sources Include=\"input.gs\"/>$references</ItemGroup><Target Name=\"Build\">" +
+                "<BuildTask GsharpCompilerFullPath=\"$compiler\" OutputPath=\".\" OutputName=\"Forwarders\" " +
+                "TempOutputPath=\".\" TargetFramework=\"net10.0\" BasePath=\"$basePath\" OutputType=\"Library\" " +
+                "Compile=\"@(Sources)\" References=\"@(Refs)\" ResponseFilePath=\"./forwarders.rsp\" " +
+                "UseSharedCompilation=\"$shared\" TreatWarningsAsErrors=\"true\" WorkerGrant=\"1\" " +
+                "Deterministic=\"true\" DebugType=\"portable\" RefAssembly=\"Forwarders.ref.dll\"/>" +
+                "</Target></Project>"
+        )
+        let (exit, diagnostics) = BuildProject(project, directory)
+        Assert.True(exit == 0, diagnostics)
+        Assert.DoesNotContain("GS9100", diagnostics)
+        Assert.Contains("/warnaserror", File.ReadAllLines(Path.Combine(directory, "forwarders.rsp")))
+        for suffix in[]string{".dll", ".ref.dll", ".pdb"} {
+            Assert.True(File.Exists(Path.Combine(directory, "Forwarders" + suffix)))
         }
     }
 

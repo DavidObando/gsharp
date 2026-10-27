@@ -2428,7 +2428,7 @@ class ReferenceResolver : IDisposable {
         }
 
         /// Eagerly verifies that the supplied reference set forms a complete
-        /// transitive closure. For every primary reference, each assembly it names
+        /// transitive closure. For every primary reference, each required assembly it names
         /// (one hop) is probed against the load context's resolver; any name that
         /// neither the supplied set nor the gsc host runtime can satisfy is
         /// reported as missing. This converts a latent
@@ -2449,8 +2449,9 @@ class ReferenceResolver : IDisposable {
                     // A malformed reference table must not abort closure analysis.
                     continue
                 }
+                let forwarderOnly = ForwarderOnlyAssemblyReferences(asm)
                 for refName in referenced {
-                    if string.IsNullOrEmpty(refName?.Name) {
+                    if string.IsNullOrEmpty(refName?.Name) || forwarderOnly.Contains(refName.Name!!) {
                         continue
                     }
                     // The context raises (cref:FileNotFoundException) for a name that neither
@@ -2489,6 +2490,35 @@ class ReferenceResolver : IDisposable {
             } else {
                 missing.ToImmutableArray()
             }
+        }
+
+        private func ForwarderOnlyAssemblyReferences(assembly Assembly) HashSet[string] {
+            let names = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            using let image = OpenAssemblyImage(assembly)
+            if image == nil {
+                return names
+            }
+            using let pe = PEReader(image)
+            let reader = pe.GetMetadataReader()
+            for handle in reader.ExportedTypes {
+                let exported = reader.GetExportedType(handle)
+                if exported.IsForwarder && exported.Implementation.Kind == HandleKind.AssemblyReference {
+                    let reference = reader.GetAssemblyReference(cast[AssemblyReferenceHandle](exported.Implementation))
+                    names.Add(reader.GetString(reference.Name))
+                }
+            }
+            // A facade can advertise optional packages without depending on their types.
+            // A TypeRef to the same assembly makes it a real metadata dependency.
+            for handle in reader.TypeReferences {
+                let reference = reader.GetTypeReference(handle)
+                if reference.ResolutionScope.Kind == HandleKind.AssemblyReference {
+                    let assemblyReference = reader.GetAssemblyReference(
+                        cast[AssemblyReferenceHandle](reference.ResolutionScope)
+                    )
+                    names.Remove(reader.GetString(assemblyReference.Name))
+                }
+            }
+            return names
         }
     }
 }

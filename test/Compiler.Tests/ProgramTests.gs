@@ -23,6 +23,67 @@ import System.Text.RegularExpressions
 import Xunit
 
 open class ProgramTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    func Driver_TypeForwarders_RequireOnlyActualMetadataDependencies(required bool, useForwardedType bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dependency = fixture.CompileCSharp("public class Forwarded5420 { }", "Optional5420")
+        let contract = if required {
+            "public static class Contract5420 { public static void Accept(Forwarded5420 value) { } }"
+        } else {
+            ""
+        }
+        let facade = fixture.CompileCSharp(
+            "[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(Forwarded5420))]\n" + contract,
+            "Facade5420",
+            dependency
+        )
+        File.Delete(dependency)
+        let source = Path.Combine(fixture.Directory, "Forwarder.gs")
+        File.WriteAllText(
+            source,
+            if useForwardedType {
+                "let value = Forwarded5420()\n"
+            } else {
+                "Console.Write(\"ran5420\")\n"
+            }
+        )
+        let output = Path.Combine(fixture.Directory, "Forwarder.dll")
+        let reference = Path.Combine(fixture.Directory, "Forwarder.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Forwarder.pdb")
+        let (exit, diagnostics) = RunReferenceWarningDriver(
+            fixture.Directory,
+            source,
+            facade,
+            "/warnaserror+",
+            "/out:" + output,
+            "/refout:" + reference,
+            "/pdb:" + pdb
+        )
+        Assert.DoesNotContain("GS9998", diagnostics)
+        if required {
+            Assert.Contains("$source(1,1,1,1): error GS9100:", diagnostics)
+            Assert.Contains("Optional5420", diagnostics)
+        } else {
+            Assert.DoesNotContain("GS9100", diagnostics)
+        }
+        if required || useForwardedType {
+            Assert.NotEqual(0, exit)
+            Assert.Contains("error GS", diagnostics)
+            Assert.False(File.Exists(output))
+            Assert.False(File.Exists(reference))
+            Assert.False(File.Exists(pdb))
+        } else {
+            Assert.True(exit == 0, diagnostics)
+            Assert.True(File.Exists(reference))
+            Assert.True(File.Exists(pdb))
+            IlVerifier.Verify(output)
+            Assert.Equal(Encoding.UTF8.GetBytes("ran5420"), fixture.RunBytes(output))
+        }
+    }
+
     @Fact
     func Main_NoArgs_ReturnsError() {
         using let err = StringWriter()
