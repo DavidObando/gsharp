@@ -493,6 +493,35 @@ shared class ClrTypeUtilities {
         return properties.ToArray()
     }
 
+    /// Retains the nearest eligible field or property for each data-member name.
+    internal func SafeGetNearestDataMembers(type Type, flags BindingFlags, eligible(MemberInfo) -> bool)[]MemberInfo {
+        let members = List[MemberInfo]()
+        let hiddenNames = HashSet[string](StringComparer.Ordinal)
+        var current Type? = type
+        while current != nil {
+            let declared = SafeGetFields(current, flags | BindingFlags.DeclaredOnly)
+                .Cast[MemberInfo]()
+                .Concat(SafeGetProperties(current, flags | BindingFlags.DeclaredOnly))
+                .Where(eligible)
+                .ToArray()
+            for member in declared {
+                if !hiddenNames.Contains(member.Name) {
+                    members.Add(member)
+                }
+            }
+            // Same-level declarations must not hide each other by enumeration order.
+            for member in declared {
+                hiddenNames.Add(member.Name)
+            }
+            try {
+                current = current.BaseType
+            } catch (exception Exception) when IsMetadataLoadFailure(exception) {
+                break
+            }
+        }
+        return members.ToArray()
+    }
+
     /// Enumerates a type's fields tolerantly (issue #338): fields whose type
     /// cannot be loaded under the reference context are skipped.
     /// @param type The type to enumerate.
