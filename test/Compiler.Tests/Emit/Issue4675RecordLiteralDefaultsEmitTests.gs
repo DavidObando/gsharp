@@ -750,6 +750,9 @@ System.Console.WriteLine(call.Value)
         let contract = fixture.Compile(`package CollectionLiteral5419
 public data class SliceBox[T](Items []int32)
 public data class FixedBox[T](Items [3]int32)
+public data class GenericSliceBox[T](Items []T)
+public data class GenericFixedBox[T](Items [3]T)
+public data class ArgumentBox[T](Items T)
 `, "CollectionLiteral5419", false)
         IlVerifier.Verify(contract)
         let dll = fixture.Compile(`import CollectionLiteral5419
@@ -758,10 +761,20 @@ System.Console.WriteLine(sliceValue.Items.Length)
 let fixedValue = FixedBox[int32]{Items: [3]int32{}}
 System.Console.WriteLine(fixedValue.Items.Length)
 System.Console.WriteLine(fixedValue.Items[2])
+let genericSlice = GenericSliceBox[int32]{Items: []int32{}}
+System.Console.WriteLine(genericSlice.Items.Length)
+let genericFixed = GenericFixedBox[int32]{Items: [3]int32{}}
+System.Console.WriteLine(genericFixed.Items.Length)
+System.Console.WriteLine(genericFixed.Items[2])
+let argumentSlice = ArgumentBox[[]int32]{}
+System.Console.WriteLine(argumentSlice.Items.Length)
+let argumentFixed = ArgumentBox[[3]int32]{}
+System.Console.WriteLine(argumentFixed.Items.Length)
+System.Console.WriteLine(argumentFixed.Items[2])
 `, "CollectionOmission", true, "/r:" + contract)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
-        Assert.Equal("0\n3\n0\n", fixture.Run(dll))
-        for name in[]string{"SliceBox", "FixedBox"} {
+        Assert.Equal("0\n3\n0\n0\n3\n0\n0\n3\n0\n", fixture.Run(dll))
+        for name in[]string{"SliceBox", "FixedBox", "GenericSliceBox", "GenericFixedBox"} {
             let (code, output) = fixture.TryCompile(
                 "import CollectionLiteral5419\nlet value = " + name + "[int32]{}",
                 "MissingShape",
@@ -769,7 +782,13 @@ System.Console.WriteLine(fixedValue.Items[2])
                 "/r:" + contract
             )
             Assert.Equal(1, code)
-            Assert.True(output.Contains("MissingShape.gs(2,13,2,21): error GS0267", StringComparison.Ordinal), output)
+            Assert.True(
+                output.Contains(
+                    "MissingShape.gs(2,13,2," + (13 + name.Length).ToString() + "): error GS0267",
+                    StringComparison.Ordinal
+                ),
+                output
+            )
             Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingShape.dll")))
         }
     }
@@ -883,6 +902,38 @@ Console.WriteLine(tree.Compile()(values))
 `, "ConstrainedTree", true, "/r:" + contract)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
         Assert.Equal("2\n3\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData("int32", "", "7", "", "7")
+    @InlineData("Point", "struct Point { var X int32 }", "Point{X: 9}", ".X", "9")
+    @InlineData("Color", "enum Color { Red, Green }", "Color.Green", " == Color.Green", "True")
+    func ImportedGenericDataClassLiteral_ExpressionTreePreservesNullableAccessorOwners(
+        typeName string,
+        declaration string,
+        value string,
+        member string,
+        expected string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+import System.Linq.Expressions
+` + declaration + `
+func Has[T struct]() Expression[Func[T?, bool]] -> value -> value.HasValue
+func ReadValue[T struct]() Expression[Func[T?, T]] -> value -> value.Value
+let has = Has[` + typeName + `]().Compile()
+let read = ReadValue[` + typeName + `]().Compile()
+Console.WriteLine(has(nil))
+Console.WriteLine(has(` + value + `))
+Console.WriteLine(read(` + value + `)` + member + `)
+let directHas Expression[Func[` + typeName + `?, bool]] = value -> value.HasValue
+let directRead Expression[Func[` + typeName + `?, ` + typeName + `]] = value -> value.Value
+Console.WriteLine(directHas.Compile()(nil))
+Console.WriteLine(directHas.Compile()(` + value + `))
+Console.WriteLine(directRead.Compile()(` + value + `)` + member + `)
+`, "NullableOwner", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal("False\nTrue\n" + expected + "\nFalse\nTrue\n" + expected + "\n", fixture.Run(dll))
     }
 
     @Fact

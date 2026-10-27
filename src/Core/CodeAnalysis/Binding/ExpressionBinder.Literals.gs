@@ -2737,7 +2737,8 @@ internal partial class ExpressionBinder {
                     syntax,
                     aggregate,
                     aggregate.PrimaryConstructorParameters[index],
-                    parameterType
+                    parameterType,
+                    constructor
                 )
                 if zero == nil &&
                     parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull &&

@@ -682,7 +682,7 @@ internal partial class MethodBodyEmitter {
                     member
                     .Receiver
                     ?.Type
-                let owner = if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
+                var owner = if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
                     receiverType
                 ) is {} imported {
                     MemberLookup.GetClrMemberDeclaringTypeSymbol(imported, member.Member)
@@ -690,6 +690,11 @@ internal partial class MethodBodyEmitter {
                     default(TypeSymbol?)
                 }
                 if member.Member is PropertyInfo property {
+                    var methodReference EntityHandle? = nil
+                    if this.GetNullablePropertyGetterReference(property, receiverType) is {} nullableGetter {
+                        owner = receiverType
+                        methodReference = EntityHandle(nullableGetter)
+                    }
                     this.EmitMethodInfoLiteral(
                         Invariant.Required(
                             if property.GetMethod is {IsPublic: true} getter {
@@ -700,7 +705,8 @@ internal partial class MethodBodyEmitter {
                             "a selected CLR property has an accessor",
                             expression: "property.GetMethod or property.SetMethod"
                         ),
-                        owner
+                        owner,
+                        methodReference
                     )
                 } else if member.Member is FieldInfo field {
                     this.il.OpCode(ILOpCode.Ldtoken)
@@ -786,16 +792,18 @@ internal partial class MethodBodyEmitter {
         this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(ConstructorInfo)))
     }
 
-    private func EmitMethodInfoLiteral(method MethodInfo, containingTypeSymbol TypeSymbol? = nil) {
+    private func EmitMethodInfoLiteral(
+        method MethodInfo,
+        containingTypeSymbol TypeSymbol? = nil,
+        methodReference EntityHandle? = nil
+    ) {
         this.il.OpCode(ILOpCode.Ldtoken)
-        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(method, containingTypeSymbol))
+        this.il.Token(methodReference ?? this.outer.memberRefs.GetMethodEntityHandle(method, containingTypeSymbol))
         // The CLR requires the 2-arg GetMethodFromHandle(RuntimeMethodHandle,
         // RuntimeTypeHandle) overload whenever the declaring type is a
         // generic instantiation (e.g. a user operator on `Money<Currency>`);
         // the 1-arg overload throws ArgumentException at run time for those.
-        // A generic-type-DEFINITION declaring type never occurs here because
-        // operator methods are only ever reached through a closed (fully
-        // substituted) receiver type.
+        // Symbolic owners supply their constructed TypeSpec below.
         if containingTypeSymbol != nil {
             this.il.OpCode(ILOpCode.Ldtoken)
             this.il.Token(this.outer.memberRefs.GetTypeOfToken(containingTypeSymbol))
