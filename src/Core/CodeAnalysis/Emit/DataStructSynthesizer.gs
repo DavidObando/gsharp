@@ -94,7 +94,6 @@ internal class DataStructSynthesizer {
     private let resolveUserFieldToken(StructSymbol, FieldSymbol) -> EntityHandle
     private let resolveUserMethodRef(StructSymbol, EntityHandle, string, BlobBuilder) -> EntityHandle
     private let resolveImportedMethodRef(MethodInfo, TypeSymbol) -> EntityHandle
-    private let emitInitializerConstructor(StructSymbol) -> MethodDefinitionHandle
     private let resolveUserInstanceMethodToken(StructSymbol, FunctionSymbol) -> EntityHandle
     private let emitMethodNullability(
         MethodDefinitionHandle,
@@ -130,7 +129,6 @@ internal class DataStructSynthesizer {
         resolveUserFieldToken(StructSymbol, FieldSymbol) -> EntityHandle,
         resolveUserMethodRef(StructSymbol, EntityHandle, string, BlobBuilder) -> EntityHandle,
         resolveImportedMethodRef(MethodInfo, TypeSymbol) -> EntityHandle,
-        emitInitializerConstructor(StructSymbol) -> MethodDefinitionHandle,
         resolveUserInstanceMethodToken(StructSymbol, FunctionSymbol) -> EntityHandle,
         emitMethodNullability(
             MethodDefinitionHandle,
@@ -158,8 +156,6 @@ internal class DataStructSynthesizer {
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw ArgumentNullException("resolveUserMethodRef")
         this.resolveImportedMethodRef = resolveImportedMethodRef ??
             throw ArgumentNullException("resolveImportedMethodRef")
-        this.emitInitializerConstructor = emitInitializerConstructor ??
-            throw ArgumentNullException("emitInitializerConstructor")
         this.resolveUserInstanceMethodToken = resolveUserInstanceMethodToken ??
             throw ArgumentNullException("resolveUserInstanceMethodToken")
         this.emitMethodNullability = emitMethodNullability ?? throw ArgumentNullException("emitMethodNullability")
@@ -610,7 +606,7 @@ internal class DataStructSynthesizer {
         // newobj-callable instance constructor — both for ordinary compiled
         // code and for ExpressionTreeLowerer.BuildUserConstructorExpression's
         // runtime `Type.GetConstructor` lookup.
-        if !structSym.IsClass && structSym.HasDeclaredPrimaryConstructor {
+        if structSym.HasSynthesizedDataConstructor {
             this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitDataStructPrimaryConstructor(structSym)
         }
     }
@@ -939,9 +935,6 @@ internal class DataStructSynthesizer {
     /// emitter (see `EmitInlineStructConstructor`), a struct ctor never
     /// chains to `System.ValueType::.ctor` in IL.
     private func EmitDataStructPrimaryConstructor(structSym StructSymbol) MethodDefinitionHandle {
-        if structSym.NeedsSynthesizedValueStructDefaultCtor && !structSym.ValueStructDefaultCtorIsZeroInitialization {
-            return this.emitInitializerConstructor(structSym)
-        }
         let parameters = structSym.PrimaryConstructorParameters
         var bodyOffset = -1
         if !this.emitCtx.MetadataOnly {

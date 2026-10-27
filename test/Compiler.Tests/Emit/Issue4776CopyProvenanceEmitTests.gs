@@ -296,11 +296,13 @@ Console.WriteLine(copy.copy().Value == nil)`}
     @InlineData(".copy()")
     func NullableGenericCopy_RejectsNarrowingWithoutAnImage(operation string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
+        let producerReference = Path.Combine(fixture.Directory, "Producer.ref.dll")
         let producer = fixture.Compile(
-            "package NullableCopy5405\npublic data struct S[T](Value T)",
+            "package NullableCopy5405\npublic data struct S[T](Value T)\npublic data class C[T](Value T)",
             "Producer",
             executable: false,
-            "/assemblyname:Producer"
+            "/assemblyname:Producer",
+            "/refout:" + producerReference
         )
         let reference = Path.Combine(fixture.Directory, "Narrowing.ref.dll")
         let (code, output) = fixture.TryCompile(
@@ -317,6 +319,51 @@ Console.WriteLine(copy.copy().Value == nil)`}
         Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "Narrowing.dll")))
         Assert.False(File.Exists(reference))
+        for typeName in[]string{"C", "S"} {
+            for selected in[]string{producer, producerReference} {
+                let rejectedReference = Path.Combine(fixture.Directory, "NullableReceiver.ref.dll")
+                let (nullableCode, nullableOutput) = fixture.TryCompile(
+                    "import NullableCopy5405\nfunc Copy(value " +
+                        typeName +
+                        "[string?]?) " +
+                        typeName +
+                        "[string?]? -> value " +
+                        operation +
+                        "\nlet unused = Copy(nil)",
+                    "NullableReceiver",
+                    executable: true,
+                    "/r:" + selected,
+                    "/refout:" + rejectedReference
+                )
+                Assert.NotEqual(0, nullableCode)
+                let expectedDiagnostic = if operation == "with{}" {
+                    "NullableReceiver.gs(2,51,2,55): error GS0161:"
+                } else {
+                    "NullableReceiver.gs(2,52,2,58): error GS0159:"
+                }
+                Assert.Contains(expectedDiagnostic, nullableOutput)
+                Assert.Equal(1, nullableOutput.Split(": error GS", StringSplitOptions.None).Length - 1)
+                Assert.DoesNotContain("GS9998", nullableOutput, StringComparison.Ordinal)
+                Assert.False(File.Exists(Path.Combine(fixture.Directory, "NullableReceiver.dll")))
+                Assert.False(File.Exists(rejectedReference))
+                let control = fixture.Compile(
+                    "import System\nimport NullableCopy5405\nfunc Narrow(value " +
+                        typeName +
+                        "[string?]?) bool {\nif value != nil { let changed = value " +
+                        operation +
+                        "\nreturn changed.Value == nil }\nreturn true\n}\nlet original = " +
+                        typeName +
+                        "[string?](nil)\nlet copy = original " +
+                        operation +
+                        "\nConsole.WriteLine(copy.Value == nil && Narrow(original) && Narrow(nil))",
+                    "NonNullableReceiver",
+                    executable: true,
+                    "/r:" + selected
+                )
+                IlVerifier.Verify(control, []string{producer})
+                Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), fixture.RunBytes(control))
+            }
+        }
     }
 
     @Theory

@@ -185,7 +185,8 @@ partial class Binder {
             refKindToString: RefKindToString,
             bindNativeProtocolConversion: (location TextLocation, source BoundExpression, target TypeSymbol) ->
             BindNativeProtocolConversion(location, source, target),
-            canConvertNativeProtocol: CanConvertNativeProtocol
+            canConvertNativeProtocol: CanConvertNativeProtocol,
+            getCurrentFunction: () -> this.function
         )
         overloads = OverloadResolver(
             binderCtx,

@@ -145,6 +145,65 @@ internal shared class MagicCollectionZeroValue {
         }
     }
 
+    internal func TrySynthesizePrimaryArgument(
+        syntax SyntaxNode?,
+        owner StructSymbol,
+        parameter ParameterSymbol,
+        parameterType TypeSymbol? = nil
+    ) BoundExpression? {
+        if owner.ClrType is not{} imported || !ImportedAssemblySemantics.TryGetMagicCollectionFields(
+            imported,
+            out var kinds
+        ) {
+            return TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
+        }
+        let field = owner.GetDataConstructionPrimaryField(
+            imported,
+            owner.PrimaryConstructorParameters.IndexOf(parameter)
+        )
+        return if field != nil && kinds!!.TryGetValue(field.Name, out var kind) {
+            TrySynthesizeEmptyInstanceFromMarker(
+                field,
+                kind,
+                parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
+            )
+        } else {
+            TrySynthesizeEmptyInstance(syntax, parameterType ?? parameter.Type)
+        }
+    }
+
+    internal func CanSynthesizeInTypeZeroConstructor(owner StructSymbol) bool {
+        var hasZero = false
+        for field in owner.Fields {
+            if TrySynthesizeInTypeZeroField(nil, owner, field) is {} zero {
+                if !CanInitializeZeroValue(zero) {
+                    return false
+                }
+                hasZero = true
+            }
+        }
+        return hasZero
+    }
+
+    private func CanInitializeZeroValue(value BoundExpression) bool {
+        if value is not BoundStructLiteralExpression literal {
+            return true
+        }
+        // IsInTypeZeroInitializer queries this probe when it selects a helper.
+        // Source stores belong to the prospective helper; imported stores remain external.
+        return literal.Initializers.All(
+            (initializer BoundFieldInitializer) ->
+            (
+                literal
+                    .StructType
+                    .ClrType == nil ||
+                    initializer.Field == nil ||
+                    BoundStructLiteralExpression.CanWriteInitializerField(literal.StructType, initializer.Field)
+            ) &&
+                CanInitializeZeroValue(initializer.Value)
+        )
+    }
+
     /// Issue #3329: classifies a struct field's shape into the compact tag
     /// recorded by the `GSharp.MagicCollectionFields` cross-assembly
     /// metadata marker (see (cref:Symbols.ImportedAssemblySemantics)).
@@ -188,9 +247,14 @@ internal shared class MagicCollectionZeroValue {
     /// zero value (see (cref:TrySynthesizeEmptyInstance)).
     /// @param fieldInfo The reflected field the marker describes.
     /// @param markerKind The marker tag produced by (cref:ClassifyForMarker).
+    /// @param fieldType The receiver-aware signature type, when available.
     /// @returns The synthesized empty-instance expression, or `null` when the field/tag cannot be
     /// reconstructed.
-    internal func TrySynthesizeEmptyInstanceFromMarker(fieldInfo FieldInfo?, markerKind string?) BoundExpression? {
+    internal func TrySynthesizeEmptyInstanceFromMarker(
+        fieldInfo FieldInfo?,
+        markerKind string?,
+        fieldType TypeSymbol? = nil
+    ) BoundExpression? {
         if fieldInfo == nil || string.IsNullOrEmpty(markerKind) {
             return nil
         }
@@ -203,7 +267,10 @@ internal shared class MagicCollectionZeroValue {
         // recursion, but walks reflected metadata instead of a bound
         // StructSymbol.
         if string.Equals(markerKind, "struct", StringComparison.Ordinal) {
-            return TrySynthesizeEmptyInstanceForImportedStruct(fieldInfo.FieldType)
+            return TrySynthesizeEmptyInstanceForImportedStruct(
+                fieldType?.ClrType ?? fieldInfo.FieldType,
+                receiverType: fieldType
+            )
         }
         var type TypeSymbol
         if string.Equals(markerKind, "map", StringComparison.Ordinal) {
@@ -211,13 +278,13 @@ internal shared class MagicCollectionZeroValue {
             if args.Length != 2 {
                 return nil
             }
-            type = MapTypeSymbol.Get(ElementShape(fieldInfo, 0), ElementShape(fieldInfo, 1))
+            type = MapTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), ElementShape(fieldInfo, 1, fieldType))
         } else if string.Equals(markerKind, "slice", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil {
                 return nil
             }
-            type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0))
+            type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType))
         } else if markerKind!!.StartsWith("arr", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil || !int32.TryParse(
@@ -228,7 +295,7 @@ internal shared class MagicCollectionZeroValue {
             ) {
                 return nil
             }
-            type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0), length)
+            type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), length)
         } else if markerKind!!.StartsWith("rect", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil || !fieldInfo.FieldType.IsArray || !int32.TryParse(
@@ -242,13 +309,13 @@ internal shared class MagicCollectionZeroValue {
                 .GetArrayRank() != rank {
                 return nil
             }
-            type = RectangularArrayTypeSymbol.Get(ElementShape(fieldInfo, 0), rank)
+            type = RectangularArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), rank)
         } else if string.Equals(markerKind, "seq", StringComparison.Ordinal) {
             let args = fieldInfo.FieldType.GetGenericArguments()
             if args.Length != 1 {
                 return nil
             }
-            type = SequenceTypeSymbol.Get(ElementShape(fieldInfo, 0))
+            type = SequenceTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType))
         } else {
             return nil
         }
@@ -272,9 +339,18 @@ internal shared class MagicCollectionZeroValue {
     /// @param clrType The nested struct field's own reflected CLR type.
     /// @returns The synthesized nested struct literal, or `null` when it carries no marker or no field of
     /// it can be reconstructed.
-    private func TrySynthesizeEmptyInstanceForImportedStruct(clrType Type?) BoundExpression? {
+    private func TrySynthesizeEmptyInstanceForImportedStruct(
+        clrType Type?,
+        syntax SyntaxNode? = nil,
+        receiverType TypeSymbol? = nil
+    ) BoundExpression? {
         if clrType == nil || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds) {
             return nil
+        }
+        let ownerType = if receiverType != nil {
+            MemberLookup.GetProjectionReceiverImportedType(receiverType) ?? receiverType.StripToBareShape()
+        } else {
+            nil
         }
         let bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
         let fieldBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
@@ -286,7 +362,11 @@ internal shared class MagicCollectionZeroValue {
             fieldBuilder.Add(
                 FieldSymbol(
                     field.Name,
-                    ClrNullability.GetFieldTypeSymbol(field).StripToBareShape(),
+                    if ownerType != nil {
+                        MemberLookup.GetClrFieldTypeSymbol(ownerType, field)
+                    } else {
+                        ClrNullability.GetFieldTypeSymbol(field)
+                    },
                     if field.IsPublic {
                         Accessibility.Public
                     } else {
@@ -311,15 +391,19 @@ internal shared class MagicCollectionZeroValue {
             baseClass: nil,
             clrType: clrType
         )
-        let fieldsByName = nestedStruct.Fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
         var inits ImmutableArray[BoundFieldInitializer].Builder? = nil
-        for (fieldName, kind) in magicFieldKinds!! {
-            if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) ||
-                fieldSymbol.Accessibility != Accessibility.Public ||
-                !reflectedFields.TryGetValue(fieldName, out var reflectedField) {
+        for fieldSymbol in nestedStruct.Fields {
+            if !magicFieldKinds!!.TryGetValue(fieldSymbol.Name, out var kind) || !reflectedFields.TryGetValue(
+                fieldSymbol.Name,
+                out var reflectedField
+            ) {
                 continue
             }
-            let zeroValue BoundExpression? = TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind)
+            let zeroValue BoundExpression? = TrySynthesizeEmptyInstanceFromMarker(
+                reflectedField,
+                kind,
+                fieldSymbol.Type
+            )
             if zeroValue == nil {
                 continue
             }
@@ -330,11 +414,12 @@ internal shared class MagicCollectionZeroValue {
             return nil
         }
         return BoundStructLiteralExpression(
-            nil,
+            syntax,
             nestedStruct,
             inits.ToImmutable(),
             copySource: nil,
-            isZeroInitialization: true
+            isZeroInitialization: true,
+            resultType: ownerType
         )
     }
 
@@ -403,7 +488,13 @@ internal shared class MagicCollectionZeroValue {
                 )
             }
             case structType is StructSymbol when !structType.IsClass && !structType.IsInline {
+                if structType.ClrType is {} imported {
+                    return TrySynthesizeEmptyInstanceForImportedStruct(imported, syntax, structType)
+                }
                 return TrySynthesizeStructFieldDefaults(syntax, structType, visiting, needsZeroCache)
+            }
+            case importedType is ImportedTypeSymbol when importedType.Type.IsValueType {
+                return TrySynthesizeEmptyInstanceForImportedStruct(importedType.Type, syntax, importedType)
             }
             default {
                 return nil
@@ -527,12 +618,10 @@ internal shared class MagicCollectionZeroValue {
         }
     }
 
-    /// ADR-0193 Phase 2: one element position of a magic-collection field's
-    /// declared type, read through the funnel and taken bare. The synthesized
-    /// empty collection is the field's runtime zero value; it read these
-    /// positions erased before, and still wants that shape.
-    private func ElementShape(field FieldInfo, index int32) TypeSymbol {
-        let positions = ClrNullability.GetFieldTypeSymbol(field).GetElementPositions()
+    /// Reads a collection element through canonical signature queries.
+    /// Sound-zero construction uses the substituted element's bare shape.
+    private func ElementShape(field FieldInfo, index int32, fieldType TypeSymbol? = nil) TypeSymbol {
+        let positions = (fieldType ?? ClrNullability.GetFieldTypeSymbol(field)).GetElementPositions()
         return if uint32(index) < uint32(positions.Length) {
             positions[index].StripToBareShape()
         } else {

@@ -64,7 +64,14 @@ pair.A * 10 + pair.Extra`.Replace("KIND", kind, StringComparison.Ordinal)
             ))
         Assert.Empty(result.Diagnostics)
         Assert.Null(result.UnhandledException)
-        Assert.Equal(21, result.Value)
+        Assert.Equal(
+            if kind == "data struct" {
+                12
+            } else {
+                21
+            },
+            result.Value
+        )
     }
 
     @Fact

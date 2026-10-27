@@ -676,10 +676,45 @@ internal partial class MethodBodyEmitter {
                 // MethodBase.GetMethodFromHandle(...) ; castclass MethodInfo`.
                 this.EmitMethodInfoLiteral(method)
             }
+            case constructor is BoundConstructorCallExpression {
+                // Keep constructor identity and its closed owner until metadata emission.
+                let token = if constructor.StructType.ClrType != nil {
+                    this
+                        .outer
+                        .memberRefs
+                        .GetCtorReference(
+                        Invariant.Required(
+                            constructor.StructType.GetDataConstructionConstructor(),
+                            "a constructor-owned imported literal has a selected constructor",
+                            expression: "constructor.StructType.GetDataConstructionConstructor()"
+                        ),
+                        constructor.StructType
+                    )
+                } else {
+                    this.outer.userTokens.ResolveUserCtorToken(constructor)
+                }
+                this.EmitConstructorInfoLiteral(token, constructor.StructType)
+            }
+            case constructor is BoundClrConstructorCallExpression {
+                this.EmitConstructorInfoLiteral(
+                    this.outer.memberRefs.GetCtorReference(constructor.Constructor, constructor.Type),
+                    constructor.Type
+                )
+            }
             default {
                 throw NotSupportedException("Literal of CLR type '${literal.Value?.GetType()}' is not yet supported.")
             }
         }
+    }
+
+    private func EmitConstructorInfoLiteral(token EntityHandle, owner TypeSymbol) {
+        this.il.OpCode(ILOpCode.Ldtoken)
+        this.il.Token(token)
+        this.il.OpCode(ILOpCode.Ldtoken)
+        this.il.Token(this.outer.memberRefs.GetTypeOfToken(owner))
+        this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference())
+        this.il.OpCode(ILOpCode.Castclass)
+        this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(ConstructorInfo)))
     }
 
     private func EmitMethodInfoLiteral(method MethodInfo) {
@@ -699,9 +734,7 @@ internal partial class MethodBodyEmitter {
         } else {
             this.il.Call(this.outer.wellKnown.GetMethodFromHandleReference())
         }
-        // GetMethodFromHandle returns MethodBase; every caller of this helper
-        // needs the more specific MethodInfo (constructors never reach here —
-        // Stream C only resolves public static operator methods).
+        // GetMethodFromHandle returns MethodBase; these callers need MethodInfo.
         this.il.OpCode(ILOpCode.Castclass)
         this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(MethodInfo)))
     }
@@ -1135,7 +1168,11 @@ internal partial class MethodBodyEmitter {
         // that R0/R1 erasure required (`box T` before stfld) is dropped:
         // the field's signature is VAR(idx) and resolves to the correct
         // concrete type at the construction site.
-        let typeDef = this.outer.userTokens.ResolveUserTypeToken(literal.StructType)
+        let typeDef = if literal.ResultType != nil {
+            this.outer.memberRefs.GetElementTypeToken(literal.Type)
+        } else {
+            this.outer.userTokens.ResolveUserTypeToken(literal.StructType)
+        }
         let isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType)
         let structDefinition = literal.StructType.Definition ?? literal.StructType
         let callsPrimary = literal.CallsPrimaryConstructor
@@ -1242,11 +1279,11 @@ internal partial class MethodBodyEmitter {
                 if init.FieldDeclaringType != nil {
                     fieldHandle = this.ResolveStructLiteralFieldToken(literal, init)
                 } else if isGeneric || literal.StructType.ClrType != nil {
-                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField)
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
                 } else if this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle) {
                     fieldHandle = defHandle
                 } else {
-                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField)
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
                 }
                 this.il.OpCode(ILOpCode.Dup)
                 this.EmitExpression(init.Value)
@@ -1280,6 +1317,25 @@ internal partial class MethodBodyEmitter {
         if literal.CopySource != nil {
             this.EmitExpression(literal.CopySource)
             this.il.StoreLocal(slot)
+        } else if literal.CallsDataConstructor {
+            if literal.StructType.ClrType != nil && literal.StructType.GetDataConstructionConstructor() == nil {
+                this.il.LoadLocalAddress(slot)
+                this.il.OpCode(ILOpCode.Initobj)
+                this.il.Token(typeDef)
+            } else {
+                if callsPrimary {
+                    this.EmitStructLiteralPrimaryArguments(literal, primaryValues)
+                }
+                let constructor = literal.StructType.GetDataConstructionConstructor()
+                let token = if constructor != nil {
+                    this.outer.memberRefs.GetCtorReference(constructor, literal.StructType)
+                } else {
+                    this.outer.userTokens.ResolveUserCtorTokenForPrimary(literal.StructType)
+                }
+                this.il.OpCode(ILOpCode.Newobj)
+                this.il.Token(token)
+                this.il.StoreLocal(slot)
+            }
         } else if callsPrimary {
             this.il.LoadLocalAddress(slot)
             this.il.OpCode(ILOpCode.Initobj)
@@ -1292,7 +1348,7 @@ internal partial class MethodBodyEmitter {
         // ldloca slot; initobj typedef — zero-initializes the value type —
         // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
         // runs the declared initializers in-type).
-        if literal.CopySource == nil && !callsPrimary {
+        if literal.CopySource == nil && !callsPrimary && !literal.CallsDataConstructor {
             this.il.LoadLocalAddress(slot)
             if usesOwningInitializerConstructor {
                 for var marker = 0; marker < structDefinition.LiteralInitializerMarkerCount; marker++ {
@@ -1307,15 +1363,7 @@ internal partial class MethodBodyEmitter {
         }
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         for init in literal.Initializers {
-            if literal.IsZeroInitialization &&
-                structDefinition.ValueStructDefaultCtorIsZeroInitialization &&
-                usesOwningInitializerConstructor &&
-                init.Field is {} zeroField &&
-                MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(
-                literal.Syntax,
-                literal.StructType,
-                zeroField
-            ) != nil {
+            if literal.IsInTypeZeroInitializer(init) {
                 // Skip only the definition-owned zero stores that actually ran.
                 continue
             }
@@ -1351,7 +1399,7 @@ internal partial class MethodBodyEmitter {
             if init.FieldDeclaringType != nil {
                 fieldHandle = this.ResolveStructLiteralFieldToken(literal, init)
             } else if isGeneric || literal.StructType.ClrType != nil {
-                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField)
+                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
             } else if this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle) {
                 fieldHandle = defHandle
             } else {

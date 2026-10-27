@@ -1045,7 +1045,7 @@ internal class ReflectionMetadataEmitter {
             this.customAttrEncoder.NextParameterHandle,
             this.memberRefs.GetTypeReference,
             this.memberRefs.GetTypeHandleForMember,
-            this.userTokens.ResolveFieldToken,
+            (owner StructSymbol, field FieldSymbol) -> this.userTokens.ResolveFieldToken(owner, field),
             this.customAttrEncoder.EmitNullableAttributeOnProperty,
             this.customAttrEncoder.EmitNullableAttributeOnEvent,
             this.customAttrEncoder.EmitMethodNullability,
@@ -1119,13 +1119,12 @@ internal class ReflectionMetadataEmitter {
             this.customAttrEncoder.NextParameterHandle,
             this.typeDefEmitter.AddPrimaryCtorParameters,
             this.userTokens.ResolveUserTypeToken,
-            this.userTokens.ResolveFieldToken,
+            (owner StructSymbol, field FieldSymbol) -> this.userTokens.ResolveFieldToken(owner, field),
             this.userTokens.GetUserStructMethodRef,
             (method MethodInfo, containingType TypeSymbol) -> this.memberRefs.GetMethodEntityHandle(
                 method,
                 containingType
             ),
-            this.typeDefEmitter.EmitValueStructDefaultConstructor,
             this.userTokens.ResolveUserInstanceMethodToken,
             this.customAttrEncoder.EmitMethodNullability,
             this.memberRefs.GetCtorReference,
@@ -1164,7 +1163,7 @@ internal class ReflectionMetadataEmitter {
             this.signatures.EncodeTypeSymbol,
             this.signatures.EncodeClrType,
             this.userTokens.GetStructTypeToken,
-            this.userTokens.ResolveFieldToken,
+            (owner StructSymbol, field FieldSymbol) -> this.userTokens.ResolveFieldToken(owner, field),
             this.functions.BuildMoveNextBodyBytes
         )
     }
@@ -2133,7 +2132,9 @@ internal class ReflectionMetadataEmitter {
             }
             structFirstMethodRows[s] = methodRow
             if !s.ExplicitConstructors.IsDefaultOrEmpty {
-                methodRow += s.ExplicitConstructors.Length
+                methodRow += s.ExplicitConstructors.Count(
+                    (constructor ConstructorSymbol) -> !constructor.IsSynthesizedFromPrimaryConstructor
+                )
             }
             if s.IsInline {
                 methodRow += 8
@@ -2174,7 +2175,7 @@ internal class ReflectionMetadataEmitter {
                 methodRow += structSynthesizedRows
                 // Native positional data construction invokes a real primary
                 // constructor, including anonymous-class literal backing types.
-                if s.HasDeclaredPrimaryConstructor {
+                if s.HasSynthesizedDataConstructor {
                     classPrimaryCtorRows[s] = methodRow
                     methodRow++
                 }
@@ -2259,8 +2260,7 @@ internal class ReflectionMetadataEmitter {
             // parameterless .ctor as the struct's last row. ClassCtorHandles
             // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
             // consults for constructed-generic MemberRef parenting.
-            if needsSynthesizedDefaultCtor &&
-                (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper) {
+            if needsSynthesizedDefaultCtor && (!s.IsData || s.NeedsValueStructZeroHelper) {
                 let initializerCtor = MetadataTokens.MethodDefinitionHandle(methodRow++)
                 if s.HasPrimaryConstructor && !s.ValueStructDefaultCtorIsZeroInitialization {
                     this.cache.ClassPrimaryCtorHandles[s] = initializerCtor
@@ -2645,18 +2645,26 @@ internal class ReflectionMetadataEmitter {
                 s,
                 out var explicitCtorRow
             ) {
-                for var i = 0; i < s.ExplicitConstructors.Length; i++ {
-                    this.cache.ExplicitCtorHandles[s.ExplicitConstructors[i]] = MetadataTokens.MethodDefinitionHandle(
-                        explicitCtorRow + i
+                for constructor in s.ExplicitConstructors {
+                    if constructor.IsSynthesizedFromPrimaryConstructor {
+                        continue
+                    }
+                    this.cache.ExplicitCtorHandles[constructor] = MetadataTokens.MethodDefinitionHandle(
+                        explicitCtorRow++
                     )
                 }
             } else if s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow) {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow)
-            } else if s.IsData && s.HasDeclaredPrimaryConstructor && classPrimaryCtorRows.TryGetValue(
-                s,
-                out var dataPrimaryCtorRow
-            ) {
-                this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow)
+            }
+            if s.HasSynthesizedDataConstructor && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow) {
+                let primaryHandle = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow)
+                this.cache.ClassPrimaryCtorHandles[s] = primaryHandle
+                // The overload symbol names the existing constructor row; it does not add another method.
+                for constructor in s.ExplicitConstructors {
+                    if constructor.IsSynthesizedFromPrimaryConstructor {
+                        this.cache.ExplicitCtorHandles[constructor] = primaryHandle
+                    }
+                }
             }
         }
         // Same hazard, same fix, for a NAMED DELEGATE's ctor: an interface
@@ -3485,6 +3493,9 @@ internal class ReflectionMetadataEmitter {
         let EmitStructMethodBodies = func (s StructSymbol) {
             if !s.ExplicitConstructors.IsDefaultOrEmpty {
                 for explicitCtor in s.ExplicitConstructors {
+                    if explicitCtor.IsSynthesizedFromPrimaryConstructor {
+                        continue
+                    }
                     let ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBody(s, explicitCtor)
                     this.cache.ExplicitCtorHandles[explicitCtor] = ctorHandle
                 }
@@ -3502,7 +3513,7 @@ internal class ReflectionMetadataEmitter {
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
             let emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s) &&
-                (!(s.IsData && s.HasDeclaredPrimaryConstructor) || s.NeedsValueStructZeroHelper)
+                (!s.IsData || s.NeedsValueStructZeroHelper)
             if s
                 .Methods
                 .IsDefaultOrEmpty &&

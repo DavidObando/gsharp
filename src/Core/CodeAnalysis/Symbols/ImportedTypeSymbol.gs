@@ -483,7 +483,9 @@ class ImportedTypeSymbol : TypeSymbol {
             }
             let annotated NullabilityAnnotatedTypeSymbol? = unwrapped as NullabilityAnnotatedTypeSymbol
             let baseType = annotated?.BaseType ?? unwrapped
-            if !(baseType is ImportedTypeSymbol) ||
+            // The CLR-keyed aggregate cannot retain unreified generic arguments.
+            if baseType is not ImportedTypeSymbol || TypeSymbol.ContainsTypeParameter(baseType) ||
+                TypeSymbol.ContainsSameCompilationUserType(baseType) ||
                 !TryCreateSemanticAggregate(clrType, references, out var aggregate) {
                 return type
             }
@@ -623,6 +625,7 @@ class ImportedTypeSymbol : TypeSymbol {
             aggregate.SetProperties(propertyBuilder.ToImmutable())
             aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal))
             aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal))
+            let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
             // Issue #3329: a value struct's ADR-0159 magic-collection field zero
             // value is normally recorded on the DECLARING compilation's own
             // StructSymbol.InstanceFieldInitializers (DeclarationBinder.Structs.cs)
@@ -640,14 +643,19 @@ class ImportedTypeSymbol : TypeSymbol {
                 out var magicFieldKinds
             ) {
                 let fieldsByName = aggregate.Fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
-                let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
                 for (fieldName, kind) in magicFieldKinds!! {
-                    if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) {
+                    if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) || instanceInitBuilder.ContainsKey(
+                        fieldSymbol
+                    ) {
                         continue
                     }
                     let reflectedField FieldInfo? = type.GetField(fieldName, bindingFlags)
                     let zeroValue BoundExpression? = if reflectedField != nil {
-                        MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind)
+                        MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                            reflectedField,
+                            kind,
+                            fieldSymbol.Type
+                        )
                     } else {
                         default(BoundExpression?)
                     }
@@ -655,9 +663,9 @@ class ImportedTypeSymbol : TypeSymbol {
                         instanceInitBuilder[fieldSymbol] = zeroValue
                     }
                 }
-                if instanceInitBuilder.Count > 0 {
-                    aggregate.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable())
-                }
+            }
+            if instanceInitBuilder.Count > 0 {
+                aggregate.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable())
             }
             return aggregate
         }
