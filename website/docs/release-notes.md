@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Member queries in the semantic model** ([#5307](https://github.com/DavidObando/gsharp/issues/5307), ADR-0212 slice S4). `SemanticModel.LookupMembers(position, type, name)` returns the members of a type that a member access can name, and `SemanticModel.GetMemberGroup(node)` returns the candidates that overload resolution considered for a call. Imported members answer as symbols with types read through the nullability readers. Member completion, the hover member fallback, and Go to Definition on imported members now use these queries, and `ImportedClrMemberResolver` is removed. Signature help lists one signature for each candidate, including imported overloads, and the hover overload count of a call is the size of its group. Completion no longer lists private or protected members from outside their type.
 
+- **Go to implementation reports each implementer in its own file** (issue #5329). `textDocument/implementation` now returns every implementing type under the URI of the file that declares it, not the URI of the requested document.
+
 - **Incremental reuse re-points enum and delegate declarations** (issue #5324). A body-only edit that shifts text now updates the declaration syntax of enums, nested enums, and delegates, including constructed delegates and enums. Go-to-definition on an enum no longer reads the previous tree.
 
 - **Imported record projections use their declaring constructors** (issue #5435). Structural spreads, casts, and implicit projections no longer select source-emitted constructors for imported records. They retain the selected open constructor identity, constructed owner, optional defaults, and single evaluation.
