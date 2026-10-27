@@ -21,6 +21,66 @@ import Xunit
 /// statements use to resolve CLR types.
 open class ReferenceResolverTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DuplicateAssemblyNames_KeepTheWinningImageVersionAndOriginalPath(reverse bool) {
+        using let first = CSharpFixture(
+            "[assembly: System.Reflection.AssemblyVersion(\"1.0.0.0\")]\npublic class First5421 {}",
+            assemblyName: "Duplicate5421"
+        )
+        using let second = CSharpFixture(
+            "[assembly: System.Reflection.AssemblyVersion(\"2.0.0.0\")]\npublic class Second5421 {}",
+            assemblyName: "Duplicate5421"
+        )
+        let winner = if reverse {
+            second.AssemblyPath
+        } else {
+            first.AssemblyPath
+        }
+        let loser = if reverse {
+            first.AssemblyPath
+        } else {
+            second.AssemblyPath
+        }
+        using let resolver = ReferenceResolver.WithReferences([]string{winner, loser})
+        Assert.True(
+            resolver.TryResolveType(
+                if reverse {
+                    "Second5421"
+                } else {
+                    "First5421"
+                },
+                out var type
+            )
+        )
+        Assert.False(
+            resolver.TryResolveType(
+                if reverse {
+                    "First5421"
+                } else {
+                    "Second5421"
+                },
+                out _
+            )
+        )
+        Assert.Equal(
+            Version(
+                if reverse {
+                    2
+                } else {
+                    1
+                },
+                0,
+                0,
+                0
+            ),
+            type.Assembly.GetName().Version
+        )
+        Assert.True(ReferenceResolver.TryGetAssemblyPath(type.Assembly, out var path))
+        Assert.Equal(winner, path)
+    }
+
+    @Theory
     @InlineData("System.Console")
     @InlineData("System.String")
     func Default_Resolves_Bcl_Type(fullName string) {

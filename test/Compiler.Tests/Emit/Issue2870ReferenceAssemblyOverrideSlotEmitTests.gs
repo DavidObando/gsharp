@@ -38,8 +38,16 @@ open class Issue2870ReferenceAssemblyOverrideSlotEmitTests {
     @InlineData("bridge.contract.dll")
     func TransitiveSignaturesResolveExplicitReferenceIdentityRegardlessOfFileName(referenceFileName string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let references = Directory
-            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+        let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        let references = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")))
+            .Split(Path.PathSeparator)
+            .Where(
+            (path string) -> string.Equals(
+                Path.GetDirectoryName(path),
+                runtimeDirectory,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
             .OrderBy((path string) -> path, StringComparer.Ordinal)
             .ToArray()
         Assert.NotEmpty(references)
@@ -101,7 +109,7 @@ System.Console.WriteLine(value.Value == nil)`
             Assert.Equal(firstPdb, File.ReadAllBytes(Path.ChangeExtension(image, ".pdb")))
             Assert.Equal(firstReference, File.ReadAllBytes(Path.Combine(fixture.Directory, "Consumer.ref.dll")))
             VerifyStrictImage(image, verifierReferences)
-            Assert.Equal(Encoding.UTF8.GetBytes("True\n"), fixture.RunBytes(image))
+            Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), fixture.RunBytes(image))
         }
         Assert.Equal(producerBytes, File.ReadAllBytes(producerReference))
         Assert.Equal(bridgeBytes, File.ReadAllBytes(bridgeReference))

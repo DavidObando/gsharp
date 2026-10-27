@@ -1138,10 +1138,12 @@ class ReferenceResolver : IDisposable {
         /// using in-memory bytes (no file handle held open).
         func LoadFromPath(context MetadataLoadContext, path string) Assembly {
             var asm Assembly
+            var originalPath = path
             let bytes = GetImageFromPath(path)
             if bytes != nil {
                 asm = context.LoadFromByteArray(bytes)
                 ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
+                originalPath = assemblyPaths[assemblyNamesByPath[Path.GetFullPath(path)]]
             } else {
                 // Fallback: read from disk with sharing flags.
                 using let fs = FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
@@ -1150,7 +1152,7 @@ class ReferenceResolver : IDisposable {
                 asm = context.LoadFromByteArray(buffer)
                 ReferenceResolver.RegisterAssemblyContentFingerprint(asm, buffer, GetImage)
             }
-            ReferenceResolver.RegisterAssemblyOriginalPath(asm, path)
+            ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
             return asm
         }
 
