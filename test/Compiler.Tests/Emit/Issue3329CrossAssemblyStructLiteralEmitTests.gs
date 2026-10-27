@@ -19,6 +19,8 @@ import System.Reflection.Emit
 import System.Reflection.Metadata
 import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
+import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #3329 — a struct literal (`S{}`) for a struct type declared in
@@ -2398,6 +2400,104 @@ if input.Values.Length != 0 {
 }
 Console.WriteLine(input.Text)`
         Assert.Equal(ExpectedConsoleBytes("1\n4\nseed:4\n"), CompileAndRunExact(source, library, "i5296expressions"))
+    }
+
+    @Theory
+    @InlineData("Local", false)
+    @InlineData("int32", false)
+    @InlineData("Local", true)
+    func Issue5412_ReadonlyNestedZero_RejectsExternalReconstruction(argument string, primary bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let producer = fixture.Compile(`package readonlyzero5412
+public data struct Child[T] { public let Items []T }`, "readonlyzero5412", false)
+        IlVerifier.Verify(producer)
+        let declaration = if primary {
+            "data struct Parent(Value Child[" + argument + "])"
+        } else {
+            "data struct Parent { public var Value Child[" + argument + "] }"
+        }
+        let source = "import readonlyzero5412\ndata struct Local { public var X int32 }\n" +
+            declaration +
+            "\nlet value = Parent{}\nSystem.Console.WriteLine(value.Value.Items.Length)"
+        let (code, diagnostics) = fixture.TryCompile(source, "rejected", true, "/r:" + producer)
+        Assert.NotEqual(0, code)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
+        let errors = Regex.Matches(diagnostics, `rejected.gs\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`)
+        Assert.Equal(
+            if primary {
+                "rejected.gs(4,13,4,19): error GS0127:"
+            } else {
+                "rejected.gs(3,22,3,51): error GS0127:\nrejected.gs(4,13,4,19): error GS0127:"
+            },
+            string.Join("\n", errors.Cast[Match]().Select((error Match) -> error.Value))
+        )
+    }
+
+    @Theory
+    @InlineData("Local")
+    @InlineData("int32")
+    func Issue5412_MutableNestedZero_PreservesSymbolicStorageWithoutReplayingDefaults(argument string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let producer = fixture.Compile(`package mutablezero5412
+public class Effects {
+    shared {
+        public var Count int32
+        public func Next() int32 {
+            Count += 1
+            return 73
+        }
+    }
+}
+public data struct Child[T] {
+    public var Items []T
+    public var Scalar int32 = Effects.Next()
+}`, "mutablezero5412", false, "/deterministic+", "/debug:none")
+        IlVerifier.Verify(producer)
+        let source = `package consumerzero5412
+import mutablezero5412
+public data struct Local { public var X int32 }
+public data struct Parent { public var Value Child[ARG] }
+class Slots { shared { public var Value Child[ARG] } }
+func Make() Parent {
+    Effects.Count += 1
+    return Parent{}
+}
+func Main() {
+    let value = Make() with{}
+    var bare Child[ARG]
+    let raw = default(Child[ARG])
+    System.Console.Write(value.Value.Items.Length)
+    System.Console.Write("|")
+    System.Console.Write(bare.Items.Length)
+    System.Console.Write("|")
+    System.Console.Write(Slots.Value.Items.Length)
+    System.Console.Write("|")
+    System.Console.Write(value.Value.Scalar + bare.Scalar + Slots.Value.Scalar)
+    System.Console.Write("|")
+    System.Console.Write(Effects.Count)
+    System.Console.Write("|")
+    System.Console.Write(raw.Items == nil)
+}`.Replace("ARG", argument)
+        let consumer = fixture.Compile(
+            source,
+            "consumerzero5412",
+            true,
+            "/r:" + producer,
+            "/deterministic+",
+            "/debug:none"
+        )
+        let first = File.ReadAllBytes(consumer)
+        fixture.Compile(source, "consumerzero5412", true, "/r:" + producer, "/deterministic+", "/debug:none")
+        Assert.Equal(first, File.ReadAllBytes(consumer))
+        IlVerifier.Verify(consumer, []string{producer})
+        Assert.Equal(Encoding.UTF8.GetBytes("0|0|0|0|1|True"), fixture.RunBytes(consumer))
+        let downstream = fixture.Compile(`import consumerzero5412
+var value Parent
+System.Console.Write(value.Value.Items.Length)
+System.Console.Write("|")
+System.Console.Write(value.Value.Scalar)`, "downstream", true, "/r:" + consumer, "/r:" + producer)
+        IlVerifier.Verify(downstream, []string{consumer, producer})
+        Assert.Equal(Encoding.UTF8.GetBytes("0|0"), fixture.RunBytes(downstream))
     }
 
     @Fact
