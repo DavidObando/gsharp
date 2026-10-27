@@ -39,6 +39,8 @@ public static class Api {
     public static S<string> Required() { Calls++; return new("required"); }
     public static S<int> Value() { Calls++; return new(42); }
     public static S<int?> Optional() { Calls++; return new(null); }
+    public static S<List<int>> NestedValue() { Calls++; return new(new() { 42 }); }
+    public static S<List<int?>> NestedOptional() { Calls++; return new(new() { null }); }
     public static S<List<string?>> Nested() { Calls++; return new(new() { null }); }
     public static R<string?> Reference() { Calls++; return new(null); }
     public static R<string?>? Maybe() { Calls++; return null; }
@@ -67,6 +69,8 @@ public class Exports {
         public func Required() S[string] -> Api.Required()
         public func Value() S[int32] -> Api.Value()
         public func Optional() S[int32?] -> Api.Optional()
+        public func NestedValue() S[List[int32]] -> Api.NestedValue()
+        public func NestedOptional() S[List[int32?]] -> Api.NestedOptional()
         public func Nested() S[List[string?]] -> Api.Nested()
         public func Reference() R[string?] -> Api.Reference()
         public func Lift() S[string?]? -> Api.Create()
@@ -90,7 +94,8 @@ public class Exports {
         let _ = fixture.Compile(source, "Api", executable: false, arguments)
         Assert.Equal(firstImage, File.ReadAllBytes(api))
         Assert.Equal(firstReference, File.ReadAllBytes(apiReference))
-        let caller = fixture.CompileCSharp(`using CopyAnnotated5408;
+        let caller = fixture.CompileCSharp(`using System.Collections.Generic;
+using CopyAnnotated5408;
 using SameContract5408;
 using System;
 using System.Linq;
@@ -106,19 +111,23 @@ public static class Probe {
         var required = Exports.Required();
         var number = Exports.Value();
         var optional = Exports.Optional();
+        var nestedValue = Exports.NestedValue();
+        var nestedOptional = Exports.NestedOptional();
         var nested = Exports.Nested();
         var reference = Exports.Reference();
         var lifted = Exports.Lift();
         var referenceLift = Exports.ReferenceLift();
         if (required.Value != "required" || number.Value != 42 || optional.Value != null
             || optional.GetType() != typeof(S<int?>) || nested.Value.Count != 1
+            || nestedValue.Value.Single() != 42 || nestedOptional.Value.Count != 1
+            || nestedOptional.Value[0] != null || nestedOptional.GetType() != typeof(S<List<int?>>)
             || nested.Value[0] != null || reference.Value != null
             || reference.GetType() != typeof(R<string>)
             || !lifted.HasValue || lifted.Value.Value != null
             || !ReferenceEquals(lifted.Value.Anchor, Api.Marker)
             || referenceLift == null || referenceLift.Value != null || Exports.Maybe() != null)
             throw new Exception("Control contract changed.");
-        if (Api.Calls != 11 || Api.Constructions != 8)
+        if (Api.Calls != 13 || Api.Constructions != 10)
             throw new Exception("Conversion evaluated again or reconstructed a value.");
         var context = new NullabilityInfoContext();
         foreach (var name in new[] { "Direct", "Local", "Argument", "Reference" }) {
@@ -152,37 +161,57 @@ public static class Probe {
     }
 
     @Theory
-    @InlineData("S[string]", "Api.Create()")
-    @InlineData("S[string?]", "Api.Required()")
-    @InlineData("S[object?]", "Api.Create()")
-    @InlineData("S[List[string]]", "Api.Nested()")
-    @InlineData("R[string]", "Api.Reference()")
-    @InlineData("R[string?]", "Api.Maybe()")
-    func ImportedNullableGenericReturn_RejectsDifferentInvariantContracts(target string, expression string) {
+    @InlineData("S[string]", "Api.Create()", false)
+    @InlineData("S[string]", "Api.Create()", true)
+    @InlineData("S[string?]", "Api.Required()", false)
+    @InlineData("S[string?]", "Api.Required()", true)
+    @InlineData("S[object?]", "Api.Create()", false)
+    @InlineData("S[object?]", "Api.Create()", true)
+    @InlineData("S[List[string]]", "Api.Nested()", false)
+    @InlineData("S[List[string]]", "Api.Nested()", true)
+    @InlineData("R[string]", "Api.Reference()", false)
+    @InlineData("R[string]", "Api.Reference()", true)
+    @InlineData("R[string?]", "Api.Maybe()", false)
+    @InlineData("R[string?]", "Api.Maybe()", true)
+    @InlineData("S[int32]", "Api.Optional()", false)
+    @InlineData("S[int32]", "Api.Optional()", true)
+    @InlineData("S[int32?]", "Api.Value()", false)
+    @InlineData("S[int32?]", "Api.Value()", true)
+    @InlineData("S[List[int32]]", "Api.NestedOptional()", false)
+    @InlineData("S[List[int32]]", "Api.NestedOptional()", true)
+    @InlineData("S[List[int32?]]", "Api.NestedValue()", false)
+    @InlineData("S[List[int32?]]", "Api.NestedValue()", true)
+    func ImportedNullableGenericReturn_RejectsDifferentInvariantContracts(
+        target string,
+        expression string,
+        useReference bool
+    ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "Contract.ref.dll")
         let contract = fixture.CompileCSharpWithReference(ImportedNullableContract5408, "Contract", reference)
-        for dependency in[]string{contract, reference} {
-            let outputReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
-            let (code, output) = fixture.TryCompile(
-                "import System.Collections.Generic\nimport CopyAnnotated5408\npublic func Rejected() " +
-                    target +
-                    " -> " +
-                    expression +
-                    "\n",
-                "Rejected",
-                executable: false,
-                "/r:" + dependency,
-                "/refout:" + outputReference
-            )
-            let start = 28 + target.Length
-            let end = start + expression.Length
-            Assert.NotEqual(0, code)
-            Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155", output, StringComparison.Ordinal)
-            Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
-            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
-            Assert.False(File.Exists(outputReference))
-        }
+        let outputReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport CopyAnnotated5408\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            "/r:" + if useReference {
+                reference
+            } else {
+                contract
+            },
+            "/refout:" + outputReference
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("Rejected.gs(3,$start,3,$end): error GS0155", StringComparison.Ordinal), output)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(outputReference))
     }
 
     @Theory

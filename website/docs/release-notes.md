@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
-- **Imported generic record returns accept matching nullable contracts** (issue #5408). Imported annotation-backed records now convert to the same explicitly constructed generic signature. Returns, typed locals, and arguments preserve nullable type arguments, including nested positions. Different invariant argument contracts remain rejected.
+- **Imported generic record returns accept matching nullable contracts** (issue #5408). Imported annotation-backed records now convert to the same explicitly constructed generic signature. Returns, typed locals, and arguments preserve nullable type arguments, including nested positions. Different invariant argument contracts, including value-type optionality, remain rejected.
 
 - **Imported generic data copies keep nullable type arguments** (issue #5405). `with` and `.copy(...)` retain the receiver's type arguments during copying and member updates. A copy does not call constructors or repeat declaration initializers. Nullable values remain nullable after copying. Updates select the nearest declared member. A derived field can hide a writable or get-only base property without changing the base property's value.
 

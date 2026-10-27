@@ -73,6 +73,9 @@ class Conversion {
         get;
     }
 
+    /// Gets whether invariant arguments rule out this conversion before structural projection.
+    internal prop IsInvariantArgumentMismatch bool -> object.ReferenceEquals(this, InvariantArgumentMismatch)
+
     /// Gets a value indicating whether the conversion is identity or not.
     prop IsIdentity bool {
         get;
@@ -113,6 +116,12 @@ class Conversion {
     shared {
         /// States that there's no conversion between the given types.
         let None Conversion = Conversion(exists: false, isIdentity: false, isImplicit: false)
+
+        private let InvariantArgumentMismatch Conversion = Conversion(
+            exists: false,
+            isIdentity: false,
+            isImplicit: false
+        )
 
         /// States that there's an identity conversion between the given types.
         let Identity Conversion = Conversion(exists: true, isIdentity: true, isImplicit: true)
@@ -479,7 +488,7 @@ class Conversion {
                 }
                 for var i = 0; i < aggregateFromArguments.Length; i++ {
                     if !HaveIdenticalTypeArgumentContracts(aggregateFromArguments[i], aggregateToArguments[i]) {
-                        return Conversion.None
+                        return InvariantArgumentMismatch
                     }
                 }
                 return if from is not NullableTypeSymbol && to is NullableTypeSymbol {
@@ -2843,7 +2852,12 @@ class Conversion {
         }
 
         private func HaveIdenticalTypeArgumentContracts(from TypeSymbol, to TypeSymbol) bool {
-            if from.ReferenceNullability != to.ReferenceNullability || !AreTypeArgumentsEquivalent(from, to) {
+            // Value optionality changes storage even when the symbol relays its underlying CLR type.
+            if from.ReferenceNullability != to.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
+                from.StripToBareShape() as NullableTypeSymbol
+            ) !=
+            NullableLifting.IsAnyValueTypeNullable(to.StripToBareShape() as NullableTypeSymbol) ||
+                !AreTypeArgumentsEquivalent(from, to) {
                 return false
             }
             let fromPositions = from.GetElementPositions()
