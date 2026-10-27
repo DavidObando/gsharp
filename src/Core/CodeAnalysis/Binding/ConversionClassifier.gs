@@ -3382,7 +3382,7 @@ internal class ConversionClassifier {
         plan = resolvedPlan
         let ownsDataInitialization = resolvedPlan.Construction.UserType?.UsesConstructorOwnedDataConstruction == true
         let usesPrimaryConstruction = ownsDataInitialization || resolvedPlan.Construction.UserType is {IsClass: true}
-        // Brace spreads use primary zeros, not metadata's optional-call defaults.
+        // Check collection omissions before applying optional-call defaults.
         let usesPrimaryZero = ownsDataInitialization ||
             usesPrimaryConstruction &&
             constructionSyntax is StructLiteralExpressionSyntax
@@ -3467,8 +3467,10 @@ internal class ConversionClassifier {
                     )
                     return BoundErrorExpression(expression.Syntax)
                 }
-                constructorArguments.Add(zero ?? BoundDefaultExpression(expression.Syntax, slot.TargetType))
-                continue
+                if zero != nil || ownsDataInitialization {
+                    constructorArguments.Add(zero ?? BoundDefaultExpression(expression.Syntax, slot.TargetType))
+                    continue
+                }
             }
             constructorArguments.Add(
                 BindStructuralProjectionSlot(diagnosticLocation, expression.Syntax, sourceTemp, slot, explicitReads)

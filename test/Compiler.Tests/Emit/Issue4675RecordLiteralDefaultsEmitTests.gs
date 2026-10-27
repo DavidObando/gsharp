@@ -1118,7 +1118,7 @@ System.Console.WriteLine(cast[ProjectionBox[int32]](source).Extra)
 System.Console.WriteLine(ScalarBox[int32](7).Extra)
 `, "KnownSpreadShapes", true, "/r:" + selected)
         IlVerifier.Verify(knownShapes, additionalReferences: []string{contract})
-        Assert.Equal("0\n3\n0\n0\n0\n3\n0\n0\n0\n9\n9\n", fixture.Run(knownShapes))
+        Assert.Equal("0\n3\n0\n0\n0\n3\n0\n0\n9\n9\n9\n", fixture.Run(knownShapes))
     }
 
     @Fact
