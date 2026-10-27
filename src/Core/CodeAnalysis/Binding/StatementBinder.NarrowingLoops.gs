@@ -515,6 +515,9 @@ internal partial class StatementBinder {
             }
             return
         }
+        // The names that a closure of the function assigns decide the shared predicates below. They are
+        // computed on first use, and until then every name is assumed assigned.
+        EnsureClosureAssignedNames(loop)
         if HeaderIsLiteralFalse(loop) {
             // No back edge: the body runs once from the entry state, or never.
             return

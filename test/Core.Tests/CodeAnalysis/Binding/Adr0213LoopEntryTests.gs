@@ -199,6 +199,31 @@ func Run() int32 {
     }
     return n
 }`, "GS0158")
+            Add("value-type-construction-is-no-proof (P7)", `package T
+import System
+struct S { var V int32 }
+func Run(n int32) int32 {
+    var x object? = "a"
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + x.GetHashCode()
+        x = S{}
+    }
+    return total
+}`, "GS0159")
+            Add("unresolved-construction-is-no-proof (P7)", `package T
+import System
+func Run(n int32) int32 {
+    var s string? = "a"
+    if s == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + s.Length
+        s = Missing()
+    }
+    return total
+}`, "GS0158 GS0130")
             return rows
         }
     }
