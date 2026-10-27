@@ -3546,11 +3546,31 @@ internal partial class ExpressionBinder {
         // are excluded, matching C# (char is not a §10.2.11 destination type, and a
         // non-constant narrowing/cross-sign value still requires an explicit cast).
         internal func IsImplicitConstantNarrowingArgument(argument BoundExpression?, parameterType TypeSymbol?) bool {
+            return TryAdaptConstantInteger(argument, parameterType, out _, out _)
+        }
+
+        /// Adapts a representable integer constant before an optional value-nullable lift.
+        /// @param argument The constant expression.
+        /// @param target The declared destination type.
+        /// @param converted The adapted integer value.
+        /// @param integerType The integer type before lifting.
+        /// @returns True when the constant fits the integer destination.
+        internal func TryAdaptConstantInteger(
+            argument BoundExpression?,
+            target TypeSymbol?,
+            out converted object?,
+            out integerType TypeSymbol
+        ) bool {
+            converted = nil
+            integerType = if target is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
+                nullable.UnderlyingType
+            } else {
+                target ?? TypeSymbol.Error
+            }
             return argument != nil &&
-                parameterType != nil &&
-                IsIntegerType(parameterType) &&
+                IsIntegerType(integerType) &&
                 TryGetConstantIntegerValue(argument, out var value) &&
-                TryAdaptIntegerLiteral(value, parameterType, out _)
+                TryAdaptIntegerLiteral(value, integerType, out converted)
         }
 
         // Issue #1311: builds the per-call constant-narrowing applicability hook for
