@@ -68,6 +68,10 @@ open class ProgramTests {
             Assert.Contains("Optional5420", diagnostics)
         } else {
             Assert.DoesNotContain("GS9100", diagnostics)
+            if useForwardedType {
+                let error = Assert.Single(Regex.Matches(diagnostics, `(?m)^.*\berror GS\d+:[^\r\n]*`))
+                Assert.Equal("$source(1,13,1,26): error GS0130: Function 'Forwarded5420' doesn't exist.", error.Value)
+            }
         }
         if required || useForwardedType {
             Assert.NotEqual(0, exit)
