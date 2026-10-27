@@ -402,7 +402,7 @@ partial class SemanticModel {
                     hasSetter: property.CanWrite,
                     isAutoProperty: false,
                     isVirtual: accessor?.IsVirtual == true,
-                    isOverride: false,
+                    isOverride: accessor != nil && ClrTypeUtilities.SafeIsOverride(accessor),
                     isStatic: accessor?.IsStatic == true,
                     isInitOnly: setter != nil && ImportedTypeSymbol.IsInitOnlySetter(setter),
                     getterAccessibility: if getter == nil {
@@ -446,7 +446,7 @@ partial class SemanticModel {
                     ClrAccessibility(clrEvent.GetAddMethod(true)?.Attributes ?? MethodAttributes.Private),
                     isFieldLike: false,
                     isVirtual: adder?.IsVirtual == true,
-                    isOverride: false,
+                    isOverride: adder != nil && ClrTypeUtilities.SafeIsOverride(adder),
                     isStatic: adder?.IsStatic == true
                 )
                 symbol.ImportedMember = clrEvent
@@ -531,6 +531,28 @@ partial class SemanticModel {
             default: false
         }
 
+        // A member copied for a constructed base has no containing type; its declaration names the owner.
+        private func OwnerInHierarchy(member Symbol, receiver TypeSymbol) TypeSymbol {
+            if receiver is StructSymbol structure && !member.DeclaringSyntaxNodes.IsDefaultOrEmpty {
+                let declared = member.DeclaringSyntaxNodes[0].FirstAncestorOrSelf[StructDeclarationSyntax]()
+                if declared != nil {
+                    for candidate in structure.GetHierarchy() {
+                        if candidate.Name == declared
+                            .Identifier
+                            .ValueText ||
+                            candidate
+                            .Definition
+                            ?.Name == declared
+                            .Identifier
+                            .ValueText {
+                            return candidate
+                        }
+                    }
+                }
+            }
+            return receiver
+        }
+
         func CanAccess(member Symbol, receiver TypeSymbol) bool {
             let accessibility = switch member {
                 case field is FieldSymbol: field.Accessibility
@@ -542,7 +564,7 @@ partial class SemanticModel {
             if accessibility == Accessibility.Public || accessibility == Accessibility.Internal {
                 return true
             }
-            let declaring = member.ContainingType ?? receiver
+            let declaring = member.ContainingType ?? OwnerInHierarchy(member, receiver)
             // The binder rejects a protected instance member read through a receiver of the base type (GS0379).
             if accessibility == Accessibility.Protected &&
                 enclosingFunction != nil &&

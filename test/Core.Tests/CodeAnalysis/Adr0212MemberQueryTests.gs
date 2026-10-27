@@ -130,6 +130,22 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func LookupMembers_PrivateMemberOfAConstructedBase_IsNotOfferedInTheDerivedType() {
+        let names = Members("PInGDerived", "GDerived").Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("Shown", names)
+        Assert.DoesNotContain("Hidden", names)
+    }
+
+    @Fact
+    func LookupMembers_ImportedOverride_IsAnOverride() {
+        let model = ModelOf(Trees[0].Root)
+        let length = Assert.Single(
+            model.LookupMembers(Position("PLookup"), ImportedTypeSymbol.Get(typeof(System.IO.FileStream)), "Length")
+        )
+        Assert.True(cast[PropertySymbol](length).IsOverride)
+    }
+
+    @Fact
     func MemberGroup_ArgumentProbe_DoesNotReplaceTheCalleesGroup() {
         // The method-group argument is resolved against the Console overloads inside the call.
         let group = Group("PProbe")
@@ -367,6 +383,17 @@ class Dog : Animal {
         func Make() Dog {
             return Dog{}
         }
+    }
+}
+
+open class GBase[T] {
+    private var Hidden T
+    var Shown T
+}
+
+class GDerived : GBase[int32] {
+    func Peek() int32 {
+        return 0 // PInGDerived
     }
 }
 
