@@ -319,6 +319,8 @@ open class Adr0213RegionEffectScannerTests {
 }`)
         let found = span!!
         Assert.Equal([]string{"Again"}, found.Labels.ToArray())
+        // The span covers the statement and the trailing expression that holds the goto.
+        Assert.Equal(2, found.Statements().Length)
     }
 
     @Fact

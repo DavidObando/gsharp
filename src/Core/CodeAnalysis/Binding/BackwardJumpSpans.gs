@@ -21,8 +21,10 @@ internal sealed class BackwardJumpSpan {
         firstIndex int32,
         lastIndex int32,
         labels List[string],
-        gotoCount int32
+        gotoCount int32,
+        includesTail bool
     ) {
+        IncludesTail = includesTail
         Owner = owner
         StatementList = statements
         FirstIndex = firstIndex
@@ -64,11 +66,19 @@ internal sealed class BackwardJumpSpan {
         get;
     }
 
+    /// Whether the span also covers the trailing expression of a block expression.
+    prop IncludesTail bool {
+        get;
+    }
+
     /// Gets the statements of the span.
     func Statements()[]SyntaxNode {
         let result = List[SyntaxNode]()
         for var i = FirstIndex; i <= LastIndex; i++ {
             result.Add(StatementList[i])
+        }
+        if IncludesTail && Owner is BlockExpressionSyntax blockExpression && blockExpression.Expression != nil {
+            result.Add(blockExpression.Expression)
         }
         return result.ToArray()
     }
@@ -234,7 +244,8 @@ internal shared class BackwardJumpSpans {
             first = Math.Min(first, index)
             last = Math.Max(last, index)
         }
-        // The trailing expression of a block expression is not a statement of the span.
+        // A participant in the trailing expression of a block expression puts the expression in the span.
+        let includesTail = last >= statements.Length
         last = Math.Min(last, statements.Length - 1)
         first = Math.Min(first, last)
         let spanLabels = List[string]()
@@ -249,7 +260,7 @@ internal shared class BackwardJumpSpans {
                 spanLabels.Add(label.Name)
             }
         }
-        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count)
+        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count, includesTail)
     }
 
     // A label does not change what its statement does: `Again: return 0` ends the path.
