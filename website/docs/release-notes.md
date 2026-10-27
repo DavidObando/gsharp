@@ -16,7 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 The entries below are newer than v0.5.212. Published features and migration notes follow in the release section.
 
-- **Imported generic data-class literals retain their type arguments** (issue #5419). A literal such as `C[string?]{Value: nil}` now resolves the imported primary constructor instead of requiring a parameterless constructor. Constructor inputs keep their declared nullability and run once in source order. Nullable results cannot flow into non-nullable slots. Ordinary constructor calls are unchanged.
+- **Imported generic data-class literals retain their type arguments** (issue #5419). A literal such as `C[string?]{Value: nil}` now resolves the imported primary constructor instead of requiring a parameterless constructor. Classes without primary inputs use the existing default constructor path. Constructor inputs keep their declared nullability and run once in source order. Expression trees defer these inputs and construction until the compiled lambda runs. Nullable results cannot flow into non-nullable slots. Ordinary constructor calls are unchanged.
 
 - **Imported generic record returns accept matching nullable contracts** (issue #5408). Imported annotation-backed records now convert to the same explicitly constructed generic signature. Returns, typed locals, and arguments preserve nullable type arguments, including nested positions. Different invariant argument contracts, including value-type optionality, remain rejected.
 

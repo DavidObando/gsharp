@@ -790,8 +790,7 @@ class ImportedTypeSymbol : TypeSymbol {
                             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
                         )
                     }
-                    if member == nil || !ClrTypeUtilities.AreSame(
-                        ClrNullability.GetSignatureType(parameters[i]),
+                    if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
                         ClrNullability.GetSignatureType(member)
                     ) {
                         matches = false

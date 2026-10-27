@@ -1766,7 +1766,7 @@ internal partial class ExpressionBinder {
                         $scope.References,
                         out var dataClass
                     ) &&
-                        dataClass is StructSymbol{IsClass: true, HasPrimaryConstructor: true} importedDataClass {
+                        dataClass is StructSymbol{IsClass: true} importedDataClass {
                         return BindImportedDataClassLiteral(
                             syntax,
                             closedImportedType,
@@ -2585,6 +2585,9 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportCannotInstantiateAbstractType(syntax.TypeIdentifier.Location, aggregate.Name)
             return BoundErrorExpression(syntax)
         }
+        if !aggregate.HasPrimaryConstructor {
+            return BindImportedClassLiteralExpression(syntax, clrType, resultType)
+        }
         let constructor = ImportedTypeSymbol.FindPrimaryConstructor(clrType, aggregate.PrimaryConstructorParameters)
         if constructor == nil {
             Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
@@ -2643,6 +2646,10 @@ internal partial class ExpressionBinder {
             resultType
         )
         let initialized = BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction, consumed)
+        if initialized is BoundBlockExpression initializerBlock {
+            statements.AddRange(initializerBlock.Statements)
+            return BoundBlockExpression(syntax, statements.ToImmutable(), initializerBlock.Expression)
+        }
         return BoundBlockExpression(syntax, statements.ToImmutable(), initialized)
     }
 

@@ -1423,6 +1423,8 @@ Struct literals use `TypeName{Field: value}`. Data structs also support copy/upd
 
 Imported generic data-class literals preserve explicit type arguments, including nullable positions. Positional members supply the imported primary constructor's inputs; other members initialize the constructed instance. Primary inputs precede other members and content, and evaluate once in source order. For example, `C[string?]{Value: nil}` preserves `string?` both at the constructor input and when reading `Value`.
 
+Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created.
+
 ### Collection initializers
 
 A collection construction target followed by a brace-enclosed element list builds and populates a CLR collection in one expression — the analogue of C#'s `new List<int>{1, 2, 3}` / `new Dictionary<K,V>{ ["a"] = 1 }`. The collection type is named at the site (consistent with G#'s `[]T{…}`, `map[K,V]{…}`, and struct-literal traditions); the no-parentheses form `List[T]{…}` is sugar for `List[T](){…}`.

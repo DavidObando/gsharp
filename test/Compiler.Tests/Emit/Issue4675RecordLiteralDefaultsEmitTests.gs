@@ -564,6 +564,9 @@ public static class Counter {
 }
 public record Box<T>(T Value) {
     public int Stamp { get; } = Counter.Next();
+}
+public record Empty<T> {
+    public T Echo(T value) => value;
 }`, "ImportedLiteral5419", reference)
         } else {
             fixture.Compile(`package ImportedLiteral5419
@@ -578,6 +581,9 @@ public class Counter {
 }
 public data class Box[T](Value T) {
     public let Stamp int32 = Counter.Next()
+}
+public data class Empty[T] {
+    public func Echo(value T) T -> value
 }`, "ImportedLiteral5419", false, "/refout:" + reference)
         }
         IlVerifier.Verify(contract)
@@ -598,6 +604,10 @@ func Main() {
     Console.WriteLine(number.Value)
     Console.WriteLine(number.Stamp)
     Console.WriteLine(Counter.Count)
+    let empty Empty[int32] = Empty[int32]{}
+    Console.WriteLine(empty.Echo(9))
+    let nullableEmpty Empty[string?] = Empty[string?]{}
+    Console.WriteLine(nullableEmpty.Echo(nil) == nil)
 }`, "GenericLiteral", true, "/r:" +
                 if referenceAssembly {
                 reference
@@ -605,7 +615,7 @@ func Main() {
                 contract
             })
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
-        Assert.Equal("input\nTrue\n1\nTrue\n2\n7\n3\n3\n", fixture.Run(dll))
+        Assert.Equal("input\nTrue\n1\nTrue\n2\n7\n3\n3\n9\nTrue\n", fixture.Run(dll))
     }
 
     @Theory
@@ -674,14 +684,21 @@ public record Collision<T> {
     public Collision(string Value) => throw new System.InvalidOperationException("not primary");
     public Collision(T Value) { this.Value = Value; }
     public T Value { get; init; }
+}
+public record DistinctSlots<T, U> {
+    public DistinctSlots(U Value) => throw new System.InvalidOperationException("wrong slot");
+    public DistinctSlots(T Value) { this.Value = Value; }
+    public T Value { get; init; }
 }`, "Contract")
         IlVerifier.Verify(contract)
         let dll = fixture.Compile(`import ImportedLiteral5419
 let value = Collision[string?]{Value: nil}
 System.Console.WriteLine(value.Value == nil)
+let distinct = DistinctSlots[string?, string]{Value: nil}
+System.Console.WriteLine(distinct.Value == nil)
 `, "ConstructorIdentity", true, "/r:" + contract)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
-        Assert.Equal("True\n", fixture.Run(dll))
+        Assert.Equal("True\nTrue\n", fixture.Run(dll))
     }
 
     @Fact
@@ -701,5 +718,56 @@ System.Console.WriteLine(value.Value == nil)
         Assert.Equal(1, code)
         Assert.True(output.Contains("Abstract.gs(2,13,2,16): error GS0386", StringComparison.Ordinal), output)
         Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "Abstract.dll")))
+    }
+
+    @Fact
+    func ImportedGenericDataClassLiteral_ExpressionTreeDefersArgumentsAndConstruction() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.Compile(`package TreeLiteral5419
+public class Trace {
+    shared {
+        public var Count int32
+        public func Input(label string) string? {
+            System.Console.WriteLine(label)
+            return nil
+        }
+        public func Construct() int32 {
+            System.Console.WriteLine("constructor")
+            Count += 1
+            return Count
+        }
+    }
+}
+public data class Box[T](Value T)
+public data class Pair[T](First T, Second T) {
+    public var Extra T?
+    public let Stamp int32 = Trace.Construct()
+}`, "TreeLiteral5419", false)
+        IlVerifier.Verify(contract)
+        let dll = fixture.Compile(`import System
+import System.Linq.Expressions
+import TreeLiteral5419
+let simple Expression[Func[Box[int32]]] = () -> Box[int32]{Value: 7}
+Console.WriteLine(simple.Compile()().Value)
+let tree Expression[Func[Pair[string?]]] = () -> Pair[string?]{
+    Second: Trace.Input("second"),
+    First: Trace.Input("first"),
+    Extra: Trace.Input("extra")
+}
+Console.WriteLine(Trace.Count)
+let invoke = tree.Compile()
+Console.WriteLine(Trace.Count)
+let first = invoke()
+Console.WriteLine(first.First == nil && first.Second == nil && first.Extra == nil)
+Console.WriteLine(first.Stamp)
+let second = invoke()
+Console.WriteLine(second.Stamp)
+Console.WriteLine(Trace.Count)
+`, "TreeConsumer", true, "/r:" + contract)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal(
+            "7\n0\n0\nsecond\nfirst\nconstructor\nextra\nTrue\n1\nsecond\nfirst\nconstructor\nextra\n2\n2\n",
+            fixture.Run(dll)
+        )
     }
 }
