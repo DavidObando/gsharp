@@ -468,8 +468,23 @@ internal class SignatureEncoder {
             // cached projection corrupts generic async state-machine fields.
             // The reified signature retains the original nested Var/MVar slots.
             this.EncodeFunctionTypeSymbol(encoder, fn)
+        } else if type?.ClrType != nil {
+            this.EncodeClrType(encoder, type!!.ClrType)
         } else if type is MapTypeSymbol openMap {
-            // Encode the canonical pair before CLR projection can erase nested generic arguments (#5430).
+            // Issue #1481: a `map[K, V]` whose erased CLR form is unavailable
+            // because a key or value is (or structurally contains) an in-scope
+            // type parameter — e.g. `map[string, T]` — has a null ClrType, so
+            // the fast-path above cannot fire. Encode it as
+            // `GENERICINST System.Collections.Generic.Dictionary`2<K, V>` with
+            // each argument routed through EncodeTypeSymbol so the `Var`/`MVar`
+            // slot survives. Without this the encoder threw
+            // "Cannot encode signature for type 'map[string,T]'", so a generic
+            // iterator yielding `map[string, T]` could not be emitted at all,
+            // and the iterator's `IEnumerable<…>` / `IEnumerator<…>` rows could
+            // not carry the strongly-typed `Dictionary<…, !0>` shape. The
+            // matching body construction is reified through
+            // <see cref="ImportedMemberRefFactory.GetMapCtorReference"/> /
+            // <see cref="ImportedMemberRefFactory.GetMapSetItemReference"/>.
             let dictionaryOpen = typeof(System.Collections.Generic.Dictionary[_, _])
             let giMap = encoder.GenericInstantiation(
                 this.outer.memberRefs.GetTypeReference(dictionaryOpen),
@@ -478,8 +493,6 @@ internal class SignatureEncoder {
             )
             this.EncodeTypeSymbol(giMap.AddArgument(), openMap.KeyType)
             this.EncodeTypeSymbol(giMap.AddArgument(), openMap.ValueType)
-        } else if type?.ClrType != nil {
-            this.EncodeClrType(encoder, type!!.ClrType)
         } else {
             throw NotSupportedException("Cannot encode signature for type '${type?.Name}' yet.")
         }
