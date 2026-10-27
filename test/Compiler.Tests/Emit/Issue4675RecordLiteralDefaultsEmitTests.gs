@@ -625,6 +625,7 @@ func Main() {
     )
     @InlineData("let value = Box[string]{Value: nil}", "Rejected.gs(2,32,2,35): error GS0155")
     @InlineData("let value = Box[string?]{Missing: nil}", "Rejected.gs(2,26,2,33): error GS0158")
+    @InlineData("let value = Box[string?]{Value: nil, Value: nil}", "Rejected.gs(2,38,2,43): error GS0102")
     func ImportedGenericDataClassLiteral_ReportsLocatedTypeErrors(statement string, diagnostic string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contract = fixture.Compile(
@@ -665,9 +666,9 @@ func Input(label string) string? {
     return nil
 }
 let pair Pair[string?] = Pair[string?]{
+    Extra: Input("extra"),
     Second: Input("second"),
-    First: Input("first"),
-    Extra: Input("extra")
+    First: Input("first")
 }
 Console.WriteLine(pair.First == nil && pair.Second == nil && pair.Extra == nil)
 Console.WriteLine(pair.Stamp)

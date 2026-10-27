@@ -2686,7 +2686,8 @@ internal partial class ExpressionBinder {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         var primaryPrefix = true
         for element in syntax.Elements {
-            if element is not FieldInitializerSyntax initializer {
+            if element is not FieldInitializerSyntax initializer ||
+                initializer.Value is CollectionInitializerExpressionSyntax{Target: nil} {
                 primaryPrefix = false
                 continue
             }
@@ -2694,11 +2695,14 @@ internal partial class ExpressionBinder {
                 parameters,
                 (parameter ParameterInfo) -> parameter.Name == initializer.FieldIdentifier.ValueText
             )
-            if index < 0 || initializer.Value is CollectionInitializerExpressionSyntax{Target: nil} {
-                primaryPrefix = false
+            if index < 0 {
                 continue
             }
             if !consumed.Add(initializer.FieldIdentifier.ValueText) {
+                Diagnostics.ReportSymbolAlreadyDeclared(
+                    initializer.FieldIdentifier.Location,
+                    initializer.FieldIdentifier.ValueText
+                )
                 continue
             }
             if !primaryPrefix {
@@ -3038,9 +3042,6 @@ internal partial class ExpressionBinder {
             }
             if !seen.Add(memberName) {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName)
-                continue
-            }
-            if constructorMembers?.Contains(memberName) == true {
                 continue
             }
             // Resolve a public instance property (non-indexer) or field on the

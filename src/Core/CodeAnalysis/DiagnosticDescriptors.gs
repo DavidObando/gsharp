@@ -2425,7 +2425,7 @@ internal shared class DiagnosticDescriptors {
     internal let PositionalInitializerAfterCompositeElement DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0622",
         DiagnosticSeverity.Error,
-        "Positional member '{0}' cannot follow a post-construction initializer because its constructor argument would be evaluated out of source order. Move positional members before other initializers."
+        "Positional member '{0}' cannot follow a braced or content initializer because its constructor argument would be evaluated out of source order. Move positional members before composite elements."
     )
     internal let IncompatibleDataPrintMembers DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0623",

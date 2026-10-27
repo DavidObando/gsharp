@@ -1518,7 +1518,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             return true
         }
         if translatedInitializer.Type != NewExpressionTypeSymbol {
-            return this.TryBuildCopiedValueInitializer(
+            return this.TryBuildSequentialObjectInitializer(
                 block,
                 tempVariable,
                 translatedInitializer,
@@ -1535,7 +1535,14 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 parameterMap,
                 out var binding
             ) {
-                return false
+                return this.TryBuildSequentialObjectInitializer(
+                    block,
+                    tempVariable,
+                    translatedInitializer,
+                    statements,
+                    parameterMap,
+                    out expression
+                )
             }
             bindings.Add(binding!!)
         }
@@ -1557,7 +1564,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         return true
     }
 
-    private func TryBuildCopiedValueInitializer(
+    private func TryBuildSequentialObjectInitializer(
         block BoundBlockExpression,
         receiver VariableSymbol,
         initializer BoundExpression,

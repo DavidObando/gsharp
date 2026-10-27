@@ -1468,7 +1468,7 @@ All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported, and either b
 
 Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`, and a runtime/zero-initialised array allocation is written `[n]T`. Map literals use `map[K,V]{key: value}`.
 
-Imported generic data-class literals preserve explicit type arguments, including nullable positions. Positional members supply the imported primary constructor's inputs; other members initialize the constructed instance. Primary inputs precede other members and content, and evaluate once in source order. For example, `C[string?]{Value: nil}` preserves `string?` both at the constructor input and when reading `Value`.
+Imported generic data-class literals preserve explicit type arguments, including nullable positions. Positional members supply the imported primary constructor's inputs; other members initialize the constructed instance. Primary inputs evaluate once in their written order, then construction runs once, then other initializers run in their written order. A primary input cannot follow a braced member or content element. For example, `C[string?]{Value: nil}` preserves `string?` both at the constructor input and when reading `Value`.
 
 Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created.
 
