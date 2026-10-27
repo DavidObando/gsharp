@@ -699,7 +699,8 @@ internal shared class ExpressionTreeRestrictionValidator {
             }
             if object.ReferenceEquals(declaration.Variable, result.Variable) {
                 if leading.Count != 0 &&
-                    declaration.Initializer is not(BoundStructLiteralExpression and {CopySource: not nil}) {
+                    declaration.Initializer is not(BoundStructLiteralExpression and {CopySource: not nil}) &&
+                    declaration.Initializer is not BoundClrConstructorCallExpression {
                     return false
                 }
                 receiver = declaration.Variable

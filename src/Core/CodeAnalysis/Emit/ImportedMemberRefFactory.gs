@@ -216,9 +216,8 @@ internal class ImportedMemberRefFactory {
             this.signatures.EncodeTypeSymbol(encoder, nestedSlice)
             return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
-        // Interface aliases use the same reified element in opcode tokens
-        // as in signatures, including source-defined and open elements.
-        if element is SequenceTypeSymbol || element is AsyncSequenceTypeSymbol {
+        // Map and interface aliases retain their symbolic arguments in opcode tokens.
+        if element is MapTypeSymbol || element is SequenceTypeSymbol || element is AsyncSequenceTypeSymbol {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), element)
             return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))

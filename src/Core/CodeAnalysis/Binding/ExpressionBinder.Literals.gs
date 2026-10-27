@@ -1766,6 +1766,23 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName)
                         return BoundErrorExpression(nil)
                     }
+                    if ImportedTypeSymbol.TryCreateSemanticAggregate(
+                        closedImportedType,
+                        $scope.References,
+                        out var dataClass
+                    ) &&
+                        dataClass is StructSymbol{IsClass: true} {
+                        return BindImportedTypeLiteralExpression(
+                            syntax,
+                            closedImportedType,
+                            ImportedTypeSymbol.GetConstructed(
+                                closedImportedType,
+                                importedCandidate.ClassType,
+                                literalSymbolicArguments
+                            ),
+                            resolveTypeOnly
+                        )
+                    }
                     // Issue #4042: a RETAINED symbolic argument with no faithful
                     // closed CLR type of its own — a same-compilation user class
                     // or an in-scope type parameter — closes over the `object`
@@ -2641,8 +2658,120 @@ internal partial class ExpressionBinder {
         )
     } else if clrType.IsValueType {
         BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
+    } else if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, $scope.References, out var aggregateClass) &&
+        aggregateClass is StructSymbol{IsClass: true} dataClass {
+        BindImportedDataClassLiteral(
+            syntax,
+            clrType,
+            resultTypeOverride as ImportedTypeSymbol ?? ImportedTypeSymbol.GetWithoutNullability(
+                clrType,
+                NullabilityFreeReason.ResolvedTypeName
+            ),
+            dataClass,
+            resolveTypeOnly: false
+        )
     } else {
         BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride)
+    }
+
+    private func BindImportedDataClassLiteral(
+        syntax StructLiteralExpressionSyntax,
+        clrType Type,
+        resultType ImportedTypeSymbol,
+        aggregate StructSymbol,
+        resolveTypeOnly bool
+    ) BoundExpression {
+        if resolveTypeOnly {
+            return BoundDefaultExpression(syntax, resultType)
+        }
+        if clrType.IsAbstract {
+            Diagnostics.ReportCannotInstantiateAbstractType(syntax.TypeIdentifier.Location, aggregate.Name)
+            return BoundErrorExpression(syntax)
+        }
+        if !aggregate.HasPrimaryConstructor {
+            return BindImportedClassLiteralExpression(syntax, clrType, resultType)
+        }
+        let constructor = ImportedTypeSymbol.FindPrimaryConstructor(clrType, aggregate.PrimaryConstructorParameters)
+        if constructor == nil {
+            if !ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _) {
+                return BindImportedClassLiteralExpression(syntax, clrType, resultType)
+            }
+            Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
+            return BoundErrorExpression(syntax)
+        }
+        let parameters = constructor.GetParameters()
+        let arguments = [parameters.Length]BoundExpression
+        let consumed = HashSet[string](StringComparer.Ordinal)
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        var primaryPrefix = true
+        for element in syntax.Elements {
+            if element is not FieldInitializerSyntax initializer ||
+                initializer.Value is CollectionInitializerExpressionSyntax{Target: nil} {
+                primaryPrefix = false
+                continue
+            }
+            let index = Array.FindIndex(
+                parameters,
+                (parameter ParameterInfo) -> parameter.Name == initializer.FieldIdentifier.ValueText
+            )
+            if index < 0 {
+                continue
+            }
+            if !consumed.Add(initializer.FieldIdentifier.ValueText) {
+                Diagnostics.ReportSymbolAlreadyDeclared(
+                    initializer.FieldIdentifier.Location,
+                    initializer.FieldIdentifier.ValueText
+                )
+                continue
+            }
+            if !primaryPrefix {
+                Diagnostics.ReportPositionalInitializerAfterCompositeElement(
+                    initializer.FieldIdentifier.Location,
+                    initializer.FieldIdentifier.ValueText
+                )
+            }
+            // Read the constructor input, not its associated property's erased CLR type.
+            let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor, index)
+            let value = BindExpression(initializer.Value, parameterType)
+            let name = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
+                CultureInfo.InvariantCulture
+            )
+            let local = LocalVariableSymbol(name, isReadOnly: true, parameterType)
+            $scope.TryDeclareVariable(local)
+            statements.Add(BoundVariableDeclaration(initializer, local, value))
+            arguments[index] = BoundVariableExpression(initializer, local)
+        }
+        for var index = 0; index < arguments.Length; index++ {
+            if arguments[index] == nil {
+                let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor, index)
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    syntax,
+                    aggregate,
+                    aggregate.PrimaryConstructorParameters[index],
+                    out var missingDeclarationShape,
+                    parameterType,
+                    constructor
+                )
+                if missingDeclarationShape && parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                    Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
+                    return BoundErrorExpression(syntax)
+                }
+                arguments[index] = zero ?? BoundDefaultExpression(syntax, parameterType)
+            }
+        }
+        let construction = BoundClrConstructorCallExpression(
+            syntax,
+            clrType,
+            constructor,
+            arguments.ToImmutableArray(),
+            resultType
+        )
+        let initialized = BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction, consumed)
+        if initialized is BoundBlockExpression initializerBlock {
+            statements.AddRange(initializerBlock.Statements)
+            return BoundBlockExpression(syntax, statements.ToImmutable(), initializerBlock.Expression)
+        }
+        return BoundBlockExpression(syntax, statements.ToImmutable(), initialized)
     }
 
     /// ADR-0180: binds (for diagnostic continuity) and reports GS0369 for
