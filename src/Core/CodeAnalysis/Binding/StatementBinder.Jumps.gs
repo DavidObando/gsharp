@@ -367,11 +367,18 @@ internal partial class StatementBinder {
             externalCallableAliasesSnapshot
         ) {
             NarrowingComparison.EndSpeculation(speculation, true)
+            // ADR-0213 slice L0: the walker's lower bound against the analysis above. Report only.
+            if NarrowingComparison.LoopsEnabled {
+                ReportLoopComparison(body, narrowingSnapshots, inheritedNarrowingFrameCount, narrowingInvalidations)
+            }
             breakLabel = firstBreakLabel
             continueLabel = firstContinueLabel
             return firstBody
         }
         NarrowingComparison.EndSpeculation(speculation, false)
+        if NarrowingComparison.LoopsEnabled {
+            ReportLoopComparison(body, narrowingSnapshots, inheritedNarrowingFrameCount, narrowingInvalidations)
+        }
         // ADR-0208 section 18: counts the loop bodies that this design binds twice.
         CompilationMeasurements.Count("narrowing.loop-rebinds")
         Diagnostics.TruncateTo(diagnosticCount)

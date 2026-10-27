@@ -30,6 +30,9 @@ internal shared class NarrowingComparison {
     private let gate object = Object()
     private let joinLines List[string] = List[string]()
     private let readLines List[string] = List[string]()
+    private let loopLines List[string] = List[string]()
+    private let spanFunctions HashSet[string] = HashSet[string]()
+    private let captureSpanFunctions AsyncLocal[HashSet[string]?] = AsyncLocal[HashSet[string]?]()
     private let environmentPath string? = ReadEnvironment()
     private let capture AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
     private let pending AsyncLocal[List[string]?] = AsyncLocal[List[string]?]()
@@ -37,9 +40,14 @@ internal shared class NarrowingComparison {
     /// Whether the binder should compute the shadow flow.
     prop Enabled bool -> environmentPath != nil || capture.Value != nil
 
+    /// Whether the binder should compute the loop report of ADR-0213 section 20, slice L0. It is
+    /// on whenever the comparison mode is, and it reads the binder state like the other reports.
+    prop LoopsEnabled bool -> Enabled
+
     /// Starts collecting entries in memory for a test, in the calling context.
     func BeginCapture() {
         capture.Value = List[string]()
+        captureSpanFunctions.Value = HashSet[string]()
     }
 
     /// Stops the capture and returns its entries, sorted. A join entry starts
@@ -75,6 +83,57 @@ internal shared class NarrowingComparison {
         Report(true, "${Format(location)}\t${path}\t${declaredType}\t${shadowType}\t${kind}")
     }
 
+    /// Records a loop entry fact on which the walker of ADR-0213 and today's back-edge analysis
+    /// disagree. The fields are `file:line`, the path, the fact kind (`nullability` or
+    /// `type-test`), the disagreement (`old-kept/new-killed` or `old-killed/new-kept`), the rule
+    /// (W1 to W8, P7 or A3 with a detail) and the row of ADR-0213 section 16.
+    func ReportLoopDisagreement(
+        location TextLocation?,
+        path string,
+        factKind string,
+        disagreement string,
+        rule string,
+        row string
+    ) {
+        Emit("L\t${Format(location)}\t${path}\t${factKind}\t${disagreement}\t${rule}\t${row}")
+    }
+
+    /// Records the facts of a loop as counts, so a reader can tell a loop with no disagreement from
+    /// a loop the report never saw. The fields are `file:line`, the number of facts, the number
+    /// killed by both, the number kept by both and a description of the walk.
+    func ReportLoopSummary(location TextLocation?, facts int32, killedByBoth int32, keptByBoth int32, walk string) {
+        Emit("T\t${Format(location)}\t${facts}\t${killedByBoth}\t${keptByBoth}\t${walk}")
+    }
+
+    /// Records a backward-jump span of a function: its labels and the effects the walker finds in it.
+    func ReportSpan(location TextLocation?, labels string, effects string) {
+        Emit("S\t${Format(location)}\t${labels}\t${effects}")
+    }
+
+    /// Records a fact that the header of a loop proves on exit and that the entry state lacks
+    /// (ADR-0213 row R7 (f)). The last field lists the `!!` sites after the loop on the same path.
+    func ReportLoopExitGain(location TextLocation?, path string, hasBreak bool, bangSites string) {
+        let breakText = if hasBreak {
+            "break"
+        } else {
+            "no-break"
+        }
+        Emit("X\t${Format(location)}\t${path}\t${breakText}\t${bangSites}")
+    }
+
+    /// Whether this is the first request for the function with this key. A function that has
+    /// several labels asks once per label, and the span counts once.
+    func TryRegisterSpanFunction(key string) bool {
+        lock gate {
+            let scoped = captureSpanFunctions.Value
+            return if scoped != nil {
+                scoped.Add(key)
+            } else {
+                spanFunctions.Add(key)
+            }
+        }
+    }
+
     /// Formats a location as `file:line`, the line counted from 1.
     func Format(location TextLocation?) string {
         if location == nil {
@@ -105,6 +164,8 @@ internal shared class NarrowingComparison {
                 sink.Add(tagged)
             } else if tagged.StartsWith("R\t", StringComparison.Ordinal) {
                 readLines.Add(tagged.Substring(2))
+            } else if !tagged.StartsWith("J\t", StringComparison.Ordinal) {
+                loopLines.Add(tagged)
             } else {
                 joinLines.Add(tagged.Substring(2))
             }
@@ -142,12 +203,13 @@ internal shared class NarrowingComparison {
         }
     }
 
-    /// Writes both reports to [`path`](paramref) and `path.reads`. A run with no
+    /// Writes the reports to [`path`](paramref), `path.reads` and `path.loops`. A run with no
     /// difference writes empty files, so a report of an earlier run cannot remain.
     func FlushTo(path string) {
         lock gate {
             WriteSorted(path, joinLines)
             WriteSorted(path + ".reads", readLines)
+            WriteSorted(path + ".loops", loopLines)
         }
     }
 
