@@ -1221,6 +1221,68 @@ remove for R7 (f) on the measured code.
 **Spans.** Core, Core.Tests, gsc and the Oahu cells that compile have no
 backward `goto`, so no span.
 
+### 20b. Findings of slice L1
+
+Slice L1 (issue [#5317](https://github.com/DavidObando/gsharp/issues/5317), which also
+closes [#5315](https://github.com/DavidObando/gsharp/issues/5315)) replaced the snapshot and
+the second bind of `BindLoopBody` with the lower bound of section 6, applied to the frames
+before the header and the body are bound once. Each loop that is entered with a fact in force
+runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideRegionKill`).
+
+**Divergences from the text above.**
+
+- *Deletions.* `CollectLoopBackEdgeMutations`, `LoopBackEdgeMutationCollector`,
+  `CollectInheritedNarrowingInvalidations`, `ComputeLoopEntryExternalCallableAliases`,
+  `MarkIterationRunsUserCode`, `NarrowingComparison.BeginSpeculation`/`EndSpeculation`, the
+  `inheritedNarrowingFrameCount`, `backEdgeTail` and `backEdgeCondition` parameters and the
+  `bindIteration` tuple are gone. `AssignmentPreservesNarrowing`, `IsDefinitelyNonNullValue`,
+  `FunctionReturnsDefinitelyNonNull` and `IsDefinitelyNonNullSyntax` stay: the `finally` summaries
+  and the backward-`goto` checker still call them, and L2 deletes them with the checker.
+  `narrowing.loop-rebinds` is no longer counted (it reads 0; L3 removes the name).
+- *Iteration.* `iterationRunsUserCode` stays, as an argument of `BindLoopBody` and of
+  `RegionEffectScanner.ScanLoop`: whether a `for ... in` header runs user code is a property of the
+  collection's type, which syntax does not show. An array, a slice or a string iteration is not a
+  call (the `indexed-for-in` row of #5170 keeps its result). A nested loop is still a call.
+- *Literal types.* A non-nil literal proves a type-test fact only when it is a string literal whose type
+  converts to the fact's type. Slice L0 took every literal for a string, so `value = 42` kept a
+  `value is string` fact.
+- *Member reads and by-reference parameters.* A member read keeps member-bearing paths, mutable
+  globals, closure-assigned locals and the facts of an alias of an element or a member out
+  (W5, no exemption). It does not remove the fact of a by-reference parameter, as a plain call does not
+  (amendment A3, #5292); only a member, index or pointer write, an indirect call, an iteration or a
+  suspension does. Slice L0 removed it on any read, which rejected the A3 rows `h1`,
+  `out-parameter-survives-calls-in-a-loop` and `out-parameters-of-different-types-do-not-overlap`.
+- *No back edge.* A loop whose condition is the literal `false` (`while false`, `do { } while false`)
+  is bound under its entry state.
+- *Closure-assigned names.* They are computed on first use. `ApplyLoopEntryLowerBound` computes them
+  before it decides, because until then the shared predicate assumes that every name is assigned.
+- *Exit state (R7 (f)).* Break states are not recorded, so the join of table 9 cannot be taken. A loop
+  without a `break` in its body, in a function without a user label, adds the facts of the header's false
+  state to the block after the loop, minus the facts that the condition itself can remove
+  (`RecordLoopExitFacts`). A loop with a `break` keeps today's exit. The row `g1`-with-`break` and the
+  join of break states wait for the slice that records them.
+- *External callable aliases.* A function value that the region assigns, or that shares storage with one
+  that it assigns, leaves the set at the loop entry; a region with a pointer write or an unknown syntax
+  kind empties the set.
+- *A loop the walker cannot name* (the synthetic loop of a collection spread) removes every fact.
+
+**Measurements** (candidate compiler, the cells of slice L0, compare mode on). Facts of the loops that
+inherit a fact; "removed" is the walker's decision, which the binder now applies.
+
+| Input | Loops with live facts | Facts | Removed | Kept | Compile of the cell |
+| --- | --- | --- | --- | --- | --- |
+| Core | 1494 | 2089 | 59 | 2030 | 33 errors, listed below |
+| Core.Tests | 30 | 32 | 0 | 32 | clean |
+| gsc | 4 | 4 | 0 | 4 | clean |
+| Oahu, 12 cells that compile | 50 | 63 | 6 | 57 | clean (`Oahu.Cli.Tui` has the same 8 errors with the main compiler) |
+| Cs2Gs.Translator | 335 | 431 | 9 | 422 | 4 errors at one site |
+
+The 33 errors of Core are the sites of rows R7 (b) and R7 (c): `ExpressionBinder.Assignments.gs:5452-5501`
+(`access = inner`, a pattern variable; question 4), and `MemberLookup.gs:1213` with `3319-3379` (a
+closure-assigned local read in a loop that calls). Cs2Gs.Translator has `Deconstruction.gs:111-125`
+(a reassignment from a pattern variable). No diagnostic falls outside a row of
+section 16. The pin-move PR restructures these sites (section 18).
+
 ### 21. Mutation-evidence plan (ADR-0154)
 
 Each rule has a named, hand-applied mutant that is run red and then

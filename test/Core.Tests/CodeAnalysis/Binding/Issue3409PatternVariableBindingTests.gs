@@ -104,11 +104,11 @@ func Use(value object) int32 {
     }
 
     @Fact
-    func AssigningPatternVariableAcrossLoopBackEdge_KeepsTargetNarrowing() {
-        // A pattern variable is proven non-nil by its match, so `access = inner`
-        // on the loop back-edge preserves the smart cast of `access` obtained
-        // from the early-exit nil guard (the same rule as a `let` local with a
-        // non-nil initializer).
+    func AssigningPatternVariableAcrossLoopBackEdge_RemovesTargetNarrowingAtTheLoopEntry() {
+        // ADR-0213 row R7 (b) and question 4: a variable is no proof across a back edge, a pattern
+        // variable included, so the loop removes the narrowing of `access` at its entry and the
+        // read in the loop header is reported. The fix is a nullable-aware read or a `let` copy
+        // before the loop (the pin-move PR restructures the one site in `src/Core`).
         let diagnostics = Bind(`class Node {
     prop Receiver Node? { get; init; }
     prop IsStatic bool { get; init; }
@@ -130,7 +130,7 @@ func Depth(receiver object) int32 {
         depth += 1
     }
 }`)
-        Assert.Empty(diagnostics)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0158")
     }
 
     @Fact
