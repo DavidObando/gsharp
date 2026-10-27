@@ -756,6 +756,7 @@ internal shared class ClrOverloadResolution {
         // and (if necessary) a second params-expansion pass without re-querying
         // the underlying enumerable.
         let candidateList = candidates as IReadOnlyCollection[T] ?? candidates.ToList()
+        CallCandidateRecorder.RecordMethods(candidateList)
         for rawCandidate in candidateList {
             if object.ReferenceEquals(rawCandidate, nil) {
                 continue

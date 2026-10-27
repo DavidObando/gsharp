@@ -792,7 +792,7 @@ partial class SemanticModel {
     }
 
     /// Gets the same-compilation symbol a bound read or call refers to.
-    /// Imported members have no symbol here; see (cref:GetReferencedExpression).
+    /// An imported member answers through (cref:ReferencedImportedSymbol).
     private func ReferencedSourceSymbol(node BoundExpression) Symbol? {
         return switch node {
             // A bare member name inside a method reads through an implicit
@@ -828,6 +828,30 @@ partial class SemanticModel {
         }
     }
 
+    /// Gets the imported member a bound call or read refers to, as the symbol (cref:LookupMembers) answers.
+    private func ReferencedImportedSymbol(node BoundExpression) Symbol? {
+        return switch node {
+            case instanceCall is BoundImportedInstanceCallExpression: ImportedMemberSymbol(
+                instanceCall.Receiver.Type,
+                instanceCall.Method
+            )
+            case importedCall is BoundImportedCallExpression: ImportedMemberSymbol(
+                importedCall.StaticContainerType,
+                importedCall.Function.Method
+            )
+            case staticCall is BoundClrStaticCallExpression: ImportedMemberSymbol(nil, staticCall.Method)
+            case BoundConstrainedStaticCallExpression{ClrMethod: {} clrMethod} constrained: ImportedMemberSymbol(
+                constrained.ConstrainedInterfaceType,
+                clrMethod
+            )
+            case access is BoundClrPropertyAccessExpression: ImportedMemberSymbol(
+                access.Receiver?.Type ?? access.StaticContainerType,
+                access.Member
+            )
+            default: default(Symbol?)
+        }
+    }
+
     /// Gets the symbol that [`token`](paramref) declares or names. A name that
     /// differs from the token text, and a field-like event's backing field,
     /// answer null so callers use their syntactic lookup.
@@ -859,7 +883,7 @@ partial class SemanticModel {
         let symbol = if node == nil {
             default(Symbol?)
         } else {
-            ReferencedSourceSymbol(node)
+            ReferencedSourceSymbol(node) ?? ReferencedImportedSymbol(node)
         }
         // A field-like event's read binds its synthesized backing field; the
         // reference is to the event, which the callers' event lookup finds.

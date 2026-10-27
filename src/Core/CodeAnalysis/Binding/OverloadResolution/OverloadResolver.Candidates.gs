@@ -36,6 +36,7 @@ internal partial class OverloadResolver {
                 default(FunctionSymbol?)
             }
         }
+        CallCandidateRecorder.RecordFunctions(overloads)
         // Issue #1124: a call may carry an explicit method type-argument list
         // (e.g. `Factory.Make[Box](...)`). Thread its arity into overload
         // selection so generic candidates are filtered for applicability against
@@ -193,6 +194,7 @@ internal partial class OverloadResolver {
         out nullSafetyFailure NullSafetyArgumentMismatch?,
         explicitTypeArgCount int32 = 0
     ) FunctionSymbol? {
+        CallCandidateRecorder.RecordFunctions(candidates)
         return SelectBestUserOverloadCore(
             candidates,
             argumentCount,
@@ -229,6 +231,7 @@ internal partial class OverloadResolver {
         if candidates.Length == 1 {
             return candidates[0]
         }
+        CallCandidateRecorder.RecordFunctions(candidates)
         let builder = ImmutableArray.CreateBuilder[BoundExpression](boundArguments.Length)
         builder.AddRange(boundArguments)
         return SelectBestUserOverloadCore(
