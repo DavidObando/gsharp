@@ -3568,6 +3568,7 @@ internal partial class ExpressionBinder {
                 target ?? TypeSymbol.Error
             }
             return argument != nil &&
+                IsIntegerType(argument.Type) &&
                 IsIntegerType(integerType) &&
                 TryGetConstantIntegerValue(argument, out var value) &&
                 TryAdaptIntegerLiteral(value, integerType, out converted)

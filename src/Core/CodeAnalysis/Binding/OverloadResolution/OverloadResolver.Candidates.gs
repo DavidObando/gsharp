@@ -856,7 +856,11 @@ internal partial class OverloadResolver {
             .HasUserDefinedImplicitConversion(argType, paramType) {
             return ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
         }
-        if paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType {
+        if paramType is NullableTypeSymbol nullableParam &&
+            (
+            argType == nullableParam.UnderlyingType || ExpressionBinder.IsIntegerType(argType) &&
+                ExpressionBinder.IsIntegerType(nullableParam.UnderlyingType)
+        ) {
             // Issue #2146: `T -> T?` is a genuine value-type nullable WRAP only
             // when the underlying is a value type. For a REFERENCE-type nullable
             // (e.g. `Type -> Type?`) the wrap carries no runtime cost — it is a
@@ -871,12 +875,6 @@ internal partial class OverloadResolver {
             }
             return ClrOverloadResolution.ImplicitConversionKind.Reference
         }
-        // ponytail: widening-then-wrap (e.g. int32 -> int64?) is not caught by
-        // the identity-underlying check above (argType != nullableParam.UnderlyingType)
-        // and falls through to the Reference bucket below instead of a rank
-        // between NumericWidening and Reference. No ImplicitConversionKind slot
-        // exists for it today; add one (and a matching CompareNumericTargets
-        // path against nullableParam.UnderlyingType) if a real ambiguity shows up.
         let argClr = argType.ClrType
         let paramClr = paramType.ClrType
         if argClr?.FullName is string argFullName &&
@@ -1627,6 +1625,30 @@ internal partial class OverloadResolver {
             // actual tie-break once all per-arg comparisons agree.
             if ka != kb {
                 return (int32(ka)).CompareTo(int32(kb))
+            }
+            // Integer conversion precedes lifting, so compare the underlying conversions after their shared wrap cost.
+            if ka == ClrOverloadResolution
+                .ImplicitConversionKind
+                .NullableWrap &&
+                paramA is NullableTypeSymbol nullableA &&
+                paramB is NullableTypeSymbol nullableB &&
+                ExpressionBinder.IsIntegerType(source) && ExpressionBinder.IsIntegerType(nullableA.UnderlyingType) &&
+                ExpressionBinder
+                .IsIntegerType(nullableB.UnderlyingType) {
+                let exactA = source == nullableA.UnderlyingType
+                let exactB = source == nullableB.UnderlyingType
+                if exactA != exactB {
+                    return if exactA {
+                        -1
+                    } else {
+                        1
+                    }
+                }
+                return ClrOverloadResolution.CompareNumericTargets(
+                    nullableA.UnderlyingType.ClrType,
+                    nullableB.UnderlyingType.ClrType,
+                    source?.ClrType
+                )
             }
             if ka == ClrOverloadResolution.ImplicitConversionKind.NumericWidening {
                 // The three Invariant.Required calls below asserted something this

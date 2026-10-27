@@ -80,6 +80,72 @@ Console.WriteLine(wide.Item2 ?? 0)
 `, "0\n9\n255\n1\n65535\n2\n42\nab\n-128\n-32768\n4294967295\n18446744073709551615\n")
     }
 
+    @Fact
+    func EnumArguments_RequireExplicitIntegerConversion() {
+        for member in[]string{"Zero", "One"} {
+            Check(`package EnumProbe
+enum Number { Zero = 0, One = 1 }
+func F(value uint32?) bool -> value == 0
+func Test() bool -> F(Number.` + member + `)
+`, "", "GS0154", "4,23,4," + (30 + member.Length).ToString())
+        }
+        Check(`import System
+enum Number { Zero = 0, One = 1 }
+func F(value uint32?) uint32 -> value ?? 99
+Console.WriteLine(F(uint32(Number.Zero)))
+Console.WriteLine(F(uint32(Number.One)))
+`, "0\n1\n")
+    }
+
+    @Fact
+    func EnumTupleReturns_RequireExplicitIntegerConversion() {
+        for member in[]string{"Zero", "One"} {
+            Check(`package EnumProbe
+enum Number { Zero = 0, One = 1 }
+func Pair() (uint32?, int32) -> (Number.` + member + `, 9)
+`, "", "GS0156", "3,33,3," + (45 + member.Length).ToString())
+        }
+        Check(`import System
+enum Number { Zero = 0, One = 1 }
+func Zero() (uint32?, int32) -> (uint32(Number.Zero), 9)
+func One() (uint32?, int32) -> (uint32(Number.One), 9)
+let zero = Zero()
+let one = One()
+Console.WriteLine(zero.Item1 ?? 99)
+Console.WriteLine(zero.Item2)
+Console.WriteLine(one.Item1 ?? 99)
+Console.WriteLine(one.Item2)
+`, "0\n9\n1\n9\n")
+    }
+
+    @Fact
+    func NullableIntegerOverloads_RankUnderlyingConversionsBeforeChoosingBody() {
+        Check(`import System
+func F(value int32?) string -> "signed"
+func F(value uint32?) string -> "unsigned"
+func Reversed(value uint32?) string -> "unsigned"
+func Reversed(value int32?) string -> "signed"
+func Widen(value int32?) string -> "int32"
+func Widen(value int64?) string -> "int64"
+func Width(value uint32?) string -> "uint32"
+func Width(value uint64?) string -> "uint64"
+func Exact(value int32) string -> "nonnullable"
+func Exact(value uint32?) string -> "nullable"
+func Many(values ...int32?) string -> "signed-tail"
+func Many(values ...uint32?) string -> "unsigned-tail"
+Console.WriteLine(F(0))
+Console.WriteLine(Reversed(0))
+Console.WriteLine(F(4294967295))
+Console.WriteLine(Widen(0))
+let small int16 = 7
+Console.WriteLine(Widen(small))
+Console.WriteLine(Width(0))
+Console.WriteLine(Width(5000000000))
+Console.WriteLine(Exact(0))
+Console.WriteLine(Many(0, 42))
+`, "signed\nsigned\nunsigned\nint32\nint32\nuint32\nuint64\nnonnullable\nsigned-tail\n")
+    }
+
     shared {
         private func Check(
             sourceText string,
