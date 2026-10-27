@@ -30,13 +30,22 @@ import System.Collections.Immutable
 internal shared class SynthesizedClosureReifier {
     /// Collects, in a stable canonical order (enclosing TYPE parameters first
     /// by ordinal, then enclosing METHOD parameters by ordinal), the distinct
-    /// type parameters referenced by [`types`](paramref).
+    /// type parameters referenced by [`types`](paramref) and their transitive constraints.
     /// @param types The member / signature types to scan.
     /// @returns The ordered distinct referenced type parameters; empty when none.
     func CollectOrdered(types IEnumerable[TypeSymbol]) ImmutableArray[TypeParameterSymbol] {
         let referenced = List[TypeParameterSymbol]()
         for t in types {
             TypeSymbol.CollectReferencedTypeParameters(t, referenced)
+        }
+        // A cloned constraint must not reference an undeclared original parameter.
+        // The collector deduplicates entries, including self-referential constraints.
+        for var i = 0; i < referenced.Count; i++ {
+            let parameter = referenced[i]
+            TypeSymbol.CollectReferencedTypeParameters(parameter.TypeParameterBound, referenced)
+            TypeSymbol.CollectReferencedTypeParameters(parameter.ClassConstraint, referenced)
+            TypeSymbol.CollectReferencedTypeParameters(parameter.InterfaceConstraint, referenced)
+            TypeSymbol.CollectReferencedTypeParameters(parameter.ClrInterfaceConstraint, referenced)
         }
         if referenced.Count == 0 {
             return ImmutableArray[TypeParameterSymbol].Empty
