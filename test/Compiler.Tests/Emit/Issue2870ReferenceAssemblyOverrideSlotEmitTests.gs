@@ -36,6 +36,8 @@ open class Issue2870ReferenceAssemblyOverrideSlotEmitTests {
     @InlineData("nullablecopy5296.ref.dll")
     @InlineData("unrelated.contract.dll")
     @InlineData("bridge.contract.dll")
+    @InlineData("ref.dll")
+    @InlineData("System.Console.dll")
     func TransitiveSignaturesResolveExplicitReferenceIdentityRegardlessOfFileName(referenceFileName string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
@@ -56,9 +58,6 @@ open class Issue2870ReferenceAssemblyOverrideSlotEmitTests {
         let producer = Path.Combine(fixture.Directory, "nullablecopy5296.dll")
         let producerReference = Path.Combine(contracts, referenceFileName)
         let bridge = Path.Combine(fixture.Directory, "LiteralBridge5419.dll")
-        let bridgeContracts = Path.Combine(contracts, "bridge")
-        Directory.CreateDirectory(bridgeContracts)
-        let bridgeReference = Path.Combine(bridgeContracts, "bridge.contract.dll")
         let producerResult = CompileStandalone(
             fixture.Directory,
             "nullablecopy5296",
@@ -67,6 +66,21 @@ open class Issue2870ReferenceAssemblyOverrideSlotEmitTests {
             "/refout:" + producerReference
         )
         Assert.True(producerResult.Code == 0, producerResult.Diagnostics)
+        let caseDistinctPaths = referenceFileName == "ref.dll" && !File.Exists(Path.Combine(contracts, "REF.dll"))
+        let bridgeContracts = if caseDistinctPaths {
+            contracts
+        } else {
+            Path.Combine(contracts, "bridge")
+        }
+        Directory.CreateDirectory(bridgeContracts)
+        let bridgeReference = Path.Combine(
+            bridgeContracts,
+            if referenceFileName == "ref.dll" {
+                "REF.dll"
+            } else {
+                "bridge.contract.dll"
+            }
+        )
         let bridgeResult = CompileStandalone(fixture.Directory, "LiteralBridge5419", `package LiteralBridge5419
 import nullablecopy5296
 public class Bridge { shared { public func Make() C[string?] -> C[string?](nil) } }`, references, "/r:" +
@@ -82,6 +96,18 @@ public class Bridge { shared { public func Make() C[string?] -> C[string?](nil) 
 let value = Bridge.Make()
 System.Console.WriteLine(value.Value == nil)`
         for useReferences in[]bool{false, true} {
+            let consumerReferences = if useReferences && referenceFileName == "System.Console.dll" {
+                references.Where(
+                    (path string) -> !string.Equals(
+                        Path.GetFileName(path),
+                        "System.Console.dll",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                    .ToArray()
+            } else {
+                references
+            }
             let extra = []string{
                 "/target:exe",
                 "/r:" + if useReferences {
@@ -96,14 +122,14 @@ System.Console.WriteLine(value.Value == nil)`
                 },
                 "/refout:" + Path.Combine(fixture.Directory, "Consumer.ref.dll")
             }
-            let result = CompileStandalone(fixture.Directory, "Consumer", consumer, references, extra)
+            let result = CompileStandalone(fixture.Directory, "Consumer", consumer, consumerReferences, extra)
             Assert.True(result.Code == 0, result.Diagnostics)
             Assert.DoesNotContain("nullablecopy5296,", result.Diagnostics, StringComparison.Ordinal)
             let image = Path.Combine(fixture.Directory, "Consumer.dll")
             let firstImage = File.ReadAllBytes(image)
             let firstPdb = File.ReadAllBytes(Path.ChangeExtension(image, ".pdb"))
             let firstReference = File.ReadAllBytes(Path.Combine(fixture.Directory, "Consumer.ref.dll"))
-            let repeat = CompileStandalone(fixture.Directory, "Consumer", consumer, references, extra)
+            let repeat = CompileStandalone(fixture.Directory, "Consumer", consumer, consumerReferences, extra)
             Assert.True(repeat.Code == 0, repeat.Diagnostics)
             Assert.Equal(firstImage, File.ReadAllBytes(image))
             Assert.Equal(firstPdb, File.ReadAllBytes(Path.ChangeExtension(image, ".pdb")))
