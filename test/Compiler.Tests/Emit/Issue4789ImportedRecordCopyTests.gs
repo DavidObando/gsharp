@@ -186,22 +186,29 @@ public class NoCopy {
 }`))
         using let fixture = NativeSliceLanguageTests.Fixture()
         let reference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
         let (code, output) = fixture.TryCompile(
             "package ImportedCopy\npublic data class Rejected(Value int32) : NoCopy(0)",
             "Rejected",
             executable: false,
             "/r:" + contract.AssemblyPath,
-            "/refout:" + reference
+            "/refout:" + reference,
+            "/pdb:" + pdb
         )
         Assert.NotEqual(0, code)
-        Assert.Contains("GS9998", output, StringComparison.Ordinal)
-        Assert.True(
-            output.Contains("no accessible copy constructor for imported direct base", StringComparison.Ordinal),
-            output
+        let errors = output
+            .Split([]char{'\r', '\n'}, StringSplitOptions.RemoveEmptyEntries)
+            .Where((line string) -> line.Contains("error GS", StringComparison.Ordinal))
+            .ToArray()
+        Assert.Single(errors)
+        let source = Path.Combine(fixture.Directory, "Rejected.gs")
+        Assert.Equal(
+            "$source(2,1,2,52): error GS9998: InvalidOperationException: Class 'Rejected' has no accessible copy constructor for imported direct base 'ImportedCopy.NoCopy'.",
+            errors[0]
         )
-        Assert.Contains("Rejected.gs(", output, StringComparison.Ordinal)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
         Assert.False(File.Exists(reference))
+        Assert.False(File.Exists(pdb))
     }
 
     @Fact

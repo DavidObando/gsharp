@@ -1046,6 +1046,124 @@ open class CompilerWorkerTests : IDisposable {
     }
 
     @Fact
+    func SdkTaskReferenceClosure_CompilesWithWarningsAsErrors_AndRejectsOmittedDependencies() {
+        let resolve = ProcessStartInfo("dotnet"){
+            WorkingDirectory = RepoRoot.Path,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        for argument in[]string{
+            "msbuild",
+            Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.gsproj"),
+            "-target:FindReferenceAssembliesForReferences",
+            "-getItem:ReferencePathWithRefAssemblies",
+            "-p:BuildProjectReferences=false",
+            "-p:Configuration=Release",
+            "-nr:false",
+            "-nologo",
+            "-v:quiet"
+        } {
+            resolve.ArgumentList.Add(argument)
+        }
+        let (resolved, stdout, stderr, _) = RunProcess(resolve)
+        Assert.True(resolved == 0, stdout + stderr)
+        using let document = JsonDocument.Parse(stdout)
+        let references = document
+            .RootElement
+            .GetProperty("Items")
+            .GetProperty("ReferencePathWithRefAssemblies")
+            .EnumerateArray()
+            .Select(
+            (item JsonElement) -> item.GetProperty("FullPath").GetString() ??
+                throw InvalidOperationException("Missing resolved reference path.")
+        )
+            .ToArray()
+        Assert.NotEmpty(references)
+        let source = Path.Combine(directory, "closure.gs")
+        File.WriteAllText(source, "func Value() int32 -> 42\n")
+        for missing in[]string{"", "System.Security.Permissions"} {
+            let name = if missing.Length == 0 {
+                "complete"
+            } else {
+                missing
+            }
+            let output = Path.Combine(directory, name + ".dll")
+            let reference = Path.Combine(directory, name + ".ref.dll")
+            let pdb = Path.Combine(directory, name + ".pdb")
+            let start = ProcessStartInfo("dotnet"){
+                WorkingDirectory = directory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+            for argument in[]string{
+                CompilerPath(),
+                source,
+                "/target:library",
+                "/targetframework:netstandard2.0",
+                "/warnaserror+",
+                "/out:" + output,
+                "/refout:" + reference,
+                "/pdb:" + pdb
+            } {
+                start.ArgumentList.Add(argument)
+            }
+            for path in references.Where((path string) -> Path.GetFileNameWithoutExtension(path) != missing) {
+                start.ArgumentList.Add("/r:" + path)
+            }
+            let (exit, diagnostics, errors, _) = RunProcess(start)
+            if missing.Length == 0 {
+                Assert.True(exit == 0, diagnostics + errors)
+                Assert.DoesNotContain("GS9100", diagnostics)
+                Assert.True(File.Exists(output))
+                Assert.True(File.Exists(reference))
+                Assert.True(File.Exists(pdb))
+            } else {
+                Assert.NotEqual(0, exit)
+                Assert.Contains("$source(1,1,1,1): error GS9100:", diagnostics)
+                Assert.Contains("($missing)", diagnostics)
+                Assert.False(File.Exists(output))
+                Assert.False(File.Exists(reference))
+                Assert.False(File.Exists(pdb))
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RealBuildTask_OptionalFrameworkForwarders_AreNotMissing(shared bool) {
+        File.WriteAllText(Path.Combine(directory, "input.gs"), "func Value() int32 -> 42\n")
+        let compiler = SecurityElement.Escape(CompilerPath())
+        let taskAssembly = SecurityElement.Escape(typeof(BuildTask).Assembly.Location)
+        let basePath = SecurityElement.Escape(directory)
+        let references = string.Join(
+            "",
+            RuntimeReferences().Select((path string) -> "<Refs Include=\"${SecurityElement.Escape(path)}\"/>")
+        )
+        let project = Path.Combine(directory, "forwarders.proj")
+        File.WriteAllText(
+            project,
+            "<Project><UsingTask AssemblyFile=\"$taskAssembly\" TaskName=\"Gsharp.NET.Sdk.Tools.BuildTask\"/>" +
+                "<ItemGroup><Sources Include=\"input.gs\"/>$references</ItemGroup><Target Name=\"Build\">" +
+                "<BuildTask GsharpCompilerFullPath=\"$compiler\" OutputPath=\".\" OutputName=\"Forwarders\" " +
+                "TempOutputPath=\".\" TargetFramework=\"net10.0\" BasePath=\"$basePath\" OutputType=\"Library\" " +
+                "Compile=\"@(Sources)\" References=\"@(Refs)\" ResponseFilePath=\"./forwarders.rsp\" " +
+                "UseSharedCompilation=\"$shared\" TreatWarningsAsErrors=\"true\" WorkerGrant=\"1\" " +
+                "Deterministic=\"true\" DebugType=\"portable\" RefAssembly=\"Forwarders.ref.dll\"/>" +
+                "</Target></Project>"
+        )
+        let (exit, diagnostics) = BuildProject(project, directory)
+        Assert.True(exit == 0, diagnostics)
+        Assert.DoesNotContain("GS9100", diagnostics)
+        Assert.Contains("/warnaserror", File.ReadAllLines(Path.Combine(directory, "forwarders.rsp")))
+        for suffix in[]string{".dll", ".ref.dll", ".pdb"} {
+            Assert.True(File.Exists(Path.Combine(directory, "Forwarders" + suffix)))
+        }
+    }
+
+    @Fact
     func TargetFrameworkReferenceIdentityIsIsolated() {
         let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

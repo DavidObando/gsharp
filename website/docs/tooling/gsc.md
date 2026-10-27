@@ -112,6 +112,10 @@ Unsupported values for `/target:<value>`, `/debug:<value>`, and boolean switches
 
 Use `/r:<path>` or `/reference:<path>` for every reference assembly the program needs. The SDK passes the full `ReferencePathWithRefAssemblies` closure so `MetadataLoadContext` can resolve transitive reference identities. If direct `gsc` use omits needed transitive references, `gsc` may report advisory warning `GS9100` naming missing assemblies.
 
+`GS9100` uses the same severity and suppression options as other diagnostics. Global or selected `/warnaserror` promotion returns a nonzero exit code before emission. `/nowarn:GS9100` suppresses the warning before warning promotion.
+
+An assembly mentioned only by a facade's type forwarders is not an eager reference-closure dependency. Missing optional forwarded surfaces do not produce `GS9100`. A reference that also uses that assembly in its type metadata still requires it. Using an unavailable forwarded type produces the ordinary binding error rather than silently accepting the missing type.
+
 ```bash
 gsc Program.gs /out:bin/App.dll /r:/path/to/System.Console.dll /tfm:net8.0
 ```
