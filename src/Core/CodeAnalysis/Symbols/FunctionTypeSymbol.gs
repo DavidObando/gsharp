@@ -270,6 +270,7 @@ class FunctionTypeSymbol : TypeSymbol {
                 PinnedTypeSymbol,
                 NullabilityAnnotatedTypeSymbol,
                 TupleTypeSymbol,
+                ByRefTypeSymbol,
                 PointerTypeSymbol,
                 FunctionPointerTypeSymbol {
                     AppendStructuralKey(builder, type!!)

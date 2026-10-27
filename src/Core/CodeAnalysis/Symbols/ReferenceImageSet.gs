@@ -49,6 +49,11 @@ internal class ReferenceImageSet {
         (uint8, int32, TypeArgsKey),
         MetadataFunctionPointerTypeSymbol
     ] = ConcurrentDictionary[(uint8, int32, TypeArgsKey), MetadataFunctionPointerTypeSymbol]()
+    // Modified types: the type beneath, the modifier types in order, and which are required.
+    private let modifiedTypes ConcurrentDictionary[
+        (TypeSymbol, TypeArgsKey, string),
+        MetadataModifiedTypeSymbol
+    ] = ConcurrentDictionary[(TypeSymbol, TypeArgsKey, string), MetadataModifiedTypeSymbol]()
     private let arrays ConcurrentDictionary[TypeSymbol, MetadataArrayTypeSymbol] = ConcurrentDictionary[
         TypeSymbol,
         MetadataArrayTypeSymbol
@@ -264,6 +269,29 @@ internal class ReferenceImageSet {
                 returnType,
                 parameterTypes
             )
+        )
+    }
+
+    /// Gets the interned modified type for a type and its modifiers in blob order.
+    internal func GetModified(
+        unmodified TypeSymbol,
+        modifiers ImmutableArray[MetadataCustomModifier]
+    ) MetadataModifiedTypeSymbol {
+        let types = ImmutableArray.CreateBuilder[TypeSymbol](modifiers.Length)
+        let required = System.Text.StringBuilder()
+        for modifier in modifiers {
+            types.Add(modifier.Type)
+            required.Append(
+                if modifier.IsRequired {
+                    'r'
+                } else {
+                    'o'
+                }
+            )
+        }
+        return modifiedTypes.GetOrAdd(
+            (unmodified, TypeArgsKey(types.ToImmutable()), required.ToString()),
+            (key(TypeSymbol, TypeArgsKey, string)) -> MetadataModifiedTypeSymbol(unmodified, modifiers)
         )
     }
 

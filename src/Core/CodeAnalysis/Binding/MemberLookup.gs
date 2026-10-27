@@ -39,12 +39,12 @@ internal enum ClrIndexerResolutionOutcome {
 /// it does not construct `BoundExpression` values, and it does not
 /// mutate (cref:BinderContext.NarrowedVariables) or
 /// (cref:BinderContext.LoopStack). The cache fields on
-/// (cref:BinderContext) for imported `[Extension]` classes
-/// ((cref:BinderContext.CachedImportedExtensionClasses) and
-/// (cref:BinderContext.CachedImportedExtensionImportCount)) are
+/// (cref:BindingServices) for imported `[Extension]` classes
+/// ((cref:BindingServices.CachedImportedExtensionClasses) and
+/// (cref:BindingServices.CachedImportedExtensionImportCount)) are
 /// intentionally written by (cref:GetImportedExtensionClasses) —
-/// those fields exist on the context precisely so this facade can populate
-/// them.
+/// those fields exist on the binding services precisely so this facade can
+/// populate them and every body of the pass can reuse them.
 ///
 /// All decisions about "what to do with no candidate" — diagnostic emission
 /// (e.g. `GS0159`, `GS0125`, `GS0187`), error-recovery
@@ -61,7 +61,80 @@ internal class MemberLookup {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
     }
 
-    private enum SymbolicInferenceBoundKind {
+    /// Finds the nearest lexical type with a named member, including visible imported base members.
+    /// @param type The innermost lexical type.
+    /// @param name The source member name.
+    /// @returns The lexical lookup owner, or null when no member exists.
+    internal func FindLexicalMemberOwner(type TypeSymbol, name string) TypeSymbol? {
+        CompilationMeasurements.Count("binding.lexical-member-owner.queries")
+        let matches Func[Symbol, bool] = (member Symbol) -> member.Name == name &&
+            member is not PropertySymbol{IsIndexer: true}
+        const dataMembers = MemberKinds.Field | MemberKinds.Property | MemberKinds.Event
+        for var current TypeSymbol? = type; current != nil; current = current!!.ContainingType {
+            if TypeMemberModel.EnumerateMembers(current, MemberQuery.Instance(dataMembers)).Any(matches) ||
+                TypeMemberModel
+                .EnumerateMembers(current, MemberQuery.Static(dataMembers)).Any(matches) || TypeMemberModel.GetMethods(
+                current,
+                name,
+                MemberQuery.Instance(MemberKinds.Method)
+            )
+                .Length != 0 ||
+                TypeMemberModel
+                .GetMethods(current, name, MemberQuery.Static(MemberKinds.Method))
+                .Length != 0 ||
+                TypeMemberModel.TryGetStaticField(current, name, out _) {
+                return current
+            }
+            if current is InterfaceSymbol iface &&
+                (
+                iface.GetStaticField(name) != nil || iface.GetPrivateMethods(name)
+                    .Length != 0 ||
+                    iface
+                    .GetStaticPrivateMethods(name)
+                    .Length != 0 ||
+                    GetInterfaceImportedBaseInstanceDataMember(iface, name, dataMembers) != nil ||
+                    GetInterfaceImportedBaseInstanceMethods(iface, name, out _).Count != 0
+            ) {
+                return current
+            }
+            if current is not StructSymbol && current is not InterfaceSymbol {
+                continue
+            }
+            let clrBase = if current is StructSymbol currentStruct {
+                ExpressionBinder.GetInheritedClrBaseType(currentStruct) ?? typeof(object)
+            } else {
+                typeof(object)
+            }
+            if SafeGetMethodsIncludingSelfAndInterfaces(clrBase, name).Count != 0 {
+                return current
+            }
+            if current is not StructSymbol {
+                continue
+            }
+            let canAccessInternals = (owner Type?) -> binderCtx.References.CanAccessInternalMembers(owner?.Assembly)
+            if ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals) != nil ||
+                ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals) != nil {
+                return current
+            }
+            const flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            if ClrTypeUtilities.SafeGetMethods(clrBase, flags).Any(
+                (method MethodInfo) -> ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
+                    ClrMemberVisibility.IsVisibleFromDerived(method, canAccessInternals(method.DeclaringType))
+            ) {
+                return current
+            }
+            let eventInfo = ClrTypeUtilities.SafeGetEvent(clrBase, name, flags)
+            if eventInfo != nil && ClrMemberVisibility.IsVisibleFromDerived(
+                eventInfo.GetAddMethod(nonPublic: true),
+                canAccessInternals(eventInfo.DeclaringType)
+            ) {
+                return current
+            }
+        }
+        return nil
+    }
+
+    internal enum SymbolicInferenceBoundKind {
         Exact,
         Lower,
         Upper,
@@ -306,9 +379,11 @@ internal class MemberLookup {
     /// @returns The list of candidate (cref:MethodInfo) overloads.
     func CollectImportedExtensionMethods(methodName string) List[MethodInfo] {
         let classes = this.GetImportedExtensionClasses()
-        let cache = binderCtx.CachedImportedExtensionMethods ??
+        let cache = binderCtx
+            .Services
+            .CachedImportedExtensionMethods ??
             Dictionary[string, ImmutableArray[MethodInfo]](StringComparer.Ordinal)
-        binderCtx.CachedImportedExtensionMethods = cache
+        binderCtx.Services.CachedImportedExtensionMethods = cache
         if cache.TryGetValue(methodName, out var cached) {
             CompilationMeasurements.Count("extensions.name-index-hits")
             return cached.ToList()
@@ -474,7 +549,7 @@ internal class MemberLookup {
     /// Issue #294: enumerates static classes declared in the currently
     /// imported namespaces that carry `[Extension]` (i.e. host
     /// extension methods). The result is cached on the
-    /// (cref:BinderContext). Reference, import, file, and consumer identities
+    /// (cref:BindingServices) of the binding pass. Reference, import, file, and consumer identities
     /// invalidate the cache; an equivalent lexical child scope does not.
     /// @returns The imported static extension-holding classes.
     func GetImportedExtensionClasses() List[Type] {
@@ -484,25 +559,22 @@ internal class MemberLookup {
         } else {
             imports.Length
         }
-        if this
-            .binderCtx
-            .CachedImportedExtensionClasses != nil &&
-            this
-            .binderCtx
-            .CachedImportedExtensionImportCount == importCount &&
-            object.ReferenceEquals(binderCtx.CachedImportedExtensionReferences, binderCtx.References) &&
-            binderCtx.CachedImportedExtensionAssemblyName == binderCtx
+        let services = binderCtx.Services
+        if services.CachedImportedExtensionClasses != nil &&
+            services.CachedImportedExtensionImportCount == importCount &&
+            object.ReferenceEquals(services.CachedImportedExtensionReferences, binderCtx.References) &&
+            services.CachedImportedExtensionAssemblyName == binderCtx
             .References
             .CurrentAssemblyName &&
-            binderCtx
+            services
             .CachedImportedExtensionImports
             .SequenceEqual(imports) && object.ReferenceEquals(
-            this.binderCtx.CachedImportedExtensionSyntaxTree,
-            this.binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
+            services.CachedImportedExtensionSyntaxTree,
+            binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         ) {
-            return this.binderCtx.CachedImportedExtensionClasses!!
+            return services.CachedImportedExtensionClasses!!
         }
-        binderCtx.CachedImportedExtensionMethods = nil
+        services.CachedImportedExtensionMethods = nil
         let namespaces = HashSet[string](StringComparer.Ordinal)
         if !imports.IsDefault {
             for import_ in imports {
@@ -535,17 +607,12 @@ internal class MemberLookup {
                 classes.Add(holder.Candidate)
             }
         }
-        this.binderCtx.CachedImportedExtensionClasses = classes
-        this.binderCtx.CachedImportedExtensionImportCount = importCount
-        binderCtx.CachedImportedExtensionImports = imports
-        binderCtx.CachedImportedExtensionReferences = binderCtx.References
-        binderCtx.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
-        this
-            .binderCtx
-            .CachedImportedExtensionSyntaxTree = this
-            .binderCtx
-            .RootScope
-            .GetCurrentReferencingSyntaxTreeForCache()
+        services.CachedImportedExtensionClasses = classes
+        services.CachedImportedExtensionImportCount = importCount
+        services.CachedImportedExtensionImports = imports
+        services.CachedImportedExtensionReferences = binderCtx.References
+        services.CachedImportedExtensionAssemblyName = binderCtx.References.CurrentAssemblyName
+        services.CachedImportedExtensionSyntaxTree = binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()
         return classes
     }
 
@@ -748,7 +815,35 @@ internal class MemberLookup {
 
     private class SymbolicInferenceConflictMarker { }
 
+    private class SourceInferenceBounds {
+        public var Exact TypeSymbol?
+        public var Lower TypeSymbol?
+        public let Upper List[TypeSymbol] = List[TypeSymbol]()
+    }
+
+    private class SourceInferenceState {
+        init(substitution Dictionary[TypeParameterSymbol, TypeSymbol]) {
+            this.FixedParameters = HashSet[TypeParameterSymbol](substitution.Keys)
+            this.Bounds = Dictionary[TypeParameterSymbol, SourceInferenceBounds]()
+        }
+
+        prop FixedParameters HashSet[TypeParameterSymbol] {
+            get;
+        }
+
+        prop Bounds Dictionary[TypeParameterSymbol, SourceInferenceBounds] {
+            get;
+        }
+    }
+
     shared {
+        // Preserve the kind of provisional evidence across argument sites without
+        // extending the substitution's lifetime or changing its dictionary API.
+        private let sourceInferenceBounds ConditionalWeakTable[
+            Dictionary[TypeParameterSymbol, TypeSymbol],
+            SourceInferenceState
+        ] = ConditionalWeakTable[Dictionary[TypeParameterSymbol, TypeSymbol], SourceInferenceState]()
+
         private let importedExtensionIndexes ConditionalWeakTable[Type, ImportedExtensionIndex] =
         ConditionalWeakTable[Type, ImportedExtensionIndex]()
 
@@ -1338,6 +1433,85 @@ internal class MemberLookup {
             Type
         ] -> ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceSymbol)
 
+        /// Finds the imported interface property shared by lexical hiding and member access.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary property name.
+        /// @param requireReadable Whether candidates require a getter instead of serving as lexical barriers.
+        /// @returns The public instance property, excluding indexers, or null.
+        internal func GetInterfaceImportedBaseInstanceProperty(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            requireReadable bool = false
+        ) PropertyInfo? -> GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol,
+            name,
+            MemberKinds.Property,
+            requireReadable
+        ) as PropertyInfo
+
+        /// Finds imported instance data members using the ordinary property and event readers.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary member name.
+        /// @param kinds The data-member kinds to admit.
+        /// @param requireReadableProperty Whether property candidates require a getter.
+        /// @returns The visible instance member, excluding indexers, or null.
+        internal func GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            kinds MemberKinds,
+            requireReadableProperty bool = false
+        ) MemberInfo? {
+            for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
+                if (kinds & MemberKinds.Property) != 0 {
+                    let property = ClrTypeUtilities.SafeGetProperty(
+                        clrBase,
+                        name,
+                        BindingFlags.Public | BindingFlags.Instance
+                    )
+                    if property != nil && property.GetIndexParameters()
+                        .Length == 0 &&
+                        (!requireReadableProperty || property.CanRead) {
+                        return property
+                    }
+                }
+                if (kinds & MemberKinds.Event) != 0 {
+                    let eventInfo = SafeGetEventIncludingSelfAndInterfaces(clrBase, name)
+                    if eventInfo != nil {
+                        return eventInfo
+                    }
+                }
+            }
+            return nil
+        }
+
+        /// Collects the imported interface overloads shared by lexical hiding and call resolution.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary method name.
+        /// @param representativeBase The first imported base, retained for diagnostic context.
+        /// @returns The public instance overloads, deduplicated by CLR signature.
+        internal func GetInterfaceImportedBaseInstanceMethods(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            out representativeBase Type?
+        ) IReadOnlyList[MethodInfo] {
+            let clrBases = GetTransitiveClrBaseInterfaces(interfaceSymbol)
+            representativeBase = if clrBases.Count == 0 {
+                nil
+            } else {
+                clrBases[0]
+            }
+            let candidates = List[MethodInfo]()
+            for clrBase in clrBases {
+                for method in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Instance | BindingFlags.Public) {
+                    if ClrTypeUtilities.EmittedMemberNameMatches(method, name) &&
+                        !HasSameSignature(candidates, method) {
+                        candidates.Add(method)
+                    }
+                }
+            }
+            return candidates
+        }
+
         /// Issue #1181: returns whether [`candidate`](paramref) already has a
         /// same-name, same-parameter-types entry in [`existing`](paramref)
         /// (structural CLR comparison via (cref:ClrTypeUtilities.AreSame)).
@@ -1854,7 +2028,31 @@ internal class MemberLookup {
             if openClr == nil {
                 return TypeSymbol.Error
             }
-            if openClr.IsGenericParameter {
+            if openClr.IsFunctionPointer {
+                return FunctionPointerTypeSymbol.FromClrSignature(
+                    openClr,
+                    (type Type) -> MapOpenClrTypeToSymbolic(
+                        type,
+                        openDefinition,
+                        typeArguments,
+                        openMethodDefinition,
+                        methodTypeArguments
+                    )
+                )
+            }
+            if openClr.IsPointer {
+                return PointerTypeSymbol.Get(
+                    MapOpenClrTypeToSymbolic(
+                        openClr.GetElementType(),
+                        openDefinition,
+                        typeArguments,
+                        openMethodDefinition,
+                        methodTypeArguments
+                    )
+                )
+            }
+            let currentOpenClr = openClr.UnderlyingSystemType
+            if currentOpenClr.IsGenericParameter {
                 // Type-level parameter (declared on a generic type): map through
                 // the receiver/container's symbolic TypeArguments.
                 //
@@ -1876,8 +2074,8 @@ internal class MemberLookup {
                 // `StackUnexpected`. Require `IsGenericTypeParameter` (equivalently
                 // `DeclaringMethod == null`) so a method-level parameter always
                 // falls through to its own (method-scoped) substitution below.
-                let declaring Type? = if openClr.IsGenericTypeParameter {
-                    openClr.DeclaringType
+                let declaring Type? = if currentOpenClr.IsGenericTypeParameter {
+                    currentOpenClr.DeclaringType
                 } else {
                     default(Type?)
                 }
@@ -1894,7 +2092,7 @@ internal class MemberLookup {
                         )
                     }
                     if ClrTypeUtilities.AreSame(declaringDef, openDefinition) {
-                        let pos = openClr.GenericParameterPosition
+                        let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(typeArguments.Length) {
                             return typeArguments[pos]
                         }
@@ -1906,14 +2104,14 @@ internal class MemberLookup {
                 // declaring type, issue #2375 follow-up above) — so substitute via
                 // the parallel method-type-args slot whenever `DeclaringMethod` is
                 // present, regardless of `DeclaringType`.
-                if openClr.DeclaringMethod != nil && !methodTypeArguments.IsDefaultOrEmpty {
+                if currentOpenClr.DeclaringMethod != nil && !methodTypeArguments.IsDefaultOrEmpty {
                     if openMethodDefinition == nil || object.ReferenceEquals(
-                        openClr.DeclaringMethod,
+                        currentOpenClr.DeclaringMethod,
                         openMethodDefinition
                     ) ||
-                        openClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
+                        currentOpenClr.DeclaringMethod!!.MetadataToken == openMethodDefinition
                         .MetadataToken {
-                        let pos = openClr.GenericParameterPosition
+                        let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(methodTypeArguments.Length) {
                             let mapped TypeSymbol? = methodTypeArguments[pos]
                             if mapped != nil {
@@ -1922,9 +2120,9 @@ internal class MemberLookup {
                         }
                     }
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
-            if openClr.IsArray && openClr.GetArrayRank() > 1 {
+            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() > 1 {
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openClr.GetElementType(),
                     openDefinition,
@@ -1932,7 +2130,7 @@ internal class MemberLookup {
                     openMethodDefinition,
                     methodTypeArguments
                 )
-                return RectangularArrayTypeSymbol.Get(mappedElement, openClr.GetArrayRank())
+                return RectangularArrayTypeSymbol.Get(mappedElement, currentOpenClr.GetArrayRank())
             }
             // Issue #794: an open generic type's instance member can return an
             // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
@@ -1941,7 +2139,7 @@ internal class MemberLookup {
             // sees the symbolic projection rather than the erased `object[]`.
             // Issue #833 extends the recursion to method-level parameters so
             // `Enumerable.ToArray[T](IEnumerable[T]) → T[]` surfaces as `[]T`.
-            if openClr.IsArray && openClr.GetArrayRank() == 1 {
+            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() == 1 {
                 let openElement = openClr.GetElementType()
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openElement,
@@ -1957,7 +2155,9 @@ internal class MemberLookup {
                 // symbolic slice here the call's return would collapse to the
                 // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
                 // the generic-type branch below, which already honours #903.
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || ClrNullability.ContainsFunctionPointer(
+                    openClr
+                ) ||
                     (
                     openElement?.ContainsGenericParameters == true &&
                         mappedElement
@@ -1966,12 +2166,12 @@ internal class MemberLookup {
                 ) {
                     return SliceTypeSymbol.Get(mappedElement)
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #794: a managed pointer return (e.g. `List<T>.this[int]` on
             // `Span<T>`) reports `IsByRef`. Recurse on the pointee and wrap with
             // `ByRefTypeSymbol` to mirror the open-shape's contract.
-            if openClr.IsByRef {
+            if currentOpenClr.IsByRef {
                 let openPointee = openClr.GetElementType()
                 let mappedPointee = MapOpenClrTypeToSymbolic(
                     openPointee,
@@ -1980,7 +2180,9 @@ internal class MemberLookup {
                     openMethodDefinition,
                     methodTypeArguments
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) || ClrNullability.ContainsFunctionPointer(
+                    openClr
+                ) ||
                     (
                     openPointee?.ContainsGenericParameters == true &&
                         mappedPointee
@@ -1989,7 +2191,7 @@ internal class MemberLookup {
                 ) {
                     return ByRefTypeSymbol.Get(mappedPointee)
                 }
-                return TypeSymbol.FromClrType(openClr)
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #2391: keep substituted Nullable<T> positions in the
             // canonical G# nullable shape. The generic reconstruction below is
@@ -1998,7 +2200,7 @@ internal class MemberLookup {
             // ImportedTypeSymbol for System.Nullable<Color>. The matching return
             // position was then distinct from the source Color? symbol even
             // though both came from the same receiver substitution.
-            if NullableLifting.IsValueTypeNullableClr(openClr) {
+            if NullableLifting.IsValueTypeNullableClr(currentOpenClr) {
                 let openUnderlying = openClr.GetGenericArguments()[0]
                 let mappedUnderlying = MapOpenClrTypeToSymbolic(
                     openUnderlying,
@@ -2009,10 +2211,12 @@ internal class MemberLookup {
                 )
                 return NullableLifting.WrapValueTypeNullable(mappedUnderlying)
             }
-            if openClr.IsGenericType {
+            if currentOpenClr.IsGenericType {
                 let openArgs = openClr.GetGenericArguments()
                 let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
-                var anyParam = openClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty
+                let hasFunctionPointers = ClrNullability.ContainsFunctionPointer(openClr)
+                var anyParam = hasFunctionPointers ||
+                    (currentOpenClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty)
                 for a in openArgs {
                     let mapped = MapOpenClrTypeToSymbolic(
                         a,
@@ -2050,7 +2254,7 @@ internal class MemberLookup {
                         anyParam = true
                     }
                 }
-                let openDef = openClr.GetGenericTypeDefinition()
+                let openDef = currentOpenClr.GetGenericTypeDefinition()
                 if !anyParam {
                     return TypeSymbol.FromClrType(openClr)
                 }
@@ -2087,8 +2291,11 @@ internal class MemberLookup {
                 // erase to `object`; concrete leaves keep their CLR identity, matching
                 // the selector parameter's erasure and keeping both shapes aligned.
                 let symbolicArgs = symbolic.ToImmutable()
-                let erasedClosed = TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ??
-                    openClr
+                let erasedClosed = if hasFunctionPointers && !currentOpenClr.ContainsGenericParameters {
+                    currentOpenClr
+                } else {
+                    TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject) ?? currentOpenClr
+                }
                 return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolicArgs)
             }
             return TypeSymbol.FromClrType(openClr)
@@ -4977,7 +5184,11 @@ internal class MemberLookup {
                 if openParameters != nil && parameterIndex < openParameters.Length {
                     let openParameter = openParameters[parameterIndex]
                     return NullableFlagsBuilder.MergeDeclarationNullability(
-                        MapOpenClrTypeToSymbolic(openParameter.ParameterType, openDefinition, declaringTypeArguments),
+                        MapOpenClrTypeToSymbolic(
+                            ClrNullability.GetSignatureType(openParameter),
+                            openDefinition,
+                            declaringTypeArguments
+                        ),
                         openParameter.ParameterType,
                         ClrNullability.ReadNullableFlags(openParameter, openIndexer)
                     )
@@ -5018,7 +5229,7 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openProperty PropertyInfo? = FindOpenIndexerDefinition(openDefinition, closedProperty)
                 if openProperty != nil {
-                    let openPropertyType = openProperty.PropertyType
+                    let openPropertyType = ClrNullability.GetSignatureType(openProperty)
                     let projectionType = if openPropertyType.IsByRef {
                         Invariant.Required(
                             openPropertyType.GetElementType(),
@@ -5188,7 +5399,11 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openField FieldInfo? = openDefinition.GetField(closedField.Name, AllFields)
                 if openField != nil {
-                    let mapped = MapOpenClrTypeToSymbolic(openField.FieldType, openDefinition, declaringTypeArguments)
+                    let mapped = MapOpenClrTypeToSymbolic(
+                        ClrNullability.GetSignatureType(openField),
+                        openDefinition,
+                        declaringTypeArguments
+                    )
                     let declarationFlags = ClrNullability.ReadNullableFlags(openField, openDefinition)
                     return NullableFlagsBuilder.MergeDeclarationNullability(
                         mapped,
@@ -5220,10 +5435,10 @@ internal class MemberLookup {
             var valueType Type
             switch openMember {
                 case property is PropertyInfo {
-                    valueType = property.PropertyType
+                    valueType = ClrNullability.GetSignatureType(property)
                 }
                 case field is FieldInfo {
-                    valueType = field.FieldType
+                    valueType = ClrNullability.GetSignatureType(field)
                 }
                 default {
                     return TypeSymbol.Error
@@ -5289,7 +5504,7 @@ internal class MemberLookup {
                 }
                 if openEvent?.EventHandlerType != nil {
                     let mapped = MapOpenClrTypeToSymbolic(
-                        openEvent!!.EventHandlerType,
+                        ClrNullability.GetSignatureType(openEvent!!),
                         openDefinition,
                         declaringTypeArguments
                     )
@@ -5308,7 +5523,11 @@ internal class MemberLookup {
         /// @returns The handler type with declaration-site nullability applied.
         @NullabilityFunnel
         internal func GetClrEventHandlerTypeSymbol(closedEvent EventInfo) TypeSymbol {
-            let handlerType = TypeSymbol.FromClrType(closedEvent.EventHandlerType)
+            var signatureType = closedEvent.EventHandlerType
+            if signatureType != nil {
+                signatureType = ClrNullability.GetSignatureType(closedEvent)
+            }
+            let handlerType = TypeSymbol.FromClrType(signatureType)
             if closedEvent.DeclaringType is not{} declaringType {
                 return handlerType
             }
@@ -5332,13 +5551,12 @@ internal class MemberLookup {
                     break
                 }
             }
-            if openEvent?.EventHandlerType is not Type handlerLayout ||
-                closedEvent.EventHandlerType is not Type closedHandler {
+            if openEvent?.EventHandlerType == nil || closedEvent.EventHandlerType == nil {
                 return handlerType
             }
             let projected = ClrNullability.SymbolFromLayoutFlags(
-                closedHandler,
-                handlerLayout,
+                ClrNullability.GetSignatureType(closedEvent),
+                ClrNullability.GetSignatureType(openEvent!!),
                 ClrNullability.ReadNullableFlags(openEvent!!, openDefinition)
             )
             return if projected is NullableTypeSymbol nullableHandler {
@@ -5412,7 +5630,7 @@ internal class MemberLookup {
                     // platform-wrapped by-ref for `GetPinnableReference()`, which
                     // the reader-agreement test found disagreeing with every
                     // sibling reader.
-                    let openReturnType = openMethod.ReturnType
+                    let openReturnType = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
                     let returnLayout = if openReturnType.IsByRef {
                         Invariant.Required(
                             openReturnType.GetElementType(),
@@ -5446,6 +5664,76 @@ internal class MemberLookup {
             return ClrNullability.GetReturnTypeSymbol(closedMethod)
         }
 
+        /// Reads base and interface signatures through their declaring receiver.
+        /// @param targetType The symbolic imported receiver.
+        /// @returns Annotated direct relationships in metadata order.
+        @NullabilityFunnel
+        internal func GetClrRelationshipTypeSymbols(targetType TypeSymbol) ImmutableArray[TypeSymbol] {
+            if GetProjectionReceiverImportedType(targetType) is not{} imported ||
+                !TryGetSymbolicDeclaringContext(imported, imported.ClrType, out var definition, out var arguments) ||
+                definition == nil {
+                return ImmutableArray[TypeSymbol].Empty
+            }
+            let project = (layout Type) -> MapOpenClrTypeToSymbolic(layout, definition, arguments)
+            let result = ImmutableArray.CreateBuilder[TypeSymbol]()
+            if ClrNullability.GetBaseTypeSymbol(definition, project) is {} baseType {
+                result.Add(baseType)
+            }
+            result.AddRange(ClrNullability.GetInterfaceTypeSymbols(definition, project))
+            return result.ToImmutable()
+        }
+
+        /// Reads generic bounds through their declaring receiver.
+        /// @param targetType The symbolic imported receiver.
+        /// @param parameter The reflected type or method parameter.
+        /// @returns Receiver-projected annotated constraints.
+        @NullabilityFunnel
+        internal func GetClrGenericParameterConstraintTypeSymbols(targetType TypeSymbol, parameter Type) ImmutableArray[
+            TypeSymbol
+        ] {
+            if GetProjectionReceiverImportedType(targetType) is {} imported &&
+                TryGetSymbolicDeclaringContext(
+                imported,
+                parameter.DeclaringType,
+                out var definition,
+                out var arguments
+            ) &&
+                definition != nil {
+                let method = parameter.DeclaringMethod as MethodInfo
+                let openMethod = if method != nil {
+                    TryGetOpenMethodOnDeclaringType(definition, method)
+                } else {
+                    nil
+                }
+                let openParameter = if openMethod != nil {
+                    openMethod.GetGenericArguments()[parameter.GenericParameterPosition]
+                } else {
+                    if method == nil {
+                        definition.GetGenericArguments()[parameter.GenericParameterPosition]
+                    } else {
+                        parameter
+                    }
+                }
+                let methodArguments = (method?.GetGenericArguments() ?? []Type{}).Select(
+                    (argument Type) -> cast[TypeSymbol?](
+                        TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure)
+                    )
+                )
+                    .ToImmutableArray()
+                return ClrNullability.GetGenericParameterConstraintTypeSymbols(
+                    openParameter,
+                    (layout Type) -> MapOpenClrTypeToSymbolic(
+                        layout,
+                        definition,
+                        arguments,
+                        openMethod,
+                        methodArguments
+                    )
+                )
+            }
+            return ClrNullability.GetGenericParameterConstraintTypeSymbols(parameter)
+        }
+
         /// Resolves an imported method parameter through a symbolic receiver.
         /// @param targetType The symbolic imported receiver type.
         /// @param closedMethod The reflected method selected from the erased receiver.
@@ -5454,7 +5742,7 @@ internal class MemberLookup {
         @NullabilityFunnel
         internal func GetClrMethodParameterTypeSymbol(
             targetType TypeSymbol,
-            closedMethod MethodInfo,
+            closedMethod MethodBase,
             parameterIndex int32
         ) TypeSymbol {
             if GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported &&
@@ -5465,7 +5753,15 @@ internal class MemberLookup {
                 out var declaringTypeArguments
             ) &&
                 openDefinition != nil {
-                let openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
+                let openMethod MethodBase? = if closedMethod is MethodInfo methodInfo {
+                    TryGetOpenMethodOnDeclaringType(openDefinition, methodInfo)
+                } else {
+                    ClrTypeUtilities.FindMetadataDefinition(
+                        openDefinition,
+                        closedMethod,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
+                    ) as MethodBase
+                }
                 let openParameters[]?ParameterInfo = openMethod?.GetParameters()
                 if openParameters != nil && uint32(parameterIndex) < uint32(openParameters.Length) {
                     // Issue #3705 (family 2): as with the return slot above, the
@@ -5475,7 +5771,7 @@ internal class MemberLookup {
                     // nullability byte), which is why the flags are merged after
                     // peeling and before re-wrapping.
                     let openParameter = openParameters[parameterIndex]
-                    let openParameterType = openParameter.ParameterType
+                    let openParameterType = ClrNullability.GetSignatureType(openParameter)
                     let parameterFlags = ClrNullability.ReadNullableFlags(openParameter, openMethod)
                     if openParameterType.IsByRef {
                         let pointeeType = Invariant.Required(
@@ -5795,7 +6091,7 @@ internal class MemberLookup {
             typeArguments ImmutableArray[TypeSymbol],
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openReturn = openMethod.ReturnType
+            let openReturn = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
             let layout = if openReturn.IsByRef {
                 Invariant.Required(
                     openReturn.GetElementType(),
@@ -5847,7 +6143,7 @@ internal class MemberLookup {
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openType = openParameter.ParameterType
+            let openType = ClrNullability.GetSignatureType(openParameter)
             let layout = if openType.IsByRef {
                 Invariant.Required(
                     openType.GetElementType(),
@@ -5915,7 +6211,7 @@ internal class MemberLookup {
             openMethod MethodInfo? = nil,
             methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let openType = openParameter.ParameterType
+            let openType = ClrNullability.GetSignatureType(openParameter)
             let layout = if openType.IsByRef {
                 Invariant.Required(
                     openType.GetElementType(),
@@ -5964,16 +6260,30 @@ internal class MemberLookup {
         /// @param openDefinition The open declaring type definition.
         /// @param typeArguments The receiver-projected declaring type arguments.
         /// @returns `true` when a symbolic declaring context was found.
+        @NullabilityFunnel
         internal func TryGetSymbolicDeclaringContext(
             imported ImportedTypeSymbol,
             declaringType Type?,
             out openDefinition Type?,
             out typeArguments ImmutableArray[TypeSymbol]
+        ) bool -> TryGetSymbolicDeclaringContextCore(imported, declaringType, out openDefinition, out typeArguments, 0)
+
+        @NullabilityFunnel
+        private func TryGetSymbolicDeclaringContextCore(
+            imported ImportedTypeSymbol,
+            declaringType Type?,
+            out openDefinition Type?,
+            out typeArguments ImmutableArray[TypeSymbol],
+            depth int32,
+            unsuccessful HashSet[(Type, string)]? = nil
         ) bool {
             openDefinition = nil
             typeArguments = default(ImmutableArray[TypeSymbol])
             if imported?.ClrType == nil || declaringType == nil {
                 return false
+            }
+            if depth >= 256 {
+                throw System.IO.InvalidDataException("CLR declaring hierarchy exceeds the metadata complexity limit")
             }
             let receiverOpenDefinition = imported.OpenDefinition ??
                 (
@@ -6007,9 +6317,82 @@ internal class MemberLookup {
             } else {
                 declaringType
             }
-            if ClrTypeUtilities.AreSame(receiverOpenDefinition, openDefinition) {
+            if HaveSameDeclaringIdentity(receiverOpenDefinition, openDefinition) {
+                // Root members can retain the receiver's cached erasure. Ancestor paths must match the current constructed identity.
+                if declaringType.IsGenericType &&
+                    !declaringType.IsGenericTypeDefinition &&
+                    !HaveSameDeclaringIdentity(imported.ReifyClosedClrType(), declaringType) &&
+                    (depth != 0 || !HaveSameDeclaringIdentity(imported.ClrType, declaringType)) {
+                    return false
+                }
+                CompilationMeasurements.Count("metadata.receiver-context-visits")
                 typeArguments = receiverTypeArguments
                 return true
+            }
+            let misses = unsuccessful ?? HashSet[(Type, string)]()
+            let key = (imported.ClrType!!, Convert.ToBase64String(NullableFlagsBuilder.Build(imported).ToArray()))
+            if misses.Contains(key) {
+                return false
+            }
+            CompilationMeasurements.Count("metadata.receiver-context-visits")
+            {
+                let symbolicBase = ClrNullability.GetBaseTypeSymbol(
+                    receiverOpenDefinition,
+                    (layout Type) -> MapOpenClrTypeToSymbolic(layout, receiverOpenDefinition, receiverTypeArguments)
+                )
+                if symbolicBase != nil &&
+                    GetProjectionReceiverImportedType(symbolicBase) is {} baseReceiver &&
+                    TryGetSymbolicDeclaringContextCore(
+                    baseReceiver,
+                    declaringType,
+                    out var baseDefinition,
+                    out var baseArguments,
+                    depth + 1,
+                    misses
+                ) {
+                    openDefinition = baseDefinition
+                    typeArguments = baseArguments
+                    return true
+                }
+            }
+            if declaringType.IsInterface {
+                var interfaces = ImmutableArray[TypeSymbol].Empty
+                try {
+                    interfaces = ClrNullability.GetInterfaceTypeSymbols(
+                        receiverOpenDefinition,
+                        (layout Type) -> MapOpenClrTypeToSymbolic(layout, receiverOpenDefinition, receiverTypeArguments)
+                    )
+                } catch (error Exception) when error is System
+                    .IO
+                    .InvalidDataException ||
+                    error is System
+                    .IO
+                    .IOException ||
+                    error is BadImageFormatException ||
+                    error is NotSupportedException {
+                    // Marked contracts diagnose unreadable relationship metadata during import preflight.
+                    ClrNullability.RecordMetadataReadFailure()
+                }
+                for signature in interfaces {
+                    if GetProjectionReceiverImportedType(signature) is {} interfaceReceiver &&
+                        TryGetSymbolicDeclaringContextCore(
+                        interfaceReceiver,
+                        declaringType,
+                        out var interfaceDefinition,
+                        out var interfaceArguments,
+                        depth + 1,
+                        misses
+                    ) {
+                        openDefinition = interfaceDefinition
+                        typeArguments = interfaceArguments
+                        return true
+                    }
+                }
+            }
+            if depth > 0 {
+                // Cache only misses; successful projections retain their own symbolic arguments.
+                misses.Add(key)
+                return false
             }
             if imported.OpenDefinition != nil &&
                 !imported
@@ -6031,6 +6414,52 @@ internal class MemberLookup {
                 return true
             }
             typeArguments = ImmutableArray[TypeSymbol].Empty
+            return true
+        }
+
+        private func HaveSameDeclaringIdentity(left Type?, right Type?) bool {
+            if object.ReferenceEquals(left, right) {
+                return true
+            }
+            if left == nil || right == nil {
+                return false
+            }
+            if (!left.ContainsGenericParameters && !right.ContainsGenericParameters) ||
+                (left.IsGenericTypeDefinition && right.IsGenericTypeDefinition) {
+                return TypeIdentityComparer.Instance.Equals(left, right)
+            }
+            // Open constructions have no qualified name. Compare their structure without using a name-only fallback.
+            if left.HasElementType || right.HasElementType {
+                return left.IsArray == right.IsArray &&
+                    left.IsByRef == right.IsByRef &&
+                    left.IsPointer == right.IsPointer &&
+                    (
+                    !left.IsArray || (left.IsSZArray == right.IsSZArray && left.GetArrayRank() == right.GetArrayRank())
+                ) &&
+                    HaveSameDeclaringIdentity(left.GetElementType(), right.GetElementType())
+            }
+            if !left.IsGenericType ||
+                !right.IsGenericType ||
+                left.IsGenericTypeDefinition ||
+                right.IsGenericTypeDefinition {
+                return false
+            }
+            if !TypeIdentityComparer.Instance.Equals(
+                left.GetGenericTypeDefinition(),
+                right.GetGenericTypeDefinition()
+            ) {
+                return false
+            }
+            let leftArguments = left.GetGenericArguments()
+            let rightArguments = right.GetGenericArguments()
+            if leftArguments.Length != rightArguments.Length {
+                return false
+            }
+            for var index = 0; index < leftArguments.Length; index++ {
+                if !HaveSameDeclaringIdentity(leftArguments[index], rightArguments[index]) {
+                    return false
+                }
+            }
             return true
         }
 
@@ -6067,8 +6496,12 @@ internal class MemberLookup {
         /// @param type The receiver type a member was reflected through.
         /// @returns The imported type carrying the symbolic arguments, or `null`.
         internal func GetProjectionReceiverImportedType(type TypeSymbol) ImportedTypeSymbol? {
+            if type is PlatformTypeSymbol platform {
+                return GetProjectionReceiverImportedType(platform.UnderlyingType)
+            }
             let imported ImportedTypeSymbol? = GetImportedTypeSymbol(type)
-            let receiverClr Type? = imported?.ClrType
+            // Semantic aggregates retain their CLR shape under the same annotation wrapper.
+            let receiverClr Type? = imported?.ClrType ?? (type as NullabilityAnnotatedTypeSymbol)?.ClrType
             if type is NullabilityAnnotatedTypeSymbol annotated &&
                 receiverClr != nil &&
                 receiverClr.IsGenericType &&
@@ -6182,6 +6615,59 @@ internal class MemberLookup {
             existing TypeSymbol?,
             incoming TypeSymbol?
         ) TypeSymbol? -> MergeRecoveredTypeArgument(existing, incoming)
+
+        internal func InferSourceTypeArgument(
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            parameter TypeParameterSymbol,
+            argument TypeSymbol,
+            kind SymbolicInferenceBoundKind
+        ) {
+            let state = sourceInferenceBounds.GetValue(
+                substitution,
+                (seed Dictionary[TypeParameterSymbol, TypeSymbol]) -> SourceInferenceState(seed)
+            )
+            // Owner and receiver bindings precede inference. Only newly inferred
+            // parameters may receive bounds, keyed by symbol identity.
+            if state.FixedParameters.Contains(parameter) {
+                return
+            }
+            let byParameter = state.Bounds
+            if !byParameter.TryGetValue(parameter, out var bounds) {
+                bounds = SourceInferenceBounds()
+                byParameter[parameter] = bounds
+            }
+            switch kind {
+                case SymbolicInferenceBoundKind.Exact {
+                    bounds.Exact = MergeRecoveredTypeArgument(bounds.Exact, argument, allowBaseWidening: false)
+                }
+                case SymbolicInferenceBoundKind.Upper {
+                    bounds.Upper.Add(argument)
+                }
+                case SymbolicInferenceBoundKind.MethodGroupUpper {
+                    return
+                }
+                default {
+                    bounds.Lower = MergeRecoveredTypeArgument(bounds.Lower, argument)
+                }
+            }
+            // Each summary retains the ordered fold without replaying earlier bounds.
+            // Upper evidence cannot widen lower evidence or replace an exact bound.
+            var fixedType = bounds.Exact ?? bounds.Lower
+            // Keep the earlier binding when lower and exact evidence conflict.
+            // Applicability must diagnose the conflicting argument, not an earlier valid argument.
+            if bounds.Exact is {} exact &&
+                bounds.Lower is {} lower &&
+                !HasImplicitSymbolicConversion(lower, exact) &&
+                substitution.TryGetValue(parameter, out var previous) {
+                fixedType = previous
+            }
+            if fixedType == nil && bounds.Upper.Count > 0 {
+                fixedType = FindSymbolicInferenceCandidate(nil, bounds.Upper) ?? bounds.Upper[0]
+            }
+            if fixedType != nil {
+                substitution[parameter] = fixedType
+            }
+        }
 
         internal func IsSymbolicInferenceConflict(type TypeSymbol?) bool -> object.ReferenceEquals(
             type,
@@ -8038,7 +8524,7 @@ internal class MemberLookup {
             return Conversion.ClassifyNonStructural(source, target).IsImplicit
         }
 
-        private func GetNestedInferenceBoundKind(
+        internal func GetNestedInferenceBoundKind(
             openDefinition Type,
             typeArgumentIndex int32,
             outerKind SymbolicInferenceBoundKind
@@ -8047,13 +8533,23 @@ internal class MemberLookup {
             if uint32(typeArgumentIndex) >= uint32(typeParameters.Length) {
                 return SymbolicInferenceBoundKind.Exact
             }
-            return switch (
+            let variance = switch (
                 typeParameters[typeArgumentIndex].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
             ) {
-                case GenericParameterAttributes.Covariant: outerKind
-                case GenericParameterAttributes.Contravariant: ReverseInferenceBoundKind(outerKind)
-                default: SymbolicInferenceBoundKind.Exact
+                case GenericParameterAttributes.Covariant: TypeParameterVariance.Out
+                case GenericParameterAttributes.Contravariant: TypeParameterVariance.In
+                default: TypeParameterVariance.None
             }
+            return GetNestedInferenceBoundKind(variance, outerKind)
+        }
+
+        internal func GetNestedInferenceBoundKind(
+            variance TypeParameterVariance,
+            outerKind SymbolicInferenceBoundKind
+        ) SymbolicInferenceBoundKind -> switch variance {
+            case TypeParameterVariance.Out: outerKind
+            case TypeParameterVariance.In: ReverseInferenceBoundKind(outerKind)
+            default: SymbolicInferenceBoundKind.Exact
         }
 
         /// Issue #4133 (Copilot review finding, hot-core translation guard PR):
@@ -8081,7 +8577,7 @@ internal class MemberLookup {
         /// once, directly by the top-level argument's own bound kind — never by
         /// a reversal — so staying sticky here cannot affect the group's own
         /// legitimate top-level OUTPUT (return-type) contribution.
-        private func ReverseInferenceBoundKind(
+        internal func ReverseInferenceBoundKind(
             kind SymbolicInferenceBoundKind
         ) SymbolicInferenceBoundKind -> switch kind {
             case SymbolicInferenceBoundKind.Lower: SymbolicInferenceBoundKind.Upper
@@ -9203,9 +9699,10 @@ internal class MemberLookup {
             openEvent EventInfo,
             openDefinition Type
         ) TypeSymbol {
-            if openEvent.EventHandlerType is not Type handlerLayout {
+            if openEvent.EventHandlerType == nil {
                 return mapped
             }
+            let handlerLayout = ClrNullability.GetSignatureType(openEvent)
             let declarationFlags = ClrNullability.ReadNullableFlags(openEvent, openDefinition)
             let merged = NullableFlagsBuilder.MergeDeclarationNullability(mapped, handlerLayout, declarationFlags)
             return if merged is NullableTypeSymbol nullableHandler {

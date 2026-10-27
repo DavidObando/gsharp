@@ -10,6 +10,24 @@ import Xunit
 
 class NativeSliceFormattingTests {
     @Fact
+    func ClrSpanAliasesKeepModifiersAcrossNestedTypesAndReceivers() {
+        const source = `func use(value readonly span[byte],nested List[readonly span[byte]],tuple (readonly span[int32],span[byte])){
+let empty=readonly span[byte].Empty
+let writable=span[byte](data)
+let ordinary=$span[int32]{Value:1}
+}`
+        let result = GSharpFormatter.Format(SourceText.From(source))
+        Assert.Empty(result.Diagnostics)
+        let text = result.Text!!.ToString()
+        Assert.Contains("readonly span[byte]", text)
+        Assert.Contains("List[readonly span[byte]]", text)
+        Assert.Contains("(readonly span[int32], span[byte])", text)
+        Assert.Contains("readonly span[byte].Empty", text)
+        Assert.Contains("$$span[int32]", text)
+        Assert.Equal(text, GSharpFormatter.Format(result.Text!!).Text!!.ToString())
+    }
+
+    @Fact
     func OrdinaryNameEscapesAreNotRemoved() {
         const source = `let a=$slice[int32]{Value:1}
 var b $array[int32]

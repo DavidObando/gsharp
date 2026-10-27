@@ -167,9 +167,19 @@ True
             let instructions = IlInstructionReader.Read(il)
             Assert.NotEmpty(instructions)
             let constructions = instructions.Count(
-                (instruction IlInstruction) -> instruction.OpCode == OpCodes.Initobj && main.Module.ResolveType(
-                    BitConverter.ToInt32(il!!, instruction.Offset + instruction.OpCode.Size)
-                ) == point
+                (instruction IlInstruction) ->
+                (
+                    instruction.OpCode == OpCodes.Initobj && main.Module.ResolveType(
+                        BitConverter.ToInt32(il!!, instruction.Offset + instruction.OpCode.Size)
+                    ) == point
+                ) ||
+                    (
+                    instruction.OpCode == OpCodes.Newobj &&
+                        main
+                        .Module
+                        .ResolveMethod(BitConverter.ToInt32(il!!, instruction.Offset + instruction.OpCode.Size))
+                        ?.DeclaringType == point
+                )
             )
             Assert.True(
                 constructions == freshConstructions,

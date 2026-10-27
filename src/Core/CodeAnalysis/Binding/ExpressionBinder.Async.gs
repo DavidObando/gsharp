@@ -19,34 +19,25 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding.Suspension
 
 internal partial class ExpressionBinder {
-    /// What a base class declares under an event-shaped name.
-    private enum BaseEventKind {
-        None,
-        NonVirtual,
-        Virtual
-    }
-
-    /// Classifies [`name`](paramref) on the enclosing class's base: a
-    /// source event (walking the base chain) or an imported one, and returns
-    /// the base's own event so the subscription binds to its accessors
-    /// rather than to whatever the name means on the derived class.
+    /// Looks up [`name`](paramref) on base classes, from nearest to farthest.
+    /// Writes the selected event through the output parameters; the caller checks accessibility.
     /// @param name The member name after `base.`.
     /// @param sourceEvent The base's source event, when it declares one.
     /// @param sourceOwner The base class (in the hierarchy seen from the derived class) that declares
     /// [`sourceEvent`](paramref).
     /// @param clrEvent The imported base's event, when the name resolves there.
-    /// @returns Whether the base declares an event of that name, and whether it is virtual.
-    private func ClassifyBaseEvent(
+    /// @returns Whether the base declares an event of that name.
+    private func TryGetBaseEvent(
         name string,
         out sourceEvent EventSymbol?,
         out sourceOwner StructSymbol?,
         out clrEvent EventInfo?
-    ) BaseEventKind {
+    ) bool {
         sourceEvent = nil
         sourceOwner = nil
         clrEvent = nil
-        if GetEffectiveThisParameter()?.Type is not StructSymbol{IsClass: true} enclosing {
-            return BaseEventKind.None
+        if GetBaseAccessThisParameter()?.Type is not StructSymbol{IsClass: true} enclosing {
+            return false
         }
         // Level by level, nearest first: an event at a level wins, but a field
         // or property of the same name at a nearer level hides every farther
@@ -61,16 +52,12 @@ internal partial class ExpressionBinder {
                     }
                     sourceEvent = candidate
                     sourceOwner = level
-                    return if candidate.IsVirtual || candidate.IsOverride {
-                        BaseEventKind.Virtual
-                    } else {
-                        BaseEventKind.NonVirtual
-                    }
+                    return true
                 }
                 if level.TryGetField(name, out _) || level.Properties.Any(
                     (candidate PropertySymbol) -> !candidate.IsIndexer && candidate.Name == name
                 ) {
-                    return BaseEventKind.None
+                    return false
                 }
             }
         }
@@ -81,12 +68,7 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 clrEvent = candidate
-                let add MethodInfo? = candidate.AddMethod
-                return if add != nil && add.IsVirtual && !add.IsFinal {
-                    BaseEventKind.Virtual
-                } else {
-                    BaseEventKind.NonVirtual
-                }
+                return true
             }
             // A value member the derived class can reach hides farther
             // events; one it cannot reach (e.g. private) does not take part
@@ -107,10 +89,10 @@ internal partial class ExpressionBinder {
                         ClrMemberVisibility.IsVisibleFromDerived(property.SetMethod, includeInternal)
                 )
             ) {
-                return BaseEventKind.None
+                return false
             }
         }
-        return BaseEventKind.None
+        return false
     }
 
     /// Issue #4394: the accessibility gate every source-event subscription
@@ -296,27 +278,17 @@ internal partial class ExpressionBinder {
         // (nearest base first, field before property, non-virtual accessor
         // calls). A real value named `base` keeps its ordinary meaning.
         //
-        // `base.E += handler` / `base.E -= handler` on a non-virtual event the
-        // base declares binds straight to that event's own add/remove
-        // accessors, called on `this`: a non-virtual accessor has one
-        // implementation, and naming the base's event symbol (not the name,
-        // looked up again on `this`) keeps a same-named event the derived
-        // class declares out of it, as in C#. A virtual or overridden event is
-        // not intercepted here and keeps the diagnostic it reported before.
+        // TryGetBaseEvent applies base-member hiding rules; base subscriptions call the selected accessors without virtual dispatch.
         if accessor.LeftPart is NameExpressionSyntax{IdentifierToken: {ValueText: "base"}} baseName &&
             IsContextualBaseKeyword(baseName) {
             var baseSourceEvent EventSymbol? = nil
             var baseSourceOwner StructSymbol? = nil
             var baseClrEvent EventInfo? = nil
-            let baseEventKind = if isEventCapableOperator {
-                ClassifyBaseEvent(eventName, out baseSourceEvent, out baseSourceOwner, out baseClrEvent)
-            } else {
-                BaseEventKind.None
-            }
-            if baseEventKind == BaseEventKind.None {
+            if !isEventCapableOperator ||
+                !TryGetBaseEvent(eventName, out baseSourceEvent, out baseSourceOwner, out baseClrEvent) {
                 return BindBaseMemberCompoundAssignment(baseName, eventNameSyntax, syntax, baseOpSyntaxKind)
             }
-            if baseEventKind == BaseEventKind.NonVirtual && GetEffectiveThisParameter() is {} baseEventThis {
+            if GetBaseAccessThisParameter() is {} baseEventThis {
                 let baseEventReceiver = BoundVariableExpression(nil, baseEventThis)
                 if baseSourceEvent != nil && baseSourceOwner != nil {
                     // The nearest event of that name hides any farther one,
@@ -344,7 +316,7 @@ internal partial class ExpressionBinder {
                         sourceHandler,
                         isAdd,
                         sourceEventType
-                    )
+                    ){IsNonVirtualBaseCall = true}
                 }
                 if baseClrEvent != nil {
                     // The reflected scan sees non-public events too, and the
@@ -375,12 +347,21 @@ internal partial class ExpressionBinder {
                         let _ = BindExpression(syntax.Value)
                         return BoundErrorExpression(nil)
                     }
+                    if eventAccessor != nil && eventAccessor.IsAbstract {
+                        Diagnostics.ReportBaseClassCallAbstractMember(
+                            eventNameSyntax.Location,
+                            baseClrEvent.DeclaringType?.Name ?? eventName,
+                            eventName
+                        )
+                        let _ = BindExpression(syntax.Value)
+                        return BoundErrorExpression(nil)
+                    }
                     // The imported base as the derived class names it
                     // (`Source[Item]` over a same-compilation `Item`), not
                     // the erased CLR construction reflection sees: it
                     // supplies the handler type and the add/remove MemberRef
                     // parent, as for an ordinary imported event receiver.
-                    let inheritedImportedBase TypeSymbol? = if GetEffectiveThisParameter()?.Type is StructSymbol eventEnclosing {
+                    let inheritedImportedBase TypeSymbol? = if GetBaseAccessThisParameter()?.Type is StructSymbol eventEnclosing {
                         TypeMemberModel.GetNearestImportedBase(eventEnclosing)
                     } else {
                         default(TypeSymbol?)
@@ -403,7 +384,7 @@ internal partial class ExpressionBinder {
                         clrHandler,
                         isAdd,
                         eventContainingType: clrEventContainingType
-                    )
+                    ){IsNonVirtualBaseCall = true}
                 }
             }
         }
@@ -532,8 +513,7 @@ internal partial class ExpressionBinder {
         ) {
             receiverClrType = staticImportedOverride!!.ClassType
             flags = BindingFlags.Public | BindingFlags.Static
-        } else if (accessor.LeftPart is IndexExpressionSyntax || accessor.LeftPart is GenericNameExpressionSyntax) &&
-            TryResolveConstructedGenericTypeReceiver(
+        } else if TryResolveConstructedGenericTypeReceiver(
             accessor.LeftPart,
             out var ctorStruct,
             out var ctorInterface,

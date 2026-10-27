@@ -139,6 +139,16 @@ internal partial class ExpressionBinder {
 
     private prop function FunctionSymbol? -> getCurrentFunction()
 
+    private func CanUseSpanAlias(identifier SyntaxToken, expression bool = false) bool ->
+    binderCtx.CanUseSpanAlias($scope, identifier, getCurrentFunction(), expression) &&
+        (
+        !expression ||
+            (
+            !TryResolveInheritedClrInstanceMemberByBareName(identifier.ValueText, out _, out _) &&
+                !TryResolveInterfaceInstancePropertyByBareName(identifier.ValueText, out _, out _)
+        )
+    )
+
     /// Issue #1159: returns the implicit-`this` parameter that an
     /// unqualified instance-member reference should bind against. For a direct
     /// instance method body this is the enclosing function's own
@@ -1254,36 +1264,31 @@ internal partial class ExpressionBinder {
         }
     }
 
-    /// Issue #3704: member lookup runs the property probe before the field
-    /// probe, and the property probe walks the receiver's INTERFACES when the
-    /// receiver's own type declares nothing of that name. Those two rules
-    /// combined let an interface-declared property outrank a field the receiver
-    /// really declares — `StrongBox<T>` is the canonical shape: a
-    /// public field `Value` of type `T` beside an explicitly
-    /// implemented `IStrongBox.Value` of type `object?`, which typed
-    /// every `box.Value` read as `object?`.
-    ///
-    /// A member the receiver's own type (or its base chain) declares always
-    /// outranks one reached only through an interface, so an interface-declared
-    /// property loses to a same-named own field. This does NOT retire the
-    /// interface walk: a receiver with no competing own member still reaches
-    /// the interface property, which is how `[]T.Count` resolves at all
-    /// (`System.Array` implements `ICollection.Count` explicitly).
+    /// The property probe runs before the field probe. Keep the nearest
+    /// declaration when a field hides an inherited property. A field in the
+    /// class hierarchy also takes precedence over an interface property.
     /// @param clrReceiverType The receiver's CLR type.
     /// @param property The property the probe found, if any.
     /// @param name The member name being looked up.
-    /// @returns `true` when a same-named own field outranks [`property`](paramref).
+    /// @returns `true` when a same-named field is at least as near as the property.
     private func IsHiddenByTheReceiversOwnField(clrReceiverType Type?, property PropertyInfo?, name string) bool {
-        // An interface receiver has no fields of its own to prefer, and a
-        // property the receiver's own type declares was never a candidate for
-        // this rule — only the interface walk's results are.
-        if property?.DeclaringType is not{IsInterface: true} || clrReceiverType == nil || clrReceiverType.IsInterface {
+        let propertyOwner = property?.DeclaringType
+        if propertyOwner == nil || clrReceiverType == nil || clrReceiverType.IsInterface {
             return false
         }
-        // For a non-interface receiver the field probe walks the type and its
-        // base chain only, so this asks exactly "does the receiver's own type
-        // declare a visible field with this name?".
-        return SafeGetVisibleInstanceField(clrReceiverType, name) != nil
+        let fieldOwner = SafeGetVisibleInstanceField(clrReceiverType, name)?.DeclaringType
+        if fieldOwner == nil {
+            return false
+        }
+        for var current Type? = clrReceiverType; current != nil; current = current?.BaseType {
+            if ClrTypeUtilities.AreSame(current, fieldOwner) {
+                return true
+            }
+            if ClrTypeUtilities.AreSame(current, propertyOwner) {
+                return false
+            }
+        }
+        return false
     }
 
     /// Issue #3705: the shared instance-field probe for CLR member lookup —
@@ -1916,7 +1921,7 @@ internal partial class ExpressionBinder {
     /// @param name The bare identifier text.
     /// @param receiver The effective `this` receiver on success.
     /// @param interfaceType The enclosing interface the receiver is typed as, on success.
-    /// @returns `true` when the enclosing interface declares an instance property of that name.
+    /// @returns `true` when the enclosing interface declares or inherits an instance property of that name.
     private func TryResolveInterfaceInstancePropertyByBareName(
         name string,
         @NotNullWhen(true) out receiver BoundExpression?,
@@ -1930,7 +1935,8 @@ internal partial class ExpressionBinder {
         }
         // ADR-0118 / issue #944: an indexer has the CLR name `Item` but is never
         // reachable by bare name — only through `this[i]`.
-        if !TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer {
+        if (!TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer) &&
+            MemberLookup.GetInterfaceImportedBaseInstanceProperty(thisInterface, name) == nil {
             return false
         }
         receiver = BoundVariableExpression(nil, effThis!!)

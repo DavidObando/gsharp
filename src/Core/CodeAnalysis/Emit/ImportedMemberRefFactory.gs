@@ -93,7 +93,7 @@ internal class ImportedMemberRefFactory {
         if element is FunctionPointerTypeSymbol {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), element)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         return this.GetElementTypeToken(element)
     }
@@ -142,7 +142,7 @@ internal class ImportedMemberRefFactory {
             if nullableTpInner.HasValueTypeConstraint {
                 let sigBlob = BlobBuilder()
                 this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableTpElement)
-                return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+                return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
             }
             return this.GetElementTypeToken(nullableTpInner)
         }
@@ -160,7 +160,7 @@ internal class ImportedMemberRefFactory {
             !(nullableUserVtElement.UnderlyingType is TypeParameterSymbol) {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableUserVtElement)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         // Issue #2498: nullable-reference annotations do not change the CLR
         // element token. Forward same-compilation classes/interfaces/delegates
@@ -186,7 +186,7 @@ internal class ImportedMemberRefFactory {
         if element is PointerTypeSymbol {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), element)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         // Issue #4938: a function pointer tokenises as its runtime projection,
         // `System.IntPtr`. The CLR has no boxed function-pointer type, so the
@@ -203,25 +203,24 @@ internal class ImportedMemberRefFactory {
             let sigBlob = BlobBuilder()
             let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
             this.signatures.EncodeTypeSymbol(encoder, nestedArr)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         if element is RectangularArrayTypeSymbol nestedRectangular {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), nestedRectangular)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         if element is SliceTypeSymbol nestedSlice {
             let sigBlob = BlobBuilder()
             let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
             this.signatures.EncodeTypeSymbol(encoder, nestedSlice)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
-        // Interface aliases use the same reified element in opcode tokens
-        // as in signatures, including source-defined and open elements.
-        if element is SequenceTypeSymbol || element is AsyncSequenceTypeSymbol {
+        // Map and interface aliases retain their symbolic arguments in opcode tokens.
+        if element is MapTypeSymbol || element is SequenceTypeSymbol || element is AsyncSequenceTypeSymbol {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), element)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         if element is ImportedTypeSymbol symbolicImported &&
             !symbolicImported
@@ -233,7 +232,7 @@ internal class ImportedMemberRefFactory {
             .Any(TypeSymbol.RequiresSymbolicProjection) {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), symbolicImported)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         // Issue #813: a tuple whose element types include an open generic
         // (TupleTypeSymbol.ClrType == null) needs a symbolic TypeSpec
@@ -254,7 +253,7 @@ internal class ImportedMemberRefFactory {
         if element is ImportedTypeSymbol tpImported && tpImported.HasTypeParameterArgument {
             let sigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), tpImported)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         if element is FunctionTypeSymbol fnElement &&
             (fnElement.ClrType == nil || TypeSymbol.RequiresSymbolicProjection(fnElement)) {
@@ -327,7 +326,7 @@ internal class ImportedMemberRefFactory {
             } else {
                 encoder.GenericTypeParameter(tpSym.Ordinal)
             }
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         }
         if element is EnumSymbol enumSym {
             let def = enumSym.Definition ?? enumSym
@@ -347,7 +346,7 @@ internal class ImportedMemberRefFactory {
             if ReflectionMetadataEmitter.IsUserGenericInterfaceReference(ifaceSym) {
                 let sigBlob = BlobBuilder()
                 this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), ifaceSym)
-                return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+                return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
             }
             let ifaceDef = ifaceSym.Definition ?? ifaceSym
             if this.cache.InterfaceTypeDefs.TryGetValue(ifaceDef, out var itd) {
@@ -376,7 +375,7 @@ internal class ImportedMemberRefFactory {
         if element is ChannelTypeSymbol {
             let channelSigBlob = BlobBuilder()
             this.signatures.EncodeTypeSymbol(BlobEncoder(channelSigBlob).TypeSpecificationSignature(), element)
-            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(channelSigBlob))
+            return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(channelSigBlob))
         }
         throw NotSupportedException("Cannot resolve element type token for '${element.Name}'.")
     }
@@ -591,7 +590,7 @@ internal class ImportedMemberRefFactory {
             let sigBlob = BlobBuilder()
             let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
             this.signatures.EncodeClrType(encoder, type)
-            let spec = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+            let spec = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
             this.cache.TypeSpecs[type] = spec
             return spec
         }
@@ -645,7 +644,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
@@ -703,7 +702,7 @@ internal class ImportedMemberRefFactory {
             }
             return this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMethodSpecification(symbolicRef, this.emitCtx.Metadata.GetOrAddBlob(symbolicSigBlob))
         }
         if !method.IsGenericMethod || method.IsGenericMethodDefinition {
@@ -749,7 +748,10 @@ internal class ImportedMemberRefFactory {
                 this.signatures.EncodeClrType(argsEncoder.AddArgument(), closedArgs[i])
             }
         }
-        let spec = this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        let spec = this
+            .emitCtx
+            .MetadataRows
+            .AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
         if !hasSymbolArgs {
             this.cache.MethodSpecs[method] = spec
         } else {
@@ -833,14 +835,12 @@ internal class ImportedMemberRefFactory {
             "TryNormalizeToSymbolicContainer only reports success with an open definition, and the interface re-targeting above keeps one",
             expression: "openDefinition"
         )
-        let symbolicView = ImportedTypeSymbol.GetConstructed(
-            openContainer.MakeGenericType(this.GetErasedObjectArgs(openContainer)),
-            openContainer,
-            typeArguments
-        )
+        // The encoder uses the open definition and symbolic arguments, not a placeholder CLR construction.
+        // Placeholder arguments can violate constraints such as TDelegate : Delegate.
+        let symbolicView = ImportedTypeSymbol.GetConstructed(openContainer, openContainer, typeArguments)
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let openMethod = Invariant.Required(
             ResolveMethodOnOpenDefinition(openContainer, method),
             "the symbolic container was normalized from this method's own declaring type, so its open definition declares the method",
@@ -875,61 +875,13 @@ internal class ImportedMemberRefFactory {
         )
         handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob)
         )
         return true
-    }
-
-    // Issue #821: choose the right erased `object` for an open generic
-    // definition's MakeGenericType call. The open def may live in a
-    // MetadataLoadContext (reference-pack assemblies); passing a live
-    // `typeof(object)` to its MakeGenericType raises ArgumentException with
-    // "type was not loaded by the MetadataLoadContext that loaded the
-    // generic type or method." Use `emitCtx.CoreObjectType`, which is the
-    // System.Object resolved through the active reference context, when the
-    // open def lives outside the host runtime.
-    private func GetErasedObjectArgs(openDefinition Type)[]Type {
-        let parameters = openDefinition.GetGenericArguments()
-        let result = [parameters.Length]Type
-        let coreObject = ChooseErasedObjectType(openDefinition)
-        for var i = 0; i < parameters.Length; i++ {
-            // Issue #806: a generic parameter with the `struct`
-            // constraint cannot be closed with `System.Object`
-            // (MakeGenericType throws ArgumentException). Use a
-            // BCL value-type placeholder (`int32`) so the
-            // symbolic-container path can construct the closed
-            // type purely for parent-TypeSpec encoding. The
-            // closed type's identity is irrelevant beyond the
-            // open definition's reflection metadata.
-            let p = parameters[i]
-            if (p.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
-                result[i] = ChooseErasedValueTypeType(openDefinition)
-            } else {
-                result[i] = coreObject
-            }
-        }
-        return result
-    }
-
-    private func ChooseErasedValueTypeType(openDefinition Type) Type {
-        let hostInt = typeof(int32)
-        if openDefinition?.Assembly == hostInt.Assembly {
-            return hostInt
-        }
-        return this.emitCtx.CoreInt32Type ?? hostInt
-    }
-
-    private func ChooseErasedObjectType(openDefinition Type) Type {
-        // Same context as the open def → cheap path.
-        let hostObject = typeof(object)
-        if openDefinition?.Assembly == hostObject.Assembly {
-            return hostObject
-        }
-        return this.emitCtx.CoreObjectType
     }
 
     /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
@@ -984,7 +936,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1029,7 +981,7 @@ internal class ImportedMemberRefFactory {
         }
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), imported)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let openCtor = ResolveCtorOnOpenDefinition(imported.OpenDefinition, ctor)
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
@@ -1043,7 +995,7 @@ internal class ImportedMemberRefFactory {
         )
         handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1078,7 +1030,7 @@ internal class ImportedMemberRefFactory {
         }
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfTp)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             parameterCount: 1,
@@ -1091,7 +1043,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1120,7 +1072,7 @@ internal class ImportedMemberRefFactory {
         }
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfEnum)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             parameterCount: 1,
@@ -1131,7 +1083,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1168,7 +1120,7 @@ internal class ImportedMemberRefFactory {
         }
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfUserVt)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             parameterCount: 1,
@@ -1179,7 +1131,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1219,7 +1171,7 @@ internal class ImportedMemberRefFactory {
         }
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfUserVt)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             parameterCount: 0,
@@ -1228,7 +1180,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("get_Value"),
@@ -1266,7 +1218,7 @@ internal class ImportedMemberRefFactory {
         }
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfUserVt)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             parameterCount: 0,
@@ -1275,7 +1227,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("get_HasValue"),
@@ -1306,10 +1258,10 @@ internal class ImportedMemberRefFactory {
             field
         }
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(field.Name),
@@ -1330,19 +1282,15 @@ internal class ImportedMemberRefFactory {
             throw InvalidOperationException(
             "Open generic type '${openDefinition.FullName}' has no field '${field.Name}'."
         )
-        let symbolicView = ImportedTypeSymbol.GetConstructed(
-            openDefinition.MakeGenericType(this.GetErasedObjectArgs(openDefinition)),
-            openDefinition,
-            typeArguments
-        )
+        let symbolicView = ImportedTypeSymbol.GetConstructed(openDefinition, openDefinition, typeArguments)
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent,
             this.emitCtx.Metadata.GetOrAddString(field.Name),
@@ -1366,10 +1314,10 @@ internal class ImportedMemberRefFactory {
             throw InvalidOperationException("Open generic type '${openType.FullName}' has no field '$fieldName'.")
         let parent = this.GetTypeHandleForMember(closedGenericType)
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(fieldName),
@@ -1409,7 +1357,7 @@ internal class ImportedMemberRefFactory {
         )
         let handle = this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1469,7 +1417,7 @@ internal class ImportedMemberRefFactory {
             start,
             count
         )
-        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #649: Gets a MemberRef for a tuple field when the tuple's
@@ -1494,10 +1442,10 @@ internal class ImportedMemberRefFactory {
         let openField = openType.GetField(fieldName, BindingFlags.Instance | BindingFlags.Public) ??
             throw InvalidOperationException("Open ValueTuple type has no field '$fieldName'.")
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), openField.FieldType)
+        this.signatures.EncodeClrType(BlobEncoder(sigBlob).FieldSignature(), ClrNullability.GetSignatureType(openField))
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(fieldName),
@@ -1539,7 +1487,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1567,7 +1515,7 @@ internal class ImportedMemberRefFactory {
         )
         this.signatures.EncodeTypeSymbol(genInst.AddArgument(), mapType.KeyType)
         this.signatures.EncodeTypeSymbol(genInst.AddArgument(), mapType.ValueType)
-        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #1481: gets a MemberRef for the parameterless
@@ -1585,7 +1533,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1613,7 +1561,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("set_Item"),
@@ -1642,7 +1590,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("TryGetValue"),
@@ -1667,7 +1615,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("Remove"),
@@ -1692,7 +1640,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("get_Count"),
@@ -1703,7 +1651,7 @@ internal class ImportedMemberRefFactory {
     internal func GetRectangularArrayTypeSpec(arrayType RectangularArrayTypeSymbol) TypeSpecificationHandle {
         let sigBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), arrayType)
-        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     internal func GetRectangularArrayMemberReference(
@@ -1753,7 +1701,7 @@ internal class ImportedMemberRefFactory {
         }
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent,
             this.emitCtx.Metadata.GetOrAddString(name),
@@ -1795,7 +1743,9 @@ internal class ImportedMemberRefFactory {
         }
         let sigBlob = BlobBuilder()
         this.signatures.EncodeFunctionTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), fnType)
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.functionDelegateTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -1811,7 +1761,7 @@ internal class ImportedMemberRefFactory {
     internal func GetConstructedDelegateCtorRef(symbolicDelegate ImportedTypeSymbol) EntityHandle {
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicDelegate)
-        let parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             2,
@@ -1823,7 +1773,7 @@ internal class ImportedMemberRefFactory {
         )
         return this
             .emitCtx
-            .Metadata
+            .MetadataRows
             .AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1857,7 +1807,7 @@ internal class ImportedMemberRefFactory {
         let handle = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -1913,7 +1863,7 @@ internal class ImportedMemberRefFactory {
         let handle = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString("Invoke"),

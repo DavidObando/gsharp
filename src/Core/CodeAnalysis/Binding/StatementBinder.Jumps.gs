@@ -73,7 +73,8 @@ internal partial class StatementBinder {
     private func DefineUserLabel(labelName string, location TextLocation) BoundLabel {
         if !binderCtx.DefinedUserLabels.Add(labelName) {
             Diagnostics.ReportDuplicateGotoLabel(location, labelName)
-            return binderCtx.UserLabels[labelName]
+            // Keep each recovered declaration distinct without changing the canonical goto target.
+            return BoundLabel(labelName)
         }
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray()
         let wasReachable = currentStatementListFallsThrough
@@ -942,6 +943,7 @@ internal partial class StatementBinder {
     /// opposed to (cref:HasFunctionLocalRefScope), which answers for
     /// the value's OWN storage (its fields; see that method's
     /// `BoundFieldAccessExpression` case, which this does not change).
+    /// A UTF-8 literal's referent is immutable static RVA storage, not its local span descriptor.
     /// Mirrors the `BoundDereferenceExpression` pointer-parameter case
     /// in (cref:HasFunctionLocalRefScope) exactly: a non-scoped
     /// by-value parameter's encapsulated reference is caller-supplied (the
@@ -955,7 +957,9 @@ internal partial class StatementBinder {
     private func HasFunctionLocalReferentScope(expr BoundExpression) bool {
         // This is the by-ref-like value's encapsulated referent scope, not
         // the parameter reference's effective ref scope.
-        return if expr is BoundVariableExpression{Variable: ParameterSymbol p} {
+        return if expr is BoundUtf8StringExpression {
+            false
+        } else if expr is BoundVariableExpression{Variable: ParameterSymbol p} {
             p.GetEffectiveValueScope() == ParameterValueScope.FunctionLocal
         } else {
             HasFunctionLocalRefScope(expr)

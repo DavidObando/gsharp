@@ -244,6 +244,22 @@ internal shared class StructuralProjectionPlanner {
             }
             return false
         }
+        // Imported record aggregates describe metadata, not constructors emitted by this compilation.
+        if target is StructSymbol{IsClass: true} && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            target.ClrType,
+            nil,
+            out _
+        ) {
+            return TryCreateClrTargetPlan(
+                source,
+                target,
+                sourceMembers,
+                strict,
+                explicitMemberNames,
+                out plan,
+                out failure
+            )
+        }
         return if target is StructSymbol userTarget {
             TryCreateUserTargetPlan(
                 source,
@@ -398,12 +414,17 @@ internal shared class StructuralProjectionPlanner {
         out failure string?
     ) StructuralProjectionConstruction? {
         failure = nil
-        if target.HasPrimaryConstructor {
+        if target.HasDataConstructionPrimary ||
+            (!target.UsesConstructorOwnedDataConstruction && target.HasPrimaryConstructor) {
             parameters = target
                 .PrimaryConstructorParameters
                 .Select((parameter ParameterSymbol) -> (parameter, parameter.Type))
                 .ToImmutableArray()
             return StructuralProjectionConstruction(StructuralProjectionConstructionKind.UserPrimary, userType: target)
+        }
+        if target.UsesConstructorOwnedDataConstruction {
+            parameters = ImmutableArray[(ParameterSymbol, TypeSymbol)].Empty
+            return StructuralProjectionConstruction(StructuralProjectionConstructionKind.UserDefault, userType: target)
         }
         let explicitConstructors = target.EffectiveExplicitConstructors
         if !explicitConstructors.IsDefaultOrEmpty {
@@ -467,6 +488,16 @@ internal shared class StructuralProjectionPlanner {
         }
         var constructor ConstructorInfo? = nil
         var constructorParameters = Array.Empty[ParameterInfo]()
+        // The aggregate supplies construction metadata, not the symbolic target identity.
+        var dataType = if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
+            (
+            aggregate!!.UsesConstructorOwnedDataConstruction ||
+                aggregate is {IsClass: true, HasPrimaryConstructor: true}
+        ) {
+            aggregate
+        } else {
+            default(StructSymbol?)
+        }
         let constructors = ClrTypeUtilities.SafeGetConstructors(clrType, PublicInstance)
         var parameterlessConstructor ConstructorInfo? = nil
         for candidate in constructors {
@@ -475,7 +506,21 @@ internal shared class StructuralProjectionPlanner {
                 break
             }
         }
-        if !clrType.IsValueType {
+        if dataType != nil {
+            constructor = if dataType.IsClass {
+                ImportedTypeSymbol.FindPrimaryConstructor(clrType, dataType.PrimaryConstructorParameters)
+            } else {
+                dataType.GetDataConstructionConstructor()
+            }
+            if dataType.IsClass && constructor == nil {
+                if ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _) {
+                    failure = "Type '$target' has no applicable primary constructor."
+                    return false
+                }
+                dataType = nil
+            }
+        }
+        if dataType == nil && !clrType.IsValueType {
             constructor = parameterlessConstructor
             if constructor == nil {
                 for candidate in constructors {
@@ -491,7 +536,7 @@ internal shared class StructuralProjectionPlanner {
                     constructorParameters = candidateParameters
                 }
             }
-        } else {
+        } else if dataType == nil {
             constructor = parameterlessConstructor
             if constructor == nil {
                 for candidate in constructors {
@@ -517,13 +562,14 @@ internal shared class StructuralProjectionPlanner {
         }
         let constructorSlots = ImmutableArray.CreateBuilder[StructuralProjectionSlot](constructorParameters.Length)
         let targetNames = HashSet[string](StringComparer.Ordinal)
-        for parameter in constructorParameters {
+        for var parameterIndex = 0; parameterIndex < constructorParameters.Length; parameterIndex++ {
+            let parameter = constructorParameters[parameterIndex]
             let parameterName = parameter.Name
             if string.IsNullOrEmpty(parameterName) {
                 failure = "Type '$target' has a constructor parameter without a name."
                 return false
             }
-            let parameterType = ClrNullability.GetParameterTypeSymbol(parameter)
+            let parameterType = MemberLookup.GetClrMethodParameterTypeSymbol(target, constructor!!, parameterIndex)
             targetNames.Add(parameterName)
             if explicitNames?.Contains(parameterName) != true && !sourceMembers.ContainsKey(parameterName) &&
                 parameter
@@ -553,7 +599,7 @@ internal shared class StructuralProjectionPlanner {
             if property.GetIndexParameters().Length != 0 || setter == nil || !targetNames.Add(property.Name) {
                 continue
             }
-            let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
+            let propertyType = MemberLookup.GetClrPropertyTypeSymbol(target, property)
             if !TryCreateSlot(
                 property.Name,
                 propertyType,
@@ -575,7 +621,7 @@ internal shared class StructuralProjectionPlanner {
             if field.IsStatic || field.IsLiteral || field.IsInitOnly || !targetNames.Add(field.Name) {
                 continue
             }
-            let fieldType = ClrNullability.GetFieldTypeSymbol(field)
+            let fieldType = MemberLookup.GetClrFieldTypeSymbol(target, field)
             if !TryCreateSlot(field.Name, fieldType, sourceMembers, explicitNames, strict, out var slot, out failure) {
                 return false
             }
@@ -593,11 +639,12 @@ internal shared class StructuralProjectionPlanner {
         plan = StructuralProjectionPlan(
             source,
             target,
-            StructuralProjectionConstruction(constructionKind, clrConstructor: constructor),
+            StructuralProjectionConstruction(constructionKind, userType: dataType, clrConstructor: constructor),
             constructorSlots.ToImmutable(),
             initializerSlots.ToImmutable()
         )
-        return HasMappedSlot(plan!!, explicitNames)
+        return HasMappedSlot(plan!!, explicitNames) ||
+            (dataType != nil && constructor == nil && ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _))
     }
 
     private func TryCreateSlot(
@@ -916,7 +963,7 @@ internal shared class StructuralProjectionPlanner {
                     property.Name,
                     StructuralProjectionSourceMember(
                         property.Name,
-                        ClrNullability.GetPropertyTypeSymbol(property),
+                        MemberLookup.GetClrPropertyTypeSymbol(source, property),
                         clrMember: property
                     )
                 )
@@ -928,7 +975,7 @@ internal shared class StructuralProjectionPlanner {
                     field.Name,
                     StructuralProjectionSourceMember(
                         field.Name,
-                        ClrNullability.GetFieldTypeSymbol(field),
+                        MemberLookup.GetClrFieldTypeSymbol(source, field),
                         clrMember: field
                     )
                 )

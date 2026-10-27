@@ -1247,8 +1247,16 @@ open partial class Parser {
         // declaration head is not <c>{</c>.
         let isBodyless = Current.Kind != SyntaxKind.OpenBraceToken
         if isBodyless {
-            openBrace = SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, Current.Position, "{", nil)
-            let syntheticCloseBrace = SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, Current.Position, "}", nil)
+            // Issue #5277: the braces are not written. They sit, zero-width, at the end of the last
+            // token of the declaration, so the declaration's span stops there and does not reach
+            // the next declaration that starts at (cref:Current).
+            let bodylessEnd = if position > 0 {
+                tokens[position - 1].Span.End
+            } else {
+                Current.Position
+            }
+            openBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.OpenBraceToken, bodylessEnd, "{")
+            let syntheticCloseBrace = SyntaxToken.Synthesized(syntaxTree, SyntaxKind.CloseBraceToken, bodylessEnd, "}")
             let bodylessDecl = StructDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
@@ -1509,10 +1517,7 @@ open partial class Parser {
                 sharedInitializers.Add(StaticInitializerBlockSyntax(syntaxTree, initKeyword, initBody))
             } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind
                 .OpenParenthesisToken {
-                // Issue #306 / #2766: standalone user-defined constructor
-                // `init(params) [: base(args)] { body }`. Plain structs admit
-                // constructors too; data/inline structs retain their canonical
-                // primary-constructor-only shape.
+                // ADR-0214 gives data structs the existing authored constructor syntax.
                 if memberOpenModifier != nil || memberOverrideModifier != nil {
                     // The enclosing `if` tests these same modifiers for non-null,
                     // so the coalesce always yields one of them.
@@ -1527,9 +1532,7 @@ open partial class Parser {
                     )
                 }
                 if structOrClassKeyword.Kind != SyntaxKind.ClassKeyword &&
-                    (
-                    structOrClassKeyword.Kind != SyntaxKind.StructKeyword || dataKeyword != nil || inlineKeyword != nil
-                ) {
+                    (structOrClassKeyword.Kind != SyntaxKind.StructKeyword || inlineKeyword != nil) {
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken)
                 }
                 let constructor = ParseConstructorDeclaration(memberAccessibility, memberConvenienceModifier)
@@ -1668,7 +1671,12 @@ open partial class Parser {
                             SyntaxKind.FuncKeyword
                         )
                     }
-                    if structOrClassKeyword.Kind != SyntaxKind.ClassKeyword {
+                    if structOrClassKeyword.Kind != SyntaxKind.ClassKeyword &&
+                        !(
+                        structOrClassKeyword.Kind == SyntaxKind.StructKeyword &&
+                            dataKeyword != nil &&
+                            inlineKeyword == nil
+                    ) {
                         Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken)
                     }
                     let constructor = ParseConstructorDeclaration(memberAccessibility, memberConvenienceModifier)
@@ -1823,6 +1831,7 @@ open partial class Parser {
                 SyntaxKind.NumberToken,
                 SyntaxKind.StringToken,
                 SyntaxKind.ByteStringToken,
+                SyntaxKind.Utf8StringToken,
                 SyntaxKind.OpenParenthesisToken,
                 SyntaxKind.OpenSquareBracketToken,
                 SyntaxKind.AmpersandToken,

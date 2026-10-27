@@ -12,8 +12,6 @@
 #
 # Inputs (from the migrate artifact, unpacked under $SELFMIG_GATE_ROOT):
 #   migrated/               the migrated tree
-#   csharp-tests/           the C# test-case lists per-test-name parity compares
-#                           against (issue #4633)
 #   runs/<runId>/           per-app validation-context.json manifests
 #   migrate-run-dir.txt     the manifest run directory
 # Outputs under $SELFMIG_GATE_ROOT/shard-<name>/:
@@ -68,6 +66,24 @@ for app in "$@"; do
   app_args+=(--app "$app")
 done
 
+# Capture on this runner. Different hosted images can have different targeting
+# packs, which change MemberData rows even when both use the same SDK (#5443).
+# A failed capture leaves no oracle; validation then fails closed for that app.
+set +e
+dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" capture-test-oracle \
+  --corpus "$selfmig_source_root" \
+  --out "$shard_out/csharp-tests" \
+  --manifests "$manifest_run_dir" \
+  --config Release \
+  "${selfmig_project_filters[@]}" \
+  "${app_args[@]}" \
+  2>&1 | tee "$shard_out/capture-test-oracle.log"
+capture_exit=${PIPESTATUS[0]}
+set -e
+if (( capture_exit != 0 )); then
+  echo "self-migration shard $shard_name: C# oracle capture failed (exit $capture_exit); validation will report missing oracles."
+fi
+
 # Issue #3721: the moment validation starts, so the per-app durations below can
 # attribute the first app's cost. Captured after the prerequisite build so it
 # measures validation, not the setup every shard pays equally.
@@ -80,7 +96,7 @@ selfmig_with_corpus_runtime dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.d
   --artifacts "$shard_out/runs" \
   --manifests "$manifest_run_dir" \
   --config Release \
-  --csharp-test-oracle "$work_root/csharp-tests" \
+  --csharp-test-oracle "$shard_out/csharp-tests" \
   "${selfmig_project_filters[@]}" \
   "${app_args[@]}" \
   | tee "$shard_out/validate.log"

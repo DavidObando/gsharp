@@ -1,0 +1,69 @@
+{
+  "status": "Initial independent matrix incomplete: subsequently reproduced self-consistent certificate-subset acceptance. Owner correction required; dependency PR #5331 remains draft and unmerged.",
+  "historical_producer_record": {
+    "file": "certification-record.json",
+    "sha256": "3f771dae1755225ae3fd2fa2225933a6e937f7e16da65fd933dd931177721add",
+    "meaning": "Its frozen F1-policy rejection is historical evidence, not a claim about the later policy."
+  },
+  "shared_policy": {
+    "pull_request": "#5331",
+    "commit": "838838bfacfd10902a17b9d7ab18d0d4c976b43e",
+    "source_sha256": "56c751c9a01b71fcc8c67828e02692adc241b4281abc40cbd10069e2d1251189",
+    "adapter_sha256": "c7015f8006ae994a9b8315dfa7a665dba2aeccdce5d53750ab21c2394ea7d5e9",
+    "authority": "Existing shared IlVerifyFalsePositives decision logic; no feature-local matcher.",
+    "upstream": "dotnet/runtime#129030",
+    "scope": "Only the exact immutable product image and Get/14, Empty/14, Derived/0F diagnostics."
+  },
+  "actual_tool_matrix": {
+    "tool": "Pinned dotnet-ilverify 10.0.8; full runtime 10.0.12 references; whole-image verification.",
+    "raw_exit": 2,
+    "stderr": "",
+    "images": [
+      {"name": "product", "sha256": "d8093a176ac3bbebc3022adabd7f7ba4fa9ab02436142386b5de26981a1ab3cc", "accepted": 3, "unexpected": 0, "policy_exit": 0},
+      {"name": "original research", "sha256": "38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe", "accepted": 1, "unexpected": 0, "policy_exit": 0},
+      {"name": "wrong terminator", "sha256": "75b83d49cc590259517ff6acb0da789963a03067df29fb7f197e3a8507066e30", "accepted": 0, "unexpected": 3, "policy_exit": 1},
+      {"name": "wrong logical length", "sha256": "76e42a11cfb213225873e4bf2355f709408e944472ddcddd6e23843f32ee788d", "accepted": 0, "unexpected": 3, "policy_exit": 1},
+      {"name": "renamed method", "sha256": "2ac391f9962fbeab0f17fc63a6949c6d3dfde8e133b50d8f1209a97f564931fd", "accepted": 0, "unexpected": 3, "policy_exit": 1},
+      {"name": "genuine byref-to-local, never executed", "sha256": "3fdf8253f9829667022268c6c9185dcfe00ffc8218b30711c6b9500258e80b87", "accepted": 0, "unexpected": 1, "policy_exit": 1}
+    ]
+  },
+  "altered_report_controls": {
+    "policy_exit": 1,
+    "cases": [
+      "Wrong PE path",
+      "Missing diagnostic with unchanged summary",
+      "Duplicate diagnostic with unchanged summary",
+      "Wrong return offset",
+      "Wrong diagnostic message",
+      "Additional unrecognized output",
+      "Complete product-shaped diagnostics and path forged for the genuine byref PE"
+    ]
+  },
+  "subsequently_reproduced_blocker": {
+    "review_thread": "PRRT_kwDOCzQNb86v8a_5",
+    "scope": "The same shared certificate-completeness decision also affects the runtime pair.",
+    "expected_policy_exit": 1,
+    "actual_policy_exit": 0,
+    "cases": [
+      "Only product Get diagnostic with summary reduced from three errors to one",
+      "Only product Get and Empty diagnostics with summary reduced from three errors to two"
+    ],
+    "meaning": "The seven earlier controls did not test self-consistent proper subsets. Their passing results do not establish complete finite-certificate validation.",
+    "ownership": "Shared policy owner fixes the authoritative decision separately; no feature-local matcher or frozen F1/F2 head edit."
+  },
+  "review_correction": {
+    "source_commit": "6ea70eb9d67bc333edd4fe282cdb55fa937f85da",
+    "regenerated_product": "Byte-identical complete D809 image after const, async and readonly-ref corrections.",
+    "driver_selection": "152 passed; no failures or skips.",
+    "new_contexts": "Actually suspending async conditionals, literal arguments and receivers; readonly element reference retained across GC.",
+    "new_context_verification": "Complete raw verification passes without exceptions; no byref admission requested.",
+    "discrimination": "Original async/ref bugs RED; partial async fix passed ILVerify but failed JIT after suspension; broad byref-like scope mutant killed both unsafe controls while the literal positive passed; safe source restored byte-for-byte."
+  },
+  "limits": [
+    "Raw verification still reports three errors for the frozen product: approved known exceptions, not strict unsuppressed success.",
+    "No admission of other generated images, arbitrary byrefs, ref-like types, unsafe returns or error categories.",
+    "Do not replace the historical producer/compiler evidence with later rebuilt artifacts.",
+    "Dependency and feature PR CI/review are separate from this independent local matrix.",
+    "No merge, release, SDK-pin change, translator adoption or Go-family admission."
+  ]
+}

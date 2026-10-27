@@ -62,6 +62,7 @@ class BoundScope {
     // lambdas — unify against one shape cache, mirroring Roslyn's
     // per-compilation anonymous-type cache.
     private var anonymousTypeCache AnonymousTypeCache?
+    private var bindingServices BindingServices?
 
     // Issue #3501 A2: synthesized ref-kind delegate cache, held at the root
     // of the chain, exactly like anonymousTypeCache above.
@@ -80,17 +81,8 @@ class BoundScope {
     // same file as the reference being resolved, plus implicit imports.
     private var currentReferencingSyntaxTree AsyncLocal[SyntaxTree?] = AsyncLocal[SyntaxTree?]()
 
-    // Issue #2455: the ambient "qualified construction package hint" (see
-    // SetQualifiedConstructionPackageHint), set only while re-binding the
-    // stripped remainder of a package-qualified source-type construction
-    // (e.g. `Oahu.Audible.Json.Author{...}` peeled down to bare `Author{...}`
-    // by TryBindQualifiedSourceTypeConstruction). Bare re-binding loses the
-    // peeled qualification entirely, so without this hint a same-simple-name
-    // collision across packages (both imported) would either misresolve to
-    // the wrong package (pre-#2455) or be reported as ambiguous (post-#2455)
-    // even though the qualification already disambiguates it. Lazily set/
-    // cleared only on the root scope of the chain, exactly like
-    // currentDeclaringPackageName above.
+    // Explicit package preference for alias lookup, shared across the scope chain.
+    // Qualified constructions resolve their complete identities without this hint.
     private var qualifiedConstructionPackageHint AsyncLocal[string?] = AsyncLocal[string?]()
 
     private var richAnonymousClassMap Dictionary[AnonymousClassExpressionSyntax, StructSymbol]?
@@ -811,7 +803,7 @@ class BoundScope {
     /// untouched.
     /// @param packageName The qualifier segments, dot-joined.
     /// @param name The final segment.
-    /// @param preferredArity The requested generic arity, or -1/0 for none.
+    /// @param preferredArity The requested generic arity, or -1 to infer with nongeneric preference.
     /// @param type The matching source type, when unambiguous.
     /// @returns Whether exactly one source type matches.
     func TryLookupSourceTypeInPackage(
@@ -827,10 +819,21 @@ class BoundScope {
         return TryLookupQualifiedSourceType(packageName + "." + name, preferredArity, out type)
     }
 
+    /// Expands the leading import of a qualified type name.
+    /// @param segmentTexts The dotted name segments.
+    /// @param length The number of segments to join.
+    /// @returns The complete name after import expansion.
+    internal func ExpandQualifiedTypeName(segmentTexts[]string, length int32) string {
+        if TryLookupImport(segmentTexts[0], out var import_) {
+            return import_!!.Target + "." + string.Join(".", segmentTexts, 1, length - 1)
+        }
+        return string.Join(".", segmentTexts, 0, length)
+    }
+
     /// Resolves a dotted source type name by its exact package and possibly
     /// nested type identity.
     /// @param qualifiedName The package-qualified source type name.
-    /// @param preferredArity The requested generic arity, or -1/0 for none.
+    /// @param preferredArity The requested generic arity, or -1 to infer with nongeneric preference.
     /// @param type The matching source type, when unambiguous.
     /// @returns Whether the qualified name resolves to exactly one source type.
     func TryLookupQualifiedSourceType(
@@ -842,35 +845,120 @@ class BoundScope {
         if string.IsNullOrEmpty(qualifiedName) {
             return false
         }
-        let wantedArity = if preferredArity > 0 {
-            preferredArity
-        } else {
-            0
+        if TryLookupQualifiedSourceDeclaration(qualifiedName, preferredArity, out type, out var ambiguous) ||
+            ambiguous {
+            return type != nil
+        }
+        // A derived qualifier names its base's nested declaration, not a new declaration.
+        // Resolve an exact source prefix before using the existing nested-type walk.
+        for var boundary = qualifiedName.LastIndexOf('.'); boundary > 0; boundary = qualifiedName.LastIndexOf(
+            '.',
+            boundary - 1
+        ) {
+            if !TryLookupQualifiedSourceDeclaration(
+                qualifiedName.Substring(0, boundary),
+                preferredArity: 0,
+                out var current,
+                out ambiguous
+            ) {
+                if ambiguous {
+                    return false
+                }
+                continue
+            }
+            let segments = qualifiedName.Substring(boundary + 1).Split('.')
+            for var i = 0; i < segments.Length; i++ {
+                let arity = if i == segments.Length - 1 {
+                    preferredArity
+                } else {
+                    0
+                }
+                if TryLookupNestedTypeAlias(current, segments[i], arity, out var nested) {
+                    current = if current is StructSymbol owner {
+                        ApplyEnclosingConstruction(nested!!, owner)
+                    } else {
+                        nested
+                    }
+                } else if current is StructSymbol owner &&
+                    TryLookupNestedTypeAliasIncludingInherited(
+                    owner,
+                    segments[i],
+                    arity,
+                    out nested,
+                    out var declaringContainer
+                ) {
+                    current = ApplyEnclosingConstruction(nested!!, declaringContainer!!)
+                } else {
+                    return false
+                }
+            }
+            type = current
+            return type != nil
+        }
+        return false
+    }
+
+    private func TryLookupQualifiedSourceDeclaration(
+        qualifiedName string,
+        preferredArity int32,
+        out type TypeSymbol?,
+        out ambiguous bool
+    ) bool {
+        type = nil
+        ambiguous = false
+        if string.IsNullOrEmpty(qualifiedName) {
+            return false
         }
         var match TypeSymbol? = nil
+        var matchArity = -1
         let seen = HashSet[TypeSymbol]()
         for pair in EnumerateTypeAliasesInChain() {
-            let candidate = TypeDefinition(pair.Value)
-            if !seen.Add(candidate) ||
-                GetTypeAliasArity(candidate) != wantedArity ||
-                IsDeclaredInImplicitPackage(candidate) {
+            var candidate TypeSymbol
+            var arity int32
+            if TryGetAliasDeclaringPackageInChain(pair.Key, out var aliasPackage) {
+                candidate = pair.Value
+                arity = GetTypeAliasArity(candidate)
+                let aliasName = pair.Key.Substring(pair.Key.IndexOf('#') + 1)
+                if !string.Equals(
+                    aliasPackage + "." + aliasName,
+                    MangleArity(qualifiedName, arity),
+                    StringComparison.Ordinal
+                ) {
+                    continue
+                }
+            } else {
+                candidate = TypeDefinition(pair.Value)
+                arity = GetTypeAliasArity(candidate)
+                if !seen.Add(candidate) || IsDeclaredInImplicitPackage(candidate) {
+                    continue
+                }
+                let package_ = TypePackageName(candidate)
+                if string.IsNullOrEmpty(package_) || !string.Equals(
+                    package_ + "." + QualifiedTypeName(candidate),
+                    qualifiedName,
+                    StringComparison.Ordinal
+                ) {
+                    continue
+                }
+            }
+            if (preferredArity >= 0 && arity != preferredArity) ||
+                (preferredArity < 0 && matchArity == 0 && arity != 0) {
                 continue
             }
-            let package_ = TypePackageName(candidate)
-            if string.IsNullOrEmpty(package_) || !string.Equals(
-                package_ + "." + QualifiedTypeName(candidate),
-                qualifiedName,
-                StringComparison.Ordinal
-            ) {
-                continue
+            if match == nil || (preferredArity < 0 && arity == 0 && matchArity != 0) {
+                match = candidate
+                matchArity = arity
+                ambiguous = false
+            } else if !object.ReferenceEquals(match, candidate) {
+                ambiguous = true
             }
-            if match != nil && !object.ReferenceEquals(match, candidate) {
-                return false
-            }
-            match = candidate
         }
-        type = match
-        return match != nil
+        type = if ambiguous {
+            nil
+        } else {
+            match
+        }
+        return type != nil
     }
 
     /// Resolves an explicit import alias whose target is a same-compilation
@@ -1538,6 +1626,23 @@ class BoundScope {
         return matched
     }
 
+    /// Gets the services of this binding pass (issue #5140), walking to the root of this
+    /// scope's chain so every binder over the chain shares one instance. An independent-body
+    /// worker scope is its own root: it owns worker-local services and never reaches the
+    /// coordinator's (ADR-0203 section 4).
+    /// @returns The (cref:BindingServices) for this scope's chain.
+    internal func GetBindingServices() BindingServices -> if Parent != nil && !independentBodyRoot {
+        Parent!!.GetBindingServices()
+    } else {
+        (
+            if bindingServices == nil {
+                (bindingServices = BindingServices())
+            } else {
+                bindingServices
+            }
+        )!!
+    }
+
     /// Gets the per-compile-pass anonymous-class-literal type cache (issue
     /// #2224), walking to the root of this scope's chain so every scope in
     /// one bind pass shares the same cache instance.
@@ -1552,6 +1657,18 @@ class BoundScope {
                 anonymousTypeCache
             }
         )!!
+    }
+
+    /// Issue #5281: makes this scope's chain share an anonymous-type cache
+    /// created by an earlier pass, so shapes and the `<>AnonymousTypeN` counter
+    /// continue across the declaration and body passes.
+    /// @param cache The cache to share.
+    internal func InstallAnonymousTypeCache(cache AnonymousTypeCache) {
+        if SynthesisParent != nil {
+            Parent!!.InstallAnonymousTypeCache(cache)
+            return
+        }
+        anonymousTypeCache = cache
     }
 
     /// Issue #3501 A2: gets the per-compile-pass synthesized ref-kind
@@ -1756,22 +1873,13 @@ class BoundScope {
         }
     }
 
-    /// Issue #2455: sets the package name explicitly PEELED off a
-    /// package-qualified source-type construction (e.g.
-    /// `Oahu.Audible.Json.Author{...}`) while its stripped, bare-simple-
-    /// name remainder (`Author{...}`) is re-bound by
+    /// Sets a scope-wide preferred package for type alias lookup.
+    /// Qualified constructions instead resolve their complete identities in
     /// (cref:ExpressionBinder.TryBindQualifiedSourceTypeConstruction).
     /// (cref:TryLookupTypeAlias(string, int, out TypeSymbol, out bool))
-    /// consults this FIRST, ahead of both the #2342 own-package preference and
-    /// the general import-based ambiguity resolution, so an explicit
-    /// qualification always wins deterministically — the whole point of
-    /// writing it out — even when the terminal simple name collides across
-    /// two or more packages that are each independently imported (which would
-    /// otherwise report a spurious GS0496 ambiguity despite the reference
-    /// being fully disambiguated by its own qualification). Pass
-    /// `null` to clear. Returns the PREVIOUS value so the
-    /// caller can restore it once the remainder finishes binding. Stored at
-    /// the root of this scope's chain, exactly like
+    /// consults this before the declaring-package preference and import ambiguity checks.
+    /// Pass `null` to clear it. Restore the returned previous value after lookup.
+    /// The root scope stores the preference, like
     /// (cref:currentDeclaringPackageName).
     /// @param packageName The explicitly-qualified package name to make ambient for lookup, or `null` to
     /// clear it.

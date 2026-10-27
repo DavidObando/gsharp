@@ -114,6 +114,7 @@ internal shared class NarrowingConstructTable {
                 "BoundTypeOfExpression",
                 "BoundTypePattern",
                 "BoundUnaryExpression",
+                "BoundUtf8StringExpression",
                 "BoundVariableExpression"
             }
         )

@@ -1,0 +1,136 @@
+{
+  "status": "Unadmitted product image; separate finite shared-policy review required.",
+  "issues": ["#5242", "#5244", "dotnet/runtime#129030"],
+  "producer": {
+    "source_commit": "ebca001a3ce1a028eaffa1b9f9fde1fe576145b2",
+    "bootstrap_sdk": "Gsharp.NET.Sdk 0.5.212, unchanged global.json",
+    "dotnet_sdk": "10.0.401",
+    "runtime": "10.0.12",
+    "gsc_sha256": "517010ffb95461aeb4b8b416e0f8c765044533d7cff019bc4bd85a73a975b753",
+    "compiler_core_sha256": "1b6d2474166dbe5328030970abc44ba482d827251db56a99e6d682763c5d1ece",
+    "global_json_sha256": "4b215c9bf9a55e5a7f4d617d5d44b43a11f76f6a4b46805ae361e5cb4d24e17a",
+    "input": "NativeLiteral.gs.txt, copied unchanged to NativeLiteral.gs outside the consumer project",
+    "input_sha256": "192b89fad5e23c9365ab3616cb51297c83e4cfec4f45924166a3ecba0514f6e9",
+    "reference": "Microsoft.NETCore.App.Ref/10.0.12/ref/net10.0/System.Runtime.dll",
+    "reference_sha256": "c4a1f638ad1977337dcc655e6bae1751b55477005df4fb6a884fbe6f8b940b07",
+    "arguments": "/target:library /targetframework:net10.0 /out:Utf8LiteralProof.dll /r:<reference> NativeLiteral.gs",
+    "result": "Exit 0; existing GS9100 optional transitive-reference warning retained.",
+    "determinism": "Committed compiler regenerated the identical complete PE in a different output directory."
+  },
+  "image": {
+    "assembly": "Utf8LiteralProof, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null",
+    "sha256": "d8093a176ac3bbebc3022adabd7f7ba4fa9ab02436142386b5de26981a1ab3cc",
+    "size": 3072,
+    "mvid": "b242585c-3f42-4983-a06c-04503e49aabb",
+    "encoded_reference": "System.Runtime, Version=10.0.0.0, PublicKeyToken=b03f5f7f11d50a3a",
+    "resolved_bcl_owner": "System.Private.CoreLib, Version=10.0.0.0, PublicKeyToken=7cec85d7bea7798e",
+    "targets": [
+      "RuntimeHelpers.CreateSpan<byte>(RuntimeFieldHandle)",
+      "ReadOnlySpan<byte>.Slice(int,int)"
+    ],
+    "methods": [
+      {
+        "token": "06000002",
+        "name": "Utf8LiteralProof.Literals::Get()",
+        "signature": "00001511110105",
+        "return": "System.ReadOnlySpan<System.Byte>, by value",
+        "impl": "NoInlining",
+        "il": "D002000004280100002B0A1200161A280400000A2A",
+        "locals": "07011511110105",
+        "init_locals": true,
+        "max_stack": 6,
+        "exception_regions": 0,
+        "ret_offset": "0x00000014"
+      },
+      {
+        "token": "06000003",
+        "name": "Utf8LiteralProof.Literals::Empty()",
+        "signature": "00001511110105",
+        "return": "System.ReadOnlySpan<System.Byte>, by value",
+        "impl": "NoInlining",
+        "il": "D001000004280100002B0A12001616280400000A2A",
+        "locals": "07011511110105",
+        "init_locals": true,
+        "max_stack": 6,
+        "exception_regions": 0,
+        "ret_offset": "0x00000014"
+      },
+      {
+        "token": "06000004",
+        "name": "Utf8LiteralProof.Literals::Derived()",
+        "signature": "00001511110105",
+        "return": "System.ReadOnlySpan<System.Byte>, by value",
+        "impl": "NoInlining",
+        "il": "28020000060A12001718280400000A2A",
+        "locals": "07011511110105",
+        "init_locals": true,
+        "max_stack": 5,
+        "exception_regions": 0,
+        "ret_offset": "0x0000000F"
+      }
+    ],
+    "storage": {
+      "owner": "<PrivateImplementationDetails>__Utf8, nonpublic abstract sealed",
+      "flags": "Private, Static, InitOnly, HasFieldRVA",
+      "layout": "Private nested explicit-layout value types; packing 1; exact sizes 1 and 5",
+      "fields": [
+        {"token": "04000001", "name": "__Utf8_0", "rva": 9864, "size": 1, "bytes": "00", "logical_length": 0},
+        {"token": "04000002", "name": "__Utf8_1", "rva": 9865, "size": 5, "bytes": "41C3A90000", "logical_length": 4}
+      ]
+    }
+  },
+  "runtime_witness": {
+    "host": "Witness.gs.txt, published SDK 0.5.212; no new syntax in consumer source",
+    "host_source_sha256": "847cd4e226fce16fc92972190a8aa010cc87b6b7914c976c78c382777152e0ed",
+    "helper": "TerminatorWitness.cs.txt, independent physical-storage observer; never production lowering",
+    "helper_source_sha256": "ef399f00279f4d720dbaa7113f407d4c0f87ad5d83f632dad2f2181fc86141ae",
+    "helper_image_sha256": "95410c635937e24f99711648b6a7cae440c3275e56f9eba2db55ef637861e387",
+    "expected_stdout": "witness.stdout.txt; independently handwritten 13-line oracle",
+    "expected_stdout_sha256": "c9f0c8873e82579548a54b84863d89f5e0a9b2f36cd0db9eabdb8a384fbe54b0",
+    "jit": "Exact oracle passed",
+    "native_aot": "Actual osx-arm64 executable matched the same handwritten oracle",
+    "native_image_sha256": "d4aba8931cc8d9c4363decbe07f3082cda0d621a343d7c9a177f39540061252f",
+    "observations": [
+      "Logical bytes/length, embedded zero, contiguous hidden zero, non-null backing for empty and nonempty",
+      "Original and returned derived slice survive forced collections",
+      "Mutating exported storage does not alter literal storage",
+      "100000 warmed noinline getter evaluations allocate zero bytes",
+      "Real noinline allocating-array control allocates 3200000 bytes; checksum 26000000"
+    ],
+    "native_limit": "Installed Homebrew openssl@3/brotli library paths enabled linking; deployment-target warnings retained.",
+    "consumer_and_helper_raw_verification": "Complete pinned ILVerify, exit 0 each; no exceptions or filters."
+  },
+  "verification": {
+    "tool": "Pinned dotnet-ilverify 10.0.8",
+    "scope": "Whole image; complete runtime references; no error-code or member suppression",
+    "raw_exit": 2,
+    "stderr": "",
+    "errors": 3,
+    "code": "ReturnPtrToStack",
+    "message": "Return type is ByRef, TypedReference, ArgHandle, or ArgIterator.",
+    "adapter_commit": "60ac8de9d4ee24412fbf28fba55ffccd9d01ca50",
+    "adapter_sha256": "0bbaa27ba5fa19fdaa9c3ba84748392363a8610c4507548345f98c134bda4e71",
+    "adapter_result": "Exit 1; complete=True; accepted=0; unexpected=3",
+    "admission": "NOT granted by this record. Only the shared authoritative policy owner may add a separately reviewed finite admission."
+  },
+  "actual_tool_controls": [
+    {"image": "Original approved research", "sha256": "38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe", "raw_exit": 2, "adapter_exit": 0, "accepted": 1, "unexpected": 0},
+    {"image": "Wrong hidden terminator", "sha256": "75b83d49cc590259517ff6acb0da789963a03067df29fb7f197e3a8507066e30", "raw_exit": 2, "adapter_exit": 1, "unexpected": 3},
+    {"image": "Wrong logical length", "sha256": "76e42a11cfb213225873e4bf2355f709408e944472ddcddd6e23843f32ee788d", "raw_exit": 2, "adapter_exit": 1, "unexpected": 3},
+    {"image": "Renamed method", "sha256": "2ac391f9962fbeab0f17fc63a6949c6d3dfde8e133b50d8f1209a97f564931fd", "raw_exit": 2, "adapter_exit": 1, "unexpected": 3},
+    {"image": "Actual byref-to-local descriptor, never executed", "sha256": "3fdf8253f9829667022268c6c9185dcfe00ffc8218b30711c6b9500258e80b87", "raw_exit": 2, "adapter_exit": 1, "unexpected": 1}
+  ],
+  "mutation_evidence": {
+    "wrong_terminator_image": "JIT reported physical byte 1 instead of 0; handwritten oracle RED, restored original GREEN.",
+    "wrong_length_and_byref_images": "Verifier/policy negative controls only; not executed through the physical-terminator observer.",
+    "wrong_native_lexer_prefix": "61 new behavioral cases RED; 52 existing controls GREEN; source restored byte-for-byte.",
+    "wrong_shared_editor_prefix": "1 new grammar test RED; 235 existing controls GREEN; restored 236 GREEN."
+  },
+  "limits": [
+    "No generic ref-like, byref, unsafe, RVA, caller-supplied, or diagnostic-category admission.",
+    "Current policy deliberately rejects this complete product image despite successful runtime witnesses.",
+    "An initial implementation-CoreLib/SDK-reference-pack identity mismatch produced invalid consumer IL; retained separately, not waived.",
+    "Use the canonical SDK-reference-pack producer recorded here, not the initial TPA-universe image.",
+    "No merge, release, SDK-pin change, cs2gs adoption, or Go-family admission is implied."
+  ]
+}

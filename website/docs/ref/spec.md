@@ -119,6 +119,62 @@ Console.WriteLine("answer=${n *
 
 Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`; when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
+### UTF-8 span literals (Next)
+
+An adjacent lowercase `u8"` starts a noninterpolating UTF-8 text literal.
+Its natural type is the target core library's `System.ReadOnlySpan[byte]`,
+also spelled `readonly span[byte]`.
+The identifier `u8` remains available outside this adjacent prefix.
+
+```gsharp
+let view readonly span[byte] = u8"Aé\0"
+Console.WriteLine(view.Length) // 4: 41 C3 A9 00
+let combined = (u8"A" + u8"é") + u8"\0"
+```
+
+Source scalars and decoded text escapes encode to UTF-8 without normalization
+or a BOM. Supported escapes are `\0`, `\a`, `\b`, `\f`, `\n`, `\r`,
+`\t`, `\v`, `\'`, `\"`, `\\`, `\x` with one to four hexadecimal digits,
+`\u` with exactly four digits, and `\U` with exactly eight digits.
+The complete decoded UTF-16 sequence must contain only valid scalar values.
+A high/low surrogate escape pair in one literal is valid; isolated,
+reversed, or out-of-range surrogates diagnose.
+Each literal validates independently before folding.
+Thus `u8"\uD800" + u8"\uDC00"` cannot repair either invalid operand.
+`\xFF` is text U+00FF and encodes as `C3 BF`, unlike `b"\xFF"`'s byte `FF`.
+Dollar signs, including `${...}`, are text rather than interpolation.
+Lossy source decoding, physical newlines, and raw delimiters diagnose.
+
+`+` folds only literal representations: UTF-8 literals, parentheses around
+them, and nested literal-only `+` trees.
+Variables, calls, casts, conditionals, CLR strings, and byte strings do not
+gain concatenation operators or implicit conversions.
+Adjacent literals require an explicit `+`.
+These span values are not `const`, attribute, optional-parameter, or pattern
+constants.
+
+The compiler emits deterministic private static RVA storage.
+Each complete logical byte sequence has one additional contiguous zero byte.
+`Length`, indexing, slicing, and exports exclude this hidden terminator.
+An embedded zero remains part of the logical value.
+Even the empty literal has static backing for its hidden terminator.
+Evaluation uses `RuntimeHelpers.CreateSpan[byte]` and a logical-length slice;
+it does not run an encoder or allocate a managed array.
+The descriptor remains a CLR ref struct despite the backing storage's
+assembly lifetime.
+Existing heap, capture, boxing, generic-argument, and suspension restrictions
+still apply. Reacquire a literal after an `await`; do not keep a span live
+across it.
+
+This view is neither CLR UTF-16 `string` nor arbitrary immutable `bytestring`.
+Use explicit copying APIs at mutable-array, byte-string, or native-slice
+ownership boundaries.
+Reference assemblies retain public CLR signatures but omit the private data.
+Formatter and editor tooling preserve the adjacent spelling.
+This is an unreleased compiler feature, not permission to use the syntax
+with an older SDK. cs2gs adoption follows a language release and a separate
+repository SDK-pin update.
+
 <span id="byte-string-literals-development"></span>
 
 ### Byte-string literals
@@ -279,6 +335,7 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 - **Implicit constant-expression conversions (C# §10.2.11).** A *constant* integer expression — an integer literal, or unary `+`/`-` applied to one — implicitly converts (narrows or widens) to **any** integer target type **provided its value is within that target's range**, with no cast required. So `var x uint8 = 42`, `var s int16 = 100`, `var u uint32 = 5`, and `var a int8 = -5` all compile. A constant whose value is **out of range** for the target (e.g. `var x uint8 = 300`, `var c uint8 = -1`) remains an error — the value is never silently wrapped or truncated. The folded value is re-materialised as a constant of exactly the target type.
 - **Implicit widening of non-constant values.** A value of a narrower numeric type implicitly converts to a wider one following the widening lattice (e.g. `int32 → int64`, `int32 → float64`, `float32 → float64`) with no cast: `var widened int64 = itemCount` where `itemCount` is an `int32`.
 - **Explicit narrowing of non-constant values.** Narrowing a non-constant value (e.g. `int64 → int32`, `float64 → int32`) requires the explicit conversion-call form `T(x)` and is never applied implicitly. The conversion truncates toward zero like C#, so `int32(19.75)` is `19`. (The `(x as T)` form is reference-type pattern conversion, not the numeric cast form.)
+- **Explicit nullable numeric conversions.** Converting `S?` to a non-nullable numeric type `T` requires `T(value)` or `cast[T](value)`, even when `S → T` widens implicitly. The conversion evaluates `value` once, extracts its value, and applies the ordinary numeric conversion. A missing value throws `System.InvalidOperationException`; it does not become zero. Checked overflow and signedness follow the underlying conversion. A nullable target instead preserves a missing value, as in `cast[uint64?](value)` for `value uint32?`.
 - **Call-site argument conversions.** The same implicit conversions apply when binding a call argument to a **concrete** (non-generic) numeric parameter, mirroring C#: a non-constant argument widens to a wider parameter type following the widening lattice (e.g. an `int32` argument to an `int64` parameter, a `uint16` to an `int32`), and a *constant* integer argument (a literal, or unary `+`/`-` over one) narrows or cross-signs to the parameter type when its value is in range (e.g. `5` to a `uint32` parameter). A non-constant narrowing/cross-sign argument (e.g. an `int32` variable to a `uint32` parameter) still requires the explicit `T(x)` form, exactly as in C#. This applies uniformly to function calls, constructor calls, and constructor chaining. Generic inference is unaffected: a numeric argument supplied to a **type-parameter** position must already have the inferred type — it is not widened during inference — so an explicit conversion is still required there.
 
 ### String and character types
@@ -670,7 +727,15 @@ Function types are written `(T1, T2) -> R` — fully-parenthesized parameter typ
 
 ### Structs, classes, data classes/structs, and inline value classes
 
-Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed. Structs are value-like and may declare fields, **in-body instance methods**, properties, events, and `shared` static members; a struct in-body `func` binds as an instance method on the value type with a synthesized by-ref `this`, the same canonical, warning-free site classes use. Structs are constructed via primary constructors and struct literals; plain structs also support explicit `init(...)` constructors. Data and inline structs retain their primary-constructor-only form. An explicit `init(...)` on a plain struct or class cannot duplicate its primary constructor's parameter signature (`GS0284`). Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`). Inside an instance member of a derived class, an `override` (or any other instance member) may invoke the **base class** implementation of an inherited virtual member non-virtually via the **base-class call** syntax `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or the explicit bracketed form `base[BaseClass].Member(args)`. Postfix access applies normally to the result, as in `base.Member(args).Next()`. The call emits as `ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`, so the nearest base implementation runs without re-dispatching through the v-table; this lets an override delegate to the member it shadows without infinite recursion. The member is resolved by walking the base chain, so a grandparent's implementation is reached when the immediate base class does not declare its own override; parameters, generics, and return values are supported. `base.Member(...)` is valid only inside an instance member of a class, or inside a function literal nested in one (the literal keeps its enclosing member's `base`, as a C# lambda or local function does; the compiler routes such a base call, including a generic one or one with `ref`/`out`/`in` arguments or a `ref` return, through a private forwarder method on the class so it stays non-virtual and verifiable); otherwise the call is rejected with GS0383. A base-qualified field or property is also a valid target of compound assignment, `??=` and increment/decrement (`base.count += 1`, `base.Name ??= v`, `base.Position++`), which reads and writes it through the base accessors non-virtually. `base.E += handler` and `base.E -= handler` subscribe through a non-virtual event the base declares (source or imported); a virtual (`open`/`override`) base event is not supported through `base` yet. : the base class may be an **imported / BCL** type — a class deriving from a CLR base (e.g. `System.IO.Stream`, `System.IO.MemoryStream`, or simply `System.Object`) can delegate to an inherited virtual member via `base.Dispose(disposing)`, `base.ToString()`, `base.Position`, etc. The inherited member is resolved against the class's CLR base type (honoring `protected`/`public` accessibility and walking a user → user → BCL chain) and emits the same non-virtual `call`; a base call into an **abstract** BCL member with no implementation (e.g. `base.Read(...)` on `System.IO.Stream`) is rejected with GS0413 (matching C# CS0205). A missing member on any base reports GS0384, and a `base[Type]` selector that is not the actual base class reports GS0385 — see the diagnostics reference. A class method MAY be declared **abstract** by giving an `open func` a `;` no-body marker instead of a `{ … }` block — `open func Area() float64;` — the canonical G# spelling of a C# `abstract` method. An abstract method declares a virtual slot with no implementation (emitted as `MethodAttributes.Abstract | Virtual | NewSlot`, no IL body); it is only valid as an `open` member of an `open class` (otherwise GS0388). A class that declares — or inherits without overriding — an abstract method is itself **abstract**: it is emitted with `TypeAttributes.Abstract` and cannot be instantiated (constructing it is the compile error GS0386, never a runtime failure). A concrete (non-`open`) subclass must `override` every inherited abstract member (otherwise GS0387); an `open` subclass may leave them abstract and remain abstract itself. Abstract methods support parameters, generic type parameters, and reference- or value-typed (including `ref`) return types, and dispatch virtually through the base/abstract slot. A class can also be declared **`abstract class`** explicitly: it is inheritable (the modifier implies `open`), is emitted with `TypeAttributes.Abstract` and cannot be instantiated even when it declares no abstract member; `Foo()` and `Foo{}` are both GS0386. A **`shared class`** is the spelling of a C# `static class`: it is emitted CLR `abstract sealed` and cannot be instantiated, and its body is the shared member list — every field, `const`, property, event and `func` declared directly in it is a shared (static) member, `init { }` is its static initializer, and it has no `shared { }` block of its own (a non-shared class keeps its trailing `shared { }` block). It cannot declare an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (GS0617), or have a base class or interface (GS0619), and it cannot be combined with `open`, `sealed`, `abstract` or `data` (GS0618). Every part of a `partial` shared class carries `shared` (GS0479). `abstract` and `shared` are contextual modifiers valid only on a `class` head.
+Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed. Structs are value-like and may declare fields, **in-body instance methods**, properties, events, and `shared` static members; a struct in-body `func` binds as an instance method on the value type with a synthesized by-ref `this`, the same canonical, warning-free site classes use.
+
+Structs use primary constructors and struct literals.
+Plain structs and data structs also support explicit `init(...)` constructors.
+Data structs also accept the existing `func init(...)` spelling and convenience constructors.
+Inline structs retain their primary-constructor-only form.
+An explicit constructor cannot duplicate its primary constructor's parameter signature (`GS0284`), including an empty data-struct primary list.
+
+Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`). Inside an instance member of a derived class, an `override` (or any other instance member) may invoke the **base class** implementation of an inherited virtual member non-virtually via the **base-class call** syntax `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or the explicit bracketed form `base[BaseClass].Member(args)`. Postfix access applies normally to the result, as in `base.Member(args).Next()`. The call emits as `ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`, so the nearest base implementation runs without re-dispatching through the v-table; this lets an override delegate to the member it shadows without infinite recursion. The member is resolved by walking the base chain, so a grandparent's implementation is reached when the immediate base class does not declare its own override; parameters, generics, and return values are supported. `base.Member(...)` is valid only inside an instance member of a class, or inside a function literal nested in one (the literal keeps its enclosing member's `base`, as a C# lambda or local function does; the compiler routes such a base call, including a generic one or one with `ref`/`out`/`in` arguments or a `ref` return, through a private forwarder method on the class so it stays non-virtual and verifiable); otherwise the call is rejected with GS0383. A base-qualified field or property is also a valid target of compound assignment, `??=` and increment/decrement (`base.count += 1`, `base.Name ??= v`, `base.Position++`), which reads and writes it through the base accessors non-virtually. `base.E += handler` and `base.E -= handler` subscribe through a non-virtual event the base declares (source or imported); a virtual (`open`/`override`) base event is not supported through `base` yet. : the base class may be an **imported / BCL** type — a class deriving from a CLR base (e.g. `System.IO.Stream`, `System.IO.MemoryStream`, or simply `System.Object`) can delegate to an inherited virtual member via `base.Dispose(disposing)`, `base.ToString()`, `base.Position`, etc. The inherited member is resolved against the class's CLR base type (honoring `protected`/`public` accessibility and walking a user → user → BCL chain) and emits the same non-virtual `call`; a base call into an **abstract** BCL member with no implementation (e.g. `base.Read(...)` on `System.IO.Stream`) is rejected with GS0413 (matching C# CS0205). A missing member on any base reports GS0384, and a `base[Type]` selector that is not the actual base class reports GS0385 — see the diagnostics reference. A class method MAY be declared **abstract** by giving an `open func` a `;` no-body marker instead of a `{ … }` block — `open func Area() float64;` — the canonical G# spelling of a C# `abstract` method. An abstract method declares a virtual slot with no implementation (emitted as `MethodAttributes.Abstract | Virtual | NewSlot`, no IL body); it is only valid as an `open` member of an `open class` (otherwise GS0388). A class that declares — or inherits without overriding — an abstract method is itself **abstract**: it is emitted with `TypeAttributes.Abstract` and cannot be instantiated (constructing it is the compile error GS0386, never a runtime failure). A concrete (non-`open`) subclass must `override` every inherited abstract member (otherwise GS0387); an `open` subclass may leave them abstract and remain abstract itself. Abstract methods support parameters, generic type parameters, and reference- or value-typed (including `ref`) return types, and dispatch virtually through the base/abstract slot. A class can also be declared **`abstract class`** explicitly: it is inheritable (the modifier implies `open`), is emitted with `TypeAttributes.Abstract` and cannot be instantiated even when it declares no abstract member; `Foo()` and `Foo{}` are both GS0386. A **`shared class`** is the spelling of a C# `static class`: it is emitted CLR `abstract sealed` and cannot be instantiated, and its body is the shared member list — every field, `const`, property, event and `func` declared directly in it is a shared (static) member, `init { }` is its static initializer, and it has no `shared { }` block of its own (a non-shared class keeps its trailing `shared { }` block). It cannot declare an `init(…)` constructor, a primary constructor, a `deinit`, a `shared { }` block, or an `open` or `override` method, property or event (GS0617), or have a base class or interface (GS0619), and it cannot be combined with `open`, `sealed`, `abstract` or `data` (GS0618). Every part of a `partial` shared class carries `shared` (GS0479). `abstract` and `shared` are contextual modifiers valid only on a `class` head.
 
 **Construction versus same-named callables.** A call-shaped construction `T(args)` / `T[A](args)` competes with any callable of the same name in scope. A free (non-receiver) function, a function-valued local, or a member of the enclosing type named `T` shadows the type, so the call binds to that callable. A receiver-clause **extension** function never shadows a constructible source type of the same name: C# never considers an extension method for `new T(...)`, so `Slice[T](owner, 0, n, n)` constructs `Slice[T]` even when an extension `func (s Slice[T]) Slice[T](lo int32, hi int32, max int32)` has the same arity in bare form. Such an extension stays callable in receiver form (`s.Slice(1, 2, 4)`).
 
@@ -684,6 +749,11 @@ Every declared `data class` / `data struct` synthesizes the C# `record` ABI, so 
 * A data class has the protected (private when sealed) copy constructor with parameter `original`, the `<Clone>$` method that `with` / `.copy(...)` call, and the record `EqualityContract` property (`protected virtual`, `private` on a sealed root) that typed equality consults. A body-only type has a parameterless constructor (what `T{X: 1}` uses); a type with a non-empty primary constructor has no additional one, and an empty primary constructor (`data class Empty()`) is itself the parameterless constructor.
 * `Deconstruct` stays G#'s own: positional components when there is a primary constructor, otherwise all fields and then all auto-properties in declaration order, and none for a type without members. This differs from a C# record only for body-only records.
 * `data object { ... }` and `object { ... }` literals keep G#'s equality surface plus `IEquatable<Self>` and print as `{ X = 1, Y = 2 }` with no type name; they get no `PrintMembers`, copy constructor or clone.
+
+`with` and `.copy(...)` require a nonnullable receiver.
+Nullable type arguments are preserved: a `C[string?]` receiver can be copied,
+while a `C[string?]?` receiver must first be narrowed to a nonnullable value.
+The same requirement applies to optional value-type receivers such as `S[string?]?`.
 
 Known gaps: a data class that only synthesizes `PrintMembers` over an inherited abstract `PrintMembers` is rejected with GS0387 (#4876), and an imported non-data class between a record and a data class hides the inherited `PrintMembers` slot (#4877).
 
@@ -778,6 +848,23 @@ The prefix `*T` is **context-sensitive**. **Outside** an `unsafe` context it den
 `stackalloc [n]T` stack-allocates a contiguous buffer of `n` elements of a blittable element type `T`, emitted as the CIL `localloc` instruction and reclaimed when the method returns. It uses **G#-style array grammar** — the bracketed count first, then the element type (`stackalloc [4]uint8`), mirroring G#'s array/slice type grammar (`[]T`, `[n]T`). It has two forms, selected by the target type exactly as the unsafe gating of `*T` falls out of context. The **safe** form is the default and needs **no** `unsafe` context: `var buf = stackalloc [4]uint8` yields a `System.Span[T]` (or `System.ReadOnlySpan[T]` when the target is one) over the allocated block, so element access is bounds-checked and `.Length` is available. The **unsafe** form is reached only inside an `unsafe` context when the target type is a `*T` unmanaged pointer (`var p *int32 = stackalloc [3]int32`), yielding the raw `localloc` pointer; outside an unsafe context no pointer target exists, so the safe `Span[T]` form is always chosen and no extra "unsafe required" diagnostic is needed. The count is a full expression (a runtime length is allowed). An optional brace-delimited **initializer** supplies the element values: `stackalloc [3]int32{1, 2, 3}` (explicit count) or the count-inferred `stackalloc []int32{1, 2, 3}` (empty brackets — the length comes from the initializer). Each initializer element must be convertible to `T`, and the values are stored into the block through the `localloc` pointer via scaled indirect writes (for both the safe `Span[T]` and unsafe `*T` forms). A count-inferred `stackalloc []T` with no initializer is rejected with `GS0411`, and an explicit `stackalloc [n]T{…}` whose constant count disagrees with the initializer length is rejected with `GS0412` (matching C#). The element type must be a blittable primitive or a pointer; a managed/non-blittable element type is rejected with `GS0399`. Without an initializer the buffer is **zero-initialised** (method bodies are emitted with `.locals init`, which zeroes `localloc` memory, matching C# safe-`stackalloc`). `stackalloc` is a contextual keyword recognised only in the `stackalloc […` shape, so it remains usable as an ordinary identifier elsewhere. `localloc` IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
 
 The `fixed` statement `fixed <name> *T = <source> { … }` pins a managed buffer for the duration of its body block and binds an unmanaged pointer `<name>` of type `*T` to the buffer's first element (including span-like sources) — the G# spelling of C# `fixed (T* p = source) { … }`. The header is paren-less, consistent with G#'s other statement headers (`if`/`for`/`while`/`unsafe`), and `fixed` is a **contextual keyword** recognised only in the `fixed <ident> *…` shape, so it remains usable as an ordinary identifier elsewhere; the source expression is parsed with struct-literal suppression so the `{` that follows opens the body block rather than a composite literal. Because it produces a raw unmanaged pointer, the statement is legal **only inside an `unsafe` context** (function, `unsafe { … }` block, or unsafe type); used outside one it is rejected with `GS0400`. The **source** must be a pinnable managed buffer: a slice/array `[]T` (the cs2gs mapping of a C# `T[]`, CLR-backed by `T[]`), a `string`, a **span-like** source whose type exposes a public instance `ref T GetPinnableReference()` (canonically `System.Span[T]` / `System.ReadOnlySpan[T]`), or a **fixed-size buffer field** (`fixed p *int8 = h.B.Name { … }`, or a bare `fixed p *int8 = Name { … }` inside the declaring struct) — the G# spelling of C# `fixed (sbyte* p = Name)`, which binds `p` to the buffer's first element and keeps the buffer's containing storage pinned for the block. As in C#, a fixed-size buffer is pinnable only when it lives in *movable* storage (a class field, an array/slice element, a `ref`/`out`/`in` parameter, or a struct method's receiver); one reached through storage that cannot move (a local, a by-value parameter, or a pointer dereference `p->Name`) is rejected with `GS0507` (C#'s CS0213) and is used directly as a `*T` instead. The pointer's pointee type must match the buffer's element type (`uint16`/`char` are accepted interchangeably for `string`); any other source — or a pointee mismatch — is rejected with `GS0401`. The bound `*T` pointer is in scope **only inside the body** and is read-only. Lowering mirrors the C# compiler: a synthetic CLR **pinned local** (`.locals init ([n] T[] pinned)` for a slice/array, `string pinned` for a `string`, `T& pinned` for a span-like source or a fixed-size buffer) holds the buffer reference so the GC cannot move it; the pointer is derived as the element-0 address (`ldelema` with a null/zero-length guard for arrays — an empty buffer yields a null pointer — `RuntimeHelpers.OffsetToStringData` for strings, `call GetPinnableReference(); conv.u` for span-like sources, and `ldflda name; ldflda FixedElementField` — the address of the buffer's first element, exactly as C# emits — for a fixed-size buffer). For a span-like source the emitted MemberRef carries the real BCL signature, including `modreq(System.Runtime.InteropServices.InAttribute)` on `ReadOnlySpan[T].GetPinnableReference()`'s `ref readonly T` return, so the call binds at runtime. On block exit the pinned local is released (`ldnull; stloc` for array/string, `ldc.i4.0; conv.u; stloc` for a span-like or fixed-size buffer by-ref pin). Pinning + unmanaged-pointer dereference IL is *unverifiable by design* (as in C#); the emit tests assert runtime behaviour.
+
+For array pinning, an inferred one-dimensional CLR array with a non-nullable
+static type is equivalent to an annotated `[]T` local. No annotation or array copy
+is required. This static-type rule is not a runtime non-null guarantee.
+Array pinning keeps its null and empty-array guards.
+Rectangular and explicitly nullable arrays remain rejected.
+
+```gsharp
+import System.Text
+
+unsafe {
+    let bytes = Encoding.UTF8.GetBytes("x")
+    fixed value *uint8 = bytes {
+        System.Console.WriteLine(value[0]) // 120
+    }
+}
+```
 
 CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values: they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `ref struct X { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred.
 
@@ -1149,7 +1236,7 @@ class Foo {
 }
 ```
 
-The semantics match C#:
+Constructor-owned field initialization follows these rules. Plain struct literals retain the separate rules below:
 
 * An **instance** field initializer (`let`/`var x T = expr`) runs as part of
   **every** instance constructor, **before** the constructor body, in textual
@@ -1172,23 +1259,57 @@ The semantics match C#:
   contexts and from other assemblies. A `const` field with no initializer reports
   `GS0375`; a `const` field whose initializer is not a constant expression reports
   `GS0376`.
-* For **value types** (`struct` / `data struct`), a composite struct literal
-  (`Pt{ ... }`) starts with zero-initialized storage. Generic ownership,
-  primary-parameter scope, or non-public initialized storage requires an
-  owning constructor: primary inputs are evaluated once, then declaration
-  initializers run in declaration order, then explicit non-primary member
-  writes run in literal order. Ordinary omitted primary fields keep the
-  literal's zero value where that default is legal. An omitted primary input
-  whose substituted type requires a non-null managed-reference slot (including
-  nested aggregates and nonempty fixed arrays) reports `GS0604`, just like an
-  explicit `default` of that type. Nullable handles remain legal defaults.
-  Other public-only, non-generic literals retain inline
-  initialization for omitted fields. Braces do not execute an authored
-  constructor body; calling `T(...)` still does. Compiler-owned initialization
-  remains distinct when an authored parameterless constructor exists. Braced
-  member/content population runs after primary inputs and declaration
-  initializers. Raw `default(T)` and array element
-  zero-initialization do not invoke these constructors.
+* Fresh **data struct** construction uses an ordinary instance constructor.
+  This includes `T{...}`, structural projections, and ordinary `T(...)` calls.
+  Body-only data structs get a public parameterless constructor unless one is authored.
+  An empty primary list uses its ordinary parameterless constructor.
+  An accessible authored parameterless constructor runs its body; an inaccessible constructor is not bypassed.
+* Constructor arguments run once, in written order, before construction.
+  The constructor establishes sound zeros, stores primary inputs, runs declaration initializers in declaration order, then runs its authored body.
+  A delegating constructor does not repeat the delegated initialization plan.
+  Remaining member expressions run once after construction, immediately before each assignment.
+  Member assignments and collection population retain their written order.
+  The same phases apply to structural spreads with symbolic generic arguments and across `await`:
+  construct the receiver before evaluating an awaited nonprimary member value.
+* A data struct's declaration default still runs when the caller overwrites that field.
+  Its allocations, effects, and exceptions remain observable.
+  A throwing default prevents later member expressions from running.
+  Construction follows ordinary CLR static-initialization rules.
+  An explicit static constructor can therefore run where the old literal used only zero initialization.
+* Existing G# primary-member brace syntax supplies constructor inputs.
+  An omitted primary input receives a legal zero or sound collection zero, not its optional-call default.
+  For `P(A int32, B int32 = 5)`, `P{A: 3}` passes `(3, 0)`, while `P(3)` passes `(3, 5)`.
+  Missing non-null managed-reference inputs, including nested aggregates and nonempty fixed arrays, report `GS0604`.
+  Nullable handles remain legal defaults.
+* Source and imported data structs use the same construction phases.
+  The ordinary constructor and existing primary mapping form the cross-assembly contract.
+  A legacy G# producer without the required constructor reports `GS0267`; recompile that producer and its consumer.
+  An omitted nonnullable array input also reports `GS0267` when required primary collection shape metadata is missing.
+  An explicit primary value remains legal; nullable omission remains null.
+  Select the primary constructor on the open generic definition, then map that same method to the closed type.
+  A foreign type without G# primary metadata uses its accessible parameterless constructor or its implicit zero path,
+  including foreign record structs in symbolic generic spreads. Member names do not select a parameterized constructor.
+  Field names do not authorize selection of an unrelated parameterized constructor.
+  Implementation and reference assemblies expose the same constructor contract.
+* Data struct constructors may initialize their own readonly `let` fields.
+  Caller writes to those fields report located `GS0127` diagnostics and produce no image.
+  A primary input stored inside the constructor is legal.
+  Sound-zero-only initialization cannot bypass readonly storage with external writes or replay a fresh constructor.
+  If no legal sound-zero path exists, report located `GS0127` without an image.
+  Fields remain CLR `InitOnly` fields; they do not become C# record `init` properties.
+  C# consumers use `new S()` or `new S { X = 9 }` for legal mutable overrides.
+* Plain **struct** literals retain their existing initialization model.
+  Generic ownership, primary-parameter scope, or non-public initialized storage can require an owning initializer.
+  Other source-local public-only, non-generic literals initialize omitted fields inline.
+  Explicitly supplied fields skip those inline initializers.
+  Braces do not execute an authored plain-struct constructor body.
+* Raw `default(T)` and zero-initialized array elements do not invoke fresh constructors or declaration defaults.
+  Bare declarations retain sound-zero-only initialization.
+  A nested field without a declaration expression receives only its required sound-zero state.
+  `with` and `.copy` retain value-copy semantics without constructor or declaration-initializer replay.
+
+The constructor-owned data struct model changes the old omitted-only semantics.
+See [ADR-0214](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0214-imported-inline-field-initializers.md) for compatibility and metadata requirements.
 
 ## Expressions
 
@@ -1245,7 +1366,9 @@ Primary expressions include literals, identifiers, calls, generic calls, struct 
 
 Generic instantiation uses brackets and bounded lookahead to distinguish type arguments from indexing. Examples include `Id[int32](1)` and `Box[string]{Value: "x"}`.
 
-Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. G# also supports a dedicated arrow-lambda expression form: `(p1, p2) -> body`. Parameter types and the return type are **inferred** from the target delegate type; they may also be spelled explicitly (`(p1 T1, p2 T2) -> body`). A single-parameter lambda may drop the parentheses (`x -> body`). The body is either a single expression or a brace-delimited block. A block body is a statement block with an optional trailing value expression: an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and the trailing expression (or `return`) supplies the lambda value (void when neither yields a value) — full parity with `func` literals. Arrow lambdas share the function-literal capture, lowering, and emit pipeline (closures, `ldftn`/`newobj`, delegate construction). A lambda can also convert to `System.Linq.Expressions.Expression[TDelegate]` when `TDelegate` is a delegate type (G# function type, named delegate, or imported CLR delegate). The conversion works in assignments, returns, and call arguments and emits a runtime expression tree. Unsupported expression-tree constructs — statement-bodied lambdas, async/await, assignments, switch/pattern-heavy forms, throw expressions, null propagation, tuples, unsafe/byref/pointer shapes, collection initializers, maps, and other constructs without a stable `System.Linq.Expressions` representation — report `GS0473`; an `Expression[T]` whose `T` is not delegate-like reports `GS0474`.
+Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. G# also supports a dedicated arrow-lambda expression form: `(p1, p2) -> body`. Parameter types and the return type are **inferred** from the target delegate type; they may also be spelled explicitly (`(p1 T1, p2 T2) -> body`). A single-parameter lambda may drop the parentheses (`x -> body`). The body is either a single expression or a brace-delimited block. A block body is a statement block with an optional trailing value expression: an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and the trailing expression (or `return`) supplies the lambda value (void when neither yields a value) — full parity with `func` literals. Arrow lambdas share the function-literal capture, lowering, and emit pipeline (closures, `ldftn`/`newobj`, delegate construction). A lambda can also convert to `System.Linq.Expressions.Expression[TDelegate]` when `TDelegate` is a delegate type (G# function type, named delegate, or imported CLR delegate). The conversion works in assignments, returns, and call arguments and emits a runtime expression tree. Unsupported expression-tree constructs — statement-bodied lambdas, async/await, assignments, switch/pattern-heavy forms, throw expressions, null propagation, tuples, unsafe/byref/pointer shapes, collection initializers, map literals, and other constructs without a stable `System.Linq.Expressions` representation — report `GS0473`; an `Expression[T]` whose `T` is not delegate-like reports `GS0474`.
+
+Expression-tree parameters can use `map[K,V]`, including in-scope generic arguments. The parameter retains its `Dictionary[K,V]` runtime identity. A map literal outside the tree can supply an argument when the compiled tree runs. Map literals inside the tree remain unsupported.
 
 The inferred-type arrow lambda is the **canonical** lambda form; the explicit `func (x T) R { … }` literal remains the alternative for when explicit typing is desired or no target type is available. A parameter named `_` is a **discard**: more than one `_` parameter may appear in a single parameter list — on lambdas and on named functions/methods alike (e.g. an event handler `(_, _) -> …`) — and the repeated-name check that otherwise reports `GS0101` does not apply to `_`. Each `_` still occupies its own positional slot (so the emitted signature has the correct arity), but a discard parameter is **not** added to the body's lookup scope, so referencing `_` does not resolve to a parameter. A non-`_` duplicate parameter name (`(x, x) -> …`) is still rejected with `GS0101`.
 
@@ -1346,6 +1469,14 @@ All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported, and either b
 ### Composite literals
 
 Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`, and a runtime/zero-initialised array allocation is written `[n]T`. Map literals use `map[K,V]{key: value}`.
+
+Imported generic data-class literals preserve explicit type arguments, including nullable positions. Simple and namespace-qualified names use the same construction path. Positional members supply the imported primary constructor's inputs; other members initialize the constructed instance. Primary inputs evaluate once in their written order, then construction runs once, then other initializers run in their written order. A primary input cannot follow a braced member or content element. For example, `C[string?]{Value: nil}` preserves `string?` both at the constructor input and when reading `Value`.
+
+Omitted collection inputs use the declaration's collection-shape metadata when available. An omitted nonnullable array, map, or sequence input without sufficient shape is diagnosed, including libraries without class collection-shape metadata. Declaration shapes `[]T`, `[N]T`, `map[K,T]`, and `sequence[T]` require this metadata even when an element is a consumer-defined type or an in-scope type parameter. A whole primary type parameter keeps the known collection shape of its explicit argument. Explicit collection inputs and nullable omissions remain legal. Foreign records without a matching primary signature retain the available parameterless-constructor/member-initializer path.
+
+Structural spreads resolve the exact constructed target type before validating construction. Imported data-class spreads use the same open primary constructor and input slots as ordinary literals. Omitted primary collection inputs use the same collection-zero and declaration-shape checks, rather than blindly passing CLR optional null defaults. Noncollection optional defaults, ordinary calls, and other CLR structural projections retain their existing defaults. Foreign-record candidates must match open member signatures before their primary input list is selected. Property selection walks the hierarchy most-derived-first and retains the nearest eligible declaration of each name. Selected properties retain their identity when reference assemblies omit private backing fields. An inherited field or property with the same name cannot replace that property. Closing a generic type cannot make an unrelated overload become primary. Explicit primary inputs remain available during construction validation. Source members retain their constructed types; remaining member initializers run after the constructor in written order.
+
+Expression-tree lambdas keep these inputs in tree-local variables. The constructor and remaining initializers run when the compiled lambda runs, not when the tree is created. Deferred CLR field and property accesses retain the selected member and declaring-type identity, including case-distinct names. Symbolic collection receivers, constrained interface owners and metadata-only generic owners retain their constructed owners in nested lambdas. Nullable value accessors preserve their constructed nullable owner for both reflection handles.
 
 ### Collection initializers
 

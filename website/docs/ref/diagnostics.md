@@ -22,11 +22,27 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
 | GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
 
+## Fixed-array ABI imports (Next, ADR-0210 F1)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0630 | Error | A marked fixed-array contract has an unsupported revision/unsafe boundary, missing/incompatible canonical owner, malformed shape, unreadable/ambiguous relationship metadata or contradictory element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Interface/base clauses, type/method constraints and inherited public signatures retain receiver-projected annotations. Resolve contradictory paths to one fixed-bearing interface; do not substitute arrays or lookalike carriers. |
+
+This validates explicitly marked CLR contracts; it does not enable the planned
+value lowering of ordinary source `[N]T`.
+
 ## Native protocols (Next, ADR-0205)
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
 | GS0629 | Error | Unsupported native protocol declaration, payload/signature/escape, absent required initialization, or unknown/invalid/incompatible canonical evidence. | Use the admitted nongeneric synchronous by-value core and exact accessible witnesses; initialize required storage, reference the canonical origin/contracts and matching implementation/ref metadata. Unknown evidence is not negative conformance. |
+
+## Native CLR span aliases (Next, ADR-0211)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
+| GS0632 | Error | Invalid UTF-8 span literal, unsupported literal form, invalid decoded Unicode scalar, lossy source decoding, unavailable target span helpers, or a constant initializer. | Use adjacent lowercase `u8"..."`, valid text escapes, and a target core library with `RuntimeHelpers.CreateSpan` and readonly span slicing. Use literal-only `+` explicitly; the span value is not a metadata constant. |
 
 ## Severity levels
 
@@ -44,6 +60,7 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 |------|-----------------|--------|
 | `/nowarn:<ids>` | `<NoWarn>` | Suppress the listed warning IDs. Errors cannot be suppressed. |
 | `/warnaserror` | `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` | Promote every warning to an error. |
+| `/warnaserror-` | — | Disable global promotion. The last global enable or disable option wins; selected-ID settings remain unchanged. |
 | `/warnaserror+:<ids>` | `<WarningsAsErrors>` | Promote only the listed IDs to errors. |
 | `/warnaserror-:<ids>` | — | Exempt the listed IDs from a global `/warnaserror`. |
 
@@ -1029,6 +1046,13 @@ Tuple
 `==` / `!=` compares element-wise and is only defined between tuple operands
 of the same arity. Comparing tuples of different arities is an error rather
 than a constant `false`, matching C#.
+
+Element comparisons retain integer constant conversions, including nullable
+unsigned operands: `(value, 9) == (0, 9)` accepts `value uint32?`.
+Both operands run once, left before right, before element comparisons start.
+An incompatible element pair reports GS0129 at the tuple operator.
+Values read from tuple storage do not become constants.
+Constant recovery does not fold native-width conversions.
 
 | ID | Severity | Message | Example |
 |---|---|---|---|

@@ -24,7 +24,7 @@ internal shared class RepositoryMirror {
         let files = RepositoryFileInventory.Enumerate(source)
         let verbatim = RepositoryVerbatimSources.Compute(source, files)
         ValidateCollisions(files, verbatim)
-        Directory.CreateDirectory(destination)
+        RepositoryGitMetadata.Prepare(source, destination)
         for relativePath in files {
             let extension = Path.GetExtension(relativePath)
             if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) && !verbatim.Contains(relativePath)) ||

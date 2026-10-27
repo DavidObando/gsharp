@@ -364,45 +364,30 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         property BoundClrPropertyAccessExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        let memberName = property.Member.Name
-        let ownerType = property.StaticContainerType ?? TypeSymbol.FromClrTypeWithoutNullability(
-            Invariant.Required(
-                property.Member.DeclaringType,
-                "a CLR property has a declaring type",
-                expression: "property.Member.DeclaringType"
-            ),
-            NullabilityFreeReason.TypeStructure
-        )
         let isField = property.Member is FieldInfo
-        let staticMethod = if isField {
-            ExpressionFieldStaticMethod
-        } else {
-            ExpressionPropertyStaticMethod
-        }
-        let instanceMethod = if isField {
-            ExpressionFieldInstanceMethod
-        } else {
-            ExpressionPropertyInstanceMethod
-        }
-        if property.Receiver == nil {
-            return BoundClrStaticCallExpression(
-                property.Syntax,
-                staticMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](
-                    BoundLiteralExpression(nil, nil, TypeSymbol.Null),
-                    CreateTypeOf(ownerType),
-                    BoundLiteralExpression(nil, memberName, TypeSymbol.String)
-                )
-            )
-        }
         return BoundClrStaticCallExpression(
             property.Syntax,
-            instanceMethod,
+            if isField {
+                ExpressionFieldInfoMethod
+            } else {
+                ExpressionPropertyAccessorMethod
+            },
             TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create[BoundExpression](
-                UpcastToExpression(this.TranslateExpression(property.Receiver!!, parameterMap)),
-                BoundLiteralExpression(nil, memberName, TypeSymbol.String)
+                if property.Receiver == nil {
+                    cast[BoundExpression](BoundLiteralExpression(nil, nil, TypeSymbol.Null))
+                } else {
+                    UpcastToExpression(this.TranslateExpression(property.Receiver, parameterMap))
+                },
+                BoundLiteralExpression(
+                    nil,
+                    property,
+                    if isField {
+                        ReflectionFieldInfoTypeSymbol
+                    } else {
+                        ReflectionMethodInfoTypeSymbol
+                    }
+                )
             )
         )
     }
@@ -412,6 +397,15 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let operand = UpcastToExpression(this.TranslateExpression(unary.Operand, parameterMap))
+        // Issue #5400: a synthesized nullable extraction remains a conversion in expression trees.
+        if unary.IsConversionUnwrap {
+            return BoundClrStaticCallExpression(
+                unary.Syntax,
+                ExpressionConvertMethod,
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(UnaryExpression), NullabilityFreeReason.TypeLiteral),
+                ImmutableArray.Create[BoundExpression](operand, CreateTypeOf(unary.Type))
+            )
+        }
         // Issue #3349: a reference-type null-assertion is pure static annotation
         // — the CLR has no distinct `T?`, so there is nothing to emit. Erase it
         // and hand the operand's own tree through unchanged.
@@ -664,10 +658,15 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 this.TranslateExpression(structLiteral.CopySource, parameterMap)
             }
         }
-        if structLiteral.CallsPrimaryConstructor {
+        if structLiteral.CallsPrimaryConstructor || structLiteral.CallsDataConstructor {
             let arguments = ImmutableArray.CreateBuilder[BoundExpression]()
             let consumed = HashSet[BoundFieldInitializer]()
-            for parameter in structLiteral.StructType.PrimaryConstructorParameters {
+            let parameters = if structLiteral.CallsPrimaryConstructor {
+                structLiteral.StructType.PrimaryConstructorParameters
+            } else {
+                ImmutableArray[ParameterSymbol].Empty
+            }
+            for parameter in parameters {
                 let initializer = Invariant.Required(
                     structLiteral.GetPrimaryArgument(parameter.Name),
                     "primary literal arguments, including defaults, are prepared during binding",
@@ -842,8 +841,13 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
     ) BoundExpression {
         let markerCount = literal.StructType.LiteralInitializerMarkerCount
         if literal.IsZeroInitialization &&
-            literal.StructType is {IsData: true, IsClass: false, HasDeclaredPrimaryConstructor: true} &&
-            markerCount == 0 {
+            !literal
+            .StructType
+            .IsClass &&
+            markerCount == 0 &&
+            !literal
+            .StructType
+            .NeedsSynthesizedValueStructDefaultCtor {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression
@@ -852,14 +856,14 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 literal.Syntax,
                 ExpressionNewTypeMethod,
                 NewExpressionTypeSymbol,
-                ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.StructType))
+                ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.Type))
             )
         } else {
             // Literal-only initializers have an assembly-only Boolean marker
             // signature distinct from every authored constructor.
             let constructor = BoundImportedInstanceCallExpression(
                 literal.Syntax,
-                CreateTypeOf(literal.StructType),
+                CreateTypeOf(literal.Type),
                 TypeGetConstructorWithBindingFlagsMethod,
                 ReflectionConstructorInfoTypeSymbol,
                 ImmutableArray.Create[BoundExpression](
@@ -940,7 +944,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             literal.Syntax,
             ExpressionDefaultMethod,
             ExpressionTypeSymbol,
-            ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.StructType))
+            ImmutableArray.Create[BoundExpression](CreateTypeOf(literal.Type))
         )
         if literal.Initializers.IsDefaultOrEmpty {
             return defaultValue
@@ -954,7 +958,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 ExpressionParameterMethod,
                 ParameterExpressionTypeSymbol,
                 ImmutableArray.Create[BoundExpression](
-                    CreateTypeOf(literal.StructType),
+                    CreateTypeOf(literal.Type),
                     BoundLiteralExpression(nil, string.Empty, TypeSymbol.String)
                 )
             )
@@ -1030,7 +1034,18 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         constructor BoundConstructorCallExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        if constructor.Arguments.IsDefaultOrEmpty || constructor.Arguments.Length == 0 {
+        let importedConstructor = if constructor.StructType.UsesConstructorOwnedDataConstruction {
+            constructor.StructType.GetDataConstructionConstructor()
+        } else {
+            nil
+        }
+        if constructor
+            .StructType
+            .ClrType != nil &&
+            importedConstructor == nil &&
+            constructor
+            .Arguments
+            .IsDefaultOrEmpty {
             return BoundClrStaticCallExpression(
                 constructor.Syntax,
                 ExpressionNewTypeMethod,
@@ -1038,17 +1053,23 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 ImmutableArray.Create[BoundExpression](CreateTypeOf(constructor.StructType))
             )
         }
-        let ctorInfo = BoundImportedInstanceCallExpression(
-            constructor.Syntax,
-            CreateTypeOf(constructor.StructType),
-            TypeGetConstructorMethod,
-            ReflectionConstructorInfoTypeSymbol,
-            ImmutableArray.Create[BoundExpression](BuildTypeArray(GetArgumentTypes(constructor.Arguments)))
-        )
+        let ctorInfo = if constructor.StructType.ClrType == nil || importedConstructor != nil {
+            cast[BoundExpression](
+                BoundLiteralExpression(constructor.Syntax, constructor, ReflectionConstructorInfoTypeSymbol)
+            )
+        } else {
+            BoundImportedInstanceCallExpression(
+                constructor.Syntax,
+                CreateTypeOf(constructor.StructType),
+                TypeGetConstructorMethod,
+                ReflectionConstructorInfoTypeSymbol,
+                ImmutableArray.Create[BoundExpression](BuildTypeArray(GetArgumentTypes(constructor.Arguments)))
+            )
+        }
         // Only property-based anonymous objects carry the NewExpression.Members
         // contract. Named positional data types can also have properties without
         // fields, including properties that hide inherited members.
-        if constructor.StructType.Definition!!.HasAnonymousConstructorMembers {
+        if (constructor.StructType.Definition ?? constructor.StructType).HasAnonymousConstructorMembers {
             let membersArray = BuildMemberInfoArray(
                 constructor.StructType,
                 constructor.StructType.PrimaryConstructorParameters
@@ -1083,21 +1104,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         constructor BoundClrConstructorCallExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        if constructor.Arguments.IsDefaultOrEmpty || constructor.Arguments.Length == 0 {
-            return BoundClrStaticCallExpression(
-                constructor.Syntax,
-                ExpressionNewTypeMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(NewExpression), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](CreateTypeOf(constructor.Type))
-            )
-        }
-        let ctorInfo = BoundImportedInstanceCallExpression(
-            constructor.Syntax,
-            CreateTypeOf(constructor.Type),
-            TypeGetConstructorMethod,
-            ReflectionConstructorInfoTypeSymbol,
-            ImmutableArray.Create[BoundExpression](BuildTypeArray(GetArgumentTypes(constructor.Arguments)))
-        )
+        let ctorInfo = BoundLiteralExpression(constructor.Syntax, constructor, ReflectionConstructorInfoTypeSymbol)
         return BoundClrStaticCallExpression(
             constructor.Syntax,
             ExpressionNewCtorMethod,
@@ -1496,7 +1503,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             return true
         }
         if translatedInitializer.Type != NewExpressionTypeSymbol {
-            return this.TryBuildCopiedValueInitializer(
+            return this.TryBuildSequentialObjectInitializer(
                 block,
                 tempVariable,
                 translatedInitializer,
@@ -1513,7 +1520,14 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 parameterMap,
                 out var binding
             ) {
-                return false
+                return this.TryBuildSequentialObjectInitializer(
+                    block,
+                    tempVariable,
+                    translatedInitializer,
+                    statements,
+                    parameterMap,
+                    out expression
+                )
             }
             bindings.Add(binding!!)
         }
@@ -1535,7 +1549,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         return true
     }
 
-    private func TryBuildCopiedValueInitializer(
+    private func TryBuildSequentialObjectInitializer(
         block BoundBlockExpression,
         receiver VariableSymbol,
         initializer BoundExpression,
@@ -1723,18 +1737,6 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                     UpcastToExpression(this.TranslateExpression(property.Value, parameterMap))
                 )
             )
-            case clrProperty is BoundClrPropertyAssignmentExpression when ReferencesReceiver(
-                clrProperty.Receiver,
-                receiver
-            ): BoundClrStaticCallExpression(
-                clrProperty.Syntax,
-                ExpressionBindMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberAssignment), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](
-                    BuildMemberInfoConstant(clrProperty.Member),
-                    UpcastToExpression(this.TranslateExpression(clrProperty.Value, parameterMap))
-                )
-            )
             default: default(BoundClrStaticCallExpression?)
         }
         return binding != nil
@@ -1914,11 +1916,11 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             typeof(Type),
             typeof(string)
         )
-        private let ExpressionPropertyInstanceMethod MethodInfo = GetRequiredMethod(
+        private let ExpressionFieldInfoMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
-            "Property",
+            "Field",
             typeof(Expression),
-            typeof(string)
+            typeof(FieldInfo)
         )
         private let ExpressionPropertyInfoMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
@@ -1926,12 +1928,11 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             typeof(Expression),
             typeof(PropertyInfo)
         )
-        private let ExpressionPropertyStaticMethod MethodInfo = GetRequiredMethod(
+        private let ExpressionPropertyAccessorMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
             "Property",
             typeof(Expression),
-            typeof(Type),
-            typeof(string)
+            typeof(MethodInfo)
         )
         private let ExpressionIndexerPropertyMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
@@ -2213,12 +2214,6 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
             )
         }
-
-        private func BuildMemberInfoConstant(member MemberInfo) BoundExpression -> BoundLiteralExpression(
-            nil,
-            member,
-            ReflectionMemberInfoTypeSymbol
-        )
 
         private func BuildUserFieldInfoLookup(ownerType TypeSymbol, memberName string) BoundExpression {
             return BoundImportedInstanceCallExpression(

@@ -5,10 +5,15 @@
 package GSharp.Compiler.Tests.Emit
 
 import System
+import System.Collections.Concurrent
+import System.Collections.Generic
+import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Linq.Expressions
 import System.Reflection
+import System.Text
+import System.Threading.Tasks
 import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -18,6 +23,163 @@ import GSharp.Compiler
 import GSharp.Compiler.Tests
 
 class Issue4755GenericStructInitializerEmitTests {
+    @Fact
+    func Issue5361_DriverTimeoutReapsRealChildAndRetainsRawPartialOutput() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let image = fixture.Compile(`package Timeout5361
+import System
+import System.IO
+import System.Threading
+File.WriteAllText("child.pid", Environment.ProcessId.ToString())
+let stdout = Console.OpenStandardOutput()
+stdout.WriteByte(uint8(255))
+stdout.WriteByte(uint8(0))
+stdout.Flush()
+Console.Error.Write("partial-error")
+Console.Error.Flush()
+if !File.Exists("exit-now") { Thread.Sleep(60000) }
+`, "timeout-child", true)
+        IlVerifier.Verify(image)
+        let exitFlag = Path.Combine(fixture.Directory, "exit-now")
+        File.WriteAllText(exitFlag, "")
+        Assert.Equal([]uint8{255, 0}, RunDriverBytes(image, fixture.Directory))
+        File.Delete(exitFlag)
+        var child Process? = nil
+        try {
+            let failure = Record.Exception(
+                () -> {
+                    let _ = RunDriverBytes(image, fixture.Directory, 5000, 5000)
+                }
+            )
+            let pid = int32.Parse(File.ReadAllText(Path.Combine(fixture.Directory, "child.pid")))
+            try {
+                child = Process.GetProcessById(pid)
+            } catch (ArgumentException) {
+                child = nil
+            }
+            Assert.True(child == nil || child.HasExited, "timed-out child $pid remains alive")
+            let aggregate = Assert.IsType[AggregateException](failure)
+            Assert.Contains(aggregate.InnerExceptions, (error Exception) -> error is TimeoutException)
+            Assert.Contains("streams settled=True", aggregate.Message)
+            Assert.Contains("stdout(base64)=/wA=", aggregate.Message)
+            Assert.Contains("stderr(base64)=cGFydGlhbC1lcnJvcg==", aggregate.Message)
+        } finally {
+            if child != nil {
+                using let cleanup = child
+                if !cleanup.HasExited {
+                    cleanup.Kill(entireProcessTree: true)
+                    Assert.True(cleanup.WaitForExit(5000), "timeout witness cleanup could not confirm child exit")
+                }
+            }
+        }
+    }
+
+    @Fact
+    func Issue5361_InferredClassLiteralRunsDeclarationInitializerThroughDriver() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const source = `package Repro
+import System
+class Box[T](Value T) { var Kind string = "top" }
+Console.WriteLine(Box{Value: 5}.Kind == "top")
+`
+        let image = fixture.Compile(source, "issue5361", true, "/deterministic+")
+        IlVerifier.Verify(image)
+        Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), RunDriverBytes(image, fixture.Directory))
+        let first = File.ReadAllBytes(image)
+        fixture.Compile(source, "issue5361", true, "/deterministic+")
+        Assert.Equal(first, File.ReadAllBytes(image))
+    }
+
+    @Theory
+    @InlineData("Box")
+    @InlineData("Box[int32]")
+    @InlineData("Scalar")
+    func Issue5361_ClassLiteralPreservesPrimaryScopeEffectsAndOverrides(literalType string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package PrimaryClass5361
+import System
+class Effects {
+    shared {
+        var Log string = ""
+        var Fail bool = false
+        func Mark(tag string, value int32) int32 {
+            Log += tag
+            if Fail && tag == "I" { throw InvalidOperationException("initializer") }
+            return value
+        }
+    }
+}
+open class Parent {
+    var BaseValue int32 = Effects.Mark("B", 3)
+}
+class Box[T](Value T) : Parent {
+    private let Snapshot T = Value
+    var Kind int32 = Effects.Mark("I", 7)
+    func Read() T -> Snapshot
+}
+class Scalar(Value int32) : Parent {
+    private let Snapshot int32 = Value
+    var Kind int32 = Effects.Mark("I", 7)
+    func Read() int32 -> Snapshot
+}
+func Main() {
+    let omitted = ` + literalType + `{Value: Effects.Mark("A", 5)}
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(omitted.Value == 5 && omitted.Read() == 5 && omitted.Kind == 7 && omitted.BaseValue == 3)
+    Effects.Log = ""
+    let overridden = ` + literalType + `{Kind: Effects.Mark("O", 9), Value: Effects.Mark("V", 6)}
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(overridden.Value == 6 && overridden.Read() == 6 && overridden.Kind == 9)
+    Effects.Log = ""
+    let positional = Box[int32](Effects.Mark("P", 8))
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(positional.Read() == 8 && positional.Kind == 7)
+    Effects.Log = ""
+    let defaulted = Box[int32]{}
+    Console.WriteLine(Effects.Log)
+    Console.WriteLine(defaulted.Read() == 0 && defaulted.Kind == 7)
+    Effects.Log = ""
+    Effects.Fail = true
+    try {
+        let rejected = ` + literalType + `{Value: Effects.Mark("T", 10), Kind: Effects.Mark("X", 11)}
+        Console.WriteLine("initializer did not throw")
+    } catch (error InvalidOperationException) {
+        Console.WriteLine(Effects.Log)
+        Console.WriteLine(error.Message)
+    }
+}
+`
+        let image = fixture.Compile(source, "primary-class", true)
+        IlVerifier.Verify(image)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "ABI\nTrue\nOVBI\nTrue\nPBI\nTrue\nBI\nTrue\nTXBI\ninitializer\n".Replace("\n", Environment.NewLine)
+            ),
+            RunDriverBytes(image, fixture.Directory)
+        )
+    }
+
+    @Fact
+    func Issue5361_ClassLiteralExpressionTreeUsesPrimaryConstructor() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let image = fixture.Compile(`package ClassTree5361
+import System
+import System.Linq.Expressions
+class Box[T](Value T) {
+    private let Snapshot T = Value
+    var Kind string = "top"
+    func Read() T -> Snapshot
+}
+func Main() {
+    let tree Expression[Func[Box[int32]]] = () -> Box{Value: 5, Kind: "override"}
+    let item = tree.Compile()()
+    Console.WriteLine(item.Read() == 5 && item.Kind == "override")
+}
+`, "class-tree", true)
+        IlVerifier.Verify(image)
+        Assert.Equal(Encoding.UTF8.GetBytes("True" + Environment.NewLine), RunDriverBytes(image, fixture.Directory))
+    }
+
     @Theory
     @InlineData(int32(0), false)
     @InlineData(int32(0), true)
@@ -2016,6 +2178,103 @@ class Api {
     }
 
     shared {
+        private func RunDriverBytes(
+            image string,
+            directory string,
+            timeoutMilliseconds int32 = 30_000,
+            graceMilliseconds int32 = 10_000
+        )[]uint8 {
+            let start = ProcessStartInfo("dotnet"){
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = directory
+            }
+            start.ArgumentList.Add(image)
+            using let process = Process.Start(start)!!
+            let stdout = ConcurrentQueue[uint8]()
+            let stderr = ConcurrentQueue[uint8]()
+            let output = Task.Run(
+                () -> {
+                    CaptureDriverBytes(process.StandardOutput.BaseStream, stdout)
+                }
+            )
+            let error = Task.Run(
+                () -> {
+                    CaptureDriverBytes(process.StandardError.BaseStream, stderr)
+                }
+            )
+            let captures = Task.WhenAll(output, error)
+            let failures = List[Exception]()
+            let timedOut = !process.WaitForExit(timeoutMilliseconds)
+            var exited = !timedOut
+            var exitRace = false
+            if timedOut {
+                failures.Add(TimeoutException("class literal driver witness timed out after $timeoutMilliseconds ms"))
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (failure InvalidOperationException) {
+                    // #5380: keep captured process checks in catch bodies until the released compiler supports filters.
+                    if process.HasExited {
+                        exitRace = true
+                    } else {
+                        failures.Add(failure)
+                    }
+                } catch (failure Exception) {
+                    failures.Add(failure)
+                }
+                try {
+                    exited = process.WaitForExit(graceMilliseconds)
+                } catch (failure Exception) {
+                    failures.Add(failure)
+                }
+                if !exited {
+                    failures.Add(TimeoutException("child termination remains unconfirmed after $graceMilliseconds ms"))
+                }
+            }
+            var settled = false
+            try {
+                settled = captures.Wait(graceMilliseconds)
+            } catch (AggregateException) {
+                settled = captures.IsCompleted
+            }
+            if !settled {
+                failures.Add(TimeoutException("redirected streams did not settle after $graceMilliseconds ms"))
+                let _ = captures.ContinueWith((task Task) -> task.Exception, TaskContinuationOptions.OnlyOnFaulted)
+            }
+            for task in[]Task{output, error} {
+                if task.Exception is {} failure {
+                    failures.AddRange(failure.Flatten().InnerExceptions)
+                }
+                if !settled {
+                    let _ = task.ContinueWith((failed Task) -> failed.Exception, TaskContinuationOptions.OnlyOnFaulted)
+                }
+            }
+            // Concurrent byte queues permit raw snapshots without reading or disposing an actively written buffer.
+            let stdoutBytes = stdout.ToArray()
+            let stderrBytes = stderr.ToArray()
+            if failures.Count != 0 {
+                throw AggregateException(
+                    "driver capture: pid=${process.Id}; child exited=$exited; exit race=$exitRace; streams settled=$settled; " +
+                        "stdout(base64)=${Convert.ToBase64String(stdoutBytes)}; " +
+                        "stderr(base64)=${Convert.ToBase64String(stderrBytes)}",
+                    failures
+                )
+            }
+            Assert.True(process.ExitCode == 0, Encoding.UTF8.GetString(stderrBytes))
+            return stdoutBytes
+        }
+
+        private func CaptureDriverBytes(stream Stream, bytes ConcurrentQueue[uint8]) {
+            while true {
+                let value = stream.ReadByte()
+                if value < 0 {
+                    return
+                }
+                bytes.Enqueue(uint8(value))
+            }
+        }
+
         private func AssertNativeConsumer(
             directory string,
             emitted string,

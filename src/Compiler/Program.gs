@@ -19,6 +19,7 @@ import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Execution
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Core.IO
 import GSharp.Core.CodeAnalysis.Analyzers
 import System.ComponentModel
@@ -435,7 +436,10 @@ open class Program {
                     logger.LogInfo(
                         "Starting compiler. Sources: ${parsed.SourceFiles.Count}; Output: ${parsed.OutputPath ?? "<none>"}"
                     )
-                    ReportMissingTransitiveReferences(references, parsed)
+                    if !ReportMissingTransitiveReferences(references, parsed, syntaxTrees[0]) {
+                        Console.Error.WriteLine("Failed.")
+                        return Error
+                    }
                     let compilation = Compilation(references, syntaxTrees){
                         WorkBudget = workBudget,
                         ImplicitSystemImport = parsed.ImplicitSystemImport,
@@ -552,29 +556,32 @@ open class Program {
             return Error
         }
 
-        private func ReportMissingTransitiveReferences(references ReferenceResolver?, args CommandLineArgs) {
+        private func ReportMissingTransitiveReferences(
+            references ReferenceResolver?,
+            args CommandLineArgs,
+            firstSource SyntaxTree
+        ) bool {
             if references == nil || references.MissingTransitiveReferences.IsDefaultOrEmpty {
-                return
+                return true
             }
             // GS9100 is advisory: the resolver already degrades gracefully (the
             // affected members are skipped), but a genuinely under-referenced
             // project benefits from naming the missing assemblies (issue #340).
-            const code = "GS9100"
-            if args.NoWarnIds.Contains(code) {
-                return
-            }
             // Anchor the diagnostic at the first source file so the SDK BuildTask's
-            // diagnostic regex surfaces it as a structured MSBuild warning.
-            let file = if args.SourceFiles.Count > 0 {
-                Path.GetFullPath(args.SourceFiles[0])
-            } else {
-                "gsc"
-            }
+            // diagnostic regex surfaces it with its effective severity.
             let names = string.Join(", ", references.MissingTransitiveReferences)
-            Console.Out.WriteLine(
-                "$file(1,1,1,1): warning $code: One or more referenced assemblies depend on assemblies that were not supplied via /r: ($names). " +
+            let diagnostic = Diagnostic(
+                TextLocation(firstSource.Text, TextSpan(0, 0)),
+                "GS9100",
+                DiagnosticSeverity.Warning,
+                "One or more referenced assemblies depend on assemblies that were not supplied via /r: ($names). " +
                     "Members that reference these assemblies will be skipped. Ensure the full transitive closure of references is passed (e.g. add the missing package or project reference)."
             )
+            let effective = ApplySuppressPromote([]Diagnostic{diagnostic}, args)
+            if effective.Any() {
+                DiagnosticWriter.WriteDiagnostics(Console.Out, effective)
+            }
+            return !effective.Any((d Diagnostic) -> d.IsError)
         }
 
         // ADR-0156 Phase 1: bare gsc no longer interprets. The program is emitted
@@ -1321,7 +1328,7 @@ Options:
                                 result.NoWarnIds.Add(id)
                             }
                         }
-                        case "warnaserror" {
+                        case "warnaserror", "warnaserror+" {
                             // /warnaserror  → global; /warnaserror+:<ids> → promote specific ids
                             // /warnaserror-:<ids> → demote specific ids (keep as warnings even with /warnaserror)
                             if string.IsNullOrEmpty(value) {
@@ -1332,14 +1339,13 @@ Options:
                                 }
                             }
                         }
-                        case "warnaserror+" {
-                            for id in ParseIdList(value!!) {
-                                result.WarnAsErrorIds.Add(id)
-                            }
-                        }
                         case "warnaserror-" {
-                            for id in ParseIdList(value!!) {
-                                result.WarnNotAsErrorIds.Add(id)
+                            if string.IsNullOrEmpty(value) {
+                                result.TreatAllWarningsAsErrors = false
+                            } else {
+                                for id in ParseIdList(value) {
+                                    result.WarnNotAsErrorIds.Add(id)
+                                }
                             }
                         }
                         case "optimize" {

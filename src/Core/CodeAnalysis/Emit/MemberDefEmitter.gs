@@ -1216,7 +1216,7 @@ internal class MemberDefEmitter {
     private func GetEventTypeSpecHandle(type TypeSymbol) EntityHandle {
         let sigBlob = BlobBuilder()
         this.encodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), type)
-        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #1611: emits the thread-safe CAS-loop body shared by the instance/static
@@ -1616,7 +1616,7 @@ internal class MemberDefEmitter {
         let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(1)
         let typeEncoder = argsEncoder.AddArgument()
         this.encodeTypeSymbol(typeEncoder, eventType)
-        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #248: emits abstract accessor MethodDefs, PropertyDef rows, PropertyMap,

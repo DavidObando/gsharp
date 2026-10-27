@@ -369,6 +369,31 @@ shared class ClrTypeUtilities {
         }
     }
 
+    /// Issue #5216: returns whether a CLR generic parameter declares `allows ref struct`
+    /// (the `AllowByRefLike` flag). Only such a parameter accepts a by-ref-like type argument.
+    /// @param attributes The attributes of the generic parameter.
+    /// @returns `true` when the parameter admits by-ref-like type arguments.
+    internal func AllowsByRefLikeArgument(attributes GenericParameterAttributes) bool {
+        return (attributes & GenericParameterAttributes.AllowByRefLike) != 0
+    }
+
+    /// Issue #5216: returns whether the generic parameter at [`index`](paramref) of an open CLR generic
+    /// definition declares `allows ref struct`. A metadata-load failure answers `false`.
+    /// @param openDefinition The open generic type or method definition.
+    /// @param index The position of the generic parameter, in reflection order.
+    /// @returns `true` when that parameter admits by-ref-like type arguments.
+    internal func GenericParameterAllowsByRefLike(openDefinition Type?, index int32) bool {
+        if openDefinition == nil || index < 0 {
+            return false
+        }
+        try {
+            let parameters = openDefinition.GetGenericArguments()
+            return index < parameters.Length && AllowsByRefLikeArgument(parameters[index].GenericParameterAttributes)
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) {
+            return false
+        }
+    }
+
     /// Issue #338 (generalizing the #321 fix): determines whether an exception
     /// thrown while reflecting over a CLR member's signature is a
     /// metadata/assembly load failure. Such failures arise when a member's
@@ -443,6 +468,59 @@ shared class ClrTypeUtilities {
         flags,
         (t Type) -> t.GetProperties(flags)
     )
+
+    /// Retains the nearest eligible declaration for each property name.
+    internal func SafeGetNearestProperties(
+        type Type,
+        flags BindingFlags,
+        eligible(PropertyInfo) -> bool
+    )[]PropertyInfo {
+        let properties = List[PropertyInfo]()
+        let names = HashSet[string](StringComparer.Ordinal)
+        var current Type? = type
+        while current != nil {
+            for property in SafeGetProperties(current, flags | BindingFlags.DeclaredOnly) {
+                if eligible(property) && names.Add(property.Name) {
+                    properties.Add(property)
+                }
+            }
+            try {
+                current = current.BaseType
+            } catch (exception Exception) when IsMetadataLoadFailure(exception) {
+                break
+            }
+        }
+        return properties.ToArray()
+    }
+
+    /// Retains the nearest eligible field or property for each data-member name.
+    internal func SafeGetNearestDataMembers(type Type, flags BindingFlags, eligible(MemberInfo) -> bool)[]MemberInfo {
+        let members = List[MemberInfo]()
+        let hiddenNames = HashSet[string](StringComparer.Ordinal)
+        var current Type? = type
+        while current != nil {
+            let declared = SafeGetFields(current, flags | BindingFlags.DeclaredOnly)
+                .Cast[MemberInfo]()
+                .Concat(SafeGetProperties(current, flags | BindingFlags.DeclaredOnly))
+                .Where(eligible)
+                .ToArray()
+            for member in declared {
+                if !hiddenNames.Contains(member.Name) {
+                    members.Add(member)
+                }
+            }
+            // Same-level declarations must not hide each other by enumeration order.
+            for member in declared {
+                hiddenNames.Add(member.Name)
+            }
+            try {
+                current = current.BaseType
+            } catch (exception Exception) when IsMetadataLoadFailure(exception) {
+                break
+            }
+        }
+        return members.ToArray()
+    }
 
     /// Enumerates a type's fields tolerantly (issue #338): fields whose type
     /// cannot be loaded under the reference context are skipped.
@@ -873,6 +951,20 @@ shared class ClrTypeUtilities {
                 return result.ToArray()
             }
         )
+    }
+
+    /// Enumerates [`type`](paramref) followed by every interface it implements,
+    /// using the guarded transitive walk of (cref:SafeGetInterfaces).
+    /// @param type The starting CLR type.
+    /// @param includeSelfWhenClass When false, [`type`](paramref) itself is yielded only if it is an interface.
+    /// @returns The type (per the self policy) and then its interfaces in walk order.
+    internal func EnumerateSelfAndInterfaces(type Type, includeSelfWhenClass bool) sequence[Type] {
+        if includeSelfWhenClass || type.IsInterface {
+            yield type
+        }
+        for implemented in SafeGetInterfaces(type) {
+            yield implemented
+        }
     }
 
     @return: NotNullIfNotNull("type")
@@ -1552,8 +1644,8 @@ func (self Type?) IsSameAs(other Type?) bool {
     // generic with a leaf-FullName-matchable type argument.
     if self.IsGenericType && other.IsGenericType && !self.IsGenericTypeDefinition && !other.IsGenericTypeDefinition {
         if !string.Equals(
-            self.GetGenericTypeDefinition().FullName,
-            other.GetGenericTypeDefinition().FullName,
+            self.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
+            other.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
             StringComparison.Ordinal
         ) {
             return false

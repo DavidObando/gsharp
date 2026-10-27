@@ -263,11 +263,76 @@ of the alias class may also alias storage that no root names: a `ref` local
 whose initializer is not a plain variable (`let ref a = xs[0]`, `let ref a
 = box.Field`), and every `ref`/`out`/`in` parameter, whose caller may have
 passed an element or a member (`Run(ref xs[0], xs)`). So every member,
-index or indirect write, and every call, kills every fact on the whole
-alias class, parameters included (probe f2: `xs[0] = nil; a.Value` through
-a `ref` local, and probe g2: the same through a `ref` parameter, both
-compile and throw today; bug #5171, second and fourth shapes). The rule
-does not try to tell which members of the class the write can reach.
+index or indirect write kills every fact on the whole alias class,
+parameters included (probe f2: `xs[0] = nil; a.Value` through a `ref`
+local, and probe g2: the same through a `ref` parameter, both compile and
+throw today; bug #5171, second and fourth shapes). The rule does not try to
+tell which members of the class the write can reach.
+
+**When a call kills by-reference facts (amendment A3, #5292).** A plain
+call does not kill the fact of a by-reference parameter, or of a `ref` local
+that aliases one, and neither does a read-only call, a call in a loop body,
+or a call that passes another variable by `ref`/`out` (`Use(path); Use(path)`,
+or `TryGetValue(path, out found)` in a loop, the shape of the translated
+compiler source). This is the behavior of 0.5.212 and of C# nullable
+analysis. The fact still dies on:
+
+- a direct write to a member of the alias class (the assignment rules above);
+- a member, index or indirect write, and user code that the table lists
+  (computed getters, constructors with user code, callables of unknown
+  origin, loop headers), which keep the full class kill;
+- a call, for a `ref` local that does not alias a by-reference parameter (a
+  `ref` local of an element or member, or of a mutable global), as before;
+- a variable that one call passes more than once with at least one
+  `ref`/`out` (`Run(ref b, ref b)`, or `ref b` together with `b`): the
+  aliasing is visible at the call site, so the write is a write through
+  every by-reference parameter.
+
+A variable that a call passes by `ref`/`out` once does not kill the facts of
+the other by-reference parameters; only an overlapping `ref` alias chain
+does. Two by-reference parameters are treated as different storages in a direct
+write only when that is provable: both types are plain named reference
+types that are not generic and mention no type parameter (a source class, or
+an imported class, interface or `object`), or primitives or strings, after
+the outer nullability is stripped, and they are different types (`Run(ref
+path AccessPath?, ref found TypeSymbol?)`, `Run(ref symbol ISymbol?, ref name
+string?)`). A by-reference argument has the exact type of its parameter, so
+a different reference type is a different storage. Everything else overlaps:
+equal types, any generic instantiation (annotations nested in a construction
+are not told apart: `Box[C]?` and `Box[C?]?`), tuples, structs and other
+value aggregates (they embed the other as a member), arrays, source
+interfaces, type parameters (also nested in tuples, maps, function types or
+enclosing-type arguments, as `TypeSymbol.ContainsTypeParameter` decides), a nested type of a generic outer type (`Outer[string].Inner` and
+`Outer[string?].Inner`) and any type that cannot be classified. The occurrences of a
+variable among the receiver and the arguments of a call are collected
+through conversions, null assertions, address-of operands and each branch of
+a conditional (`Clear(ref b, b!!)`, `Clear2(ref flag ? b : b, ref b)`); an
+operand counts a variable once, because the branches of one conditional are
+mutually exclusive (`Touch(ref flag ? b : b)` is one reference). Each variable is
+resolved to the storage it names before it is counted: through `let ref`
+alias chains, on both the recording and the lookup side (`let ref c = b;
+Clear2(ref c, ref c)`) (`let ref c = b; Clear2(ref b, ref c)`) and through the synthetic
+capture that a null-conditional call uses as its receiver (`b?.Clear(ref
+b)`). A conditional address handed to a `ref`/`out` parameter of an
+imported method (as `RefCapabilities.GetParameterRefKind` decides, so
+`[In, Out] ref` is writable) is a write; one handed to an `in` parameter is a read
+(`Touch(in flag ? x : x)` keeps the fact, like `Touch(in x)`). The exemption is for plain
+function and method calls only: a property or indexer accessor call (a
+source indexer setter, `box[0] = 1`) keeps the full storage invalidation.
+
+**Known limitations of the call rule.** Because a plain call does not kill
+the fact, the rule does not cover a callee that writes the storage by a path
+the call site does not show: (1) a mutable global or static that the
+by-reference parameter aliases (`Run(ref g)`, then `Clear()` assigns `g`);
+(2) an alias created elsewhere (the caller passed an element or member, and
+a callee reaches its container through an array, list, `StrongBox`, a
+cyclic object, a base class or a subclass, a generic holder, a
+`CollectionsMarshal` slot, `LinkedListNode<T>.ValueRef`, `Memory<T>.Span`);
+(3) a container reachable from an operand (`Clear(xs)` with the aliased
+element in `xs`). They are the same hole as in C# nullable analysis and are
+pinned as accepted programs by corpus rows h2 and h3 (they run and throw
+`NullReferenceException`). A sound call-effect model is tracked in the
+follow-up issue (effect summaries) tracked in #5326.
 
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
@@ -479,7 +544,7 @@ covers. The classes, with representative kinds:
 | `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call` |
 | `pointer-write` | `BoundIndirectAssignmentExpression` through anything else, `BoundDereferenceExpression` as a target | removes every mutable root (`MayMutateAnyRootViaPointer`) |
 | `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression` (both operands, whichever the condition selects; its condition and operands flow like `?:`), `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root (every operand's root, for a conditional address) in the alias class; the write rules above then apply to the class |
-| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads with user code (a non-auto getter; in any position, a condition included: row R14 and amendment A2, #5215) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
+| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads with user code (a non-auto getter; in any position, a condition included: row R14 and amendment A2, #5215) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class), except that a plain `BoundCallOperationExpression` does not kill the fact of a by-reference parameter unless the call passes one variable more than once with a `ref`/`out` (amendment A3, #5292: `Use(path)` and `TryGetValue(path, out found)` keep the fact); in straight-line code with a bound callee, today's finer classification may keep closure-assigned locals when the callee has no captures, is not indirect through an unknown target and receives no unknown callable argument (`AnalyzeCallableArguments`, `:1930-1949`), and may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
 | `jump` | `BoundReturnStatement`, `BoundThrowStatement`, `BoundRethrowStatement`, `BoundThrowExpression`, `BoundGotoStatement`, `break`/`continue` | one successor: records the state on the target (through pending cleanup) and yields `Unreachable` |
 | `conditional-jump` | `BoundConditionalGotoStatement` (the binder emits it before the then-body of a multi-clause `if let`, `StatementBinder.Conditionals.gs:299-305`, and the CFG connects both successors, `ControlFlowGraph.gs:298-314`) | two successors: binds the condition and applies its effects (P1 classification plus the condition's own writes and calls); records `Assume(condition, JumpIfTrue)` on the target through pending cleanup; continues with `Assume(condition, !JumpIfTrue)` as the fall-through state. It never yields `Unreachable` by itself. The rule this row fixes: no kind with a live fall-through successor may use the `jump` class, whose transfer ends the current path. A kind that selects between two operands or branches gets its control flow from the join rules (P1 on the condition, each operand under its derived state, P5 on their exits), whatever effect class names its other effect: statement-level branching is `join` or `region`, and an expression such as `BoundConditionalAddressExpression` keeps its `alias` class for the operands it may select while its two operands are joined like those of `?:` |
 | `join` | `BoundIfStatement`, `BoundConditionalExpression`, `BoundSwitchExpression`, `BoundPatternSwitchStatement`, `BoundNullConditionalAccessExpression`, `&&`/`||`/`??`, `BoundTryStatement` exits, labels | P1 on the condition, children under the derived states, P5 on the exits |
@@ -778,7 +843,7 @@ compatibility note. "Probe" refers to section 4.
 | R9 | Invalidation is expression-granular: `s != nil ? consume((s = nil), s.Length) : 0` (ADR-0064 L576-581, #4985) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
 | R10 | Every handler entry sees the writes of every `when` filter in the function: a later clause (probe cA), an intervening `finally` (probe d1), an inner `catch` reached through a replacement exception (probe f3), where the filter stores nil (bug [#5168](https://github.com/DavidObando/gsharp/issues/5168)) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
 | R11 | Any call, written or introduced by lowering, kills a fact on a mutable global: `text = "safe"; Clear(); text.Length` where `Clear` assigns the global (probes d3, d3b); `for item in items { }` over an iterator that assigns it (probe f5) (bug [#5170](https://github.com/DavidObando/gsharp/issues/5170)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
-| R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write, because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
+| R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write (a call alone does not kill a by-reference parameter's fact: amendment A3, #5292), because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 

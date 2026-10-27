@@ -8,6 +8,7 @@ import System.Collections.Immutable
 import System.Linq
 
 /// Represents a compilation unit in the language.
+@SyntaxChildSourceOrder
 open partial class CompilationUnitSyntax : SyntaxNode {
     /// Initializes a new instance of the (cref:CompilationUnitSyntax) class.
     /// @param syntaxTree The parent syntax tree.

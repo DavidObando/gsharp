@@ -33,6 +33,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" Version="17.13.9" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.13.9" PrivateAssets="all" />
+    <!-- Close ConfigurationManager's metadata references for gsc. -->
+    <PackageReference Include="System.Security.Permissions" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -99,6 +101,7 @@
     <None Include="build\Gsharp.NET.Sdk.props" Pack="true" PackagePath="build\Gsharp.NET.Sdk.props" />
     <None Include="build\Gsharp.NET.Current.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Current.Sdk.targets" />
     <None Include="build\Gsharp.NET.Core.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Core.Sdk.targets" />
+    <None Include="build\Gsharp.NET.SourceLink.targets" Pack="true" PackagePath="build\Gsharp.NET.SourceLink.targets" />
     <None Include="build\Gsharp.File.xaml" Pack="true" PackagePath="build\Gsharp.File.xaml" />
     <None Include="build\Gsharp.CollectedPackageReference.xaml" Pack="true" PackagePath="build\Gsharp.CollectedPackageReference.xaml" />
     <None Include="build\Gsharp.ProjectItemsSchema.xaml" Pack="true" PackagePath="build\Gsharp.ProjectItemsSchema.xaml" />
@@ -215,8 +218,15 @@
       </_GsharpSdkPackagePayload>
       <_GsharpSdkPackagePayload Update="@(_GsharpSdkPackagePayload)">
         <GsharpSdkRelativeDirectory>$([System.IO.Path]::GetDirectoryName('%(GsharpSdkRelativePath)'))</GsharpSdkRelativeDirectory>
+        <GsharpSdkPackSource>%(FullPath)</GsharpSdkPackSource>
+        <!-- ADR-0210: all tool copies use the SDK-owned ABI, not the bootstrap runtime. -->
+        <GsharpSdkPackSource Condition="'%(Filename)' == 'Gsharp.Runtime.Values'">$(BaseOutputPath)Gsharp.Runtime.Values/%(Filename)%(Extension)</GsharpSdkPackSource>
       </_GsharpSdkPackagePayload>
-      <None Include="%(_GsharpSdkPackagePayload.FullPath)" Pack="true" Visible="false">
+    </ItemGroup>
+    <Error Condition="!Exists('%(_GsharpSdkPackagePayload.GsharpSdkPackSource)')"
+           Text="SDK payload source '%(_GsharpSdkPackagePayload.GsharpSdkPackSource)' is missing." />
+    <ItemGroup>
+      <None Include="%(_GsharpSdkPackagePayload.GsharpSdkPackSource)" Pack="true" Visible="false">
         <PackagePath>%(_GsharpSdkPackagePayload.GsharpSdkPackagePrefix)%(_GsharpSdkPackagePayload.GsharpSdkRelativeDirectory)/</PackagePath>
       </None>
     </ItemGroup>

@@ -431,7 +431,7 @@ internal class UserTokenResolver {
         for var i = 0; i < args.Length; i++ {
             this.signatures.EncodeTypeSymbol(argsEnc.AddArgument(), args[i])
         }
-        return this.emitCtx.Metadata.AddMethodSpecification(openMethod, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddMethodSpecification(openMethod, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     /// Issue #2793: builds the user-struct `TypeSpec` cache key for
@@ -498,7 +498,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userStructTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -623,7 +625,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userEnumTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -663,7 +667,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userDelegateTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -702,7 +708,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
@@ -755,7 +761,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
@@ -834,7 +840,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
@@ -849,7 +855,11 @@ internal class UserTokenResolver {
     /// For a non-generic type returns the bare `FieldDef`; for a
     /// user-declared generic type returns a `MemberRef` parented
     /// at the constructed (or self-) `TypeSpec`.
-    internal func ResolveFieldToken(containingType StructSymbol, field FieldSymbol) EntityHandle {
+    internal func ResolveFieldToken(
+        containingType StructSymbol,
+        field FieldSymbol,
+        receiverType TypeSymbol? = nil
+    ) EntityHandle {
         if ReflectionMetadataEmitter.IsUserGenericTypeReference(containingType) {
             return this.GetUserStructFieldRef(containingType, field)
         }
@@ -859,7 +869,7 @@ internal class UserTokenResolver {
                 BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             )
             if importedField != nil {
-                return this.memberRefs.GetFieldReference(importedField)
+                return this.memberRefs.GetFieldReference(importedField, receiverType ?? containingType)
             }
         }
         if this.cache.StructFieldDefs.TryGetValue(field, out fieldHandle) {
@@ -873,7 +883,7 @@ internal class UserTokenResolver {
             this.signatures.EncodeTypeSymbol(BlobEncoder(signature).FieldSignature(), field.Type)
             return this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 this.ResolveUserTypeToken(containingType),
                 this.emitCtx.Metadata.GetOrAddString(field.Name),
@@ -924,7 +934,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
@@ -957,7 +967,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(methodName),
@@ -1274,7 +1284,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(methodName),
@@ -1524,7 +1534,9 @@ internal class UserTokenResolver {
         for arg in typeArgs {
             this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg)
         }
-        let spec = EntityHandle(this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob)))
+        let spec = EntityHandle(
+            this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        )
         this.userInterfaceTypeSpecCache[cacheKey] = spec
         return spec
     }
@@ -1556,7 +1568,7 @@ internal class UserTokenResolver {
         let memberRef = EntityHandle(
             this
                 .emitCtx
-                .Metadata
+                .MetadataRows
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(openMethod.Name),
@@ -1587,6 +1599,23 @@ internal class UserTokenResolver {
         return this.GetUserStructMethodRef(structType, clone, "<Clone>$$", signature)
     }
 
+    internal func ResolveUserCtorToken(call BoundConstructorCallExpression) EntityHandle {
+        if call.SelectedConstructor != nil && this.cache.ExplicitCtorHandles.ContainsKey(call.SelectedConstructor) {
+            return this.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
+        }
+        let definition = call.StructType.Definition ?? call.StructType
+        if call.StructType.UsesConstructorOwnedDataConstruction {
+            return this.ResolveUserCtorTokenForPrimary(call.StructType)
+        }
+        if this.cache.ClassPrimaryCtorHandles.ContainsKey(definition) {
+            return this.ResolveUserCtorTokenForPrimary(call.StructType)
+        }
+        if call.Arguments.IsDefaultOrEmpty && this.cache.ClassCtorHandles.ContainsKey(definition) {
+            return this.ResolveUserCtorTokenForDefault(call.StructType)
+        }
+        throw InvalidOperationException("Type '${call.StructType.Name}' has no emitted primary ctor.")
+    }
+
     /// ADR-0087 §3 R3: resolves the right token for a `newobj`
     /// against a user-declared primary ctor. Returns the bare
     /// `MethodDef` for a non-generic type, or a MemberRef
@@ -1601,6 +1630,17 @@ internal class UserTokenResolver {
         // ResolveUserCtorTokenForDefault (issue #810) and
         // ResolveConstructedBaseParameterlessCtorToken (issue #1055).
         let ctorKey = structType.Definition ?? structType
+        if !ctorKey.IsClass && ctorKey.IsData && !ctorKey.HasDataConstructionPrimary {
+            let explicitDefault = ctorKey.EffectiveExplicitConstructors.FirstOrDefault(
+                (candidate ConstructorSymbol) -> !candidate.IsSynthesizedFromPrimaryConstructor &&
+                    candidate
+                    .Parameters
+                    .IsEmpty
+            )
+            if explicitDefault != nil {
+                return this.ResolveUserCtorTokenForExplicit(structType, explicitDefault)
+            }
+        }
         if !this.cache.ClassPrimaryCtorHandles.TryGetValue(ctorKey, out var primaryDef) {
             if ctorKey.HasDeclaredPrimaryConstructor && ctorKey.PrimaryConstructorParameters.IsEmpty {
                 return this.ResolveUserCtorTokenForDefault(structType)
@@ -1812,7 +1852,11 @@ internal class UserTokenResolver {
         // ADR-0193 Phase 2: [NullabilityFunnel] on purpose. This is the IL
         // stack type of the symbolic-container MemberRef, which decides only
         // the erasure widening; IL carries no reference nullability.
-        substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openProp.PropertyType, openDef, typeArguments)
+        substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(
+            ClrNullability.GetSignatureType(openProp),
+            openDef,
+            typeArguments
+        )
         if substitutedReturn == nil || substitutedReturn == TypeSymbol.Error {
             return false
         }
@@ -1881,7 +1925,7 @@ internal class UserTokenResolver {
         if openMethod == nil {
             return false
         }
-        let openReturn Type? = openMethod.ReturnType
+        let openReturn Type? = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
         if openReturn == nil || openReturn.IsSameAs(typeof(Void)) {
             return false
         }
@@ -1952,7 +1996,7 @@ internal class UserTokenResolver {
         } else {
             method.GetGenericMethodDefinition()
         }
-        let openReturn Type? = openMethod.ReturnType
+        let openReturn Type? = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
         if openReturn == nil || openReturn.IsSameAs(typeof(Void)) {
             return false
         }

@@ -497,6 +497,13 @@ class BoundGlobalScope {
     /// delegate symbol across both passes.
     internal prop RefDelegateCache SynthesizedRefDelegateCache?
 
+    /// Gets or sets the anonymous-class-literal type cache (issue #2224)
+    /// shared with `BindProgram`'s body-binding pass (issue #5281), so a shape
+    /// bound in a top-level statement and the same shape bound in a body resolve
+    /// to one synthesized type, and the two passes cannot both emit
+    /// `<>AnonymousType0`.
+    internal prop AnonymousTypeCache AnonymousTypeCache?
+
     /// Returns every import visible across the whole (cref:Previous)
     /// chain, oldest submission first (issue #2101). This is the cumulative
     /// view that (cref:Imports) itself used to provide directly —

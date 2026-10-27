@@ -2,6 +2,22 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Fixed-array ABI imports (ADR-0210 F1)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0630 | Error | A marked fixed-array contract has an unsupported revision/unsafe boundary, missing/incompatible canonical owner, malformed shape, unreadable/ambiguous relationship metadata or contradictory element nullability. | Reference the matching SDK-owned V1 definitions and correct producer metadata. Lengths must be 0-32 with canonical balanced children and identical element positions. Interface/base clauses, type/method constraints and inherited public signatures retain receiver-projected annotations. Resolve contradictory paths to one fixed-bearing interface; do not substitute arrays or lookalike carriers. |
+
+This validates explicitly marked CLR contracts; it does not enable the planned
+value lowering of ordinary source `[N]T`.
+
+## Native CLR span aliases (ADR-0211)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
+| GS0632 | Error | Invalid UTF-8 span literal, unsupported literal form, invalid decoded Unicode scalar, lossy source decoding, unavailable target span helpers, or a constant initializer. | Use adjacent lowercase `u8"..."`, valid text escapes, and a target core library with `RuntimeHelpers.CreateSpan` and readonly span slicing. Use literal-only `+` explicitly; the span value is not a metadata constant. |
+
 ## Native protocols (ADR-0205)
 
 | Code | Severity | Meaning | Remedy |

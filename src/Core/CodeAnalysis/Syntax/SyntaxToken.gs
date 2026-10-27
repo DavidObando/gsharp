@@ -15,7 +15,7 @@ open partial class SyntaxToken : SyntaxNode {
     /// @param text The text of the syntax token.
     /// @param value The value of the syntax token.
     convenience init(syntaxTree SyntaxTree, kind SyntaxKind, position int32, text string, value object?) {
-        init(syntaxTree, kind, position, text, value, false)
+        init(syntaxTree, kind, position, text, value, false, false)
     }
 
     private init(
@@ -24,13 +24,15 @@ open partial class SyntaxToken : SyntaxNode {
         position int32,
         text string,
         value object?,
-        isMissing bool
+        isMissing bool,
+        isSynthesized bool
     ) : base(syntaxTree) {
         _kind = kind
         Position = position
         Text = text
         Value = value
         IsMissing = isMissing
+        IsSynthesized = isSynthesized
     }
 
     /// Gets the kind of this syntax token.
@@ -64,7 +66,24 @@ open partial class SyntaxToken : SyntaxNode {
     prop ValueText string -> Value as string ?? Text
 
     /// Gets the text span associated to the token.
-    open override prop Span TextSpan -> TextSpan(Position, Text?.Length ?? 0)
+    /// @remarks Issue #5277: a synthesized token (see (cref:IsSynthesized)) has text but is not
+    /// written in source, so its span is zero-width at (cref:Position). It then never overlaps the
+    /// real token that happens to start there, and never widens the span of the node that holds it.
+    open override prop Span TextSpan -> TextSpan(
+        Position,
+        if IsSynthesized {
+            0
+        } else {
+            Text?.Length ?? 0
+        }
+    )
+
+    /// Gets a value indicating whether the parser made this token to complete a desugared form
+    /// (the braces of a body-less type, the `return` of an expression body, the parentheses of
+    /// `T{...}`). It carries text for the consumers that read it, but occupies no source.
+    internal prop IsSynthesized bool {
+        get;
+    }
 
     /// Gets a value indicating whether the token was inserted by the parser and doesn't appear in source.
     /// @remarks Issue #3332: this was previously derived from `Text == null`. It is
@@ -94,7 +113,24 @@ open partial class SyntaxToken : SyntaxNode {
             position,
             string.Empty,
             nil,
-            isMissing: true
+            isMissing: true,
+            isSynthesized: false
         )
+
+        /// Creates a token that completes a desugared form. It has text, a zero-width span and
+        /// is not missing (issue #5277).
+        /// @param syntaxTree The parent syntax tree.
+        /// @param kind The kind of the token.
+        /// @param position The position in source where the form is completed.
+        /// @param text The text consumers read from the token.
+        /// @param value The value of the token, if any.
+        /// @returns A zero-width token with the given text.
+        internal func Synthesized(
+            syntaxTree SyntaxTree,
+            kind SyntaxKind,
+            position int32,
+            text string,
+            value object? = nil
+        ) SyntaxToken -> SyntaxToken(syntaxTree, kind, position, text, value, false, true)
     }
 }

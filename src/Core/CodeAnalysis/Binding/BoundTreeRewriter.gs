@@ -313,6 +313,9 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten expression.
     protected open func RewriteExpression(node BoundExpression) BoundExpression {
         switch node.Kind {
+            case BoundNodeKind.Utf8StringExpression {
+                return node
+            }
             case BoundNodeKind.ErrorExpression {
                 return RewriteErrorExpression(cast[BoundErrorExpression](node))
             }
@@ -598,7 +601,9 @@ abstract class BoundTreeRewriter {
 
         // lambda, i.e. precisely the frames where attribution matters most.
 
-        return BoundUnaryExpression(node.Syntax, node.Op, operand, node.IsChecked, node.PlatformCheckMessage)
+        return BoundUnaryExpression(node.Syntax, node.Op, operand, node.IsChecked, node.PlatformCheckMessage){
+            IsConversionUnwrap = node.IsConversionUnwrap
+        }
     }
 
     /// Rewrites a binary expression.
@@ -1534,7 +1539,8 @@ abstract class BoundTreeRewriter {
                 node.StructType,
                 builder?.ToImmutable() ?? node.Initializers,
                 copySource,
-                node.IsZeroInitialization
+                node.IsZeroInitialization,
+                node.ResultType
             )
         }
     }
@@ -1749,7 +1755,7 @@ abstract class BoundTreeRewriter {
             node.ConstrainedReceiverTypeParameter,
             node.ConstrainedInterfaceType,
             node.EventContainingType
-        )
+        ){IsNonVirtualBaseCall = node.IsNonVirtualBaseCall}
     }
 
     /// Rewrites a user-defined event subscription expression (ADR-0052).
@@ -1773,7 +1779,7 @@ abstract class BoundTreeRewriter {
             handler,
             node.IsAdd,
             node.EventType
-        )
+        ){IsNonVirtualBaseCall = node.IsNonVirtualBaseCall}
     }
 
     /// Rewrites a CLR binary operator call (Stream C).

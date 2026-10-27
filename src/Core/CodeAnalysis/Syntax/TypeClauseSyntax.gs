@@ -10,6 +10,7 @@ import System.Linq
 import System.Text
 
 /// Represents a type clause in the language.
+@SyntaxChildSourceOrder
 partial class TypeClauseSyntax : SyntaxNode {
     /// Issue #1506: per-<em>outer</em>-segment type-argument lists, aligned to the segment
     /// sequence (index 0 = (cref:Identifier); index `i` = qualifier segment
@@ -641,6 +642,12 @@ partial class TypeClauseSyntax : SyntaxNode {
 
     /// Gets the contextual readonly modifier of a native slice type.
     prop ReadOnlySliceModifier SyntaxToken? {
+        get;
+        internal set;
+    }
+
+    /// Gets the contextual readonly modifier of a CLR span alias.
+    prop ReadOnlySpanModifier SyntaxToken? {
         get;
         internal set;
     }

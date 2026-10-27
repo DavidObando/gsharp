@@ -291,7 +291,7 @@ internal class MethodBodyPlanner {
                 continue
             }
             let slot = localTypes.Count
-            localTypes.Add(literal.StructType)
+            localTypes.Add(literal.Type)
             Debug.Assert(
                 !structLiteralSlots.ContainsKey(literal),
                 "Bound struct literal node aliased across emit positions; rekey structLiteralSlots by (node, parentContext) if lowering ever shares nodes."
@@ -748,7 +748,7 @@ internal class MethodBodyPlanner {
         let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
         let gi = encoder.GenericInstantiation(openHandle, genericArgumentCount: 1, isValueType: false)
         this.encodeTypeSymbol(gi.AddArgument(), elementType)
-        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
 
     func AddAsyncIteratorInterfaceImplementations(smClass StructSymbol, plan AsyncIteratorPlan) {

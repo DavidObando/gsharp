@@ -13,8 +13,10 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
 import System
+import System.Threading
 
 /// Definite-assignment analysis. Two consumers share the same forward
 /// "must be assigned" data-flow:
@@ -38,6 +40,35 @@ import System
 /// so a single statement that both writes and reads the same variable is
 /// classified using the set at the start of that statement.
 internal shared class DefiniteAssignmentAnalyzer {
+    /// (cref:NestedRegionCacheMode) value: probes are never cached.
+    internal let NestedRegionCacheOff int32 = 0
+    /// (cref:NestedRegionCacheMode) value: probes are cached (the default).
+    internal let NestedRegionCacheOn int32 = 1
+    /// (cref:NestedRegionCacheMode) value: probes are cached and every hit is re-analyzed and compared; a
+    /// difference is counted in (cref:NestedRegionCacheMismatches). Used by tests.
+    internal let NestedRegionCacheVerify int32 = 2
+    /// A cache key for a region that is built fresh on every call, so no later call could hit it.
+    private let NotCacheable object = Object()
+    private var nestedRegionCacheMode int32 = 1
+    private var nestedRegionCacheHits int64
+    private var nestedRegionCacheBypasses int64
+    private var nestedRegionCacheMismatches int64
+
+    /// Test seam for issue #5284: how nested-region probes are cached. Tests set it for one compilation and
+    /// restore (cref:NestedRegionCacheOn) afterwards; compilation results do not depend on it.
+    internal prop NestedRegionCacheMode int32 {
+        get -> nestedRegionCacheMode
+        set {
+            nestedRegionCacheMode = value
+        }
+    }
+    /// Probes answered from the cache since process start.
+    internal prop NestedRegionCacheHits int64 -> Interlocked.Read(&nestedRegionCacheHits)
+    /// Probes that skipped the cache because a pointer alias was live.
+    internal prop NestedRegionCacheBypasses int64 -> Interlocked.Read(&nestedRegionCacheBypasses)
+    /// Verified hits whose cached result differed from a fresh analysis.
+    internal prop NestedRegionCacheMismatches int64 -> Interlocked.Read(&nestedRegionCacheMismatches)
+
     /// Fallback walker for expression/statement kinds the linear simulation
     /// has no explicit case for (channel receive/send/close, index and member
     /// access, interpolated strings, …). It routes nested flow-sensitive block
@@ -54,6 +85,91 @@ internal shared class DefiniteAssignmentAnalyzer {
         Function FunctionSymbol,
         MethodExitLabel BoundLabel?
     ) : IEquatable[ExpressionFlowContext] { }
+
+    /// One entry of (cref:NestedRegionCache): the result of probing one region from one input state.
+    private class NestedRegionResult {
+        internal init(input HashSet[VariableSymbol], trackedCount int32, exit HashSet[VariableSymbol]?) {
+            Input = input
+            TrackedCount = trackedCount
+            Exit = exit
+        }
+
+        prop Input HashSet[VariableSymbol] {
+            get;
+        }
+        prop TrackedCount int32 {
+            get;
+        }
+        prop Exit HashSet[VariableSymbol]? {
+            get;
+        }
+    }
+
+    /// The no-zero-value locals of one function analysis, which also owns that analysis's cache of
+    /// nested-region probes (issue #5284). A probe is a diagnostics-free re-analysis of a try, catch,
+    /// finally, switch-arm, fixed or await-for body; an enclosing region's fixed point repeats the probe
+    /// with an unchanged input state on later iterations. One instance serves one (cref:AnalyzeWithCaptured)
+    /// call on one thread, so nothing here is shared between threads.
+    internal class TrackedLocals : HashSet[VariableSymbol] {
+        private let probes Dictionary[object, List[NestedRegionResult]] = Dictionary[object, List[NestedRegionResult]](
+            ReferenceEqualityComparer.Instance
+        )
+
+        /// Replays the earlier probe of [`region`](paramref) that started from exactly [`input`](paramref) with the
+        /// same tracked locals. [`exit`](paramref) is a copy the caller may change, or null when the region never
+        /// completes normally.
+        internal func TryReplay(region object, input HashSet[VariableSymbol], out exit HashSet[VariableSymbol]?) bool {
+            if probes.TryGetValue(region, out var candidates) {
+                for var i = 0; i < candidates.Count; i++ {
+                    let candidate = candidates[i]
+                    if candidate.TrackedCount == Count &&
+                        candidate
+                        .Input
+                        .Count == input.Count &&
+                        candidate
+                        .Input
+                        .SetEquals(input) {
+                        exit = if candidate.Exit == nil {
+                            default(HashSet[VariableSymbol]?)
+                        } else {
+                            HashSet[VariableSymbol](candidate.Exit)
+                        }
+                        return true
+                    }
+                }
+            }
+            exit = nil
+            return false
+        }
+
+        /// Remembers a probe made while the tracked set held [`trackedBefore`](paramref) locals. A probe that
+        /// added a tracked local is not remembered: a replay would skip that side effect.
+        internal func Record(
+            region object,
+            input HashSet[VariableSymbol],
+            exit HashSet[VariableSymbol]?,
+            trackedBefore int32
+        ) {
+            if Count != trackedBefore {
+                return
+            }
+            if !probes.TryGetValue(region, out var candidates) {
+                candidates = List[NestedRegionResult]()
+                probes[region] = candidates
+            }
+            candidates.Add(
+                NestedRegionResult(
+                    HashSet[VariableSymbol](input),
+                    trackedBefore,
+                    if exit == nil {
+                        default(HashSet[VariableSymbol]?)
+                    } else {
+                        HashSet[VariableSymbol](exit)
+                    }
+                )
+            )
+        }
+    }
 
     private class FunctionLiteralAndUseWalker : BoundTreeWalker {
         private let assigned HashSet[VariableSymbol]
@@ -173,7 +289,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         // with the tracked locals it captures so a capture-before-assignment
         // use inside the literal reports against the state at the capture
         // point (the C# model).
-        let tracked = HashSet[VariableSymbol]()
+        let tracked = TrackedLocals()
         if capturedTracked != nil {
             tracked.UnionWith(capturedTracked)
         }
@@ -241,8 +357,105 @@ internal shared class DefiniteAssignmentAnalyzer {
         pointerAliases Dictionary[VariableSymbol, VariableSymbol],
         tracked HashSet[VariableSymbol],
         methodExitLabel BoundLabel?,
+        isFunctionBody bool = false,
+        cacheKey object? = nil
+    ) HashSet[VariableSymbol]? {
+        // Issue #5284: only a diagnostics-free probe of a nested region is cached. Its result is a pure
+        // function of the region, the input set, and the tracked-local set: the outer parameters are fixed
+        // for one analysis, the probe reports nothing, and an empty alias map is neither read nor changed
+        // (any alias in play bypasses the cache). A probe that adds a tracked local has a side effect a
+        // replay would skip, so it is not stored.
+        let cache = tracked as TrackedLocals
+        let key object = cacheKey ?? regionBody
+        let mode = nestedRegionCacheMode
+        if isFunctionBody ||
+            diagnostics != nil ||
+            cache == nil ||
+            mode == NestedRegionCacheOff ||
+            object
+            .ReferenceEquals(key, NotCacheable) {
+            return AnalyzeRegionUncached(
+                regionBody,
+                initialAssigned,
+                outParams,
+                function,
+                diagnostics,
+                pointerAliases,
+                tracked,
+                methodExitLabel,
+                isFunctionBody
+            )
+        }
+        if pointerAliases.Count != 0 {
+            Interlocked.Increment(&nestedRegionCacheBypasses)
+            return AnalyzeRegionUncached(
+                regionBody,
+                initialAssigned,
+                outParams,
+                function,
+                diagnostics,
+                pointerAliases,
+                tracked,
+                methodExitLabel,
+                isFunctionBody
+            )
+        }
+        if cache.TryReplay(key, initialAssigned, out var cachedExit) {
+            CompilationMeasurements.Count("definite-assignment.region-replays")
+            Interlocked.Increment(&nestedRegionCacheHits)
+            if mode == NestedRegionCacheVerify {
+                let fresh = AnalyzeRegionUncached(
+                    regionBody,
+                    initialAssigned,
+                    outParams,
+                    function,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    methodExitLabel,
+                    isFunctionBody
+                )
+                let same = if cachedExit == nil || fresh == nil {
+                    cachedExit == nil && fresh == nil
+                } else {
+                    SetsEqual(cachedExit, fresh)
+                }
+                if !same {
+                    Interlocked.Increment(&nestedRegionCacheMismatches)
+                }
+            }
+            return cachedExit
+        }
+        let trackedBefore = cache.Count
+        let exit = AnalyzeRegionUncached(
+            regionBody,
+            initialAssigned,
+            outParams,
+            function,
+            diagnostics,
+            pointerAliases,
+            tracked,
+            methodExitLabel,
+            isFunctionBody
+        )
+        if pointerAliases.Count == 0 {
+            cache.Record(key, initialAssigned, exit, trackedBefore)
+        }
+        return exit
+    }
+
+    private func AnalyzeRegionUncached(
+        regionBody BoundStatement,
+        initialAssigned HashSet[VariableSymbol],
+        outParams ImmutableArray[ParameterSymbol],
+        function FunctionSymbol,
+        diagnostics DiagnosticBag?,
+        pointerAliases Dictionary[VariableSymbol, VariableSymbol],
+        tracked HashSet[VariableSymbol],
+        methodExitLabel BoundLabel?,
         isFunctionBody bool = false
     ) HashSet[VariableSymbol]? {
+        CompilationMeasurements.Count("definite-assignment.region-analyses")
         let graph = ControlFlowGraph.Create(AsBlock(regionBody))
         let entryAssigned = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]?]()
         let exitAssigned = Dictionary[ControlFlowGraph.BasicBlock, HashSet[VariableSymbol]?]()
@@ -1055,7 +1268,8 @@ internal shared class DefiniteAssignmentAnalyzer {
                         diagnostics,
                         pointerAliases,
                         tracked,
-                        context.MethodExitLabel
+                        context.MethodExitLabel,
+                        cacheKey: block
                     )
                     assigned.Clear()
                     if exit != nil {
@@ -1646,7 +1860,8 @@ internal shared class DefiniteAssignmentAnalyzer {
                         diagnostics,
                         pointerAliases,
                         tracked,
-                        context.MethodExitLabel
+                        context.MethodExitLabel,
+                        cacheKey: NotCacheable
                     )
                     assigned.Clear()
                     if exit != nil {

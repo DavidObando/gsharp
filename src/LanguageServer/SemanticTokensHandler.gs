@@ -330,6 +330,7 @@ shared class SemanticTokensComputer {
         // String literals
         if token.Kind == SyntaxKind.StringToken ||
             token.Kind == SyntaxKind.ByteStringToken ||
+            token.Kind == SyntaxKind.Utf8StringToken ||
             token.Kind == SyntaxKind.InterpolatedStringToken {
             return (SemanticTokenType.String, Array.Empty[SemanticTokenModifier]())
         }

@@ -23,18 +23,22 @@ internal shared class Program {
         prop Check bool
         prop Diff bool
         prop StdinName string?
+        prop Out TextWriter
+        prop Err TextWriter
 
         prop Paths List[string] {
             get;
         }
     }
 
-    internal func Main(args[]string) int32 {
-        if !TryParse(args, out var options) {
+    internal func Main(args[]string) int32 -> Run(args, Console.Out, Console.Error)
+
+    internal func Run(args[]string, stdout TextWriter, stderr TextWriter) int32 {
+        if !TryParse(args, stdout, stderr, out var options) {
             return 2
         }
         if options.Help {
-            PrintUsage()
+            PrintUsage(options)
             return 0
         }
         try {
@@ -44,45 +48,46 @@ internal shared class Program {
                 FormatPaths(options)
             }
         } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException {
-            Console.Error.WriteLine("gsfmt: " + ex.Message)
+            options.Err.WriteLine("gsfmt: " + ex.Message)
             return 2
         }
     }
 
     private func FormatStandardInput(options Options) int32 {
         if options.Write {
-            Console.Error.WriteLine("gsfmt: --write cannot be used with standard input.")
+            options.Err.WriteLine("gsfmt: --write cannot be used with standard input.")
             return 2
         }
         let name = options.StdinName ?? "<stdin>"
         let original = Console.In.ReadToEnd()
         let result = GSharpFormatter.Format(SourceText.From(original, name))
         if !result.Diagnostics.IsEmpty {
-            PrintDiagnostics(name, result)
+            PrintDiagnostics(options, name, result)
             return 2
         }
         let formatted = result.Text?.ToString() ??
             throw InvalidOperationException("Successful formatting must return text.")
         if options.Check {
-            return if result.Changed {
-                1
-            } else {
-                0
+            if !result.Changed {
+                return 0
             }
+            options.Out.WriteLine(name)
+            options.Err.WriteLine("gsfmt: $name needs formatting. Pipe it through 'gsfmt' with no flags to format it.")
+            return 1
         }
         if options.List {
             if result.Changed {
-                Console.Out.WriteLine(name)
+                options.Out.WriteLine(name)
             }
             return 0
         }
         if options.Diff {
             if result.Changed {
-                Console.Out.Write(UnifiedDiff(name, original, formatted))
+                options.Out.Write(UnifiedDiff(name, original, formatted))
             }
             return 0
         }
-        Console.Out.Write(formatted)
+        options.Out.Write(formatted)
         return 0
     }
 
@@ -94,7 +99,7 @@ internal shared class Program {
                 cast[IEnumerable[string]](options.Paths)
             }
         )
-        var changed = false
+        let changedPaths = List[string]()
         var failed = false
         for path in files {
             var original string
@@ -103,13 +108,13 @@ internal shared class Program {
                 sourceText = SourceText.Load(path)
                 original = sourceText.ToString()
             } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException {
-                Console.Error.WriteLine("gsfmt: $path: ${ex.Message}")
+                options.Err.WriteLine("gsfmt: $path: ${ex.Message}")
                 failed = true
                 continue
             }
             let result = GSharpFormatter.Format(sourceText)
             if !result.Diagnostics.IsEmpty {
-                PrintDiagnostics(path, result)
+                PrintDiagnostics(options, path, result)
                 failed = true
                 continue
             }
@@ -117,29 +122,60 @@ internal shared class Program {
                 throw InvalidOperationException("Successful formatting must return text.")
             if !result.Changed {
                 if !options.Write && !options.List && !options.Check && !options.Diff {
-                    Console.Out.Write(formatted)
+                    options.Out.Write(formatted)
                 }
                 continue
             }
-            changed = true
-            if options.List {
-                Console.Out.WriteLine(path)
+            changedPaths.Add(path)
+            if options.List && !options.Check {
+                options.Out.WriteLine(path)
             }
             if options.Write {
                 File.WriteAllText(path, formatted)
             } else if options.Diff {
-                Console.Out.Write(UnifiedDiff(path, original, formatted))
+                options.Out.Write(UnifiedDiff(path, original, formatted))
             } else if !options.Check && !options.List {
-                Console.Out.Write(formatted)
+                options.Out.Write(formatted)
             }
+        }
+        if options.Check && changedPaths.Count > 0 {
+            ReportCheckFailure(options, changedPaths)
         }
         if failed {
             return 2
         }
-        return if options.Check && changed {
+        return if options.Check && changedPaths.Count > 0 {
             1
         } else {
             0
+        }
+    }
+
+    // `--check` names every file that would change on stdout, one per line in the order `-l` uses, then
+    // explains the failure and the fix on stderr so a pipe of the list stays clean (#5299).
+    private func ReportCheckFailure(options Options, changedPaths List[string]) {
+        for changedPath in changedPaths {
+            options.Out.WriteLine(changedPath)
+        }
+        let target = if options.Paths.Count == 0 {
+            "."
+        } else {
+            string.Join(" ", options.Paths.Select((p string) -> QuoteForShell(p)))
+        }
+        options.Err.WriteLine("gsfmt: ${changedPaths.Count} file(s) need formatting. Run 'gsfmt -w $target' to fix.")
+    }
+
+    private func QuoteForShell(argument string) string {
+        var plain = argument.Length > 0
+        for ch in argument {
+            if !(char.IsAsciiLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '/' || ch == '-') {
+                plain = false
+            }
+        }
+        return if plain {
+            argument
+        } else {
+            "'" + argument.Replace("'", "'\\''", StringComparison.Ordinal) + "'"
         }
     }
 
@@ -179,13 +215,13 @@ internal shared class Program {
         return files.ToArray()
     }
 
-    private func PrintDiagnostics(path string, result FormatResult) {
+    private func PrintDiagnostics(options Options, path string, result FormatResult) {
         for diagnostic in result.Diagnostics {
             if diagnostic.Location.Text == nil {
-                Console.Error.WriteLine("$path: ${diagnostic.Id}: ${diagnostic.Message}")
+                options.Err.WriteLine("$path: ${diagnostic.Id}: ${diagnostic.Message}")
                 continue
             }
-            Console.Error.WriteLine(
+            options.Err.WriteLine(
                 "$path(${diagnostic.Location.StartLine + 1},${diagnostic.Location.StartCharacter + 1}): " +
                     "${diagnostic.Id}: ${diagnostic.Message}"
             )
@@ -206,8 +242,10 @@ internal shared class Program {
         .Replace("\r\n", "\n", StringComparison.Ordinal)
         .Split('\n')
 
-    private func TryParse(args[]string, out options Options) bool {
+    private func TryParse(args[]string, stdout TextWriter, stderr TextWriter, out options Options) bool {
         options = Options()
+        options.Out = stdout
+        options.Err = stderr
         for var i = 0; i < args.Length; i++ {
             let argument = args[i]
             switch argument {
@@ -228,14 +266,14 @@ internal shared class Program {
                 }
                 case "--stdin-name" {
                     if (i += 1) >= args.Length {
-                        Console.Error.WriteLine("gsfmt: --stdin-name requires a value.")
+                        options.Err.WriteLine("gsfmt: --stdin-name requires a value.")
                         return false
                     }
                     options.StdinName = args[i]
                 }
                 default {
                     if argument.StartsWith("-", StringComparison.Ordinal) {
-                        Console.Error.WriteLine("gsfmt: unknown option '$argument'.")
+                        options.Err.WriteLine("gsfmt: unknown option '$argument'.")
                         return false
                     }
                     options.Paths.Add(argument)
@@ -243,18 +281,18 @@ internal shared class Program {
             }
         }
         if options.Write && options.Check {
-            Console.Error.WriteLine("gsfmt: --write and --check cannot be combined.")
+            options.Err.WriteLine("gsfmt: --write and --check cannot be combined.")
             return false
         }
         return true
     }
 
-    private func PrintUsage() {
-        Console.Out.WriteLine("Usage: gsfmt [flags] [path ...]")
-        Console.Out.WriteLine("  -w, --write        rewrite files in place")
-        Console.Out.WriteLine("  -l, --list         list files whose formatting would change")
-        Console.Out.WriteLine("      --check        exit 1 if any file would change")
-        Console.Out.WriteLine("  -d, --diff         print a unified diff")
-        Console.Out.WriteLine("      --stdin-name   diagnostic filename for standard input")
+    private func PrintUsage(options Options) {
+        options.Out.WriteLine("Usage: gsfmt [flags] [path ...]")
+        options.Out.WriteLine("  -w, --write        rewrite files in place")
+        options.Out.WriteLine("  -l, --list         list files whose formatting would change")
+        options.Out.WriteLine("      --check        list files that would change and exit 1")
+        options.Out.WriteLine("  -d, --diff         print a unified diff")
+        options.Out.WriteLine("      --stdin-name   diagnostic filename for standard input")
     }
 }

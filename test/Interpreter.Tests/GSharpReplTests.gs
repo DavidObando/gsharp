@@ -9,6 +9,19 @@ import Xunit
 
 open class GSharpReplTests {
     @Theory
+    @InlineData("span")
+    @InlineData("slice")
+    @InlineData("array")
+    func EarlierIndexedValueWinsOverNativeAlias(name string) {
+        using let engine = EmittedSessionEngine()
+        let declaration = engine.Evaluate("let " + name + " = []string{\"x\", \"hello\"}")
+        Assert.False(declaration.HasError, string.Join("; ", declaration.Diagnostics))
+        let result = engine.Evaluate("let i = 1\n" + name + "[i].Length")
+        Assert.False(result.HasError, string.Join("; ", result.Diagnostics))
+        Assert.Equal(5, result.Value)
+    }
+
+    @Theory
     @InlineData("typeof(bytestring) == typeof($$bytestring)", true)
     @InlineData("let value bytestring = bytestring{Value: 7}\nvalue.Value", int32(7))
     func EarlierUserTypeWinsOverNativeAlias(submission string, expected object) {

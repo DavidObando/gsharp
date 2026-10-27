@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
 
 /// Represents an `event Name Type` declaration inside a type body (ADR-0052).
+@SyntaxChildSourceOrder
 partial class EventDeclarationSyntax : SyntaxNode {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).

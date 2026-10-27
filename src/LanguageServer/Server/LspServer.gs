@@ -1504,15 +1504,37 @@ class LspServer {
             return Array.Empty[Location]()
         }
         let locations = List[Location]()
-        for structSym in compilation.GlobalScope.Structs {
-            ct.ThrowIfCancellationRequested()
-            if structSym.Interfaces.Contains(iface) && structSym.Declaration != nil {
-                locations.Add(
-                    Location{
-                        Uri: request.TextDocument.Uri,
-                        Range: SemanticLookup.ToRange(structSym.Declaration!!.Identifier)
+        let reported = HashSet[StructSymbol](ReferenceEqualityComparer.Instance)
+        // The structs of every tree that implement the interface, in tree order then source order.
+        for tree in compilation.SyntaxTrees {
+            let model = BoundSemantics.GetModel(compilation, tree)
+            if model == nil {
+                continue
+            }
+            for declaration in tree.Root.DescendantNodes().OfType[StructDeclarationSyntax]() {
+                ct.ThrowIfCancellationRequested()
+                // Every part of a partial type answers the same symbol, which is reported once at its
+                // declaration's identifier.
+                if model.GetDeclaredSymbol(declaration, ct) is StructSymbol structSym && structSym.Interfaces.Contains(
+                    iface
+                ) &&
+                    structSym.Declaration is {} structDeclaration &&
+                    reported
+                    .Add(structSym) {
+                    // The location belongs to the tree that declares the struct, not to the request's document.
+                    // A partial type is reported at its canonical declaration, which can be in another tree
+                    // than the part visited here, so the URI comes from that declaration's own tree.
+                    let declaringTree = structDeclaration.SyntaxTree
+                    let declaringFile = declaringTree.Text?.FileName
+                    let uri = if object.ReferenceEquals(declaringTree, content.SyntaxTree) || string.IsNullOrEmpty(
+                        declaringFile
+                    ) {
+                        request.TextDocument.Uri
+                    } else {
+                        DocumentUri.FromFileSystemPath(declaringFile!!) ?? request.TextDocument.Uri
                     }
-                )
+                    locations.Add(Location{Uri: uri, Range: SemanticLookup.ToRange(structDeclaration.Identifier)})
+                }
             }
         }
         return locations.ToArray()

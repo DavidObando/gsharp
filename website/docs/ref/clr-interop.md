@@ -41,6 +41,37 @@ dict["answer"] = 42
 
 Constructor overload resolution uses the same imported member machinery as method calls, including numeric conversion ranking and optional/default argument support where metadata supplies defaults.
 
+### Native CLR span aliases (Next)
+
+`span[T]` denotes `System.Span[T]`.
+`readonly span[T]` denotes `System.ReadOnlySpan[T]`.
+These contextual aliases use the target core library and preserve CLR type identity.
+They are not native slices, bytestrings, or new wrapper types.
+
+```gsharp
+let bytes = []byte{65, 0, 195, 169}
+let writable = span[byte](bytes)
+writable[0] = 66
+let view readonly span[byte] = writable
+Console.WriteLine(view.Length) // 4
+```
+
+Use existing CLR constructors and conversions.
+The aliases add no collection allocation syntax or implicit conversions.
+A visible user type or callable named `span` keeps ordinary lookup precedence.
+`$span` uses ordinary lookup.
+If a user type shadows `span`, use `System.ReadOnlySpan[T]` rather than `readonly span[T]`.
+Invalid native aliases report `GS0631`.
+
+CLR ref-safety rules still apply.
+Readonly element stores report `GS0226`.
+Ordinary heap fields, closure capture, and locals live across an `await` remain restricted.
+A local consumed before suspension is permitted.
+The subsequent native literal slice adds [`u8"..."`](./spec.md#utf-8-span-literals-next)
+and literal-only UTF-8 addition with the same CLR identity.
+It does not make spans heap-storable or safe across suspension.
+Later cs2gs adoption remains tracked by #5242 and #5218.
+
 ## Members and overloads
 
 Imported instance members use ordinary member syntax. Static members are accessed through the imported type. Properties and indexers bind as property/index expressions or assignments.

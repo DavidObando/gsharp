@@ -369,7 +369,7 @@ shared class TypeMemberModel {
                     iface
                 }
                 for p in propertyOwner.Properties {
-                    if !p.IsIndexer && p.Name == name {
+                    if !p.IsStatic && !p.IsIndexer && p.Name == name {
                         property = p
                         declaringType = iface
                         return true
@@ -852,11 +852,7 @@ shared class TypeMemberModel {
         }
     }
 
-    /// ADR-0112 P0: enumerates an interface's members for completion. Interfaces
-    /// have no base-chain modeling here, so this surfaces the interface's own
-    /// instance properties/events/methods plus static methods, honoring the
-    /// query. (InterfaceSymbol does not currently model static
-    /// properties/events; see the ADR-0112 P0 addendum.)
+    /// Enumerates interface members with the query's inheritance and static/instance filters.
     private func EnumerateInterfaceMembers(interfaceSymbol InterfaceSymbol, query MemberQuery) sequence[Symbol] {
         // Issue #1006: include inherited base-interface members when the query
         // permits inherited lookup.
@@ -867,13 +863,18 @@ shared class TypeMemberModel {
         }
         for iface in interfaces {
             iface.EnsureMembersResolved()
-            if (query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance {
-                for p in iface.Properties {
-                    yield p
+            // Constructed interfaces project methods but retain data symbols on their definition.
+            let declaration = iface.Definition ?? iface
+            declaration.EnsureMembersResolved()
+            if (query.Kinds & MemberKinds.Property) != 0 {
+                for p in declaration.Properties {
+                    if IncludesStaticness(p.IsStatic, query) {
+                        yield p
+                    }
                 }
             }
             if (query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance {
-                for e in iface.Events {
+                for e in declaration.Events {
                     yield e
                 }
             }
@@ -981,38 +982,18 @@ shared class TypeMemberModel {
     }
 
     private func LookupInterfaceMember(interfaceSymbol InterfaceSymbol, name string, query MemberQuery) Symbol? {
-        // Issue #1006: walk this interface together with its transitive base
-        // interfaces so members inherited from an extended interface resolve.
-        for iface in if query.IncludeInherited {
-            interfaceSymbol.SelfAndAllBaseInterfaces()
-        } else {
-            cast[IEnumerable[InterfaceSymbol]]([]InterfaceSymbol{interfaceSymbol})
-        } {
-            iface.EnsureMembersResolved()
-            if (query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance {
-                for p in iface.Properties {
-                    if p.Name == name {
-                        return p
-                    }
-                }
-            }
-            if (query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance {
-                for e in iface.Events {
-                    if e.Name == name {
-                        return e
-                    }
-                }
-            }
-            if (query.Kinds & MemberKinds.Method) != 0 {
-                if query.IncludeInstance && iface.TryGetMethod(name, out var method) {
-                    return method!!
-                }
-                if query.IncludeStatic && iface.TryGetStaticMethod(name, out var staticMethod) {
-                    return staticMethod!!
-                }
+        for member in EnumerateInterfaceMembers(interfaceSymbol, query) {
+            if member.Name == name {
+                return member
             }
         }
         return nil
+    }
+
+    private func IncludesStaticness(isStatic bool, query MemberQuery) bool -> if isStatic {
+        query.IncludeStatic
+    } else {
+        query.IncludeInstance
     }
 
     private func TryFirst[T Symbol](

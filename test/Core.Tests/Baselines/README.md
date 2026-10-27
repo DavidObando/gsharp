@@ -89,6 +89,14 @@ adjust. Only the entry-point body and its local signature change; the other
 images produce byte-identical stdout and pass unsuppressed ILVerify. The sample
 inventory, existing compile-failure entries, and hashing policy are unchanged.
 
+The #5325 storage repair intentionally changes six samples: `AllowsRefStruct`,
+`AsyncLet`, `FanInMerge`, `Pipeline`, `ScopeAll`, and `WorkerPool`.
+Their eight async `MoveNext` methods remove eleven unused trailing receiver locals.
+The canonical source-field addressability query aligns scratch-local planning with actual receiver emission.
+Executable IL bytes, exception regions, maximum stacks, and retained local slots are unchanged.
+Both genuine compiler images produce the independently expected stdout for all six samples and pass unsuppressed ILVerify.
+Only the paired sample hashes and `MethodBodies` digests change; inventory and hashing rules remain unchanged.
+
 The #5037 cleanup fix changes exactly `TupleSequenceIterators` and
 `YieldInTryFinally`. The tuple sample's two generated iterators now preserve
 enumerator cleanup through yields, with an `IDisposable.Dispose` reference and
@@ -209,3 +217,51 @@ flow analysis sees every initializer's assignments. Only its `MethodBodies`
 digest changes; all metadata-table digests and the other 159 sample entries
 remain unchanged. The nullable-binding emit tests verify the control flow,
 stdout and IL. The sample inventory and hashing policy are unchanged.
+
+The #5274 field-typed equality and hashing repair changes eleven of the 163
+sample hashes: `DataStruct`, `DataStructErgonomics`, `PatternSwitch`,
+`PrimaryCtorVariadic`, `Records`, `ReifiedGenerics`, `SliceLinqUntypedLambda`,
+`SwitchExpression`, `WebsiteData`, `WebsiteKotlin`, and `WebsiteSwift`.
+Genuine before/after compiler images reproduce the old and new hashes.
+Only their 22 synthesized typed `Equals` and `GetHashCode` bodies change:
+field comparisons use `EqualityComparer[T].Default`, and `HashCode.Combine`
+is specialized to the ordered field types rather than `object`.
+Existing reference identities and all method contracts are unchanged; the
+other 149 decoded methods, their locals and exception regions are identical.
+The added references identify the canonical comparer owner in
+`System.Collections`; generic fields retain their `!0` type argument.
+Changed body sizes also relocate subsequent method RVAs. Both image banks
+are full-PE deterministic across repeated emissions, produce the independently
+expected stdout, and pass unsuppressed ILVerify. The other 152 hash entries,
+including five known-null entries, and the other 147 per-table entries remain
+unchanged. Neither sample inventory nor golden acceptance rules change.
+
+The #5274 operator-consistency follow-up changes eight of those eleven
+sample hashes. Their sixteen struct equality/inequality operators now call
+the existing typed `Equals` once, with inequality negating its result.
+The 22 typed equality/hash bodies and the other 133 decoded methods are
+unchanged by this follow-up; the complete repair changes 38 of 171 methods
+against main. Generic operators retain their self-instantiated receiver
+and parameter signatures. No reference identities are added: four samples
+drop the now-unused static `object.Equals(object, object)` member reference;
+the remaining reference changes only reorder existing rows.
+All eleven final images repeat full-PE-identically, match independent literal
+stdout, and pass unsuppressed ILVerify. The other 155 hash entries, including
+five known-null entries, and 150 per-table entries are unchanged by this
+follow-up. Inventory, digest policy, and acceptance rules are unchanged.
+
+The #5260 function-pointer nullability layout changes only
+`samples/PInvokeFunctionPointer.gs`. The canonical flag builder now includes
+the function-pointer boundary's oblivious byte, so `native_dlsym` has a return
+parameter carrying `NullableAttribute(0)`. Its new attribute TypeRef and
+constructor MemberRef relocate later tokens; the return Param row also moves
+later MethodDef parameter-list starts. These account for all four changed
+companion fingerprints, including the raw method-body bytes.
+
+All seven method signature blobs remain identical, including `native_dlsym`'s
+unmanaged Cdecl function-pointer return. Resolved instructions, locals, stack
+limits, exception regions, P/Invoke contracts and the delegate's Cdecl
+attribute are unchanged. Reviewed old and new images repeat byte-for-byte,
+pass unsuppressed IL verification and print the same `1`, `-1`, `0` lines
+without invoking either native declaration. The other sample entries,
+known-null entries, inventory and hashing policy are unchanged.

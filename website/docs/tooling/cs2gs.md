@@ -72,6 +72,15 @@ cs2gs migrate --corpus path/to/csharp-repo --out path/to/gsharp-repo
 
 The destination keeps the source's relative directories. `cs2gs` translates checked-in `.cs` files to `.gs`, transforms `.csproj` files to `.gsproj`, mirrors each `.sln`, and copies non-C# files. Build outputs, logs and reports go to a separate artifacts directory, `<out>.cs2gs-runs` by default.
 
+For Git sources, supply the working-tree root.
+The destination keeps an independent copy of the source Git history without checking out the original files.
+Version tasks use that history instead of a repository above the destination.
+The translated files remain uncommitted.
+Linked working trees work as source roots.
+`cs2gs` rejects source subdirectories because their new relative paths cannot preserve history-based version calculations.
+An archive without Git history gets an empty destination repository.
+Its version files stay unchanged.
+
 Useful `migrate` options:
 
 | Option | Behavior |

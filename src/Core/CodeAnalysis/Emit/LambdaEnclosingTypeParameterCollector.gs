@@ -57,6 +57,15 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
             TypeSymbol.CollectReferencedTypeParameters(node.Type, this.sink)
         }
         switch node {
+            case BoundLiteralExpression{Value: BoundConstructorCallExpression constructor} {
+                TypeSymbol.CollectReferencedTypeParameters(constructor.StructType, this.sink)
+            }
+            case BoundLiteralExpression{Value: BoundClrConstructorCallExpression constructor} {
+                TypeSymbol.CollectReferencedTypeParameters(constructor.Type, this.sink)
+            }
+            case BoundLiteralExpression{Value: BoundClrPropertyAccessExpression member} {
+                this.VisitExpression(member)
+            }
             case literal is BoundFunctionLiteralExpression when literal.Function?.IsGeneric != true {
                 this.VisitStatement(literal.Body)
             }
@@ -136,6 +145,11 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
                     cast[TypeSymbol?](propertyAssignment.StructType) ?? propertyAssignment.InterfaceType,
                     this.sink
                 )
+            }
+            case member is BoundClrPropertyAccessExpression {
+                TypeSymbol.CollectReferencedTypeParameters(member.StaticContainerType, this.sink)
+                TypeSymbol.CollectReferencedTypeParameters(member.ConstrainedInterfaceType, this.sink)
+                TypeSymbol.CollectReferencedTypeParameters(member.ConstrainedReceiverTypeParameter, this.sink)
             }
             case importedCall is BoundImportedCallExpression {
                 this.CheckNullableTypeArguments(importedCall.TypeArgumentSymbols)

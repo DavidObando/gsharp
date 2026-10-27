@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Reflection
 import System.Reflection.Metadata
@@ -80,6 +81,7 @@ internal class MetadataMethodSignature {
 internal class MetadataMethodSymbol : Symbol {
     private let genericParameters Lazy[MetadataGenericParameterSet]
     private let signature Lazy[MetadataMethodSignature]
+    private let nullableSignature Lazy[MetadataNullableSignature]
 
     internal init(owner MetadataTypeSymbol, handle MethodDefinitionHandle) : base(
         owner.Module.Reader.GetString(owner.Module.Reader.GetMethodDefinition(handle).Name)
@@ -91,6 +93,10 @@ internal class MetadataMethodSymbol : Symbol {
             LazyThreadSafetyMode.ExecutionAndPublication
         )
         signature = Lazy[MetadataMethodSignature](Decode, LazyThreadSafetyMode.ExecutionAndPublication)
+        nullableSignature = Lazy[MetadataNullableSignature](
+            ReadNullableSignature,
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
     }
 
     override prop Kind SymbolKind -> SymbolKind.Function
@@ -108,6 +114,47 @@ internal class MetadataMethodSymbol : Symbol {
 
     /// Gets the decoded signature.
     internal prop Signature MetadataMethodSignature -> signature.Value
+
+    /// Gets the nullability of the return value and of each parameter, read through the funnel.
+    internal prop NullableSignature MetadataNullableSignature -> nullableSignature.Value
+
+    // The Param row of a sequence number (0 is the return value), or nil when the method has none.
+    private func OwnRow(rows Dictionary[int32, EntityHandle], number int32) EntityHandle -> if rows.TryGetValue(
+        number,
+        out var row
+    ) {
+        row
+    } else {
+        default(EntityHandle)
+    }
+
+    private func ReadNullableSignature() MetadataNullableSignature {
+        let module = Owner.Module
+        let reader = module.Reader
+        let definition = reader.GetMethodDefinition(Handle)
+        let holders = MetadataNullability.ContextHolders(module, Handle, definition.GetDeclaringType())
+        let rows = Dictionary[int32, EntityHandle]()
+        for handle in definition.GetParameters() {
+            rows[reader.GetParameter(handle).SequenceNumber] = handle
+        }
+        let signature = Signature
+        let returnPosition = MetadataNullability.ApplyPosition(
+            module.Set,
+            signature.ReturnType,
+            MetadataNullability.ReadFlags(module, OwnRow(rows, 0), holders)
+        )
+        let parameters = ImmutableArray.CreateBuilder[MetadataNullablePosition](signature.Parameters.Length)
+        for parameter in signature.Parameters {
+            parameters.Add(
+                MetadataNullability.ApplyPosition(
+                    module.Set,
+                    parameter.Type,
+                    MetadataNullability.ReadFlags(module, OwnRow(rows, parameter.Ordinal + 1), holders)
+                )
+            )
+        }
+        return MetadataNullableSignature(returnPosition, parameters.MoveToImmutable())
+    }
 
     private func ReadGenericParameters() MetadataGenericParameterSet -> MetadataTypeParameters.Read(
         Owner.Module,
@@ -136,6 +183,7 @@ internal class MetadataMethodSymbol : Symbol {
 /// A field definition row as a symbol.
 internal class MetadataFieldSymbol : Symbol {
     private let type Lazy[TypeSymbol]
+    private let nullablePosition Lazy[MetadataNullablePosition]
 
     internal init(owner MetadataTypeSymbol, handle FieldDefinitionHandle) : base(
         owner.Module.Reader.GetString(owner.Module.Reader.GetFieldDefinition(handle).Name)
@@ -143,6 +191,10 @@ internal class MetadataFieldSymbol : Symbol {
         Owner = owner
         Handle = handle
         type = Lazy[TypeSymbol](Decode, LazyThreadSafetyMode.ExecutionAndPublication)
+        nullablePosition = Lazy[MetadataNullablePosition](
+            ReadNullablePosition,
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
     }
 
     override prop Kind SymbolKind -> SymbolKind.Field
@@ -155,6 +207,19 @@ internal class MetadataFieldSymbol : Symbol {
 
     /// Gets the declared type of the field.
     internal prop FieldType TypeSymbol -> type.Value
+
+    /// Gets the declared type with its nullability, read through the funnel.
+    internal prop NullableFieldType MetadataNullablePosition -> nullablePosition.Value
+
+    private func ReadNullablePosition() MetadataNullablePosition {
+        let module = Owner.Module
+        let holders = MetadataNullability.ContextHolders(module, default(EntityHandle), Owner.Handle)
+        return MetadataNullability.ApplyPosition(
+            module.Set,
+            FieldType,
+            MetadataNullability.ReadFlags(module, Handle, holders)
+        )
+    }
 
     private func Decode() TypeSymbol -> Owner
         .Module
@@ -169,6 +234,7 @@ internal class MetadataFieldSymbol : Symbol {
 /// A property definition row as a symbol, with its accessors from the `MethodSemantics` table.
 internal class MetadataPropertySymbol : Symbol {
     private let signature Lazy[MetadataMethodSignature]
+    private let nullablePosition Lazy[MetadataNullablePosition]
 
     internal init(owner MetadataTypeSymbol, handle PropertyDefinitionHandle) : base(
         owner.Module.Reader.GetString(owner.Module.Reader.GetPropertyDefinition(handle).Name)
@@ -176,6 +242,10 @@ internal class MetadataPropertySymbol : Symbol {
         Owner = owner
         Handle = handle
         signature = Lazy[MetadataMethodSignature](Decode, LazyThreadSafetyMode.ExecutionAndPublication)
+        nullablePosition = Lazy[MetadataNullablePosition](
+            ReadNullablePosition,
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
     }
 
     override prop Kind SymbolKind -> SymbolKind.Property
@@ -188,6 +258,19 @@ internal class MetadataPropertySymbol : Symbol {
 
     /// Gets the signature: the property type is the return type and the index parameters are the parameters.
     internal prop Signature MetadataMethodSignature -> signature.Value
+
+    /// Gets the property type with its nullability, read through the funnel.
+    internal prop NullablePropertyType MetadataNullablePosition -> nullablePosition.Value
+
+    private func ReadNullablePosition() MetadataNullablePosition {
+        let module = Owner.Module
+        let holders = MetadataNullability.ContextHolders(module, default(EntityHandle), Owner.Handle)
+        return MetadataNullability.ApplyPosition(
+            module.Set,
+            Signature.ReturnType,
+            MetadataNullability.ReadFlags(module, Handle, holders)
+        )
+    }
 
     /// Gets the getter, or `null`.
     internal prop Getter MethodDefinitionHandle -> Owner

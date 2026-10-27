@@ -99,7 +99,7 @@ internal shared class ConstantFieldMetadataEmitter {
                 parameters.AddParameter().Type().UInt32()
             }
         )
-        let ctor = emitCtx.Metadata.AddMemberReference(
+        let ctor = emitCtx.MetadataRows.AddMemberReference(
             getTypeReference(attributeType),
             emitCtx.Metadata.GetOrAddString(".ctor"),
             emitCtx.Metadata.GetOrAddBlob(ctorSignature)

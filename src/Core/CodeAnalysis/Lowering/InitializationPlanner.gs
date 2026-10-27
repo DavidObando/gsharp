@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering.Iterators
 import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -109,11 +110,16 @@ internal shared class InitializationPlanner {
             let fields = type.InstanceFieldInitializers.Values
             let primary = type.BaseConstructorInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty
             if (
-                type.ExplicitConstructor == nil ||
+                type.HasSynthesizedDataConstructor ||
+                    type.ExplicitConstructor == nil ||
                     type.HasPrimaryConstructor ||
                     type.NeedsSynthesizedValueStructDefaultCtor
             ) &&
-                (type.NeedsSynthesizedValueStructDefaultCtor || HasRequest(fields.Concat(primary))) {
+                (
+                type.UsesConstructorOwnedDataConstruction ||
+                    type.NeedsSynthesizedValueStructDefaultCtor ||
+                    HasRequest(fields.Concat(primary))
+            ) {
                 let function = OwnerFunction(program, type, type.PrimaryConstructorParameters, isStatic: false)
                 plans[(type, false)] = InstancePlan(type, function, primary, Empty(), primaryStores: true)
             }
@@ -124,7 +130,10 @@ internal shared class InitializationPlanner {
                     continue
                 }
                 let arguments = constructor.BaseInitializer?.Arguments ?? ImmutableArray[BoundExpression].Empty
-                if !type.HasPrimaryConstructor && !HasRequest(fields.Concat(arguments)) && !HasRequest(body) {
+                if !type.UsesConstructorOwnedDataConstruction &&
+                    !type.HasPrimaryConstructor &&
+                    !HasRequest(fields.Concat(arguments)) &&
+                    !HasRequest(body) {
                     continue
                 }
                 plans[(constructor.Function, false)] = if constructor.IsConvenience {
@@ -220,7 +229,7 @@ internal shared class InitializationPlanner {
                 BoundBlockStatement(nil, statements)
             )
         }
-        if plans.Count == program.Initializers.Count {
+        if plans.Count == program.Initializers.Count && functions.Count == program.Functions.Count {
             return program
         }
         return BoundProgram(
@@ -258,6 +267,32 @@ internal shared class InitializationPlanner {
             "instance initialization has its constructor receiver",
             expression: "function.ThisParameter"
         )
+        if owner.UsesConstructorOwnedDataConstruction {
+            for field in owner.Fields {
+                if field.Declaration is FieldDeclarationSyntax{Initializer: not nil} ||
+                    (
+                    primaryStores && owner.PrimaryConstructorParameters.Any(
+                        (parameter ParameterSymbol) ->
+                        ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(
+                            owner,
+                            parameter.Name,
+                            out var primaryField
+                        ) &&
+                            primaryField == field
+                    )
+                ) {
+                    continue
+                }
+                if MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(field.Declaration, owner, field) is {} zero {
+                    statements.Add(
+                        BoundExpressionStatement(
+                            field.Declaration,
+                            BoundFieldAssignmentExpression(field.Declaration, receiver, owner, field, zero)
+                        )
+                    )
+                }
+            }
+        }
         // Authored constructors have their own parameter scope; declaration
         // initializers read primary inputs from the already-owned storage.
         var storedPrimaryInputs PrimaryStorageRewriter? = nil
@@ -306,6 +341,10 @@ internal shared class InitializationPlanner {
         }
         for field in owner.Fields {
             if owner.InstanceFieldInitializers.TryGetValue(field, out var expression) {
+                if owner.UsesConstructorOwnedDataConstruction &&
+                    field.Declaration is FieldDeclarationSyntax{Initializer: nil} {
+                    continue
+                }
                 let assignment = BoundExpressionStatement(
                     expression.Syntax,
                     BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression)

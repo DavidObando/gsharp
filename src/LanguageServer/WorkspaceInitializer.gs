@@ -87,7 +87,9 @@ shared class WorkspaceInitializer {
                                     return
                                 }
                                 let compilation = project.GetCompilation()
-                                let _ = compilation.BoundProgram
+                                // ADR-0212 §7a: the diagnostics query is the warm-up; it binds the
+                                // declarations and the bodies and keeps the answer.
+                                let _ = compilation.GetDiagnostics(cancellationToken)
                                 // Pre-build the LSP SemanticModel + references index so the
                                 // first CodeLens / hover / FindReferences request after open
                                 // hits a warm cache instead of paying ~500ms of tree walks.

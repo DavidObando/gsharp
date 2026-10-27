@@ -41,7 +41,9 @@ import System
 /// struct and interface type symbols are re-pointed too
 /// ((cref:StructSymbol.RepointDeclaration),
 /// (cref:InterfaceSymbol.RepointDeclaration)), as are source field
-/// declarations ((cref:FieldSymbol.RepointDeclaration)). Re-binding of every
+/// declarations ((cref:FieldSymbol.RepointDeclaration)), enums
+/// ((cref:EnumSymbol.RepointDeclaration)), and delegates
+/// ((cref:DelegateTypeSymbol.RepointDeclaration)). Re-binding of every
 /// re-pointed body is forced by passing the edited tree as a `dirtyTree` to
 /// (cref:Binder.BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache,
 /// System.Collections.Immutable.ImmutableHashSet{SyntaxTree}));
@@ -66,7 +68,7 @@ import System
 /// from (cref:BoundGlobalScope.Statements) rather than from a
 /// member-declaration node, so it is not member-addressable for re-pointing.
 /// Such a file falls back to a full rebuild.
-shared class IncrementalGlobalScopeReuse {
+internal shared class IncrementalGlobalScopeReuse {
     private enum EventAccessorKind {
         Add,
         Remove,
@@ -132,7 +134,9 @@ shared class IncrementalGlobalScopeReuse {
             !TryBuildPositionalMap[DeinitDeclarationSyntax](previousTree, updatedTree, out var deinitMap) ||
             !TryBuildPositionalMap[FieldDeclarationSyntax](previousTree, updatedTree, out var fieldMap) ||
             !TryBuildPositionalMap[PropertyDeclarationSyntax](previousTree, updatedTree, out var propertyMap) ||
-            !TryBuildPositionalMap[EventDeclarationSyntax](previousTree, updatedTree, out var eventMap) {
+            !TryBuildPositionalMap[EventDeclarationSyntax](previousTree, updatedTree, out var eventMap) ||
+            !TryBuildPositionalMap[EnumDeclarationSyntax](previousTree, updatedTree, out var enumMap) ||
+            !TryBuildPositionalMap[DelegateDeclarationSyntax](previousTree, updatedTree, out var delegateMap) {
             return false
         }
         // Reusing the prior scope keeps the prior (signature-level) diagnostics
@@ -140,12 +144,16 @@ shared class IncrementalGlobalScopeReuse {
         // edited file's spans may have shifted — so refuse the fast path when
         // the edited file contributed any global-scope diagnostic, to keep
         // diagnostics bit-for-bit identical to a full rebuild.
+        // A diagnostic belongs to the edited tree when it points into that tree's text; an unnamed
+        // tree has no file name to compare, so the text identity decides first.
         let editedFile = previousText.FileName
-        if !string.IsNullOrEmpty(editedFile) {
-            for diagnostic in $scope.Diagnostics {
-                if string.Equals(diagnostic.Location.Text?.FileName, editedFile, StringComparison.Ordinal) {
-                    return false
-                }
+        for diagnostic in $scope.Diagnostics {
+            let diagnosticText = diagnostic.Location.Text
+            if object.ReferenceEquals(diagnosticText, previousText) {
+                return false
+            }
+            if SourcePathIdentity.AreSame(diagnosticText?.FileName, editedFile) {
+                return false
             }
         }
         // ---- Phase 1: gather every reused member whose backing syntax belongs
@@ -194,6 +202,28 @@ shared class IncrementalGlobalScopeReuse {
                 return false
             }
             interfacesToRepoint.Add((interfaceSymbol, updated))
+        }
+        let enumsToRepoint = List[(Symbol EnumSymbol, Updated EnumDeclarationSyntax)]()
+        for enumSymbol in $scope.Enums {
+            let declaration EnumDeclarationSyntax? = enumSymbol.Declaration
+            if declaration == nil || declaration.SyntaxTree != previousTree {
+                continue
+            }
+            if !enumMap.TryGetValue(declaration, out var updated) {
+                return false
+            }
+            enumsToRepoint.Add((enumSymbol, updated))
+        }
+        let delegatesToRepoint = List[(Symbol DelegateTypeSymbol, Updated DelegateDeclarationSyntax)]()
+        for delegateSymbol in $scope.Delegates {
+            let declaration DelegateDeclarationSyntax? = delegateSymbol.Declaration
+            if declaration == nil || declaration.SyntaxTree != previousTree {
+                continue
+            }
+            if !delegateMap.TryGetValue(declaration, out var updated) {
+                return false
+            }
+            delegatesToRepoint.Add((delegateSymbol, updated))
         }
         let constructorsToRepoint = List[(Symbol ConstructorSymbol, Updated ConstructorDeclarationSyntax)]()
         let deinitsToRepoint = List[(Symbol DeinitSymbol, Updated DeinitDeclarationSyntax)]()
@@ -328,6 +358,12 @@ shared class IncrementalGlobalScopeReuse {
             symbol.RepointDeclaration(updated)
         }
         for (symbol, updated) in interfacesToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
+        for (symbol, updated) in enumsToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
+        for (symbol, updated) in delegatesToRepoint {
             symbol.RepointDeclaration(updated)
         }
         for (symbol, updated) in constructorsToRepoint {

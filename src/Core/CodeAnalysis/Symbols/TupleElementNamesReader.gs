@@ -108,6 +108,29 @@ shared class TupleElementNamesReader {
                     }
                 }
             }
+            case platform is PlatformTypeSymbol {
+                let applied = Apply(platform.UnderlyingType, names, &position)
+                return if object.ReferenceEquals(applied, platform.UnderlyingType) {
+                    type
+                } else {
+                    PlatformTypeSymbol.Get(applied)
+                }
+            }
+            case pointer is PointerTypeSymbol {
+                return PointerTypeSymbol.Get(Apply(pointer.PointeeType, names, &position))
+            }
+            case byRef is ByRefTypeSymbol {
+                return ByRefTypeSymbol.Get(Apply(byRef.PointeeType, names, &position))
+            }
+            case pointer is FunctionPointerTypeSymbol {
+                // CLR tuple-name metadata visits the return before the parameters.
+                let result = Apply(pointer.ReturnType, names, &position)
+                let parameters = ImmutableArray.CreateBuilder[TypeSymbol](pointer.ParameterTypes.Length)
+                for parameter in pointer.ParameterTypes {
+                    parameters.Add(Apply(parameter, names, &position))
+                }
+                return pointer.WithSignature(parameters.MoveToImmutable(), result)
+            }
             case array is ArrayTypeSymbol {
                 {
                     let applied = Apply(array.ElementType, names, &position)
@@ -212,6 +235,15 @@ shared class TupleElementNamesReader {
                     } else {
                         cast[TypeSymbol](NullabilityAnnotatedTypeSymbol(applied, annotated.NullableFlags))
                     }
+                }
+            }
+            case {ClrType: {IsSZArray: true}} {
+                let element = type.GetElementPositions()[0]
+                let applied = Apply(element, names, &position)
+                return if object.ReferenceEquals(applied, element) {
+                    type
+                } else {
+                    SliceTypeSymbol.Get(applied)
                 }
             }
             case {ClrType: {IsGenericType: true, IsGenericTypeDefinition: false} closedClr} {

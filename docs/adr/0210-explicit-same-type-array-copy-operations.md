@@ -1152,8 +1152,24 @@ explicit capability revision, not edits to `V1` or automatic element adapters.
 Do not publish another owner assembly or move definitions by type forwarding
 in v1. Keep old definitions available when introducing a new ABI.
 
+F1 (#5236) freezes the measured owner as
+`Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null`,
+with default sequential packing and no explicit layout size. The runtime
+advertises `AssemblyMetadata("GSharp.FixedArrayAbi", "1")`; a producer
+explicitly claiming fixed shapes advertises
+`AssemblyMetadata("GSharp.FixedArrays", "1")`. Duplicate or unsupported
+markers diagnose. The owner's public definitions must originate in that
+assembly, not forwarded replacements. The required `struct` constraints are
+the CLR value-type/default-constructor flags; a redundant `System.ValueType`
+constraint row does not change their meaning.
+An extra `unmanaged` constraint is not equivalent and must be rejected.
+
 The SDK supplies one canonical reference/runtime pair. Producers reference
-that owner instead of embedding its definitions. Reexports preserve the
+that owner instead of embedding its definitions. Tool payloads can contain
+physical copies, but every packaged copy must match the SDK-owned runtime.
+`build/check-fixed-array-owner.py` checks actual package bytes against that
+runtime before the SDK end-to-end test changes its sample pin.
+Reexports preserve the
 originating owner and closed generic arguments. A resolver must unify
 compatible references to that actual owner; unresolved or conflicting owners
 diagnose. A lookalike namespace, assembly name or manifest claim is insufficient.
@@ -1187,6 +1203,37 @@ CLR types; they cannot convert to `[N]T`. A producer claiming that such a type
 is a fixed array must diagnose on import. Actual reference assemblies must
 contain every needed public definition, signature, helper and annotation.
 Import cannot depend on private fields or reference method bodies.
+
+F1 validates these explicit claims without replacing ordinary source
+`ArrayTypeSymbol` or granting semantic authority to raw imported CLR carriers.
+Automatic capability emission for newly lowered native `[N]T` signatures
+belongs to F2; a handwritten F1 marker is emitted unchanged through both
+implementation and reference outputs. The F1 decoder/signature visitor uses
+a depth budget of 256, diagnosing exhaustion instead of changing storage.
+This is a metadata resource ceiling, not certification of all CLR layouts
+below it or a supported-length increase beyond 32.
+F1 reads `InterfaceImpl` and type/method `GenericParamConstraint` annotations
+from their metadata rows, through the ADR-0186/0193 declaration readers and
+receiver-aware projection. It validates public declared members, including
+constructors and inherited static members, at each projected hierarchy node.
+Independent implementation/reference witnesses cover marked closed receivers
+over unmarked generic bases, transitive interface/base relationships and
+framework-forwarded interface identities, including nested types forwarded
+through their declaring type. Constructed declaring contexts must match the
+selected closed CLR identity, not just its generic definition. Projection
+memoizes unsuccessful annotation-aware receiver states within each search;
+shared diamonds must not cause exponential metadata work.
+Unsubstituted CLR declarations keep
+their declared annotations; substituted slots use the canonical open-slot rule.
+Unreadable, ambiguous or contradictory marked relationships diagnose GS0630.
+Fixed-bearing unmanaged pointer/function-pointer signatures also fail closed;
+the ordinary element-position query does not admit those unsafe boundaries.
+Fixed-bearing detection includes projected public members and constraints,
+not only the interface's type arguments.
+Different nullability paths to one fixed-bearing CLR interface are ambiguous;
+the importer must not choose a path by traversal order. Unmarked ordinary CLR
+contracts keep their existing treatment. These readers do not grant raw
+carriers source-level fixed-array authority or complete the remaining F1 gates.
 
 Distinct lengths and invariant generic instantiations remain distinct.
 Aliases of the same source shape share `C(T,N)`; this does not merge distinct
@@ -1361,14 +1408,28 @@ bounded PR slices and closure gates:
 | Slice | Scope and required evidence |
 | --- | --- |
 | F1: canonical ABI/import | Add the three runtime definitions and capability/import model, without changing ordinary `[N]T` lowering. Use pinned released G# only. Independent gsc/C# producers and consumers must exchange invariant generic shapes through real implementation/ref contracts. Test malformed trees, lookalikes, missing capabilities, reexports, duplicate owners, compatible version skew and load contexts. Freeze exact ABI metadata and deterministic bytes. |
-| F2: value lowering, explicit bridges and defaults | Implement the complete value/store matrix in an unreleased, explicitly gated compiler profile. No source adoption or public default switch. Cover every length 0-32, boundary failures, numeric/reference/nullable/enum/struct/open-generic elements, nested carriers, containing aggregates, collections, boxing and checked CLR copies. Reject larger lengths and invalid layouts. Include required-handle/default/nullability cases. |
+| F2: value lowering, explicit bridges and defaults | Complete the value/store matrix before rollout. Independently usable runtime/emitter foundations may land without changing source defaults; do not add an unused feature profile or legacy mode. No source adoption or public default switch. Cover every length 0-32, boundary failures, numeric/reference/nullable/enum/struct/open-generic elements, nested carriers, containing aggregates, collections, boxing and checked CLR copies. Reject larger lengths and invalid layouts. Include required-handle/default/nullability cases. |
 | F3: retained locations and slice composition | Add view operations/types using existing promotion/location machinery. Cover early borrows/captures, escape/GC, parent replacement/swap, nested fields/arrays/slices, pure paths, permissions, owner rebinding/growth, overlap, effectful indexing and suspension rejection. Unknown origins stay rejected. |
 | F4: tooling and breaking rollout | Complete structural equality, import/IDE/formatter/debugger displays, migration diagnostics/fixes and reference/spec examples. Close all F1-F3 gates before enabling the new default. The maintainer chooses the breaking release; publish, pin in a separate clean-build PR, then adopt in repository source. |
 
+F2a (#5323/#5327) supplies callable typed CLR-copy services for all 33
+carrier lengths, without source fixed-value lowering.
+The independent #5325 correction preserves existing nested value-field storage
+through native-slice elements. Ref-returning storage remains a location through
+bound-block prefixes; source-field receivers use the canonical addressability
+query. This correction needs no F1 carriers, copy bridges or verifier-policy
+changes. It does not complete F2/F3 or enable fixed-array value defaults.
+Suspending stores remain a separate gate, including the existing #5012 defect.
+Neither foundation grants retained fixed views.
+F1/F2a integration must include #5331's complete-diagnostic-set correction;
+the earlier green F1/F2a heads predate that shared policy fix.
+
 Every behavioral test needs ADR-0154 RED/GREEN evidence through the actual
-product path, not just Roslyn fixtures. Require unfiltered strict ILVerify
-for all emitted runtime, producer, consumer and scenario assemblies, with
-no new scopes suppressing errors. Run JIT and NativeAOT on the release's
+product path, not just Roslyn fixtures. Run unfiltered ILVerify
+for all emitted runtime, producer, consumer and scenario assemblies.
+The only new approved F1 exception is the finite runtime certificate below;
+it does not suppress a diagnostic category or skip verification.
+Run JIT and NativeAOT on the release's
 supported architectures, deterministic repeated builds and public/ref
 round trips. Measure large/open/nested value costs and GC-containing layouts;
 do not infer allocation or latency from inline fields.
@@ -1376,7 +1437,7 @@ If a verifier, runtime or pinned-compiler limitation blocks a slice, keep
 that slice unshipped and report it. Do not add a source exclusion, change
 the SDK pin or use an unreleased compiler to bypass it.
 
-Current evidence is **only** section 8/#5225: 33 integer lengths, selected
+At design approval, the evidence was **only** section 8/#5225: 33 integer lengths, selected
 reference/open/nested shapes, implementation/ref exchange, explicit retained
 owners and three discriminating prototype mutants. The prototype's verifier
 exclusions and unverified scenario IL remain exclusions. Automatic promotion,
@@ -1386,6 +1447,121 @@ No new executable investigation is needed to choose this proposal; those
 are implementation acceptance tests, not facts a design edit can establish.
 Go-family admission and audio workload acceptance remain ADR-0191 gates;
 M0 still reports `migrationReady: false`.
+
+F1 implementation and evidence are tracked separately in #5236. The
+interface/constraint readers have discriminating product-driver witnesses.
+The pinned 0.5.212 compiler also publishes and runs the production carriers
+under actual macOS arm64 NativeAOT: all 33 lengths, independent invariant
+exchange and selected generic/nested/reference/nullable/CLR-array copies.
+A buildable generic-value-loss mutant fails that native witness. This is
+host-specific evidence, not certification of every release-supported target.
+Reproduce with `python3 e2etests/fixed-array-abi-aot.py --rid osx-arm64`;
+supply installed native linker dependency paths when the host requires them.
+The helper accepts dedicated directories under `out/test-artifacts` only.
+It rejects shared roots, redirected paths and multiply-linked files before builds or writes.
+Run `python3 build/test-fixed-array-aot-workspace.py` for non-destructive guard tests.
+
+F2a [#5323](https://github.com/DavidObando/gsharp/issues/5323) is the
+separately scoped typed CLR-copy foundation.
+`Gsharp.Values.FixedArrays.V1.ClrArrayCopies` supplies ordinary public
+`FromArrayN<T>(T[]) -> C(T,N)` and `ToArrayN<T>(C(T,N)) -> T[]`
+methods for each constant `N` from 0 through 32.
+Copy-in checks null, then exact physical length, before producing a value.
+Copy-out allocates fresh exact storage, including length zero.
+Typed fields copy values without element constructors, reflection or boxing;
+references and descriptors inside elements retain their established sharing.
+These are compiler-service CLR APIs, not source `cast[[N]T]` or
+`.ToArray()` recognition, automatic native-signature capability emission,
+or a second fixed-array category.
+They do not alter the frozen carriers, source defaults, required-handle
+checks, numeric empty-allocation inference or `migrationReady: false`.
+Actual implementation/ref witnesses independently inspect field order and
+construct canonical inputs; a round trip alone is not a copy oracle.
+
+The broader native-slice nested-field write gate remains blocked by
+[#5325](https://github.com/DavidObando/gsharp/issues/5325).
+Released 0.5.212 silently drops an imported nested value-field store through
+a slice element; the corresponding same-file case reports GS9998.
+F2a tests whole-carrier stores and existing retained roots.
+It neither works around this compiler defect nor claims that full F2,
+fixed views/promotion, equality/protocol admission or breaking rollout is ready.
+
+Before the exception approval below, these witnesses did not close the full-runtime gate: ILVerify 10.0.8
+reports the same two `ReturnPtrToStack` diagnostics in existing native-slice
+`AsSpan` methods in both the changed SDK runtime and published 0.5.212 runtime.
+The separate P2 tracking issue is [#5244](https://github.com/DavidObando/gsharp/issues/5244),
+with an exact published-binary reproduction and upstream provenance.
+The [permanent upstream reproducer](https://github.com/dotnet/runtime/issues/129030#issuecomment-6389023342)
+also contrasts safe CLR span/ref-struct identity returns with an ordinary struct control.
+
+On October 24, 2026, the maintainer explicitly approved a narrow
+verification/certification exception for
+[dotnet/runtime#129030](https://github.com/dotnet/runtime/issues/129030):
+“We know this is a limitation of ilverify, please make an exception for the
+validation/certification based on the upstream tracking issue.”
+This approval is not a compiler, ref-safety or language-semantics waiver.
+
+The test helper and standalone gate use one shared, fail-closed policy.
+Its runtime certificate admits only the exact `ReturnPtrToStack` diagnostics
+at `Slice<T>.AsSpan`'s `ret` at `0x17` and
+`ReadOnlySlice<T>.AsSpan`'s `ret` at `0x10`.
+The certificate freezes the unsigned `Gsharp.Runtime.Values, Version=0.5.0.0`
+owner, full declaration/reference signatures and complete array-owner
+method closure emitted by the pinned released compiler.
+That closure consists of `Slice<T>.get_Owner`, `Slice<T>.AsSpan` and
+`ReadOnlySlice<T>.AsSpan`: a managed array range, followed only by the
+trusted CLR writable-to-readonly span conversion.
+The shared implementation records its SHA-256 certificate and serialization.
+Even unrelated metadata drift invalidates this finite certificate;
+never refresh its digest without renewed inspection and safety evidence.
+F2a renews that digest after adding the copy-helper declarations.
+Independent old/new audits resolve the same complete three-method closure,
+including locals, exception regions, offsets and signed CLR targets.
+No additional return, method or diagnostic is admitted.
+The same policy separately admits one immutable #5242 research image:
+`Utf8Proof.Utf8Candidate.Get`, by value, at `0x14`, bound to full-image
+SHA-256 `38b57be6d6b8abd3be70316b48c3abb6371bccaf28e6fa6ee6188b005f557bbe`.
+That image contains exactly `41C3A900` plus its contiguous hidden zero.
+Its independent JIT/NativeAOT, GC, terminator and allocation witnesses do not
+admit other generated literal images or certify the UTF-8 feature.
+One separately reviewed **compiler-produced** witness is also finite:
+`Utf8LiteralProof.dll`, full-image SHA-256
+`d8093a176ac3bbebc3022adabd7f7ba4fa9ab02436142386b5de26981a1ab3cc`.
+Only its exact `Literals.Get`/`Empty` returns at `0x14` and `Derived` at
+`0x0F` are admitted. All three return `ReadOnlySpan<byte>` by value.
+The complete closure uses signed CLR `CreateSpan<byte>`/`Slice` targets,
+private contiguous RVA storage, bounded lengths and a hidden zero.
+Source/compiler provenance, exact IL and independent JIT/NativeAOT evidence
+are recorded with the image certificate.
+Its raw verifier result remains exit 2 with three errors; report
+approved 3 / unexpected 0, not strict clean verification.
+Changed storage, exposed terminators, renamed methods and actual byref
+returns remain failures. Other compiler outputs require separate review;
+this does not certify the whole UTF-8 feature or change any rollout gate.
+The human-readable finite records and immutable positive/true-byref-negative
+images are under `test/Compiler.Tests/TestData/IlVerify`.
+Each matched certificate requires its complete unique diagnostic set:
+the runtime pair, product triple or research singleton.
+An internally consistent shortened report is incomplete and grants no admission.
+
+The verifier must run over the entire runtime without ignore or scope flags.
+Report its exact invocation, raw exit/stdout/stderr, accepted diagnostics,
+upstream issue and remaining errors.
+The pinned tool currently exits 2 with exactly two admitted diagnostics.
+Call this **verified with the approved upstream exception**, never
+**strict unsuppressed ILVerify success**.
+By-reference returns, other methods/owners/signatures, changed closure bodies,
+wrong offsets, other diagnostics, incomplete/malformed output, stderr and
+tool/reference/process failures remain failures.
+JIT, alias/default/range/readonly/escaped-GC and applicable NativeAOT
+witnesses remain required independently.
+
+Keep #5244 and upstream tracking open.
+When a corrected released verifier is separately approved and pinned,
+rerun the full unsuppressed runtime and the positive/negative witnesses.
+Remove this certificate when those methods verify without it.
+This exception does not certify unmeasured release targets, enable ordinary
+fixed-value lowering, choose a release or authorize publication.
 
 #### Recorded maintainer decisions
 
