@@ -778,52 +778,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         let variables = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
         let expressions = ImmutableArray.CreateBuilder[BoundExpression]()
         for declaration BoundVariableDeclaration in block.Statements {
-            let local = LocalVariableSymbol(
-                "<>exprLocal${this.counter++}",
-                isReadOnly: true,
-                ParameterExpressionTypeSymbol
-            )
-            factoryStatements.Add(
-                BoundVariableDeclaration(
-                    nil,
-                    local,
-                    BoundClrStaticCallExpression(
-                        nil,
-                        ExpressionParameterMethod,
-                        ParameterExpressionTypeSymbol,
-                        ImmutableArray.Create[BoundExpression](
-                            CreateTypeOf(declaration.Variable.Type),
-                            BoundLiteralExpression(nil, declaration.Variable.Name, TypeSymbol.String)
-                        )
-                    )
-                )
-            )
-            locals.Add(declaration.Variable, local)
-            variables.Add(local)
-            expressions.Add(
-                BoundClrStaticCallExpression(
-                    nil,
-                    ExpressionAssignMethod,
-                    TypeSymbol.FromClrTypeWithoutNullability(
-                        typeof(BinaryExpression),
-                        NullabilityFreeReason.TypeLiteral
-                    ),
-                    ImmutableArray.Create(
-                        UpcastToExpression(BoundVariableExpression(nil, local)),
-                        UpcastToExpression(
-                            this.TranslateArgument(
-                                Invariant.Required(
-                                    declaration.Initializer,
-                                    "a staged construction argument has an initializer",
-                                    expression: "declaration.Initializer"
-                                ),
-                                declaration.Variable.Type,
-                                locals
-                            )
-                        )
-                    )
-                )
-            )
+            this.AddDeferredCapture(declaration, locals, variables, factoryStatements, expressions)
         }
         expressions.Add(this.TranslateExpression(block.Expression, locals))
         let tree = BoundClrStaticCallExpression(
@@ -833,6 +788,49 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             ImmutableArray.Create(BuildParameterArray(variables), BuildExpressionArray(expressions))
         )
         return BoundBlockExpression(nil, factoryStatements.ToImmutable(), tree)
+    }
+
+    private func AddDeferredCapture(
+        capture BoundVariableDeclaration,
+        parameterMap Dictionary[VariableSymbol, LocalVariableSymbol],
+        locals ImmutableArray[LocalVariableSymbol].Builder,
+        declarations ImmutableArray[BoundStatement].Builder,
+        expressions ImmutableArray[BoundExpression].Builder
+    ) {
+        let local = LocalVariableSymbol("<>exprParam${this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol)
+        let parameter = BoundClrStaticCallExpression(
+            capture.Syntax,
+            ExpressionParameterMethod,
+            ParameterExpressionTypeSymbol,
+            ImmutableArray.Create[BoundExpression](
+                CreateTypeOf(capture.Variable.Type),
+                BoundLiteralExpression(nil, capture.Variable.Name, TypeSymbol.String)
+            )
+        )
+        declarations.Add(BoundVariableDeclaration(capture.Syntax, local, parameter))
+        locals.Add(local)
+        expressions.Add(
+            BoundClrStaticCallExpression(
+                capture.Syntax,
+                ExpressionAssignMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create[BoundExpression](
+                    UpcastToExpression(BoundVariableExpression(capture.Syntax, local)),
+                    UpcastToExpression(
+                        this.TranslateArgument(
+                            Invariant.Required(
+                                capture.Initializer,
+                                "a deferred capture has an initializer",
+                                expression: "capture.Initializer"
+                            ),
+                            capture.Variable.Type,
+                            parameterMap
+                        )
+                    )
+                )
+            )
+        )
+        parameterMap[capture.Variable] = local
     }
 
     private func BuildOwningStructLiteralExpression(
@@ -1435,43 +1433,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             let declarations = ImmutableArray.CreateBuilder[BoundStatement](captures.Length)
             let expressions = ImmutableArray.CreateBuilder[BoundExpression](captures.Length + 1)
             for capture in captures {
-                let local = LocalVariableSymbol(
-                    "<>exprParam${this.counter++}",
-                    isReadOnly: true,
-                    ParameterExpressionTypeSymbol
-                )
-                let parameter = BoundClrStaticCallExpression(
-                    capture.Syntax,
-                    ExpressionParameterMethod,
-                    ParameterExpressionTypeSymbol,
-                    ImmutableArray.Create[BoundExpression](
-                        CreateTypeOf(capture.Variable.Type),
-                        BoundLiteralExpression(nil, capture.Variable.Name, TypeSymbol.String)
-                    )
-                )
-                declarations.Add(BoundVariableDeclaration(capture.Syntax, local, parameter))
-                locals.Add(local)
-                expressions.Add(
-                    BoundClrStaticCallExpression(
-                        capture.Syntax,
-                        ExpressionAssignMethod,
-                        ExpressionTypeSymbol,
-                        ImmutableArray.Create[BoundExpression](
-                            UpcastToExpression(BoundVariableExpression(capture.Syntax, local)),
-                            UpcastToExpression(
-                                this.TranslateExpression(
-                                    Invariant.Required(
-                                        capture.Initializer,
-                                        "a spilled input has an initializer",
-                                        expression: "capture.Initializer"
-                                    ),
-                                    scopedMap
-                                )
-                            )
-                        )
-                    )
-                )
-                scopedMap[capture.Variable] = local
+                this.AddDeferredCapture(capture, scopedMap, locals, declarations, expressions)
             }
             let construction = BoundBlockExpression(
                 block.Syntax,
@@ -1570,6 +1532,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             )
         )
         let scopedMap = Dictionary[VariableSymbol, LocalVariableSymbol](parameterMap){[receiver] = local}
+        let receivers = HashSet[VariableSymbol](){receiver}
         let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
         locals.Add(local)
         let declarations = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -1594,43 +1557,24 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                         capture.Syntax is VariableDeclarationSyntax {
                         return false
                     }
-                    let capturedLocal = LocalVariableSymbol(
-                        "<>exprParam${this.counter++}",
-                        isReadOnly: true,
-                        ParameterExpressionTypeSymbol
-                    )
-                    let capturedParameter = BoundClrStaticCallExpression(
-                        capture.Syntax,
-                        ExpressionParameterMethod,
-                        ParameterExpressionTypeSymbol,
-                        ImmutableArray.Create[BoundExpression](
-                            CreateTypeOf(capture.Variable.Type),
-                            BoundLiteralExpression(nil, capture.Variable.Name, TypeSymbol.String)
-                        )
-                    )
-                    declarations.Add(BoundVariableDeclaration(capture.Syntax, capturedLocal, capturedParameter))
-                    locals.Add(capturedLocal)
-                    expressions.Add(
-                        BoundClrStaticCallExpression(
-                            capture.Syntax,
-                            ExpressionAssignMethod,
-                            ExpressionTypeSymbol,
-                            ImmutableArray.Create[BoundExpression](
-                                UpcastToExpression(BoundVariableExpression(capture.Syntax, capturedLocal)),
-                                UpcastToExpression(this.TranslateExpression(capturedValue, scopedMap))
-                            )
-                        )
-                    )
-                    scopedMap[capture.Variable] = capturedLocal
+                    // The spiller can capture the initializer receiver before a value.
+                    // Retain that alias without accepting updates to unrelated receivers.
+                    if ReferencesReceiver(capturedValue, receivers) {
+                        receivers.Add(capture.Variable)
+                    }
+                    this.AddDeferredCapture(capture, scopedMap, locals, declarations, expressions)
                 }
                 assignment = spilled.Expression
             }
             let target BoundExpression? = switch assignment {
-                case field is BoundFieldAssignmentExpression when ReferencesReceiver(field, receiver): this
+                case field is BoundFieldAssignmentExpression when field.Receiver != nil && receivers.Contains(
+                    field.Receiver
+                ) ||
+                    ReferencesReceiver(field.ReceiverExpression, receivers): this
                     .BuildFieldAccessExpression(
                     BoundFieldAccessExpression(
                         field.Syntax,
-                        BoundVariableExpression(field.Syntax, receiver),
+                        field.ReceiverExpression ?? BoundVariableExpression(field.Syntax, field.Receiver ?? receiver),
                         BoundNodeForm.DeclaringType(field),
                         field.Field
                     ),
@@ -1638,12 +1582,12 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
                 case property is BoundPropertyAssignmentExpression when ReferencesReceiver(
                     property.Receiver,
-                    receiver
+                    receivers
                 ): this
                     .BuildPropertyAccessExpression(
                     BoundPropertyAccessExpression(
                         property.Syntax,
-                        BoundVariableExpression(property.Syntax, receiver),
+                        property.Receiver,
                         property.StructType,
                         property.Property
                     ),
@@ -1651,12 +1595,12 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
                 case clrProperty is BoundClrPropertyAssignmentExpression when ReferencesReceiver(
                     clrProperty.Receiver,
-                    receiver
+                    receivers
                 ): this
                     .BuildClrPropertyAccessExpression(
                     BoundClrPropertyAccessExpression(
                         clrProperty.Syntax,
-                        BoundVariableExpression(clrProperty.Syntax, receiver),
+                        clrProperty.Receiver,
                         clrProperty.Member,
                         clrProperty.Type
                     ),
@@ -2455,6 +2399,12 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             receiver VariableSymbol
         ) bool -> expression is BoundVariableExpression variable &&
             object.ReferenceEquals(variable.Variable, receiver)
+
+        private func ReferencesReceiver(
+            expression BoundExpression?,
+            receivers HashSet[VariableSymbol]
+        ) bool -> expression is BoundVariableExpression variable &&
+            receivers.Contains(variable.Variable)
 
         private func ReferencesReceiver(
             assignment BoundFieldAssignmentExpression,
