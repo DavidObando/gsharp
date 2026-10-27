@@ -21,7 +21,8 @@ internal class CSharpFixture : IDisposable {
         source string,
         additionalReferences IEnumerable[MetadataReference]? = nil,
         parseOptions CSharpParseOptions? = nil,
-        assemblyName string? = nil
+        assemblyName string? = nil,
+        allowUnsafe bool = false
     ) {
         DirectoryPath = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(DirectoryPath)
@@ -37,7 +38,7 @@ internal class CSharpFixture : IDisposable {
                     .HostTrustedPlatformAssemblyPaths()
                     .Select((path string) -> MetadataReference.CreateFromFile(path))
                     .Concat(additionalReferences ?? Array.Empty[MetadataReference]()),
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: allowUnsafe)
             )
             using let stream = File.Create(AssemblyPath)
             let result = compilation.Emit(stream)

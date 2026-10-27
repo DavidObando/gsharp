@@ -6,6 +6,12 @@ description: "Index of the G# design decisions."
 
 # Design decisions (ADRs)
 
+## Build and source identity
+
+| ADR | Title | Summary |
+| --- | --- | --- |
+| [0215](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0215-source-link-build-inputs.md) | Source Link build inputs | Track standard Source Link output before incremental compilation. Share the target between consumer projects and repository builds. |
+
 ## Null model, values, and primitives
 
 | ADR | Title | Summary |

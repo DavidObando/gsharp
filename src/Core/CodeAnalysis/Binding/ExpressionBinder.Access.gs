@@ -386,12 +386,20 @@ internal partial class ExpressionBinder {
             typeSimpleName,
             terminalLiteral.TypeArgumentList,
             out var clrType,
-            out _,
-            out _
+            out var openDefinition,
+            out var symbolicArguments
         ) {
             return false
         }
-        result = BindImportedTypeLiteralExpression(terminalLiteral, clrType!!)
+        result = BindImportedTypeLiteralExpression(
+            terminalLiteral,
+            clrType!!,
+            if openDefinition != nil && !symbolicArguments.IsDefaultOrEmpty {
+                ImportedTypeSymbol.GetConstructed(clrType, openDefinition, symbolicArguments)
+            } else {
+                nil
+            }
+        )
         return true
     }
 
@@ -403,19 +411,9 @@ internal partial class ExpressionBinder {
     /// Binds a same-compilation SOURCE type constructed or referenced through a
     /// package-qualified name — e.g. `Oahu.Decrypt.Mp4Operation(...)` or the
     /// generic `Oahu.Decrypt.Mp4Operation[TResult](...)`. cs2gs
-    /// fully-qualifies type references, but a G# source type has no CLR type at
-    /// bind time, so (cref:TryBindQualifiedClrConstructorCall) (which only
-    /// resolves reference-set types) cannot see it. G# resolves source types by
-    /// simple name from a flat, cross-package type scope, so a leading
-    /// namespace/package prefix is redundant.
-    ///
-    /// This fires only when every leading segment is a pure namespace/package
-    /// component — none names an in-scope value, a known type, an import alias,
-    /// or an imported class (which would make the chain a static-member access or
-    /// nested-type reference handled elsewhere) — and the terminal is a call or
-    /// struct-literal whose simple name resolves to a user aggregate type. In that
-    /// case the redundant prefix is peeled off and the terminal is bound by simple
-    /// name, matching how the same construction binds when written unqualified.
+    /// fully-qualifies type references, but source types have no CLR type while
+    /// binding. Resolve the complete source identity before binding its construction
+    /// or static members. Constructor arguments retain their ordinary lexical scope.
     /// @param syntax The accessor chain forming the qualified name.
     /// @param result The bound terminal construction on success.
     /// @returns Whether the qualified name bound to a source-type construction.
@@ -424,14 +422,25 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
+        if !TryResolveQualifiedSourceType(syntax, out var remainder, out var sourceType) {
+            return false
+        }
+        result = BindQualifiedSourceTypeRemainder(remainder, sourceType!!)
+        return true
+    }
+
+    private func TryResolveQualifiedSourceType(
+        syntax AccessorExpressionSyntax,
+        out remainder ExpressionSyntax,
+        @NotNullWhen(true) out sourceType TypeSymbol?
+    ) bool {
+        remainder = syntax
+        sourceType = nil
         if syntax.IsNullConditional {
             return false
         }
-        // Peel the leading dotted-name segments while each is a bare identifier
-        // that does NOT resolve to a value, a type, an import alias, or an
-        // imported class — i.e. a pure namespace/package component. Stop at the
-        // first segment that is anything else (a generic-name type reference, a
-        // type name, or the terminal construction). Only the FIRST segment is
+        // Peel namespace segments until a value or type receiver begins.
+        // Namespace import aliases expand during exact source lookup. Only the FIRST segment is
         // required to fail the in-scope-value check: once a segment has been
         // accepted as a namespace-prefix component, the chain can no longer be a
         // value-access chain (there is no value at its head to access `.member`
@@ -439,6 +448,14 @@ internal partial class ExpressionBinder {
         // in-scope value (e.g. a field on the enclosing type) is not a genuine
         // alternate interpretation and must not stop peeling (issue #2419).
         var current ExpressionSyntax = syntax
+        while current is AccessorExpressionSyntax step &&
+            !step.IsNullConditional &&
+            step.LeftPart is AccessorExpressionSyntax left &&
+            !left
+            .IsNullConditional {
+            let right = AccessorExpressionSyntax(step.SyntaxTree, left.RightPart, step.DotToken, step.RightPart)
+            current = AccessorExpressionSyntax(step.SyntaxTree, left.LeftPart, left.DotToken, right)
+        }
         var peeledAny = false
         let peeledSegments = List[string]()
         while current is AccessorExpressionSyntax accessor &&
@@ -461,71 +478,50 @@ internal partial class ExpressionBinder {
         if !peeledAny {
             return false
         }
-        // Issue #2455: make the exact peeled package name ambient for the
-        // remainder's resolution (both the gate check just below and the
-        // actual bind further down) so a terminal simple name that collides
-        // across two or more independently-imported packages resolves to
-        // THIS specific package's declaration — the qualification's whole
-        // purpose — instead of being second-guessed by the general
-        // import-based ambiguity check.
-        let peeledPackageName = string.Join(".", peeledSegments)
-        let previousHint = $scope.SetQualifiedConstructionPackageHint(peeledPackageName)
-        try {
-            if !RemainderHeadIsSourceType(current) {
-                return false
-            }
-            // Peel the redundant namespace prefix and bind the remainder by simple
-            // name. Use BindExpressionpublic (not BindExpression) so a void
-            // terminal (a `Ns.Type[Args].VoidMethod(...)` call in an
-            // expression-bodied void member) is not prematurely rejected here —
-            // the caller's BindExpression wrapper applies the correct
-            // void-in-value-position check on the original syntax.
-            result = BindExpressionpublic(current)
-            return true
-        } finally {
-            $scope.SetQualifiedConstructionPackageHint(previousHint)
-        }
+        remainder = current
+        return TryResolveQualifiedSourceTypeHead(current, peeledSegments, out sourceType)
     }
 
-    /// Whether the head of [`remainder`](paramref) (after peeling a
-    /// namespace prefix) names a same-compilation user aggregate source type:
-    /// a constructor call `Type(...)`, a struct literal `Type{...}`,
-    /// or a static-member access rooted at a type name `Type.Member` /
-    /// generic type reference `Type[Args].Member`.
-    private func RemainderHeadIsSourceType(remainder ExpressionSyntax) bool {
+    /// Resolves the qualified source identity of a construction or static receiver.
+    /// @param remainder The expression after its namespace prefix.
+    /// @param packageSegments The namespace prefix segments.
+    /// @param sourceType The resolved aggregate type.
+    /// @returns Whether the complete source name resolves.
+    private func TryResolveQualifiedSourceTypeHead(
+        remainder ExpressionSyntax,
+        packageSegments List[string],
+        @NotNullWhen(true) out sourceType TypeSymbol?
+    ) bool {
+        sourceType = nil
         var simpleName string
         var arity int32
         switch remainder {
             case CollectionInitializerExpressionSyntax{Target: {} target} {
-                return RemainderHeadIsSourceType(target)
+                return TryResolveQualifiedSourceTypeHead(target, packageSegments, out sourceType)
             }
-            case AccessorExpressionSyntax{LeftPart: CollectionInitializerExpressionSyntax collection} {
-                return RemainderHeadIsSourceType(collection)
+            case ObjectCreationExpressionSyntax{Target: {} target} {
+                return TryResolveQualifiedSourceTypeHead(target, packageSegments, out sourceType)
+            }
+            case accessor is AccessorExpressionSyntax {
+                return TryResolveQualifiedSourceTypeHead(accessor.LeftPart, packageSegments, out sourceType)
             }
             case call is CallExpressionSyntax when !call.Identifier.IsMissing {
                 simpleName = call.Identifier.ValueText
-                arity = call.TypeArgumentList?.Arguments.Count ?? 0
+                arity = call.TypeArgumentList?.Arguments.Count ?? -1
             }
             case literal is StructLiteralExpressionSyntax when !literal.TypeIdentifier.IsMissing {
                 simpleName = literal.TypeIdentifier.ValueText
-                arity = literal.TypeArgumentList?.Arguments.Count ?? 0
+                arity = literal.TypeArgumentList?.Arguments.Count ?? -1
             }
-            case AccessorExpressionSyntax{LeftPart: GenericNameExpressionSyntax genericHead} {
+            case genericHead is GenericNameExpressionSyntax {
                 simpleName = genericHead.Identifier.ValueText
                 arity = genericHead.TypeArgumentList?.Arguments.Count ?? 0
             }
-            case AccessorExpressionSyntax{LeftPart: NameExpressionSyntax nameHead} {
+            case nameHead is NameExpressionSyntax {
                 simpleName = nameHead.IdentifierToken.ValueText
                 arity = 0
             }
-            case accessor is AccessorExpressionSyntax {
-                // `Type[Args].Member`: a generic type receiver parses as an index
-                // expression (`Mp4Operation[int32]`), not a GenericName, when it
-                // appears as the left part of a member access.
-                if accessor.LeftPart is not IndexExpressionSyntax index ||
-                    index.Target is not NameExpressionSyntax indexNameHead {
-                    return false
-                }
+            case index is IndexExpressionSyntax when index.Target is NameExpressionSyntax indexNameHead {
                 simpleName = indexNameHead.IdentifierToken.ValueText
                 arity = index.Indices.Count
             }
@@ -533,16 +529,77 @@ internal partial class ExpressionBinder {
                 return false
             }
         }
-        return $scope.TryLookupTypeAlias(
-            simpleName,
-            if arity > 0 {
-                arity
-            } else {
-                -1
-            },
-            out var terminalType
+        let segments = packageSegments.Append(simpleName).ToArray()
+        return $scope.TryLookupQualifiedSourceType(
+            $scope.ExpandQualifiedTypeName(segments, segments.Length),
+            arity,
+            out sourceType
         ) &&
-            IsUserAggregateType(terminalType!!)
+            IsUserAggregateType(sourceType!!)
+    }
+
+    private func BindQualifiedSourceTypeRemainder(remainder ExpressionSyntax, sourceType TypeSymbol) BoundExpression {
+        let receiverSyntax = if remainder is AccessorExpressionSyntax accessor {
+            accessor.LeftPart
+        } else {
+            remainder
+        }
+        var structure StructSymbol? = sourceType as StructSymbol
+        var interface_ InterfaceSymbol? = sourceType as InterfaceSymbol
+        if receiverSyntax is IndexExpressionSyntax{IsNullConditional: false} or
+            GenericNameExpressionSyntax &&
+            !TryResolveConstructedGenericTypeReceiver(
+            receiverSyntax,
+            out structure,
+            out interface_,
+            out _,
+            out _,
+            sourceType
+        ) {
+            return BoundErrorExpression(remainder)
+        }
+        switch remainder {
+            case call is CallExpressionSyntax {
+                return overloads.BindCallExpression(call, sourceType)
+            }
+            case literal is StructLiteralExpressionSyntax when sourceType is StructSymbol structure {
+                return BindStructLiteralExpression(literal, structure)
+            }
+            case ObjectCreationExpressionSyntax{Target: {} target} creation {
+                return BindObjectInitializerSuffix(creation, BindQualifiedSourceTypeRemainder(target, sourceType))
+            }
+            case CollectionInitializerExpressionSyntax{Target: {} target} collection {
+                return BindCollectionInitializerSuffix(collection, BindQualifiedSourceTypeRemainder(target, sourceType))
+            }
+            case accessor is AccessorExpressionSyntax when accessor.LeftPart is CallExpressionSyntax or
+                StructLiteralExpressionSyntax or
+                ObjectCreationExpressionSyntax or
+                CollectionInitializerExpressionSyntax {
+                let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
+                if receiver is BoundErrorExpression {
+                    return receiver
+                }
+                return if accessor.IsNullConditional {
+                    BindNullConditionalAccessExpressionCore(receiver, accessor.RightPart)
+                } else {
+                    BindAccessorStep(receiver, classSymbol: nil, accessor.RightPart)
+                }
+            }
+            case accessor is AccessorExpressionSyntax when !accessor.IsNullConditional {
+                if sourceType is EnumSymbol enumeration {
+                    return BindEnumAccessorStep(enumeration, accessor.RightPart)
+                }
+                return BindConstructedGenericTypeAccessorStep(
+                    structure,
+                    interface_,
+                    constructedImported: nil,
+                    accessor.RightPart,
+                    accessor.LeftPart
+                )
+            }
+        }
+        Diagnostics.ReportExpressionMustHaveValue(remainder.Location)
+        return BoundErrorExpression(remainder)
     }
 
     /// Resolves a closed CLR type from a fully-qualified dotted name written in
@@ -629,48 +686,12 @@ internal partial class ExpressionBinder {
                 }
                 let mangled = prefix + "." + typeSimpleName + "`" + arity.ToString()
                 if $scope.References!!.TryResolveType(mangled, out var openType) {
-                    let clrArgs = [arity]Type
-                    let symbolic = ImmutableArray.CreateBuilder[TypeSymbol](arity)
-                    var argsResolved = true
-                    var hasSymbolicArg = false
-                    for var i = 0; i < arity; i++ {
-                        let ta TypeSymbol? = bindTypeClause(typeArgumentList.Arguments[i])
-                        if ta == nil {
-                            argsResolved = false
-                            break
-                        }
-                        symbolic.Add(ta)
-                        if ta.ClrType == nil {
-                            // Issue #313 / #671: in-scope type parameter or
-                            // user-defined G# type argument — close with a
-                            // System.Object placeholder and preserve the
-                            // symbolic argument for the emitter to recover.
-                            hasSymbolicArg = true
-                            clrArgs[i] = $scope.References!!.GetCoreType("System.Object")
-                            continue
-                        }
-                        // Issue #3962: a fixed-length array `[N]T` HAS a CLR type
-                        // (`T[]`), but it is the same one `[]T` and every other
-                        // length carry, so the declared length survives only in
-                        // the symbol. Retain it, or `List[[3]int32]` and
-                        // `List[[4]int32]` resolve to one cached symbol here too.
-                        // Issue #4024: the SLICE spelling `[]T` shares that
-                        // backing and is retained by the same gate, so a
-                        // fully-qualified
-                        // `System.Collections.Generic.List[[]int32]()` is
-                        // distinguishable from a metadata `List<int[]>`.
-                        if TypeSymbol.ContainsSourceArrayShape(ta) {
-                            hasSymbolicArg = true
-                        }
-                        // Type arguments resolve to gsc-host CLR types (e.g.
-                        // primitives map to host typeof(...)), but openType may
-                        // come from the resolver's isolated MetadataLoadContext.
-                        // MakeGenericType requires every argument to share the
-                        // open generic's load context, so project each argument
-                        // onto the resolver's reference set first.
-                        clrArgs[i] = $scope.References!!.MapClrTypeToReferences(ta.ClrType)!!
-                    }
-                    if !argsResolved {
+                    if !TryResolveClrConstructionTypeArgs(
+                        typeArgumentList,
+                        out var clrArgs,
+                        out var symbolic,
+                        out var hasSymbolicArg
+                    ) {
                         continue
                     }
                     // Issue #4032 (review finding 1): a static member reached
@@ -682,7 +703,7 @@ internal partial class ExpressionBinder {
                         Diagnostics,
                         openType,
                         clrArgs,
-                        symbolic.ToImmutable(),
+                        symbolic,
                         typeArgumentList.Location
                     ) {
                         return false
@@ -691,7 +712,7 @@ internal partial class ExpressionBinder {
                         clrType = openType!!.MakeGenericType(clrArgs)
                         if hasSymbolicArg {
                             openGenericDefinition = openType
-                            symbolicTypeArgs = symbolic.MoveToImmutable()
+                            symbolicTypeArgs = symbolic
                         }
                         return true
                     } catch (ArgumentException) {

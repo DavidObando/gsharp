@@ -917,6 +917,28 @@ internal partial class MethodBodyEmitter {
         this.il.LoadLocal(valueSlot)
     }
 
+    private func GetNullablePropertyGetterReference(
+        property PropertyInfo,
+        receiverType TypeSymbol?
+    ) MemberReferenceHandle? {
+        let symbolicNullable = receiverType as NullableTypeSymbol
+        let propertyOwner = property.DeclaringType
+        if symbolicNullable != nil && NullableLifting.IsAnyValueTypeNullable(symbolicNullable) &&
+            propertyOwner != nil &&
+            propertyOwner.IsGenericType &&
+            propertyOwner
+            .GetGenericTypeDefinition()
+            .FullName == "System.Nullable`1" &&
+            (property.Name == "Value" || property.Name == "HasValue") {
+            return if property.Name == "Value" {
+                this.GetNullableValueRef(symbolicNullable)
+            } else {
+                this.GetNullableHasValueRef(symbolicNullable)
+            }
+        }
+        return nil
+    }
+
     private func EmitClrPropertyAccess(access BoundClrPropertyAccessExpression) {
         if access.IsConstrainedTypeParameterAccess {
             if access.Member is not PropertyInfo constrainedProperty {
@@ -993,23 +1015,9 @@ internal partial class MethodBodyEmitter {
                 // `Nullable<>` (the underlying has no ClrType while binding).
                 // Its getter MemberRef must be parented at the constructed
                 // `Nullable<T>` TypeSpec, as the `!!` unwrap's is.
-                let symbolicNullable = receiver?.Type as NullableTypeSymbol
-                let propertyOwner = property.DeclaringType
-                if symbolicNullable != nil && NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullable) &&
-                    propertyOwner != nil &&
-                    propertyOwner.IsGenericType &&
-                    propertyOwner
-                    .GetGenericTypeDefinition()
-                    .FullName == "System.Nullable`1" &&
-                    (property.Name == "Value" || property.Name == "HasValue") {
+                if this.GetNullablePropertyGetterReference(property, receiver?.Type) is {} nullableGetter {
                     this.il.OpCode(ILOpCode.Call)
-                    this.il.Token(
-                        if property.Name == "Value" {
-                            this.GetNullableValueRef(symbolicNullable)
-                        } else {
-                            this.GetNullableHasValueRef(symbolicNullable)
-                        }
-                    )
+                    this.il.Token(nullableGetter)
                     break
                 }
                 let getterRef = if isStatic {
@@ -1719,7 +1727,7 @@ internal partial class MethodBodyEmitter {
         if fa.Receiver is BoundIndexExpression elementReceiver {
             return elementReceiver.IsArrayBackedElementAccess
         }
-        return false
+        return RefCapabilities.IsDirectlyAddressableForImplicitIn(fa.Receiver!!)
     }
 
     /// Issue #3185: emits the managed-pointer address of an addressable CLR

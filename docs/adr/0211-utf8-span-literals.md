@@ -6,6 +6,9 @@
 - **Approval**: The maintainer stated “ADR 0211 is approved” on 2026-10-23.
 - **Release scope**: The maintainer selected native span aliases and native
   UTF-8 literal `+` folding on 2026-10-23.
+- **Certification exception**: On 2026-10-24, the maintainer authorized a narrow,
+  auditable exception for confirmed [dotnet/runtime#129030][ilverify-by-value]
+  false positives. Raw verification and all other proof gates remain required.
 - **Issue**: [#5218](https://github.com/DavidObando/gsharp/issues/5218)
 - **Related**: [ADR-0204](0204-immutable-bytestring-values.md),
   [ADR-0056](0056-span-consumption-v1.md),
@@ -228,9 +231,28 @@ The [runtime implementation][runtime-helpers] requires a recognized intrinsic
 sequence for NativeAOT.
 Keep `ldtoken` adjacent to its `CreateSpan` call.
 Do not hide the handle in a reflective lookup, delegate, or runtime wrapper.
-Strict IL verification and actual NativeAOT execution remain acceptance gates.
-If this shape fails, stop for a reviewed emission decision.
-Do not silently choose allocating storage or suppress verification failures.
+Run raw, unfiltered ILVerify on the complete emitted image.
+Actual NativeAOT execution remains an independent acceptance gate.
+Certification requires no verifier errors, except individually admitted false
+positives covered by the maintainer's 2026-10-24 approval.
+That approval applies only to [dotnet/runtime#129030][ilverify-by-value].
+It does not authorize a different emission shape or allocating storage.
+
+Use the shared known-issue policy tracked in
+[#5244](https://github.com/DavidObando/gsharp/issues/5244), not a UTF-8-specific filter.
+An admission must identify the generated method and its provenance, exact
+by-value CLR signature, complete expected IL shape, and static RVA storage.
+Match the diagnostic, return offset, and expected diagnostic count.
+Check payload bytes, logical length, and the contiguous hidden terminator.
+Do not infer safety from `ReadOnlySpan<byte>` or `ReturnPtrToStack` alone.
+True byref returns, unsafe shapes, additional errors, and unmatched methods fail.
+Missing tools, unresolved references, and malformed verifier output also fail.
+Report raw outcomes and each admitted known issue explicitly.
+Never report an admitted failure as “strict unsuppressed ILVerify passed.”
+Keep negative controls strict and retain the original diagnostic output.
+New or changed shapes require their own reviewed admission.
+Any failure outside the admitted limitation still requires correction or a
+reviewed emission decision.
 
 [Roslyn's byte-span path][roslyn-emission] instead emits an address-based
 `ReadOnlySpan<byte>(void*, length)` construction.
@@ -400,7 +422,7 @@ The following are required witnesses, not results claimed by this study.
 | Determinism and metadata | Compile identical inputs twice and compare PE bytes; duplicate sites share a verified exact blob; changed source order does not derive metadata from hash enumeration; inspect reference assembly signatures and absence of private payloads. |
 | Translation | Execute original C# and real cs2gs-driver output; compare exact stdout bytes, explicit lengths, overload choices, terminator observations, and warmed allocation deltas for ordinary/verbatim/raw/multiline/uppercase/pair-escape/addition cases. Old-target rejection must have original source coordinates. |
 | Tooling | Code-model factory/printer/reparse/compiler chain; formatter preserves kind and bytes and is idempotent; comments, hover, coloring, REPL, following-line diagnostics, and null reverse-map coordinates remain correct. |
-| Deployment | Strict ILVerify without a feature-specific suppression; emitted G# JIT execution; published NativeAOT execution with exact bytes, terminator, return lifetime, and allocation checks. Parsing alone cannot satisfy any storage gate. |
+| Deployment | Raw unfiltered ILVerify on the complete image, with no errors or only individually admitted and explicitly reported upstream #129030 false positives; strict rejection controls; emitted G# JIT execution; published NativeAOT execution with exact bytes, terminator, return lifetime, and allocation checks. Parsing alone cannot satisfy any storage gate. |
 
 Reuse `NativeSliceLanguageTests.Fixture`, `IlVerifier`, and `EmittedOracle`
 where applicable.
@@ -417,7 +439,8 @@ Do not call a printer substring assertion an allocation or semantic witness.
    Preserve the approved encoding, raw deferral, termination, and static-storage contracts.
 2. Implement compiler token/binding and minimal static-data emission in G#.
    Reuse existing BCL symbols, escape analysis, metadata, and slot planning.
-   Cover diagnostics, exact bytes, type, lifetime, allocation, and strict IL.
+   Cover diagnostics, exact bytes, type, lifetime, allocation, and raw verification
+   under the narrow certification policy in section 5.
 3. Complete formatter, IDE, editor grammar, REPL, reference-assembly,
    deterministic-emit, and NativeAOT witnesses.
    Add public specification, lexical, CLR interop, feature matrix, and release notes.
@@ -513,6 +536,8 @@ or proposed managed-helper emission was certified by this study.
 The measured Roslyn implementation uses the pointer-constructor path.
 It does not certify the candidate G# emission.
 Those missing proofs are explicit implementation gates.
+The later certification exception changes only the known verifier limitation.
+It does not supply the missing implementation or runtime evidence.
 
 ## Consequences
 
@@ -550,3 +575,4 @@ Raw target syntax and general span concatenation remain outside the first releas
 [roslyn-emission]: https://github.com/dotnet/roslyn/blob/main/src/Compilers/CSharp/Portable/CodeGen/EmitArrayInitializer.cs
 [createspan]: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.runtimehelpers.createspan?view=net-10.0
 [runtime-helpers]: https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/RuntimeHelpers.cs
+[ilverify-by-value]: https://github.com/dotnet/runtime/issues/129030

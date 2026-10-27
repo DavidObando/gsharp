@@ -908,12 +908,28 @@ existing `[N]T` a value and records #5225's fixture-only feasibility evidence.
 Section 9 now selects that production recommendation: one frozen SDK-owned
 compositional ABI for lengths 0-32, ordinary value/store boundaries, checked
 copying bridges and separate owner-retaining fixed views. The broader element
-domain, production import/lowering, promotion, strict IL and AOT remain unproved.
+domain, complete production lowering, promotion and release-target certification remain unproved.
 The maintainer approved the production contract on October 23, 2026.
 The small direct syntax footprint is not implementation evidence.
 Compiler-directed copies over `T[]` do not solve uninformed CLR generic or
 array-field struct copies. Implementation, certification and a breaking release
 remain pending; `.copy()` is not a prerequisite implementation.
+ADR-0210 F1 separately records product import and host NativeAOT witnesses.
+The maintainer approved a finite verification exception on October 24, 2026,
+for the two existing native-slice `AsSpan` false positives tracked by
+[#5244](https://github.com/DavidObando/gsharp/issues/5244) and
+[dotnet/runtime#129030](https://github.com/dotnet/runtime/issues/129030).
+The full verifier still runs; exact signature/closure certificates and raw
+reporting replace neither safety witnesses nor unmeasured target evidence.
+Success under that exception is not strict unsuppressed ILVerify success.
+A separately reviewed UTF-8 compiler witness uses that same narrow policy.
+Its complete image digest admits only three exact by-value returns over
+private static RVA data, with independent JIT/NativeAOT and negative controls.
+Raw verification still exits 2; approved 3 / unexpected 0 is not strict clean.
+Each certificate requires its entire diagnostic set, not a self-consistent subset.
+Future compiler outputs need separate review; this admits neither the full
+UTF-8 feature nor any Go-family profile.
+This does not change M0's `migrationReady: false`.
 `[]T` remains the CLR interop anchor. Native slice descriptors still share
 outer storage; fixed-array element value boundaries and views over inline
 storage need their own witnessed composition.

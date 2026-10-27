@@ -429,21 +429,23 @@ internal class AssemblyAttributeEmitter {
             }
             // Issue #1953 follow-up: pair each primary-ctor parameter name
             // with its backing field's metadata token (0 when no backing
-            // field is found, e.g. a property-backed parameter), so the
+            // field is found, including a computed property), so the
             // importer (ImportedTypeSymbol.BuildPrimaryConstructorParameters)
             // can recover the parameter's type via the exact field even when
             // a future lowering/mangling pass makes the parameter name differ
             // from the field name — falling back to name matching only when
             // no token was recorded.
-            let fieldsByName = type.Fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
+            let fieldsByName = type.Fields.ToDictionary((field FieldSymbol) -> field.Name, StringComparer.Ordinal)
             let parameterEntries = type.PrimaryConstructorParameters.Select(
                 (p ParameterSymbol) -> {
                     var token = 0
-                    if fieldsByName.TryGetValue(p.Name, out var backingField) &&
-                        this
-                        .cache
-                        .StructFieldDefs
-                        .TryGetValue(backingField, out var fieldHandle) {
+                    var backingField FieldSymbol? = nil
+                    let hasBacking = if type.UsesConstructorOwnedDataConstruction {
+                        ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, p.Name, out backingField)
+                    } else {
+                        fieldsByName.TryGetValue(p.Name, out backingField)
+                    }
+                    if hasBacking && this.cache.StructFieldDefs.TryGetValue(backingField!!, out var fieldHandle) {
                         token = MetadataTokens.GetToken(fieldHandle)
                     }
                     return "${p.Name}:${token.ToString(CultureInfo.InvariantCulture)}"
@@ -507,6 +509,21 @@ internal class AssemblyAttributeEmitter {
             }
             let entries = type
                 .Fields
+                .Concat(
+                if type.UsesConstructorOwnedDataConstruction {
+                    type
+                        .Properties
+                        .Where(
+                        (property PropertySymbol) -> property.BackingField != nil &&
+                            type
+                            .PrimaryConstructorParameters
+                            .Any((parameter ParameterSymbol) -> parameter.Name == property.Name)
+                    )
+                        .Select((property PropertySymbol) -> property.BackingField!!)
+                } else {
+                    Enumerable.Empty[FieldSymbol]()
+                }
+            )
                 .Select((f FieldSymbol) -> (Field: f, Kind: MagicCollectionZeroValue.ClassifyForMarker(f.Type)))
                 .Where((e(Field FieldSymbol, Kind string?)) -> e.Item2 != nil)
                 .Select((e(Field FieldSymbol, Kind string?)) -> "${e.Item1.Name}:${e.Item2}")

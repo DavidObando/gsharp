@@ -713,7 +713,15 @@ let second = compiled(1)
 before * 1000000 + first.Read() * 1000 + second.Read()`.Replace("KIND", kind, StringComparison.Ordinal))
         Assert.Empty(result.Diagnostics)
         Assert.Null(result.UnhandledException)
-        Assert.Equal(421754, result.Value)
+        // Data structs evaluate B and A, construct Marker, then evaluate Extra.
+        Assert.Equal(
+            if kind == "data struct" {
+                313646
+            } else {
+                421754
+            },
+            result.Value
+        )
     }
 
     @Theory
@@ -749,6 +757,14 @@ before * 1000000 + first.Read() * 1000 + second.Read() + first.A * 10 + second.A
             ))
         Assert.Empty(result.Diagnostics)
         Assert.Null(result.UnhandledException)
-        Assert.Equal(301629, result.Value)
+        // Data structs evaluate A, construct Marker, then evaluate Extra.
+        Assert.Equal(
+            if kind == "data struct" {
+                203520
+            } else {
+                301629
+            },
+            result.Value
+        )
     }
 }

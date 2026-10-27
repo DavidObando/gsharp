@@ -61,6 +61,11 @@ class BoundClrEventSubscriptionExpression : BoundExpression {
         get;
     }
 
+    internal prop IsNonVirtualBaseCall bool {
+        get;
+        init;
+    }
+
     @MemberNotNullWhen(true, "ConstrainedReceiverTypeParameter")
     prop IsConstrainedTypeParameterAccess bool -> ConstrainedReceiverTypeParameter != nil
 

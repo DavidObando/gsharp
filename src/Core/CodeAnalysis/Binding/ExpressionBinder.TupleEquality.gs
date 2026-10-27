@@ -63,7 +63,9 @@ internal partial class ExpressionBinder {
             rightReceiver,
             rightTuple,
             opLocation,
-            syntax.OperatorToken.Text
+            syntax.OperatorToken.Text,
+            left,
+            right
         )
         if comparison == nil {
             return BoundErrorExpression(nil)
@@ -99,7 +101,9 @@ internal partial class ExpressionBinder {
         rightReceiver BoundExpression,
         rightTuple TupleTypeSymbol,
         opLocation TextLocation,
-        opText string
+        opText string,
+        leftSource BoundExpression?,
+        rightSource BoundExpression?
     ) BoundExpression? {
         let foldKind = if opKind == SyntaxKind.EqualsEqualsToken {
             SyntaxKind.AmpersandAmpersandToken
@@ -116,7 +120,17 @@ internal partial class ExpressionBinder {
                 leftElement,
                 rightElement,
                 opLocation,
-                opText
+                opText,
+                if leftSource is BoundTupleLiteralExpression leftLiteral {
+                    leftLiteral.Elements[i]
+                } else {
+                    nil
+                },
+                if rightSource is BoundTupleLiteralExpression rightLiteral {
+                    rightLiteral.Elements[i]
+                } else {
+                    nil
+                }
             )
             if elementComparison == nil {
                 failed = true
@@ -150,7 +164,9 @@ internal partial class ExpressionBinder {
         left BoundExpression,
         right BoundExpression,
         opLocation TextLocation,
-        opText string
+        opText string,
+        leftSource BoundExpression?,
+        rightSource BoundExpression?
     ) BoundExpression? {
         var left = left
         var right = right
@@ -167,15 +183,34 @@ internal partial class ExpressionBinder {
             }
             // Nested elements are `ItemN` accesses on the outer temps, so
             // they are already single-evaluation — no further spilling.
-            return BindTupleElementwiseComparison(opKind, left, nestedLeft, right, nestedRight, opLocation, opText)
+            return BindTupleElementwiseComparison(
+                opKind,
+                left,
+                nestedLeft,
+                right,
+                nestedRight,
+                opLocation,
+                opText,
+                leftSource,
+                rightSource
+            )
         }
-        let boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
+        var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
             opKind,
             &left,
             &right,
             opLocation,
             opLocation
         )
+        if boundOperator == nil {
+            let constantLeft = PreserveTupleElementConstant(left, leftSource)
+            let constantRight = PreserveTupleElementConstant(right, rightSource)
+            if !object.ReferenceEquals(left, constantLeft) || !object.ReferenceEquals(right, constantRight) {
+                left = constantLeft
+                right = constantRight
+                boundOperator = BindBinaryOperatorWithNumericAdaptation(opKind, &left, &right, opLocation, opLocation)
+            }
+        }
         if boundOperator != nil {
             return BoundBinaryExpression(nil, left, boundOperator, right, binderCtx.IsCheckedContext)
         }
@@ -202,5 +237,17 @@ internal partial class ExpressionBinder {
         }
         Diagnostics.ReportUndefinedBinaryOperator(opLocation, opText, left.Type, right.Type)
         return nil
+    }
+
+    private func PreserveTupleElementConstant(element BoundExpression, source BoundExpression?) BoundExpression {
+        // Spilling removes constant identity. Recover only proven integer constants, never storage reads or effects (#5399).
+        if source != nil && IsIntegerType(source.Type) && !ConstantExpressionEvaluator.TryFindNativeInteger(
+            source,
+            out _
+        ) &&
+            ConstantExpressionEvaluator.TryEvaluate(source, out var value) && IsIntegerLiteralValue(value) {
+            return BoundLiteralExpression(source.Syntax, value, source.Type)
+        }
+        return element
     }
 }

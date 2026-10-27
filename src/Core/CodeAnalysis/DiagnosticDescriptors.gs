@@ -2577,6 +2577,21 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Native protocol contract: {0}."
     )
+    internal let FixedArrayContract DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0630",
+        DiagnosticSeverity.Error,
+        "Fixed-array ABI contract: {0}."
+    )
+    internal let NativeSpanType DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0631",
+        DiagnosticSeverity.Error,
+        "Native CLR span type: {0}."
+    )
+    internal let InvalidUtf8StringLiteral DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0632",
+        DiagnosticSeverity.Error,
+        "Invalid UTF-8 span literal: {0}"
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

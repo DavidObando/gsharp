@@ -358,6 +358,9 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol GetTypeByMetadataName(String fullyQualifiedMetadataName, System.Threading.CancellationToken cancellationToken = null)
   method public String get_AssemblyName()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> ApplySourceSuppressions(System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetBodyDiagnostics(System.Threading.CancellationToken cancellationToken = null)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDeclarationDiagnostics(System.Threading.CancellationToken cancellationToken = null)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(System.Threading.CancellationToken cancellationToken = null)
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> get_SyntaxTrees()
   method public System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`3<String, Byte[], Boolean>> get_EmbeddedResources()
   method public System.Collections.Immutable.ImmutableHashSet`1<String> get_PreprocessorSymbols()
@@ -729,6 +732,7 @@ type enum GSharp.Core.CodeAnalysis.Binding.BoundNodeKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind TypePattern = 82
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind UnaryExpression = 21
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind UserInstanceCallExpression = 36
+  field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind Utf8StringExpression = 103
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind VariableDeclaration = 1
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind VariableExpression = 19
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind YieldStatement = 93
@@ -1154,6 +1158,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind UnsignedShiftRightToken = 61
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind UsingKeyword = 119
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind UsingStatement = 208
+  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Utf8StringToken = 283
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind VarKeyword = 120
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind VarPattern = 192
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind VariableDeclaration = 162
@@ -4222,10 +4227,12 @@ type sealed class GSharp.Core.CodeAnalysis.SemanticModel : System.Object
   method public GSharp.Core.CodeAnalysis.Compilation.Compilation get_Compilation()
   method public GSharp.Core.CodeAnalysis.SymbolInfo GetSymbolInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Symbols.Symbol GetDeclaredSymbol(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
+  method public GSharp.Core.CodeAnalysis.Symbols.Symbol GetEnclosingSymbol(Int32 position, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree get_SyntaxTree()
   method public GSharp.Core.CodeAnalysis.TypeInfo GetReceiverTypeInfo(GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax expression, System.Threading.CancellationToken cancellationToken = null)
   method public GSharp.Core.CodeAnalysis.TypeInfo GetTypeInfo(GSharp.Core.CodeAnalysis.Syntax.SyntaxNode node, System.Threading.CancellationToken cancellationToken = null)
-  method public static System.Collections.Immutable.ImmutableArray`1<System.ValueTuple`2<GSharp.Core.CodeAnalysis.Syntax.SyntaxToken, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol>> GetTypeClauseSymbols(GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax typeClause, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(System.Threading.CancellationToken cancellationToken = null)
+  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.Symbol> LookupSymbols(Int32 position, String name = null, System.Threading.CancellationToken cancellationToken = null)
   property public GSharp.Core.CodeAnalysis.Compilation.Compilation Compilation { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SyntaxTree { get; }
 type sealed class GSharp.Core.CodeAnalysis.StructValue : System.Object
@@ -6375,6 +6382,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.GenericNameExpressionSyntax : 
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Identifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReadOnlyManagedModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReadOnlySliceModifier()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReadOnlySpanModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.TypeArgumentListSyntax get_TypeArgumentList()
   method public Void .ctor(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree syntaxTree, GSharp.Core.CodeAnalysis.Syntax.SyntaxToken identifier, GSharp.Core.CodeAnalysis.Syntax.TypeArgumentListSyntax typeArgumentList)
   method public virtual override GSharp.Core.CodeAnalysis.Syntax.SyntaxKind get_Kind()
@@ -6382,6 +6390,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.GenericNameExpressionSyntax : 
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Identifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ReadOnlyManagedModifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ReadOnlySliceModifier { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ReadOnlySpanModifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.TypeArgumentListSyntax TypeArgumentList { get; }
 type sealed class GSharp.Core.CodeAnalysis.Syntax.GoStatementSyntax : GSharp.Core.CodeAnalysis.Syntax.StatementSyntax
   method public GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax get_Expression()
@@ -7650,6 +7659,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax : GSharp.Core
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_QuestionToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReadOnlyManagedModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReadOnlySliceModifier()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ReadOnlySpanModifier()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SequenceCloseBracketToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SequenceKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_SequenceOpenBracketToken()
@@ -7753,6 +7763,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax : GSharp.Core
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken QuestionToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ReadOnlyManagedModifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ReadOnlySliceModifier { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ReadOnlySpanModifier { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SequenceCloseBracketToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SequenceKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken SequenceOpenBracketToken { get; }

@@ -190,9 +190,9 @@ internal shared class PInvokeBinder {
             // the tailored GS0349 "not blittable" message rather than the
             // generic GS0323. Pointers to structs (`*S`) likewise route
             // through the blittable check.
-            if IsStructOrPointerToStruct(parameter.Type, out var structType) && structType is {} nonNullStructType {
-                if !blittableDetector.IsBlittable(nonNullStructType) {
-                    diagnostics.ReportPInvokeNonBlittableType(typeLocation, nonNullStructType.Name)
+            if IsStructMarshallingType(parameter.Type) {
+                if !blittableDetector.IsBlittable(parameter.Type) {
+                    diagnostics.ReportPInvokeNonBlittableType(typeLocation, parameter.Type.Name)
                 }
                 continue
             }
@@ -222,15 +222,14 @@ internal shared class PInvokeBinder {
             } else if function.Type is FunctionPointerTypeSymbol {
                 // FNPTR return is accepted directly.
 
-            } else if IsStructOrPointerToStruct(function.Type, out var returnStruct) &&
-                returnStruct is {} nonNullReturnStruct {
-                if nonNullReturnStruct.IsClass {
+            } else if IsStructMarshallingType(function.Type) {
+                if !function.Type.IsValueType {
                     // ADR-0093 §4 — classes are not supported as P/Invoke
                     // return values; the user must declare a struct or
                     // return `nint` for opaque handles.
-                    diagnostics.ReportPInvokeClassReturnNotSupported(returnLocation, nonNullReturnStruct.Name)
-                } else if !blittableDetector.IsBlittable(nonNullReturnStruct) {
-                    diagnostics.ReportPInvokeNonBlittableType(returnLocation, nonNullReturnStruct.Name)
+                    diagnostics.ReportPInvokeClassReturnNotSupported(returnLocation, function.Type.Name)
+                } else if !blittableDetector.IsBlittable(function.Type) {
+                    diagnostics.ReportPInvokeNonBlittableType(returnLocation, function.Type.Name)
                 }
             } else if !IsSupportedMarshallingType(function.Type) {
                 diagnostics.ReportPInvokeUnsupportedMarshallingType(returnLocation, function.Type?.Name ?? "?")
@@ -300,7 +299,14 @@ internal shared class PInvokeBinder {
             // requested from an ad hoc context. Restrict to the strict
             // blittable-primitive set so `ref bool` / `ref char` do not
             // sneak through.
-            return IsBlittablePrimitive(byRef.PointeeType)
+            return IsBlittablePrimitive(byRef.PointeeType) ||
+                (
+                IsStructMarshallingType(byRef.PointeeType) &&
+                    byRef
+                    .PointeeType
+                    .IsValueType &&
+                    BlittableDetector().IsBlittable(byRef.PointeeType)
+            )
         }
         // ADR-0122 / issue #1014: an unmanaged raw pointer `*T` (CLR
         // ELEMENT_TYPE_PTR) marshals as a native pointer when its pointee is a
@@ -315,12 +321,12 @@ internal shared class PInvokeBinder {
             // gated at type-binding time (GS0398), so any surviving struct
             // pointee here is a legal blittable value struct.
             return TypeSymbol.IsVoidPointer(type) ||
-                IsBlittablePrimitive(pointer.PointeeType) ||
+                IsSupportedPrimitive(pointer.PointeeType) ||
                 pointer.PointeeType is PointerTypeSymbol ||
-                (pointer.PointeeType is StructSymbol and {IsClass: false}) ||
-                pointer
-                .PointeeType
-                ?.ClrType is {IsValueType: true}
+                BlittableDetector.IsBlittableValueStructPointee(pointer.PointeeType)
+        }
+        if IsStructMarshallingType(type) {
+            return BlittableDetector().IsBlittable(type)
         }
         if type is SliceTypeSymbol slice {
             return IsSupportedPrimitive(slice.ElementType)
@@ -403,33 +409,34 @@ internal shared class PInvokeBinder {
             (parameter.MarshalAsMetadata?.UnmanagedType is UnmanagedType.Bool or UnmanagedType.I1 or UnmanagedType.U1) {
             return
         }
-        if pointee is StructSymbol pointeeStruct {
-            if !blittableDetector.IsBlittable(pointeeStruct) {
-                diagnostics.ReportPInvokeNonBlittableType(typeLocation, pointeeStruct.Name)
+        if IsStructMarshallingType(pointee) && pointee.IsValueType {
+            if !blittableDetector.IsBlittable(pointee) {
+                diagnostics.ReportPInvokeNonBlittableType(typeLocation, pointee.Name)
             }
             return
         }
         diagnostics.ReportPInvokeNonBlittableByRefPointee(typeLocation, parameter.Name, pointee.Name)
     }
 
-    /// Returns `true` when [`type`](paramref) is either a user
-    /// (cref:StructSymbol) directly, or a pointer (`*S`) to
-    /// one. The matched struct symbol is returned via
-    /// [`structSymbol`](paramref). ADR-0093 / issue #759: this
-    /// classifier separates the struct / class marshalling path from the
-    /// generic (cref:IsSupportedMarshallingType) set so the
-    /// blittability check can produce a tailored diagnostic.
-    private func IsStructOrPointerToStruct(type TypeSymbol, out structSymbol StructSymbol?) bool {
-        if type is StructSymbol direct {
-            structSymbol = direct
-            return true
+    /// Recognizes source aggregates and imported value structs before the shared blittability check.
+    /// @param type The signature type.
+    /// @returns Whether the type uses aggregate marshalling.
+    private func IsStructMarshallingType(type TypeSymbol) bool {
+        // CLR aggregate marshalling does not support generic types, even when their fields are blittable.
+        if type.ClrType?.IsGenericType == true || !type.ConstructedTypeArguments.IsDefaultOrEmpty {
+            return false
         }
-        if type is ByRefTypeSymbol byRef && byRef.PointeeType is StructSymbol pointee {
-            structSymbol = pointee
-            return true
+        if type is StructSymbol source {
+            return source
+                .TypeParameters
+                .IsDefaultOrEmpty &&
+                source
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                StructSymbol
+                .CollectEnclosingTypeParameters(source).IsDefaultOrEmpty
         }
-        structSymbol = nil
-        return false
+        return BlittableDetector.IsValueStruct(type)
     }
 
     /// ADR-0086 §2 / issue #1208: returns `true` when
@@ -903,7 +910,7 @@ internal shared class PInvokeBinder {
                 return IsIntegerOrNativeInteger(paramType)
             }
             case UnmanagedType.Struct {
-                return paramType is StructSymbol
+                return IsStructMarshallingType(paramType)
             }
             case UnmanagedType.LPArray, UnmanagedType.SafeArray, UnmanagedType.ByValArray {
                 return paramType is SliceTypeSymbol

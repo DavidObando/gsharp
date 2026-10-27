@@ -1338,8 +1338,12 @@ Options:
                             }
                         }
                         case "warnaserror-" {
-                            for id in ParseIdList(value!!) {
-                                result.WarnNotAsErrorIds.Add(id)
+                            if string.IsNullOrEmpty(value) {
+                                result.TreatAllWarningsAsErrors = false
+                            } else {
+                                for id in ParseIdList(value) {
+                                    result.WarnNotAsErrorIds.Add(id)
+                                }
                             }
                         }
                         case "optimize" {

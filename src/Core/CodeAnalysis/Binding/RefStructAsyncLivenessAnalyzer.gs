@@ -5,11 +5,15 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Linq
 
 /// Issue #2350: replaces the coarse, syntax-only rejection of a by-ref-like
 /// (`ref struct`) local declared anywhere in an async function (the
@@ -64,6 +68,71 @@ import System.Collections.Immutable
 /// *through* an alias (`alias = 42`) is a use of the alias, not a kill
 /// of it, unlike overwriting a by-ref-like value local outright.
 internal shared class RefStructAsyncLivenessAnalyzer {
+    /// Completes deferred operand checks after inference for every function body and initializer root.
+    /// @param functions The rewritten function bodies in source order.
+    /// @param statement The complete top-level body, including library initializers.
+    /// @param structs The user and synthesized types.
+    /// @param interfaces The user interfaces.
+    /// @param diagnostics Existing and new compilation diagnostics.
+    /// @param references The compilation references used by async preparation.
+    func AnalyzeProgram(
+        functions ImmutableArray[KeyValuePair[FunctionSymbol, BoundBlockStatement]],
+        statement BoundBlockStatement,
+        structs ImmutableArray[StructSymbol],
+        interfaces ImmutableArray[InterfaceSymbol],
+        diagnostics ImmutableArray[Diagnostic].Builder,
+        references ReferenceResolver?
+    ) {
+        let bag = DiagnosticBag()
+        bag.AddRange(diagnostics)
+        let existingCount = bag.Count
+        for (function, body) in functions {
+            bag.SuppressDuplicateDiagnostics(
+                () -> {
+                    Analyze(body.PreEmitAnalysisBody ?? body, function, bag, references)
+                    return 0
+                }
+            )
+        }
+        let finder = AsyncLambdaScopeFinder(bag, references, includeOperandTemporaries: true)
+        let VisitRoot = (root BoundNode?) -> bag.SuppressDuplicateDiagnostics(
+            () -> {
+                finder.Visit(root)
+                return 0
+            }
+        )
+        VisitRoot(statement)
+        for type in structs {
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.InstanceFieldInitializers) {
+                VisitRoot(initializer)
+            }
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.StaticFieldInitializers) {
+                VisitRoot(initializer)
+            }
+            for initializer in type.StaticInitializerStatements {
+                VisitRoot(initializer)
+            }
+            if type.BaseConstructorInitializer is {} initializer {
+                for argument in initializer.Arguments {
+                    VisitRoot(argument)
+                }
+            }
+            for constructor in type.ExplicitConstructors {
+                if constructor.BaseInitializer is {} initializer {
+                    for argument in initializer.Arguments {
+                        VisitRoot(argument)
+                    }
+                }
+            }
+        }
+        for type in interfaces {
+            for (_, initializer) in BoundProgramOrder.FieldInitializers(type.StaticFieldInitializers) {
+                VisitRoot(initializer)
+            }
+        }
+        diagnostics.AddRange(bag.Skip(existingCount))
+    }
+
     private class ReportingContext {
         init(diagnostics DiagnosticBag?) {
             Diagnostics = diagnostics
@@ -98,6 +167,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
         prop Locals HashSet[VariableSymbol] {
             get;
+        }
+
+        protected override func VisitBlockExpression(node BoundBlockExpression) {
+            // Expression-scoped locals cannot cross suspension outside their own block.
+            if AsyncBoundTreeQueries.HasAwait(node) || BodyFacts.ContainsYield(BoundExpressionStatement(nil, node)) {
+                base.VisitBlockExpression(node)
+            }
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
@@ -161,9 +237,13 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     /// further-nested async/iterator lambdas/local functions.
     private class AsyncLambdaScopeFinder : BoundTreeWalker {
         private let diagnostics DiagnosticBag
+        private let references ReferenceResolver?
+        private let includeOperandTemporaries bool
 
-        init(diagnostics DiagnosticBag) {
+        init(diagnostics DiagnosticBag, references ReferenceResolver?, includeOperandTemporaries bool) {
             this.diagnostics = diagnostics
+            this.references = references
+            this.includeOperandTemporaries = includeOperandTemporaries
         }
 
         override func VisitExpression(node BoundExpression?) {
@@ -181,7 +261,8 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 // so ControlFlowGraph sees the same goto/label shape the
                 // emitter eventually will; this does not replace the node's
                 // real Body anywhere.
-                let loweredLambdaBody = BodyFacts.LowerLambdaBody(literal.Body)
+                let loweredLambdaBody = literal.LoweredBody ?? BodyFacts.LowerLambdaBody(literal.Body)
+                literal.LoweredBody = loweredLambdaBody
                 // Issue #4222: also recurse into an iterator-returning
                 // function literal, not just an async one, so a nested
                 // iterator local function/lambda gets its own native
@@ -191,7 +272,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     RefStructAsyncLivenessAnalyzer.AnalyzeScope(
                         loweredLambdaBody,
                         diagnostics,
-                        collectByRefLikeLocals: literal.Function.IsAsyncOrSuspending
+                        collectByRefLikeLocals: literal.Function.IsAsyncOrSuspending,
+                        references,
+                        includeOperandTemporaries
                     )
                 }
                 VisitStatement(loweredLambdaBody)
@@ -215,7 +298,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     /// @param body The bound-and-lowered body of [`enclosing`](paramref).
     /// @param enclosing The function/method/accessor whose body is being checked.
     /// @param diagnostics The diagnostic bag to report GS0219/GS0258 violations to.
-    func Analyze(body BoundBlockStatement?, enclosing FunctionSymbol?, diagnostics DiagnosticBag?) {
+    /// @param references The compilation references used by the actual async preparation.
+    /// @param includeOperandTemporaries Whether whole-program call rewriting has completed.
+    func Analyze(
+        body BoundBlockStatement?,
+        enclosing FunctionSymbol?,
+        diagnostics DiagnosticBag?,
+        references ReferenceResolver?,
+        includeOperandTemporaries bool = true
+    ) {
         if body == nil || enclosing == nil || diagnostics == nil {
             return
         }
@@ -224,9 +315,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             // plain iterator still blanket-rejects them elsewhere) — only
             // native ref-alias locals (#4222) are interesting in an iterator
             // that isn't also async.
-            AnalyzeScope(body, diagnostics, collectByRefLikeLocals: enclosing.IsAsyncOrSuspending)
+            AnalyzeScope(
+                body,
+                diagnostics,
+                collectByRefLikeLocals: enclosing.IsAsyncOrSuspending,
+                references,
+                includeOperandTemporaries
+            )
         }
-        let finder = AsyncLambdaScopeFinder(diagnostics)
+        let finder = AsyncLambdaScopeFinder(diagnostics, references, includeOperandTemporaries)
         finder.VisitStatement(body)
     }
 
@@ -236,22 +333,49 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     /// (non-async, non-iterator) lambda are excluded automatically, since
     /// (cref:InterestingLocalCollector) does not recurse into
     /// function-literal bodies.
-    private func AnalyzeScope(body BoundBlockStatement, diagnostics DiagnosticBag, collectByRefLikeLocals bool) {
+    private func AnalyzeScope(
+        body BoundBlockStatement,
+        diagnostics DiagnosticBag,
+        collectByRefLikeLocals bool,
+        references ReferenceResolver?,
+        includeOperandTemporaries bool
+    ) {
         let collector = InterestingLocalCollector(collectByRefLikeLocals)
         collector.VisitStatement(body)
-        if collector.Locals.Count == 0 {
-            // Nothing interesting declared directly in this scope — nothing
-            // to check (whether or not it contains nested async/iterator
-            // lambdas is handled separately by the caller).
+        let reporting = ReportingContext(diagnostics)
+        if collector.Locals.Count != 0 {
+            AnalyzeRegion(
+                body,
+                liveOutOfRegion: HashSet[VariableSymbol](),
+                ambientLive: HashSet[VariableSymbol](),
+                collector.Locals,
+                reporting
+            )
+        }
+        if !collectByRefLikeLocals || !includeOperandTemporaries {
             return
         }
-        AnalyzeRegion(
-            body,
-            liveOutOfRegion: HashSet[VariableSymbol](),
-            ambientLive: HashSet[VariableSymbol](),
-            collector.Locals,
-            ReportingContext(diagnostics)
-        )
+        // Preserve source-local rules and prove the actual explicit and implicit suspension representation.
+        try {
+            let preparationReferences = references ?? ReferenceResolver.Default()
+            let handlerLowered = InterpolatedStringHandlerLowerer.LowerBody(body, preparationReferences)
+            let spilledBody = AsyncStateMachineRewriter.PrepareBody(handlerLowered, preparationReferences)
+            let spilledCollector = InterestingLocalCollector(collectByRefLikeLocals: true)
+            spilledCollector.VisitStatement(spilledBody)
+            spilledCollector.Locals.ExceptWith(reporting.Crossing)
+            if spilledCollector.Locals.Count == 0 {
+                return
+            }
+            AnalyzeRegion(
+                spilledBody,
+                liveOutOfRegion: HashSet[VariableSymbol](),
+                ambientLive: HashSet[VariableSymbol](),
+                spilledCollector.Locals,
+                ReportingContext(diagnostics)
+            )
+        } catch (ex EmitDiagnosticException) {
+            diagnostics.Report(Compilation.CreateInternalErrorDiagnostic(ex))
+        }
     }
 
     internal func FindLocalsLiveAcrossSuspension(body BoundBlockStatement, locals IEnumerable[VariableSymbol]) HashSet[
@@ -628,6 +752,19 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         if diagnostics == nil {
             return
         }
+        // Synthetic statements stay hidden to stepping; their await retains the diagnostic source.
+        let suspensionLocation = if owningStatement is BoundVariableDeclaration declaration {
+            AsyncBoundTreeQueries.FindFirstAwaitSyntax(declaration.Initializer)?.Location ?? default(TextLocation)
+        } else if owningStatement is BoundExpressionStatement expression {
+            AsyncBoundTreeQueries.FindFirstAwaitSyntax(expression.Expression)?.Location ?? default(TextLocation)
+        } else {
+            default(TextLocation)
+        }
+        let fallbackLocation = if suspensionLocation.Text != nil {
+            suspensionLocation
+        } else {
+            owningStatement?.Syntax?.Location ?? default(TextLocation)
+        }
         for v in live {
             if object.ReferenceEquals(v, excludedSelfKill) {
                 continue
@@ -637,7 +774,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             if bag == nil {
                 continue
             }
-            let location = v.DeclaringSyntax?.Location ?? owningStatement?.Syntax?.Location ?? default(TextLocation)
+            let location = v.DeclaringSyntax?.Location ?? fallbackLocation
             let suspensionContext = if suspensionKeyword == "yield" {
                 "an iterator"
             } else {
@@ -660,10 +797,16 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     "a local live across $article '$suspensionKeyword' suspension point in $suspensionContext (it would require hoisting a managed pointer into the state machine)"
                 )
             } else {
+                // Inference can renumber synthesized locals; keep their diagnostics tied to source, not spill ordinals.
+                let subject = if v.DeclaringSyntax == nil {
+                    "compiler-generated temporary"
+                } else {
+                    "variable '${v.Name}'"
+                }
                 bag.ReportByRefLikeEscape(
                     location,
                     v.Type,
-                    "be declared as a local in $suspensionContext and remain live across $article '$suspensionKeyword' suspension point (variable '${v.Name}'); restructure the code so its value is no longer needed after the '$suspensionKeyword'"
+                    "be declared as a local in $suspensionContext and remain live across $article '$suspensionKeyword' suspension point ($subject); restructure the code so its value is no longer needed after the '$suspensionKeyword'"
                 )
             }
         }

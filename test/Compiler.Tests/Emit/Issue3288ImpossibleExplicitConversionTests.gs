@@ -113,6 +113,139 @@ Console.WriteLine(int32(nullableValue))`)
     }
 
     @Fact
+    func NullableNumericCasts_ExtractOnceBeforeConverting() {
+        let result = CompileAndRun(`package Issue5400
+import System
+
+func Widen(value uint32?) uint64 -> cast[uint64](value)
+func Narrow(value uint64?) uint32 -> uint32(value)
+func Signed(value int32?) uint64 -> cast[uint64](value)
+func ToFloat(value uint64?) float64 -> cast[float64](value)
+func FromDecimal(value decimal?) int32 -> cast[int32](value)
+func Checked(value uint64?) uint32 -> checked(cast[uint32](value))
+func Lift(value uint32?) uint64? -> cast[uint64?](value)
+func Wrap(value uint32) uint64? -> cast[uint64?](value)
+
+class Counter {
+    var Reads int32
+    func Read(value uint32?) uint32? {
+        Reads++
+        return value
+    }
+}
+
+Console.WriteLine(Widen(0u))
+Console.WriteLine(Widen(2147483648))
+Console.WriteLine(Widen(4294967295))
+Console.WriteLine(Narrow(4294967296ul))
+Console.WriteLine(Signed(-1))
+Console.WriteLine(ToFloat(18446744073709551615) > 0)
+Console.WriteLine(FromDecimal(19.75m))
+Console.WriteLine(Checked(4294967295ul))
+try {
+    Console.WriteLine(Checked(4294967296ul))
+} catch (e OverflowException) {
+    Console.WriteLine("overflow")
+}
+try {
+    Console.WriteLine(Checked(nil))
+} catch (e InvalidOperationException) {
+    Console.WriteLine("missing before overflow")
+}
+Console.WriteLine(Lift(nil) == nil)
+Console.WriteLine(Lift(4294967295)!!)
+Console.WriteLine(Wrap(4294967295)!!)
+let counter = Counter()
+Console.WriteLine(cast[uint64](counter.Read(4294967295)))
+Console.WriteLine(counter.Reads)
+try {
+    Console.WriteLine(cast[uint64](counter.Read(nil)))
+} catch (e InvalidOperationException) {
+    Console.WriteLine("missing")
+}
+Console.WriteLine(counter.Reads)`)
+        Assert.Equal(0, result.CompileExitCode)
+        Assert.Equal(0, result.RunExitCode)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "0",
+                "2147483648",
+                "4294967295",
+                "0",
+                "18446744073709551615",
+                "True",
+                "19",
+                "4294967295",
+                "overflow",
+                "missing before overflow",
+                "True",
+                "4294967295",
+                "4294967295",
+                "4294967295",
+                "1",
+                "missing",
+                "2"
+            ) +
+                Environment.NewLine,
+            result.Stdout
+        )
+        Assert.Equal(string.Empty, result.Stderr)
+    }
+
+    @Theory
+    @InlineData("uint32", "uint64")
+    @InlineData("uint64", "uint32")
+    func NullableNumericConversions_RequireExplicitConversionAtOperand(from string, to string) {
+        let source = "func Invalid(value ${from}?) $to -> value"
+        let tree = SyntaxTree.Parse(SourceText.From(source, "Issue5400.gs"))
+        using let output = MemoryStream()
+        let result = Compilation(tree).Emit(output)
+        Assert.False(result.Success)
+        Assert.Equal(0L, output.Length)
+        let diagnostic = Assert.Single(result.Diagnostics.Where((item Diagnostic) -> item.IsError))
+        Assert.Equal("GS0156", diagnostic.Id)
+        Assert.Equal(
+            "Cannot convert type '${from}?' to '$to'. An explicit conversion exists (are you missing a cast?)",
+            diagnostic.Message
+        )
+        Assert.Equal(0, diagnostic.Location.StartLine)
+        Assert.Equal(38, diagnostic.Location.StartCharacter)
+        Assert.Equal(0, diagnostic.Location.EndLine)
+        Assert.Equal(43, diagnostic.Location.EndCharacter)
+        Assert.Equal("value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func NullableNumericCasts_InExpressionTrees_PreserveConversionAndMissingValueException() {
+        let result = CompileAndRun(`package Issue5400ExpressionTree
+import System
+import System.Linq.Expressions
+
+let tree Expression[Func[uint32?, uint64]] = (value uint32?) -> cast[uint64](value)
+let convert = tree.Compile()
+Console.WriteLine(tree.Body.NodeType)
+Console.WriteLine(convert(4294967295))
+try {
+    Console.WriteLine(convert(nil))
+} catch (e InvalidOperationException) {
+    Console.WriteLine("missing")
+}
+let lifted Expression[Func[uint32?, uint64?]] = (value uint32?) -> cast[uint64?](value)
+let lift = lifted.Compile()
+Console.WriteLine(lift(nil) == nil)
+Console.WriteLine(lift(4294967295)!!)`)
+        Assert.Equal(0, result.CompileExitCode)
+        Assert.Equal(0, result.RunExitCode)
+        Assert.Equal(
+            string.Join(Environment.NewLine, "Convert", "4294967295", "missing", "True", "4294967295") +
+                Environment.NewLine,
+            result.Stdout
+        )
+        Assert.Equal(string.Empty, result.Stderr)
+    }
+
+    @Fact
     func LegalConversionLattice_CompilesAndRuns() {
         let result = CompileAndRun(`package Issue3288Controls
 import System

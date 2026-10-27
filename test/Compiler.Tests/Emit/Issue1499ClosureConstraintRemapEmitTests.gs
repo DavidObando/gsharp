@@ -9,6 +9,9 @@ import GSharp.Compiler.Tests
 import System
 import System.Diagnostics
 import System.IO
+import System.Linq
+import System.Reflection
+import System.Text
 import Xunit
 
 /// Issue #1499 — when a lambda is reified into a GENERIC synthesized closure /
@@ -34,6 +37,124 @@ import Xunit
 /// Each facet ilverifies clean and runs; the controls (unconstrained captured
 /// TP, non-generic user-interface constraint) must not regress.
 open class Issue1499ClosureConstraintRemapEmitTests {
+    @Theory
+    @InlineData(true, false, "A, R ICollection[A]", "int, List<int>", "A,R")
+    @InlineData(false, false, "A, R ICollection[A]", "int, List<int>", "A,R")
+    @InlineData(false, false, "A, B ICollection[A], R B", "int, List<int>, List<int>", "A,B,R")
+    @InlineData(false, true, "R ICollection[A], A", "List<int>, int", "Owner,R,A")
+    func CapturedConstraintDependenciesBelongToTheGeneratedType(
+        expression bool,
+        nested bool,
+        parameters string,
+        arguments string,
+        expectedParameters string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let result = if expression {
+            "Expression[Func[int32]] -> () -> value.Count"
+        } else {
+            "() -> R -> () -> value"
+        }
+        let owner = if nested {
+            "Reader[Owner]"
+        } else {
+            "Reader"
+        }
+        let library = fixture.Compile(`package CapturedReader
+import System.Collections.Generic
+import System.Linq.Expressions
+import System
+public class OWNER {
+    shared {
+        public func Read[PARAMETERS](value R) RESULT
+    }
+}`.Replace("OWNER", owner).Replace("PARAMETERS", parameters).Replace("RESULT", result), "CapturedReader", false)
+        VerifyStrict(library)
+        let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        using let metadata = MetadataLoadContext(
+            PathAssemblyResolver(Directory.GetFiles(runtimeDirectory, "*.dll").Append(library)),
+            "System.Private.CoreLib"
+        )
+        let box = Assert.Single(
+            metadata.LoadFromAssemblyPath(library).GetTypes().Where((type Type) -> type.Name.Contains("__Box_"))
+        )
+        let cloned = box.GetGenericArguments()
+        Assert.Equal(expectedParameters.Split(','), cloned.Select((type Type) -> type.Name).ToArray())
+        let captured = cloned.Single((type Type) -> type.Name == "R")
+        Assert.Equal(captured, box.GetField("Value")!!.FieldType)
+        for parameter in cloned {
+            Assert.Equal(box, parameter.DeclaringType)
+            Assert.Null(parameter.DeclaringMethod)
+            if parameter.Name == "R" || parameter.Name == "B" {
+                let constraint = Assert.Single(parameter.GetGenericParameterConstraints())
+                let dependency = if constraint.IsGenericParameter {
+                    constraint
+                } else {
+                    Assert.Single(constraint.GetGenericArguments())
+                }
+                Assert.Equal(box, dependency.DeclaringType)
+                Assert.Null(dependency.DeclaringMethod)
+                Assert.Equal(
+                    if parameter.Name == "R" && expectedParameters.Contains("B") {
+                        "B"
+                    } else {
+                        "A"
+                    },
+                    dependency.Name
+                )
+            } else {
+                Assert.Empty(parameter.GetGenericParameterConstraints())
+            }
+        }
+        let reader = if nested {
+            "Reader<string>"
+        } else {
+            "Reader"
+        }
+        let observe = if expression {
+            `var read = READER.Read<ARGUMENTS>(values).Compile();
+return read() + "," + AddAndRead(values, read);`
+        } else {
+            `var read = READER.Read<ARGUMENTS>(values);
+var first = read();
+values.Add(3);
+return ReferenceEquals(values, first) + "," + read().Count;`
+        }
+        let consumer = fixture.CompileCSharp(`using System;
+using System.Collections.Generic;
+using CapturedReader;
+namespace CaptureConsumer;
+public static class Consumer {
+    public static string Run() {
+        var values = new List<int> { 1, 2 };
+        OBSERVE
+    }
+    private static int AddAndRead(List<int> values, Func<int> read) {
+        values.Add(3);
+        return read();
+    }
+}`.Replace("OBSERVE", observe).Replace("READER", reader).Replace("ARGUMENTS", arguments), "Consumer", library)
+        VerifyStrict(consumer, library)
+        let app = fixture.Compile(
+            "import System\nimport CaptureConsumer\nConsole.Write(Consumer.Run())",
+            "CaptureApp",
+            true,
+            "/reference:" + consumer,
+            "/reference:" + library
+        )
+        VerifyStrict(app, consumer, library)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if expression {
+                    "2,3"
+                } else {
+                    "True,3"
+                }
+            ),
+            fixture.RunBytes(app)
+        )
+    }
+
     @Fact
     func EndToEnd_SelfReferentialIComparableConstraint_ConstrainedCallInClosure_Runs() {
         let source = `package Issue1499Cmp
@@ -136,6 +257,19 @@ func Main() {
     }
 
     shared {
+        private func VerifyStrict(path string, references ...string) {
+            var report = string.Empty
+            IlVerifier.Verify(
+                path,
+                references,
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1499_exe_").FullName
             try {

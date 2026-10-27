@@ -46,6 +46,22 @@ open class SemanticLookupSpanFallbackTests {
     }
 
     @Fact
+    func Resolve_StaleLocalAndParameterTokens_RecoverThroughTheMatchingTree() {
+        // A local and a parameter have no declaration-token entry: their stale tokens resolve
+        // through the compilation's tree of the same file and text, not to a same-named global.
+        let (compilation, staleTree) = BuildDesyncedCompilation()
+        let parameterUse SyntaxToken? = FindLastIdentifier(staleTree, "prefix")
+        let localUse SyntaxToken? = FindLastIdentifier(staleTree, "greeting")
+        let parameter Symbol? = SemanticLookup.ResolveSymbol(compilation, parameterUse)
+        let local Symbol? = SemanticLookup.ResolveSymbol(compilation, localUse)
+        Assert.IsType[ParameterSymbol](parameter)
+        Assert.IsType[LocalVariableSymbol](local)
+        // The declaring identifier of the local is not visible at its own position.
+        let declaration SyntaxToken? = FindFirstIdentifier(staleTree, "greeting")
+        Assert.IsType[LocalVariableSymbol](SemanticLookup.ResolveSymbol(compilation, declaration))
+    }
+
+    @Fact
     func Resolve_FreshMemberToken_StillResolvesByReference() {
         let sourceText = SourceText.From(Source, FilePath)
         let tree = SyntaxTree.Parse(sourceText)
@@ -65,6 +81,11 @@ open class SemanticLookupSpanFallbackTests {
             "\n" +
             "    func ToString() string {\n" +
             "        return \"Name: $${Name}\"\n" +
+            "    }\n" +
+            "\n" +
+            "    func Greet(prefix string) string {\n" +
+            "        let greeting = prefix + Name\n" +
+            "        return greeting\n" +
             "    }\n" +
             "}\n"
         private const FilePath string = "/virtual/Program.gs"
@@ -88,6 +109,16 @@ open class SemanticLookupSpanFallbackTests {
                 }
             }
             return nil
+        }
+
+        private func FindLastIdentifier(tree SyntaxTree, text string) SyntaxToken? {
+            var found SyntaxToken? = nil
+            for token in EnumerateTokens(tree.Root) {
+                if token.Kind == SyntaxKind.IdentifierToken && token.Text == text {
+                    found = token
+                }
+            }
+            return found
         }
 
         private func EnumerateTokens(node SyntaxNode) sequence[SyntaxToken] {

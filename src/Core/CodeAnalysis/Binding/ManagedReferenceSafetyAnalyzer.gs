@@ -45,6 +45,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     ]()
     private var initializerOwner StructSymbol?
     private var initializerAnchor SyntaxNode?
+    private var expressionAnchor SyntaxNode?
     private var overwrittenInitializerResult BoundExpression?
     private var analyzingStateMachine bool
     private var analyzingNativeSupport bool
@@ -59,6 +60,17 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
     }
 
     override func VisitExpression(node BoundExpression?) {
+        // Imported initializer trees are shared; do not stamp a consumer's anchor on them.
+        let previousAnchor = this.expressionAnchor
+        this.expressionAnchor = node?.Syntax ?? previousAnchor
+        try {
+            this.AnalyzeExpression(node)
+        } finally {
+            this.expressionAnchor = previousAnchor
+        }
+    }
+
+    private func AnalyzeExpression(node BoundExpression?) {
         if node != nil && !this.analyzingNativeSupport {
             NativeProtocolSafety.ValidateExpression(node, this.diagnostics, this.initializerAnchor)
         }
@@ -75,6 +87,20 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
                 )
             }
             case literal is BoundStructLiteralExpression {
+                if literal.CallsDataConstructor {
+                    BoundStructLiteralExpression.ValidateDataConstructor(
+                        literal.StructType,
+                        this.diagnostics,
+                        this.initializerAnchor ?? literal.Syntax ?? this.expressionAnchor,
+                        nil,
+                        canAccessInternal: false,
+                        checkAccessibility: false,
+                        suppliedPrimaryInputs: literal.Initializers.Select(
+                            (initializer BoundFieldInitializer) -> initializer.MemberName
+                        )
+                    )
+                }
+                literal.ValidateInitializerWrites(this.diagnostics, this.initializerAnchor ?? this.expressionAnchor)
                 if literal.CopySource == nil {
                     this.CheckConstruction(
                         literal.StructType,
@@ -394,6 +420,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         // not the primary initialization path. Its uses are checked below with
         // zero provenance, without crediting ordinary declared initializers.
         if (type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass) ||
+            type.HasSynthesizedDataConstructor ||
             (
             type.NeedsSynthesizedValueStructDefaultCtor &&
                 !type.ValueStructDefaultCtorIsZeroInitialization &&
@@ -578,6 +605,12 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             )
             return
         }
+        if type.ClrType != nil &&
+            node is BoundStructLiteralExpression{CallsDataConstructor: true} &&
+            type.GetDataConstructionConstructor() != nil {
+            // Imported constructor bodies own their fields. This traversal still checks caller arguments and later stores.
+            return
+        }
         let explicitPath = explicitConstructor ||
             (
             type.ExplicitConstructors.Any((c ConstructorSymbol) -> c.Parameters.IsEmpty) &&
@@ -615,6 +648,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         if explicitPath ||
             type.IsClass ||
             callsPrimary ||
+            node is BoundStructLiteralExpression{CallsDataConstructor: true} ||
             (type.NeedsSynthesizedValueStructDefaultCtor && !type.ValueStructDefaultCtorIsZeroInitialization) {
             for field in type.Fields {
                 let declaredField FieldSymbol? = type.GetDefinitionField(field)

@@ -26,54 +26,7 @@ import System.Threading
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
     private func EmitConstructorCall(call BoundConstructorCallExpression) {
-        // ADR-0087 §3 R3+R4: when the constructed type is a user-declared
-        // generic type, every newobj must reference the ctor via a
-        // MemberRef parented at the TypeSpec for the construction. The
-        // R0/R1 erasure-era box at TypeParameterSymbol parameter slots
-        // is dropped — the parameter's signature is `!0` and resolves
-        // through the parent TypeSpec to the concrete arg type.
-        let isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StructType)
-        var ctorHandle EntityHandle
-        if call.SelectedConstructor != nil &&
-            this
-            .outer
-            .cache
-            .ExplicitCtorHandles
-            .ContainsKey(call.SelectedConstructor) {
-            // ADR-0063 §9: bind-time overload resolution picked this exact
-            // ctor; emit a newobj against its specific MethodDef (or a
-            // MemberRef on the constructed TypeSpec for a generic type).
-            ctorHandle = if isGeneric {
-                this.outer.userTokens.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
-            } else {
-                this.outer.cache.ExplicitCtorHandles[call.SelectedConstructor]
-            }
-        } else if this.outer.cache.ClassPrimaryCtorHandles.ContainsKey(call.StructType.Definition ?? call.StructType) {
-            ctorHandle = if isGeneric {
-                this.outer.userTokens.ResolveUserCtorTokenForPrimary(call.StructType)
-            } else {
-                this.outer.cache.ClassPrimaryCtorHandles[call.StructType]
-            }
-        } else if call
-            .Arguments
-            .IsDefaultOrEmpty &&
-            this
-            .outer
-            .cache
-            .ClassCtorHandles
-            .ContainsKey(call.StructType.Definition ?? call.StructType) {
-            // Issue #523: synthesized classes (e.g. capture boxes) declare
-            // no primary constructor; for a zero-argument newobj we fall
-            // back to the parameterless default ctor that PHASE B emitted
-            // into classCtorHandles.
-            ctorHandle = if isGeneric {
-                this.outer.userTokens.ResolveUserCtorTokenForDefault(call.StructType)
-            } else {
-                this.outer.cache.ClassCtorHandles[call.StructType]
-            }
-        } else {
-            throw InvalidOperationException("Type '${call.StructType.Name}' has no emitted primary ctor.")
-        }
+        let ctorHandle = this.outer.userTokens.ResolveUserCtorToken(call)
         for var i = 0; i < call.Arguments.Length; i++ {
             let arg = call.Arguments[i]
             this.EmitExpression(arg)

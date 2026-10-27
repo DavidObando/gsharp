@@ -109,6 +109,7 @@ shared class Highlight {
             case SyntaxKind.NumberToken: Tokens.Number
             case SyntaxKind.StringToken: Tokens.StringLit
             case SyntaxKind.ByteStringToken: Tokens.StringLit
+            case SyntaxKind.Utf8StringToken: Tokens.StringLit
             case SyntaxKind.CommentToken: Tokens.Comment
             case SyntaxKind.IdentifierToken: Tokens.Identifier
             default: Tokens.TextTertiary

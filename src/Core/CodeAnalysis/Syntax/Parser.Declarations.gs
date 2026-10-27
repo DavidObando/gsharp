@@ -1517,10 +1517,7 @@ open partial class Parser {
                 sharedInitializers.Add(StaticInitializerBlockSyntax(syntaxTree, initKeyword, initBody))
             } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind
                 .OpenParenthesisToken {
-                // Issue #306 / #2766: standalone user-defined constructor
-                // `init(params) [: base(args)] { body }`. Plain structs admit
-                // constructors too; data/inline structs retain their canonical
-                // primary-constructor-only shape.
+                // ADR-0214 gives data structs the existing authored constructor syntax.
                 if memberOpenModifier != nil || memberOverrideModifier != nil {
                     // The enclosing `if` tests these same modifiers for non-null,
                     // so the coalesce always yields one of them.
@@ -1535,9 +1532,7 @@ open partial class Parser {
                     )
                 }
                 if structOrClassKeyword.Kind != SyntaxKind.ClassKeyword &&
-                    (
-                    structOrClassKeyword.Kind != SyntaxKind.StructKeyword || dataKeyword != nil || inlineKeyword != nil
-                ) {
+                    (structOrClassKeyword.Kind != SyntaxKind.StructKeyword || inlineKeyword != nil) {
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken)
                 }
                 let constructor = ParseConstructorDeclaration(memberAccessibility, memberConvenienceModifier)
@@ -1676,7 +1671,12 @@ open partial class Parser {
                             SyntaxKind.FuncKeyword
                         )
                     }
-                    if structOrClassKeyword.Kind != SyntaxKind.ClassKeyword {
+                    if structOrClassKeyword.Kind != SyntaxKind.ClassKeyword &&
+                        !(
+                        structOrClassKeyword.Kind == SyntaxKind.StructKeyword &&
+                            dataKeyword != nil &&
+                            inlineKeyword == nil
+                    ) {
                         Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken)
                     }
                     let constructor = ParseConstructorDeclaration(memberAccessibility, memberConvenienceModifier)
@@ -1831,6 +1831,7 @@ open partial class Parser {
                 SyntaxKind.NumberToken,
                 SyntaxKind.StringToken,
                 SyntaxKind.ByteStringToken,
+                SyntaxKind.Utf8StringToken,
                 SyntaxKind.OpenParenthesisToken,
                 SyntaxKind.OpenSquareBracketToken,
                 SyntaxKind.AmpersandToken,

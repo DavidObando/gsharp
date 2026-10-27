@@ -1464,6 +1464,26 @@ internal partial class ExpressionBinder {
         } else {
             boundRight = BindExpression(syntax.Right)
         }
+        if syntax
+            .OperatorToken
+            .Kind == SyntaxKind.PlusToken &&
+            boundLeft is BoundUtf8StringExpression leftUtf8 &&
+            boundRight is BoundUtf8StringExpression rightUtf8 &&
+            SyntaxFacts.IsUtf8LiteralRepresentation(syntax.Left) && SyntaxFacts.IsUtf8LiteralRepresentation(
+            syntax.Right
+        ) {
+            if leftUtf8.Bytes.Length > int32.MaxValue - 1 - rightUtf8.Bytes.Length {
+                Diagnostics.ReportInvalidUtf8StringLiteral(syntax.Location, "The combined backing data is too large.")
+                return BoundErrorExpression(syntax)
+            }
+            return BoundUtf8StringExpression(
+                syntax,
+                leftUtf8.Bytes.AddRange(rightUtf8.Bytes),
+                leftUtf8.Type,
+                leftUtf8.CreateSpan,
+                leftUtf8.Slice
+            )
+        }
         if boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error {
             if TryBindDelegateCombinationOperator(
                 syntax.OperatorToken.Kind,
@@ -2639,6 +2659,12 @@ internal partial class ExpressionBinder {
                 }
             }
             if commonUnderlying != nil {
+                // Adapted constants can bind directly, especially `T? ?? constant`.
+                // Try that shape before lifting a non-null fallback to `T?` (#5395).
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type)
+                if boundOperator != nil {
+                    return boundOperator
+                }
                 let commonNullable = NullableTypeSymbol.Get(commonUnderlying)
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, commonNullable, commonNullable)
                 if lifted != nil {
@@ -3558,6 +3584,9 @@ internal partial class ExpressionBinder {
                         expression: "effectiveParameterType.GetElementType()"
                     )
                 }
+                if ClrNullability.ContainsFunctionPointer(effectiveParameterType) || effectiveParameterType.IsPointer {
+                    return false
+                }
                 return IsImplicitConstantNarrowingArgument(
                     boundArguments[argIndex],
                     TypeSymbol.FromClrTypeWithoutNullability(
@@ -3604,15 +3633,14 @@ internal partial class ExpressionBinder {
                     return nil
                 }
                 let sourceType = boundArguments[argIndex].Type
-                var nativeTarget = TypeSymbol.FromClrTypeWithoutNullability(
-                    clrParameterType,
-                    NullabilityFreeReason.IdentityComparison
-                )
+                var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
+                if parameter.ParameterType.IsArray && !ClrTypeUtilities.AreSame(
+                    parameter.ParameterType,
+                    clrParameterType
+                ) {
+                    nativeTarget = nativeTarget.GetElementPositions()[0]
+                }
                 if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
-                    nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
-                    if parameter.ParameterType.IsArray && !clrParameterType.IsArray {
-                        nativeTarget = GetArraySliceElementType(nativeTarget) ?? nativeTarget
-                    }
                     return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
                         .IsImplicit == true {
                         if sourceType == nativeTarget {
@@ -3628,13 +3656,8 @@ internal partial class ExpressionBinder {
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
                 }
-                let targetType TypeSymbol? = TypeSymbol.FromClrTypeWithoutNullability(
-                    clrParameterType,
-                    NullabilityFreeReason.IdentityComparison
-                )
-                if targetType == nil {
-                    return nil
-                }
+                // ADR-0193: applicability compares bare shapes; argument lowering retains declaration nullability.
+                let targetType = nativeTarget.StripToBareShape()
                 let standard = Conversion.ClassifyNonStructural(sourceType, targetType)
                 if standard.IsIdentity {
                     return ClrOverloadResolution.ImplicitConversionKind.Identity
@@ -3687,7 +3710,8 @@ internal partial class ExpressionBinder {
                 if argIndex < 0 ||
                     argIndex >= boundArguments.Count ||
                     clrParameterType == nil ||
-                    clrParameterType.IsByRef {
+                    clrParameterType.IsByRef ||
+                    ClrNullability.ContainsFunctionPointer(clrParameterType) || clrParameterType.IsPointer {
                     return false
                 }
                 let sourceType = boundArguments[argIndex].Type

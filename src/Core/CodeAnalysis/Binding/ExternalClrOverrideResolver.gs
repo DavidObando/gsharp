@@ -102,7 +102,7 @@ internal shared class ExternalClrOverrideResolver {
                 .Length != typeParameters.Length ||
                 !ParametersMatch(methodParameters, parameters, typeSubstitutions, method, methodTypeArguments) ||
                 !ReturnMatches(
-                method.ReturnType,
+                ClrNullability.GetSignatureType(method.ReturnParameter),
                 returnType,
                 returnRefKind,
                 typeSubstitutions,
@@ -167,14 +167,15 @@ internal shared class ExternalClrOverrideResolver {
             // property could never match, because `T&` never equals `T`).
             // A mismatch falls through to the `sawName` arm below, which is the
             // signature-mismatch diagnostic rather than "no base to override".
-            let externalIsByRef = property.PropertyType?.IsByRef == true
+            let signatureType = ClrNullability.GetSignatureType(property)
+            let externalIsByRef = signatureType.IsByRef
             if RefCapabilities.GetReturnRefKind(property) != returnRefKind {
                 continue
             }
             let comparablePropertyType = if externalIsByRef {
-                property.PropertyType.GetElementType()
+                signatureType.GetElementType()
             } else {
-                property.PropertyType
+                signatureType
             }
             if !ParametersMatch(property.GetIndexParameters(), indexParameters, typeSubstitutions) ||
                 !PropertyTypeMatches(comparablePropertyType, propertyType, hasSetter, typeSubstitutions) {
@@ -211,7 +212,7 @@ internal shared class ExternalClrOverrideResolver {
                 continue
             }
             sawName = true
-            if !TypeMatches(eventInfo.EventHandlerType, handlerType, typeSubstitutions) {
+            if !TypeMatches(ClrNullability.GetSignatureType(eventInfo), handlerType, typeSubstitutions) {
                 continue
             }
             if (add != nil && (!add.IsVirtual || add.IsFinal)) ||
@@ -358,20 +359,20 @@ internal shared class ExternalClrOverrideResolver {
             // annotations alone — so both sides are projected unmerged and
             // compared as shapes.
             let derivedType = MemberLookup.MapOpenClrTypeToSymbolic(
-                derivedParameters[i].ParameterType,
+                ClrNullability.GetSignatureType(derivedParameters[i]),
                 derivedSubstitution.OpenDefinition,
                 derivedSubstitution.TypeArguments,
                 derived,
                 canonicalMethodArguments
             )
             let baseType = MemberLookup.MapOpenClrTypeToSymbolic(
-                baseParameters[i].ParameterType,
+                ClrNullability.GetSignatureType(baseParameters[i]),
                 baseSubstitution.OpenDefinition,
                 baseSubstitution.TypeArguments,
                 baseMethod,
                 canonicalMethodArguments
             )
-            if !DeclarationBinder.TypeSignaturesEquivalent(derivedType, baseType) {
+            if !DeclarationBinder.ConformanceSignaturesEquivalent(derivedType, baseType) {
                 return false
             }
         }
@@ -624,7 +625,7 @@ internal shared class ExternalClrOverrideResolver {
     private func GetReflectionBaseType(importedBase TypeSymbol?) Type? -> if importedBase is ImportedTypeSymbol{
         OpenDefinition: not nil
     } imported &&
-        imported.HasSubstitutableTypeArgument {
+        (imported.HasSubstitutableTypeArgument || TypeSymbol.ContainsFixedLengthArray(imported)) {
         imported.OpenDefinition
     } else {
         importedBase?.ClrType
@@ -632,7 +633,8 @@ internal shared class ExternalClrOverrideResolver {
 
     private func GetSymbolicTypeArguments(importedBase TypeSymbol?) ImmutableArray[
         TypeSymbol
-    ] -> if importedBase is ImportedTypeSymbol{OpenDefinition: not nil, HasSubstitutableTypeArgument: true} imported {
+    ] -> if importedBase is ImportedTypeSymbol{OpenDefinition: not nil} imported &&
+        (imported.HasSubstitutableTypeArgument || TypeSymbol.ContainsFixedLengthArray(imported)) {
         imported.TypeArguments
     } else {
         ImmutableArray[TypeSymbol].Empty
@@ -749,7 +751,7 @@ internal shared class ExternalClrOverrideResolver {
         }
         for var i = 0; i < clrParameters.Length; i++ {
             let clrParameter = clrParameters[i]
-            var clrType = clrParameter.ParameterType
+            var clrType = ClrNullability.GetSignatureType(clrParameter)
             var clrRefKind = RefKind.None
             if clrType.IsByRef {
                 clrRefKind = if clrParameter.IsOut {
@@ -842,7 +844,7 @@ internal shared class ExternalClrOverrideResolver {
             }
             return awaitedType != nil
         }
-        let genericDefinition = clrReturnType.GetGenericTypeDefinition()
+        let genericDefinition = clrReturnType.UnderlyingSystemType.GetGenericTypeDefinition()
         if string.Equals(genericDefinition.FullName, expectedName + "`1", StringComparison.Ordinal) {
             awaitedType = clrReturnType.GetGenericArguments()[0]
             return true
@@ -891,13 +893,9 @@ internal shared class ExternalClrOverrideResolver {
                 openMethodDefinition,
                 methodTypeArguments
             )
-            if DeclarationBinder.TypeSignaturesEquivalent(substituted, type) {
+            if DeclarationBinder.ConformanceSignaturesEquivalent(substituted, type) {
                 return true
             }
-        }
-        let effectiveClrType Type? = NullableLifting.GetEffectiveClrType(type)
-        if effectiveClrType != nil && clrType != nil {
-            return ClrTypeUtilities.AreSame(clrType, effectiveClrType)
         }
         return false
     }

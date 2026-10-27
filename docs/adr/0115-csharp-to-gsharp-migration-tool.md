@@ -46,6 +46,11 @@ to a separate artifacts root. The original timestamped per-app layout remains
 available through `--diagnostic-run` for corpus gap discovery, ledger gating,
 and CI compatibility.
 
+Repository mirrors keep independent source Git history ([ADR-0216](0216-repository-mirror-git-provenance.md)).
+This prevents version tasks from using a repository above the destination.
+Supply the Git working-tree root, not a source subdirectory.
+An archive mirror gets an empty Git repository to prevent parent-history discovery.
+
 ### A. Translation approach: Roslyn front-end → dedicated emit AST → canonical pretty-printer
 
 `Cs2Gs.Translator` parses each input with Roslyn into a `CSharpCompilation`, binds a `SemanticModel`, and walks the bound tree to build a tree of `Cs2Gs.CodeModel` nodes — a **purpose-built G# emit AST** owned by this tool. `Cs2Gs.CodeModel` then **pretty-prints canonical G#** (section B). Before any generated `.gs` reaches `gsc`, the pretty-printed text is **round-trip validated by re-parsing it with the real G# parser** (`Gsharp.CodeAnalysis` syntax API, consumed read-only as a library reference); a file that does not parse is a translator bug and fails the Translate stage *before* a compile is ever attempted (section C).

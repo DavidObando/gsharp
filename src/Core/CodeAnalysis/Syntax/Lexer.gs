@@ -402,7 +402,9 @@ class Lexer {
                 ReadWhiteSpace()
             }
             default {
-                if Current == 'b' && Lookahead == '"' {
+                if Current == 'u' && Lookahead == '8' && (Peek(2) == '"' || Peek(2) == '`') {
+                    ReadUtf8String()
+                } else if Current == 'b' && Lookahead == '"' {
                     ReadByteString()
                 } else if char.IsLetter(Current) || Current == '_' {
                     ReadIdentifierOrKeyword()
@@ -592,6 +594,148 @@ class Lexer {
         }
         kind = SyntaxKind.StringToken
         value = sb.ToString()
+    }
+
+    private func ReadUtf8String() {
+        if Peek(2) == '`' {
+            Diagnostics.ReportInvalidUtf8StringLiteral(
+                TextLocation(text, TextSpan(start, 3)),
+                "Raw UTF-8 delimiters are not supported; use ordinary quoted text escapes."
+            )
+            position += 2
+            ReadRawString()
+            kind = SyntaxKind.Utf8StringToken
+            value = ImmutableArray[uint8].Empty
+            return
+        }
+        if Peek(3) == '"' && Peek(4) == '"' {
+            Diagnostics.ReportInvalidUtf8StringLiteral(
+                TextLocation(text, TextSpan(start, 5)),
+                "Raw and multiline UTF-8 delimiters are not supported; use ordinary quoted text escapes."
+            )
+            position += 5
+            while position < end {
+                if Current == '"' && Lookahead == '"' && Peek(2) == '"' {
+                    position += 3
+                    while Current == '"' {
+                        position++
+                    }
+                    break
+                }
+                position++
+            }
+            kind = SyntaxKind.Utf8StringToken
+            value = ImmutableArray[uint8].Empty
+            return
+        }
+        if !text.IsEncodingValid {
+            Diagnostics.ReportInvalidUtf8StringLiteral(
+                TextLocation(text, TextSpan(start, 3)),
+                "The source file contains invalid encoded characters; repaired source text is not permitted."
+            )
+        }
+        position += 3
+        let decoded = StringBuilder()
+        let sourceSpans = List[TextSpan]()
+        var terminated = false
+        while position < end && Current != '\r' && Current != '\n' {
+            if Current == '"' {
+                position++
+                terminated = true
+                break
+            }
+            let pieceStart = position
+            var piece = Current.ToString()
+            position++
+            if piece == "\\" {
+                if position >= end || Current == '\r' || Current == '\n' {
+                    break
+                }
+                let escape = Current
+                position++
+                piece = switch escape {
+                    case '0': "\0"
+                    case 'a': "\a"
+                    case 'b': "\b"
+                    case 'f': "\f"
+                    case 'n': "\n"
+                    case 'r': "\r"
+                    case 't': "\t"
+                    case 'v': "\v"
+                    case '\'': "'"
+                    case '"': "\""
+                    case '\\': "\\"
+                    default: ""
+                }
+                if escape is 'x' or 'u' or 'U' {
+                    let maximum = if escape == 'x' {
+                        4
+                    } else if escape == 'u' {
+                        4
+                    } else {
+                        8
+                    }
+                    let minimum = if escape == 'x' {
+                        1
+                    } else {
+                        maximum
+                    }
+                    var scalar int64 = 0
+                    var digits = 0
+                    while digits < maximum && IsHexDigit(Current) {
+                        scalar = (scalar << 4) | int64(HexValue(Current))
+                        digits++
+                        position++
+                    }
+                    if digits < minimum {
+                        Diagnostics.ReportInvalidUtf8StringLiteral(
+                            TextLocation(text, TextSpan(pieceStart, position - pieceStart)),
+                            "The escape requires $minimum to $maximum hexadecimal digits."
+                        )
+                    } else if escape == 'U' {
+                        if scalar > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF) {
+                            Diagnostics.ReportInvalidUtf8StringLiteral(
+                                TextLocation(text, TextSpan(pieceStart, position - pieceStart)),
+                                "Expected a Unicode scalar from U+0000 through U+10FFFF."
+                            )
+                        } else {
+                            piece = char.ConvertFromUtf32(int32(scalar))
+                        }
+                    } else {
+                        piece = char(scalar).ToString()
+                    }
+                } else if piece.Length == 0 {
+                    Diagnostics.ReportInvalidUtf8StringLiteral(
+                        TextLocation(text, TextSpan(pieceStart, position - pieceStart)),
+                        "Unknown text escape."
+                    )
+                }
+            }
+            decoded.Append(piece)
+            for var index = 0; index < piece.Length; index++ {
+                sourceSpans.Add(TextSpan(pieceStart, position - pieceStart))
+            }
+        }
+        if !terminated {
+            Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 3)))
+        }
+        let bytes = ImmutableArray.CreateBuilder[uint8]()
+        for var index = 0; index < decoded.Length; index++ {
+            let unit = decoded[index]
+            if char.IsHighSurrogate(unit) && index + 1 < decoded.Length && char.IsLowSurrogate(decoded[index + 1]) {
+                AppendUtf8Scalar(bytes, char.ConvertToUtf32(unit, decoded[index + 1]))
+                index++
+            } else if char.IsSurrogate(unit) {
+                Diagnostics.ReportInvalidUtf8StringLiteral(
+                    TextLocation(text, sourceSpans[index]),
+                    "The decoded text contains an unpaired UTF-16 surrogate."
+                )
+            } else {
+                AppendUtf8Scalar(bytes, int32(unit))
+            }
+        }
+        kind = SyntaxKind.Utf8StringToken
+        value = bytes.ToImmutable()
     }
 
     private func ReadByteString() {
@@ -950,8 +1094,12 @@ class Lexer {
                 Diagnostics.ReportUnterminatedInterpolationHole(loc)
                 return false
             }
-            if c == 'b' && Lookahead == '"' {
-                position++
+            if (c == 'b' && Lookahead == '"') || (c == 'u' && Lookahead == '8' && Peek(2) == '"') {
+                position += if c == 'b' {
+                    1
+                } else {
+                    2
+                }
                 if !SkipInterpolationNestedLiteral('"', interpolate: false) {
                     return false
                 }

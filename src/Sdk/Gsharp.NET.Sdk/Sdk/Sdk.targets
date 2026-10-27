@@ -18,6 +18,12 @@
 
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 
+  <!-- Read the project properties and NuGet pack defaults first.
+       Content-only packages have no build symbols to include. -->
+  <PropertyGroup>
+    <IncludeSymbols Condition=" '$(IncludeSymbols)' == '' ">$(IncludeBuildOutput)</IncludeSymbols>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">
     <ProjectCapability Include="GSharp" />
     <ProjectCapability Include="CPS" />

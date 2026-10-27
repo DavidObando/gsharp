@@ -792,6 +792,13 @@ internal class SlotPlanner {
     }
 
     private class ReceiverSpillCollector : BoundTreeWalker {
+        override func VisitExpression(node BoundExpression?) {
+            if node is BoundUtf8StringExpression && !this.sink.Contains(node) {
+                this.sink.Add(node)
+            }
+            base.VisitExpression(node)
+        }
+
         private let needsRvalueReceiverSpill(
             BoundExpression,
             FunctionSymbol?,

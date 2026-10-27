@@ -135,6 +135,12 @@ partial class Binder {
             return Statements.OutsideExceptionHandlers(() -> Expressions.BindLambdaBodyExpression(syntax, targetType))
         }
         binderCtx = BinderContext(parent)
+        // Declaration binding captures lexical unsafe context. Metadata ownership does not establish that context.
+        binderCtx.UnsafeDepth = if function?.IsUnsafe == true {
+            1
+        } else {
+            0
+        }
         memberLookup = MemberLookup(binderCtx)
         conversions = ConversionClassifier(
             binderCtx,
@@ -179,7 +185,8 @@ partial class Binder {
             refKindToString: RefKindToString,
             bindNativeProtocolConversion: (location TextLocation, source BoundExpression, target TypeSymbol) ->
             BindNativeProtocolConversion(location, source, target),
-            canConvertNativeProtocol: CanConvertNativeProtocol
+            canConvertNativeProtocol: CanConvertNativeProtocol,
+            getCurrentFunction: () -> this.function
         )
         overloads = OverloadResolver(
             binderCtx,
@@ -668,25 +675,44 @@ partial class Binder {
             //         func Bump() { CallCount += 1 }    // bare access OK
             //     }
             //
-            // resolves without requiring `TypeName.` prefix. Static members
-            // are exposed for the enclosing type only (no base-class walk) —
-            // this is consistent with the qualified `Type.StaticMember`
-            // paths (BindUserTypeStaticMemberAccess, BindFieldAssignmentExpression)
-            // which also do not walk inheritance for statics today.
+            // Resolve lexical owners from the innermost type outward (#5262).
+            // Keep each member's declaring owner and do not inherit static members.
             //
             // Shadowing precedence (enforced by paramNames/seenMembers):
             //   parameter > instance member > static member.
-            let ownerStruct StructSymbol? = (function.StaticOwnerType as StructSymbol) ??
-                (function.ReceiverType as StructSymbol)
-            if ownerStruct != nil {
-                if !ownerStruct.StaticFields.IsDefaultOrEmpty {
-                    for fld in ownerStruct.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+            let lexicalOwner = function.StaticOwnerType ?? function.ReceiverType
+            // Reserve hidden names too. A nearer member hides every farther lexical candidate.
+            for var owner = lexicalOwner; owner != nil; owner = owner!!.ContainingType {
+                let isOuterOwner = !object.ReferenceEquals(owner, lexicalOwner)
+                if owner is InterfaceSymbol ownerInterface {
+                    for field in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
+                        if paramNames.Contains(field.Name) || !seenMembers.Add(field.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, field.Name),
+                                ownerInterface
+                            )
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, field))
+                    }
+                }
+                if owner is not StructSymbol ownerStruct {
+                    continue
+                }
+                if !ownerStruct.StaticFields.IsDefaultOrEmpty {
+                    for fld in ownerStruct.StaticFields {
+                        if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
+                                ownerStruct
+                            )
+                        ) {
+                            continue
                         }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                     }
                 }
                 // Issue #948: const fields are static for bare-name resolution
@@ -694,22 +720,30 @@ partial class Binder {
                 // as the compile-time constant value by the emitter/interpreter.
                 if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                     for fld in ownerStruct.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+                        if paramNames.Contains(fld.Name) || !seenMembers.Add(fld.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, fld.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                     }
                 }
                 if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                     for prop in ownerStruct.StaticProperties {
-                        if paramNames.Contains(prop.Name) || seenMembers.Contains(prop.Name) {
+                        if paramNames.Contains(prop.Name) || !seenMembers.Add(prop.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, prop.Name),
+                                ownerStruct
+                            )
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(prop.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
                     }
                 }
                 // Issue #3907 / #3911: expose a field-like STATIC event of the
@@ -733,51 +767,23 @@ partial class Binder {
                 // ADR-0052's "Static events on user types" follow-up entry is
                 // amended accordingly.
                 //
-                // Scoped to the enclosing type with no base-class walk, which
-                // is what every other static path here does (see the note on
-                // the static-field block above). A bare `Ticked += handler`
+                // A bare `Ticked += handler`
                 // still routes to the event-subscription path, which
                 // BindBareEventOrCompoundAssignment checks before it consults
                 // this variable.
                 if !ownerStruct.StaticEvents.IsDefaultOrEmpty {
                     for evt in ownerStruct.StaticEvents {
                         if !evt.IsFieldLike || evt.BackingField == nil || paramNames.Contains(evt.Name) ||
-                            seenMembers.Contains(evt.Name) {
-                            continue
-                        }
-                        if seenMembers.Add(evt.Name) {
-                            $scope.TryDeclareVariable(
-                                ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!)
+                            !seenMembers.Add(evt.Name) ||
+                            (
+                            isOuterOwner && !object.ReferenceEquals(
+                                memberLookup.FindLexicalMemberOwner(lexicalOwner!!, evt.Name),
+                                ownerStruct
                             )
-                        }
-                    }
-                }
-            }
-            // ADR-0089 / issue #1030: expose interface static *state* by bare
-            // name inside the owning interface's static members (static
-            // methods, default-bodied static property accessors). The owner is
-            // an InterfaceSymbol, so `ownerStruct` is null above; resolve the
-            // interface owner separately and inject its static + const fields.
-            let ownerInterface InterfaceSymbol? = function.StaticOwnerType as InterfaceSymbol
-            if ownerInterface != nil {
-                if !ownerInterface.StaticFields.IsDefaultOrEmpty {
-                    for fld in ownerInterface.StaticFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
+                        ) {
                             continue
                         }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
-                        }
-                    }
-                }
-                if !ownerInterface.ConstFields.IsDefaultOrEmpty {
-                    for fld in ownerInterface.ConstFields {
-                        if paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name) {
-                            continue
-                        }
-                        if seenMembers.Add(fld.Name) {
-                            $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
-                        }
+                        $scope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField!!))
                     }
                 }
             }
@@ -1031,7 +1037,7 @@ partial class Binder {
             ) {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
-            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics)
+            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
             Diagnostics.AddRange(child.Diagnostics.ToImmutableArray())
             methodBodies[method] = lowered
         }
@@ -4179,6 +4185,58 @@ partial class Binder {
         }
         if !syntax.HasQualifier &&
             syntax.HasTypeArguments &&
+            syntax.Identifier is {} spanName &&
+            binderCtx
+            .CanUseSpanAlias($scope, spanName, function) {
+            let arguments = Invariant.Required(
+                syntax.TypeArguments,
+                "HasTypeArguments establishes the span argument list",
+                expression: "syntax.TypeArguments"
+            )
+            if arguments.Count != 1 {
+                Diagnostics.ReportNativeSpanType(
+                    syntax.Location,
+                    "span[T] and readonly span[T] require exactly one element type"
+                )
+                return nil
+            }
+            let element = BindTypeClause(arguments[0])
+            if element == nil || element == TypeSymbol.Error {
+                return nil
+            }
+            if element == TypeSymbol.Void ||
+                (element is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol) ||
+                TypeSymbol
+                .IsByRefLike(element) {
+                Diagnostics.ReportNativeSpanType(
+                    arguments[0].Location,
+                    "CLR spans require an ordinary heap-storable element type"
+                )
+                return nil
+            }
+            if !ClrSpanTypes.TryResolveDefinition(
+                $scope.References!!,
+                syntax.ReadOnlySpanModifier != nil,
+                out var definition
+            ) {
+                Diagnostics.ReportNativeSpanType(
+                    syntax.Location,
+                    "the target core library must provide CLR Span[T] and ReadOnlySpan[T]"
+                )
+                return nil
+            }
+            var symbolic = false
+            return ApplyArraySuffix(
+                syntax,
+                ImportedTypeSymbol.GetConstructed(
+                    definition.MakeGenericType(ProjectGenericArgument(element, typeof(object), &symbolic)),
+                    definition,
+                    ImmutableArray.Create(element)
+                )
+            )
+        }
+        if !syntax.HasQualifier &&
+            syntax.HasTypeArguments &&
             syntax.Identifier is {Text: "managed"} managedName &&
             binderCtx
             .CanUseIntrinsicAlias($scope, managedName, function) {
@@ -4759,6 +4817,20 @@ partial class Binder {
         let bindingScope = $scope
         let previousTree = bindingScope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree)
         try {
+            if syntax.ReadOnlySpanModifier != nil &&
+                (
+                syntax.HasQualifier || syntax.Identifier == nil || !binderCtx.CanUseSpanAlias(
+                    $scope,
+                    syntax.Identifier,
+                    function
+                )
+            ) {
+                Diagnostics.ReportNativeSpanType(
+                    syntax.ReadOnlySpanModifier!!.Location,
+                    "readonly requires the unshadowed native span alias; use System.ReadOnlySpan[T] explicitly when span is shadowed"
+                )
+                return nil
+            }
             var bound TypeSymbol? = BindNonNullableTypeClause(syntax)
             if bound == nil {
                 return nil
@@ -5151,39 +5223,15 @@ partial class Binder {
         // — were all one wrong base link. The bare-name spelling was already
         // correct, which is why only the QUALIFIED spelling failed.
         //
-        // Scoped tightly on purpose, in TWO ways.
-        //
-        // First (see TryLookupSourceTypeInPackage): the qualifier must exactly
-        // name a package this compilation declares, and that package must
-        // declare this name at this arity.
-        //
-        // Second, and just as important: there must ACTUALLY BE an imported
-        // homonym to beat. This rule is only about a source-vs-metadata
-        // collision — C#'s CS0436 — so it must not reorder a source-vs-SOURCE
-        // question, which is governed by ordinary scope shadowing and not by
-        // this probe. Issue #3466 is the case that pins it down: inside
-        // `Holder`, which declares a nested `Target`, the name
-        // `Demo.Target` has no CLR type at all, so the walk below and the
-        // simple-name fallback under it keep resolving it exactly as they did.
-        // Without this second condition the type clause started disagreeing
-        // with the construction expression beside it — the type resolved to the
-        // top-level `Demo.Target` while `Demo.Target()` still resolved to
-        // `Holder.Target`, giving `GS0155 Cannot convert 'Holder.Target' to
-        // 'Target'`. (That disagreement is a real pre-existing gap in the
-        // QUALIFIED-construction path, which resolves a package-qualified name
-        // by inner-scope simple name; it is reported separately rather than
-        // widened into here.)
-        if $scope.TryLookupSourceTypeInPackage(
-            string.Join(".", segmentTexts, 0, totalSegments - 1),
-            segmentTexts[totalSegments - 1],
-            targetArity,
-            out var packageQualifiedSourceType
-        ) &&
+        // The qualifier and arity must identify the source declaration exactly.
+        // Without a metadata homonym, the exact source lookup below handles it.
+        let qualifiedName = $scope.ExpandQualifiedTypeName(segmentTexts, totalSegments)
+        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var packageQualifiedSourceType) &&
             TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != nil {
             if targetArity == 0 {
                 return packageQualifiedSourceType!!
             }
-            let constructedSourceType TypeSymbol? = BindAndConstructUserGenericSegment(
+            return BindAndConstructUserGenericSegment(
                 syntax,
                 packageQualifiedSourceType!!,
                 Invariant.Required(
@@ -5194,9 +5242,6 @@ partial class Binder {
                 qualifiedIdentifier.Location,
                 syntax.DottedName
             )
-            if constructedSourceType != nil {
-                return constructedSourceType
-            }
         }
         // Greedy: prefer the longest outer prefix that resolves to a real type,
         // then walk the remaining segments as nested types. Going longest-first
@@ -5225,48 +5270,15 @@ partial class Binder {
                 return ConstructIfGeneric(walked, syntax, targetArity)
             }
         }
-        // Same-compilation package-qualified source type: the qualifier segments
-        // form a package/namespace prefix and the final segment names a source
-        // type declared in this compilation (e.g. `Oahu.Decrypt.INewSplitCallback[T]`
-        // referenced from within package `Oahu.Decrypt`). Source types are visible
-        // by simple name across packages, but the reflection-based prefix walk
-        // above only sees types with a CLR representation, so a source type — which
-        // has none while binding — never resolves through it. Fall back to a
-        // simple-name lookup of the final segment, honoring the trailing arity.
-        // cs2gs fully-qualifies type references (including generic-math
-        // constraints), so this is the common shape for translated code.
-        let lastSegment = segmentTexts[totalSegments - 1]
-        // Issue #3880: the simple-name fallback below refuses to guess when two
-        // or more separately-imported packages declare the same simple name
-        // (#2455's ambiguity rule) — but here the reference is not ambiguous at
-        // all: its qualifier names the package outright. Publish that qualifier
-        // as the explicit package hint #2455 already honours for qualified
-        // CONSTRUCTION (`Pkg.Type{…}`), so `typeof(ImportedVisible.defer_)`
-        // resolves even when a second imported package also declares `defer_`.
-        // The hint is restored unconditionally: it is scoped to this one
-        // lookup, exactly as at the construction site.
-        let qualifierPackageHint = string.Join(".", segmentTexts, 0, totalSegments - 1)
-        let previousQualifierHint = $scope.SetQualifiedConstructionPackageHint(qualifierPackageHint)
-        var sourceType TypeSymbol?
-        try {
-            sourceType = LookupType(
-                lastSegment,
-                if targetArity > 0 {
-                    targetArity
-                } else {
-                    -1
-                }
-            )
-        } finally {
-            $scope.SetQualifiedConstructionPackageHint(previousQualifierHint)
-        }
-        if sourceType != nil && !object.ReferenceEquals(sourceType, TypeSymbol.Error) {
+        // Source types have no CLR representation while binding. Preserve the
+        // complete name: an enum member must not resolve as an unrelated type.
+        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) {
             if targetArity == 0 {
                 return sourceType
             }
-            let constructed TypeSymbol? = BindAndConstructUserGenericSegment(
+            return BindAndConstructUserGenericSegment(
                 syntax,
-                sourceType,
+                sourceType!!,
                 Invariant.Required(
                     qualifiedTypeArguments,
                     "targetArity != 0 implies HasTypeArguments was true, so TypeArguments is non-null",
@@ -5275,9 +5287,6 @@ partial class Binder {
                 qualifiedIdentifier.Location,
                 syntax.DottedName
             )
-            if constructed != nil {
-                return constructed
-            }
         }
         // Could not resolve. Pinpoint the failing segment so the diagnostic is
         // actionable: if even the outermost simple name doesn't exist, report
@@ -5341,7 +5350,7 @@ partial class Binder {
             )
             return symbol?.ClrType
         }
-        let prefix = string.Join(".", segmentTexts, 0, outerLen)
+        let prefix = $scope.ExpandQualifiedTypeName(segmentTexts, outerLen)
         // A generic type's metadata name is arity-mangled (`Ns.IFoo`1`); when
         // the deepest prefix segment carries the trailing type-argument list,
         // try the mangled name first so a namespace-qualified generic type
@@ -6703,6 +6712,7 @@ partial class Binder {
             let binder = Binder(parentScope, function: nil)
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
+            binder.ValidateFixedArrayImports(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
             // Issues #4089/#4090: the declaration phase binds type clauses before
             // every same-compilation declaration's type-parameter constraints are
             // resolved, so the G#-declared generic constraint checks are queued
@@ -8153,7 +8163,13 @@ partial class Binder {
                                         VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics)
                                     }
                                     let lowered = Lowerer.Lower(ctorBody, structSym)
-                                    AnalyzeFunctionBody(ctorBody, lowered, ctor.Function, ctorBinder.Diagnostics)
+                                    AnalyzeFunctionBody(
+                                        ctorBody,
+                                        lowered,
+                                        ctor.Function,
+                                        ctorBinder.Diagnostics,
+                                        ctorBinder.binderCtx.References
+                                    )
                                     return BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray())
                                 }
                             )
@@ -8505,6 +8521,7 @@ partial class Binder {
                 allStructs,
                 globalScope.Interfaces
             )
+            let orderedFunctions = BoundProgramOrder.SortFunctions(functionBodies.ToImmutable())
             // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
             // pointless. Reported here, over the bound bodies, because the question
             // is about the receiver's declaration rather than the call.
@@ -8533,6 +8550,14 @@ partial class Binder {
                 // `func Main()` keeps its own body and the (empty) statement block.
                 statement = inferredEntryBody
             }
+            RefStructAsyncLivenessAnalyzer.AnalyzeProgram(
+                orderedFunctions,
+                statement,
+                allStructs,
+                globalScope.Interfaces,
+                diagnostics,
+                parentScope.References
+            )
             // Issue #3501 A2: union the ref-kind delegates synthesized while
             // binding top-level statements (already in globalScope.Delegates via
             // BindGlobalScope) with those synthesized while binding
@@ -8557,6 +8582,7 @@ partial class Binder {
                 globals,
                 allDelegates
             ){
+                OrderedFunctions = orderedFunctions,
                 Imports = globalScope.GetCumulativeImports(),
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
@@ -8939,7 +8965,13 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, function, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                function,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -8997,7 +9029,13 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, accessor, binder.Diagnostics)
+                            AnalyzeFunctionBody(
+                                body,
+                                lowered,
+                                accessor,
+                                binder.Diagnostics,
+                                binder.binderCtx.References
+                            )
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9063,7 +9101,7 @@ partial class Binder {
                                 !ControlFlowGraph.AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
                             }
-                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9120,7 +9158,7 @@ partial class Binder {
                                 .AllPathsReturn(lowered) {
                                 binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location)
                             }
-                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics)
+                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics, binder.binderCtx.References)
                             return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
                         }
                     )
@@ -9133,7 +9171,8 @@ partial class Binder {
             bound BoundStatement,
             lowered BoundBlockStatement,
             function FunctionSymbol,
-            diagnostics DiagnosticBag
+            diagnostics DiagnosticBag,
+            references ReferenceResolver
         ) {
             // Issue #4453: the protected-receiver rule reads the bound body, where
             // every receiver still has the static type the source gave it.
@@ -9144,7 +9183,13 @@ partial class Binder {
             if function.IsAsyncOrSuspending {
                 NativeSliceSuspensionAnalyzer(diagnostics).Visit(body)
             }
-            RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics)
+            RefStructAsyncLivenessAnalyzer.Analyze(
+                body,
+                function,
+                diagnostics,
+                references,
+                includeOperandTemporaries: false
+            )
         }
 
         /// ADR-0140 / issue #2131: binds the `shared { init { … } }`
@@ -9178,11 +9223,11 @@ partial class Binder {
                 "initBlocks is only non-empty when structDeclaration is non-null",
                 expression: "structDeclaration"
             )
-            let context = FunctionSymbol(
-                "<static-initializer>",
-                ImmutableArray[ParameterSymbol].Empty,
-                TypeSymbol.Void
-            ){IsStatic = true, StaticOwnerType = structSym, IsStaticInitializer = true}
+            let context = Invariant.Required(
+                structSym.StaticInitializerFunction,
+                "a declared static initializer has a captured lexical binding context",
+                expression: "structSym.StaticInitializerFunction"
+            )
             let previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName)
             let previousTree = parentScope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
             try {
@@ -12541,7 +12586,8 @@ partial class Binder {
         private func InferTypeArgumentsCore(
             parameterType TypeSymbol,
             argumentType TypeSymbol,
-            substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            boundKind MemberLookup.SymbolicInferenceBoundKind = MemberLookup.SymbolicInferenceBoundKind.Lower
         ) {
             if parameterType is TypeParameterSymbol tp {
                 // Issue #1531: `void` is never a valid type argument, so a type
@@ -12553,22 +12599,17 @@ partial class Binder {
                 // `(...)->void` overload (spurious GS0266). Skipping the binding
                 // leaves the type parameter un-inferred, so the candidate is
                 // rejected and the `(...)->void` overload wins unambiguously.
-                if argumentType == TypeSymbol.Void || TypeSymbol.ContainsNullLiteralType(argumentType) {
+                // A nested throw-only result supplies no emittable type argument (issue #5273).
+                if argumentType == TypeSymbol.Void || TypeSymbol.ContainsNeverType(argumentType) ||
+                    TypeSymbol.ContainsNullLiteralType(argumentType) {
                     return
                 }
-                // Join compatible nullable-reference evidence across arguments.
-                // The post-substitution applicability check still rejects genuine
-                // type conflicts.
-                if substitution.TryGetValue(tp, out var existing) {
-                    substitution[tp] = (MemberLookup.MergeInferredTypeArgument(existing, argumentType) ?? existing)
-                } else {
-                    substitution[tp] = argumentType
-                }
+                MemberLookup.InferSourceTypeArgument(substitution, tp, argumentType, boundKind)
                 return
             }
             let importedParameterType ImportedTypeSymbol? = parameterType as ImportedTypeSymbol
             if importedParameterType != nil && importedParameterType.HasTypeParameterArgument {
-                InferImportedTypeArguments(importedParameterType, argumentType, substitution)
+                InferImportedTypeArguments(importedParameterType, argumentType, substitution, boundKind)
                 return
             }
             if parameterType is NullableTypeSymbol pn {
@@ -12585,10 +12626,16 @@ partial class Binder {
                     } else {
                         argumentType
                     },
-                    substitution
+                    substitution,
+                    boundKind
                 )
             } else if parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym {
-                InferTypeArgumentsCore(ps.ElementType, asym.ElementType, substitution)
+                InferTypeArgumentsCore(
+                    ps.ElementType,
+                    asym.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is ChannelTypeSymbol pc && ChannelTypeSymbol.TryGetChannelShape(
                 argumentType,
                 out var argumentElement,
@@ -12601,9 +12648,19 @@ partial class Binder {
                 // inferred either way. Without this, `merge(a, b)` cannot infer its
                 // element and every generic channel function has to be called with
                 // an explicit type argument.
-                InferTypeArgumentsCore(pc.ElementType, argumentElement!!, substitution)
+                InferTypeArgumentsCore(
+                    pc.ElementType,
+                    argumentElement!!,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa {
-                InferTypeArgumentsCore(pa.ElementType, aa.ElementType, substitution)
+                InferTypeArgumentsCore(
+                    pa.ElementType,
+                    aa.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
                 // #611 intentional asymmetry: a fixed-array `[N]T` does NOT unify
                 // against a slice parameter `[]T` (or vice versa). In Go, explicit
                 // slicing is required to produce a slice from a fixed-length array.
@@ -12613,14 +12670,25 @@ partial class Binder {
 
             } else if parameterType is RectangularArrayTypeSymbol pr &&
                 argumentType is RectangularArrayTypeSymbol ar &&
-                pr.Rank == ar.Rank {
-                InferTypeArgumentsCore(pr.ElementType, ar.ElementType, substitution)
+                pr.Rank == ar
+                .Rank {
+                InferTypeArgumentsCore(
+                    pr.ElementType,
+                    ar.ElementType,
+                    substitution,
+                    MemberLookup.SymbolicInferenceBoundKind.Exact
+                )
             } else if parameterType is TupleTypeSymbol parameterTuple &&
                 argumentType is TupleTypeSymbol argumentTuple &&
                 parameterTuple.Arity == argumentTuple
                 .Arity {
                 for var i = 0; i < parameterTuple.Arity; i++ {
-                    InferTypeArgumentsCore(parameterTuple.ElementTypes[i], argumentTuple.ElementTypes[i], substitution)
+                    InferTypeArgumentsCore(
+                        parameterTuple.ElementTypes[i],
+                        argumentTuple.ElementTypes[i],
+                        substitution,
+                        boundKind
+                    )
                 }
             } else if parameterType is SequenceTypeSymbol pseq {
                 // Issue #773 / ADR-0084 §L2: an extension declared as
@@ -12630,13 +12698,13 @@ partial class Binder {
                 // or any CLR type that implements `IEnumerable<U>`.
                 switch argumentType {
                     case aseq is SequenceTypeSymbol {
-                        InferTypeArgumentsCore(pseq.ElementType, aseq.ElementType, substitution)
+                        InferTypeArgumentsCore(pseq.ElementType, aseq.ElementType, substitution, boundKind)
                     }
                     case asl is SliceTypeSymbol {
-                        InferTypeArgumentsCore(pseq.ElementType, asl.ElementType, substitution)
+                        InferTypeArgumentsCore(pseq.ElementType, asl.ElementType, substitution, boundKind)
                     }
                     case aarr is ArrayTypeSymbol {
-                        InferTypeArgumentsCore(pseq.ElementType, aarr.ElementType, substitution)
+                        InferTypeArgumentsCore(pseq.ElementType, aarr.ElementType, substitution, boundKind)
                     }
                     default {
                         let openIEnumerable = typeof(System.Collections.Generic.IEnumerable[_])
@@ -12647,7 +12715,7 @@ partial class Binder {
                             out _
                         ) &&
                             sequenceArguments.Length == 1 {
-                            InferTypeArgumentsCore(pseq.ElementType, sequenceArguments[0], substitution)
+                            InferTypeArgumentsCore(pseq.ElementType, sequenceArguments[0], substitution, boundKind)
                         }
                     }
                 }
@@ -12655,7 +12723,7 @@ partial class Binder {
                 // Mirror of the synchronous-sequence inference for `async sequence[T]`.
                 switch argumentType {
                     case aaseq is AsyncSequenceTypeSymbol {
-                        InferTypeArgumentsCore(paseq.ElementType, aaseq.ElementType, substitution)
+                        InferTypeArgumentsCore(paseq.ElementType, aaseq.ElementType, substitution, boundKind)
                     }
                     default {
                         let openIAsyncEnumerable = typeof(System.Collections.Generic.IAsyncEnumerable[_])
@@ -12666,7 +12734,12 @@ partial class Binder {
                             out _
                         ) &&
                             asyncSequenceArguments.Length == 1 {
-                            InferTypeArgumentsCore(paseq.ElementType, asyncSequenceArguments[0], substitution)
+                            InferTypeArgumentsCore(
+                                paseq.ElementType,
+                                asyncSequenceArguments[0],
+                                substitution,
+                                boundKind
+                            )
                         }
                     }
                 }
@@ -12681,9 +12754,14 @@ partial class Binder {
                 // e.g. `f func(T) U` matched against `func(int32) bool` yields
                 // T -> int32, U -> bool.
                 for var i = 0; i < pf.ParameterTypes.Length; i++ {
-                    InferTypeArgumentsCore(pf.ParameterTypes[i], af.ParameterTypes[i], substitution)
+                    InferTypeArgumentsCore(
+                        pf.ParameterTypes[i],
+                        af.ParameterTypes[i],
+                        substitution,
+                        MemberLookup.ReverseInferenceBoundKind(boundKind)
+                    )
                 }
-                InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution)
+                InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution, boundKind)
             } else if TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs) &&
                 userParamArgs
                 .Any(TypeSymbol.ContainsTypeParameter) {
@@ -12698,8 +12776,18 @@ partial class Binder {
                 if TryFindUserGenericArguments(argumentType, userParamDef!!, out var userArgArgs) &&
                     userParamArgs.Length == userArgArgs
                     .Length {
+                    let parameters = switch userParamDef {
+                        case structure is StructSymbol: structure.TypeParameters
+                        case iface is InterfaceSymbol: iface.TypeParameters
+                        default: ImmutableArray[TypeParameterSymbol].Empty
+                    }
                     for var i = 0; i < userParamArgs.Length; i++ {
-                        InferTypeArgumentsCore(userParamArgs[i], userArgArgs[i], substitution)
+                        InferTypeArgumentsCore(
+                            userParamArgs[i],
+                            userArgArgs[i],
+                            substitution,
+                            MemberLookup.GetNestedInferenceBoundKind(parameters[i].Variance, boundKind)
+                        )
                     }
                 }
             }
@@ -12708,19 +12796,34 @@ partial class Binder {
         private func InferImportedTypeArguments(
             parameterType ImportedTypeSymbol,
             argumentType TypeSymbol,
-            substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol],
+            boundKind MemberLookup.SymbolicInferenceBoundKind
         ) {
+            // A lambda's CLR delegate can be unavailable across reflection contexts.
+            // Infer from its symbolic signature instead of its CLR projection.
+            if argumentType is FunctionTypeSymbol && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                parameterType,
+                out var parameterFunction
+            ) {
+                InferTypeArgumentsCore(parameterFunction!!, argumentType, substitution, boundKind)
+                return
+            }
             var foundProjection = false
-            if parameterType.OpenDefinition != nil &&
+            if parameterType.OpenDefinition is {} openDefinition &&
                 TryFindUniqueGenericProjection(
                 argumentType,
-                parameterType.OpenDefinition,
+                openDefinition,
                 out var mappedArguments,
                 out foundProjection
             ) {
                 if mappedArguments.Length == parameterType.TypeArguments.Length {
                     for var i = 0; i < parameterType.TypeArguments.Length; i++ {
-                        InferTypeArgumentsCore(parameterType.TypeArguments[i], mappedArguments[i], substitution)
+                        InferTypeArgumentsCore(
+                            parameterType.TypeArguments[i],
+                            mappedArguments[i],
+                            substitution,
+                            MemberLookup.GetNestedInferenceBoundKind(openDefinition, i, boundKind)
+                        )
                     }
                 }
                 return
@@ -12736,7 +12839,7 @@ partial class Binder {
                 } else {
                     (cast[ArrayTypeSymbol](argumentType)).ElementType
                 }
-                InferTypeArgumentsCore(parameterType.TypeArguments[0], elementType, substitution)
+                InferTypeArgumentsCore(parameterType.TypeArguments[0], elementType, substitution, boundKind)
             }
         }
 

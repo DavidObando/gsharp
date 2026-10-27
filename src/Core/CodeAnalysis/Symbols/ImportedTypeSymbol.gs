@@ -483,7 +483,9 @@ class ImportedTypeSymbol : TypeSymbol {
             }
             let annotated NullabilityAnnotatedTypeSymbol? = unwrapped as NullabilityAnnotatedTypeSymbol
             let baseType = annotated?.BaseType ?? unwrapped
-            if !(baseType is ImportedTypeSymbol) ||
+            // The CLR-keyed aggregate cannot retain unreified generic arguments.
+            if baseType is not ImportedTypeSymbol || TypeSymbol.ContainsTypeParameter(baseType) ||
+                TypeSymbol.ContainsSameCompilationUserType(baseType) ||
                 !TryCreateSemanticAggregate(clrType, references, out var aggregate) {
                 return type
             }
@@ -568,16 +570,20 @@ class ImportedTypeSymbol : TypeSymbol {
                 fieldByToken[field.MetadataToken] = fieldSymbol
             }
             let propertyBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
-            for property in ClrTypeUtilities.SafeGetProperties(type, bindingFlags) {
-                if property.GetIndexParameters().Length != 0 {
-                    continue
-                }
+            for property in ClrTypeUtilities.SafeGetNearestProperties(
+                type,
+                bindingFlags,
+                (property PropertyInfo) -> property.GetIndexParameters()
+                    .Length == 0 &&
+                    (
+                    property.GetMethod is {} getter &&
+                        IsVisible(getter, includeInternal) ||
+                        property.SetMethod is {} setter &&
+                        IsVisible(setter, includeInternal)
+                )
+            ) {
                 let getter MethodInfo? = property.GetMethod
                 let setter MethodInfo? = property.SetMethod
-                if (getter == nil || !IsVisible(getter, includeInternal)) &&
-                    (setter == nil || !IsVisible(setter, includeInternal)) {
-                    continue
-                }
                 let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
                 propertyBuilder.Add(
                     PropertySymbol(
@@ -600,6 +606,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 )
             }
             let primaryConstructorParameters = BuildPrimaryConstructorParameters(
+                type,
                 fieldBuilder.ToImmutable(),
                 propertyBuilder.ToImmutable(),
                 fieldByToken,
@@ -623,6 +630,7 @@ class ImportedTypeSymbol : TypeSymbol {
             aggregate.SetProperties(propertyBuilder.ToImmutable())
             aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal))
             aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal))
+            let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
             // Issue #3329: a value struct's ADR-0159 magic-collection field zero
             // value is normally recorded on the DECLARING compilation's own
             // StructSymbol.InstanceFieldInitializers (DeclarationBinder.Structs.cs)
@@ -640,14 +648,19 @@ class ImportedTypeSymbol : TypeSymbol {
                 out var magicFieldKinds
             ) {
                 let fieldsByName = aggregate.Fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
-                let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
                 for (fieldName, kind) in magicFieldKinds!! {
-                    if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) {
+                    if !fieldsByName.TryGetValue(fieldName, out var fieldSymbol) || instanceInitBuilder.ContainsKey(
+                        fieldSymbol
+                    ) {
                         continue
                     }
                     let reflectedField FieldInfo? = type.GetField(fieldName, bindingFlags)
                     let zeroValue BoundExpression? = if reflectedField != nil {
-                        MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind)
+                        MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                            reflectedField,
+                            kind,
+                            fieldSymbol.Type
+                        )
                     } else {
                         default(BoundExpression?)
                     }
@@ -655,9 +668,9 @@ class ImportedTypeSymbol : TypeSymbol {
                         instanceInitBuilder[fieldSymbol] = zeroValue
                     }
                 }
-                if instanceInitBuilder.Count > 0 {
-                    aggregate.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable())
-                }
+            }
+            if instanceInitBuilder.Count > 0 {
+                aggregate.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable())
             }
             return aggregate
         }
@@ -690,6 +703,7 @@ class ImportedTypeSymbol : TypeSymbol {
         }
 
         private func BuildPrimaryConstructorParameters(
+            type Type,
             fields ImmutableArray[FieldSymbol],
             properties ImmutableArray[PropertySymbol],
             fieldByToken Dictionary[int32, FieldSymbol]?,
@@ -707,13 +721,22 @@ class ImportedTypeSymbol : TypeSymbol {
             for var i = 0; i < semantics.PrimaryConstructorParameterNames.Length; i++ {
                 let name = semantics.PrimaryConstructorParameterNames[i]
                 var parameter ParameterSymbol? = nil
-                // Prefer the exact backing field recorded by metadata token
-                // (issue #1953 follow-up) — this is immune to the parameter name
-                // ever diverging from the field name (renames, lowering,
-                // mangling). Only fall back to a name-based lookup when no token
-                // was recorded (older payload shape) or the token failed to
-                // resolve (e.g. a property-backed parameter).
-                if !tokens.IsDefaultOrEmpty &&
+                // Foreign records retain property identity; G# metadata retains field-token ownership.
+                if !semantics
+                    .PrimaryConstructorProperties
+                    .IsDefaultOrEmpty &&
+                    i < semantics
+                    .PrimaryConstructorProperties
+                    .Length {
+                    let selectedProperty = ClrTypeUtilities.FindMetadataDefinition(
+                        type,
+                        semantics.PrimaryConstructorProperties[i],
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                    ) as PropertyInfo
+                    if selectedProperty != nil {
+                        parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(selectedProperty))
+                    }
+                } else if !tokens.IsDefaultOrEmpty &&
                     i < tokens.Length &&
                     tokens[i] != 0 &&
                     fieldByToken != nil &&
@@ -733,11 +756,8 @@ class ImportedTypeSymbol : TypeSymbol {
         }
 
         private func ApplyPrimaryConstructorDefaults(type Type, parameters ImmutableArray[ParameterSymbol]) {
-            let parameterNames = ImmutableArray.CreateBuilder[string](parameters.Length)
-            for parameter in parameters {
-                parameterNames.Add(parameter.Name)
-            }
-            let clrParameters = FindPrimaryConstructorParameters(type, parameterNames.MoveToImmutable())
+            let clrParameters = FindPrimaryConstructor(type, parameters)?.GetParameters() ??
+                Array.Empty[ParameterInfo]()
             for var i = 0; i < parameters.Length && i < clrParameters.Length; i++ {
                 if TryGetOptionalDefault(clrParameters[i], out var defaultValue) {
                     parameters[i].SetExplicitDefaultValue(defaultValue)
@@ -745,24 +765,81 @@ class ImportedTypeSymbol : TypeSymbol {
             }
         }
 
-        private func FindPrimaryConstructorParameters(type Type, names ImmutableArray[string])[]ParameterInfo {
-            for constructor in ClrTypeUtilities.SafeGetConstructors(type, BindingFlags.Public | BindingFlags.Instance) {
+        internal func FindPrimaryConstructor(
+            type Type,
+            primaryParameters ImmutableArray[ParameterSymbol]
+        ) ConstructorInfo? {
+            let definition = if type.IsGenericType {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
+            if !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics) &&
+                !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(type, out semantics) {
+                return nil
+            }
+            if semantics is not ImportedTypeSemantics shape {
+                return nil
+            }
+            let fields = ClrTypeUtilities.SafeGetFields(
+                definition,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            )
+            for constructor in ClrTypeUtilities.SafeGetConstructors(
+                definition,
+                BindingFlags.Public | BindingFlags.Instance
+            ) {
                 let parameters = constructor.GetParameters()
-                if parameters.Length != names.Length {
+                if parameters.Length != primaryParameters.Length {
                     continue
                 }
-                var namesMatch = true
+                var matches = true
                 for var i = 0; i < parameters.Length; i++ {
-                    if !string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal) {
-                        namesMatch = false
+                    if !string.Equals(parameters[i].Name, primaryParameters[i].Name, StringComparison.Ordinal) {
+                        matches = false
+                        break
+                    }
+                    var member MemberInfo? = nil
+                    if !shape
+                        .PrimaryConstructorProperties
+                        .IsDefaultOrEmpty &&
+                        i < shape
+                        .PrimaryConstructorProperties
+                        .Length {
+                        member = shape.PrimaryConstructorProperties[i]
+                    } else {
+                        let tokens = shape.PrimaryConstructorParameterFieldTokens
+                        let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
+                            fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
+                        } else {
+                            fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == primaryParameters[i].Name)
+                        }
+                        member = if field != nil {
+                            field
+                        } else {
+                            definition.GetProperty(
+                                primaryParameters[i].Name,
+                                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                            )
+                        }
+                    }
+                    if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
+                        ClrNullability.GetSignatureType(member)
+                    ) {
+                        matches = false
                         break
                     }
                 }
-                if namesMatch {
-                    return parameters
+                if matches {
+                    // Closing can collapse distinct overloads. Keep the selected open MethodDef.
+                    return ClrTypeUtilities.FindMetadataDefinition(
+                        type,
+                        constructor,
+                        BindingFlags.Public | BindingFlags.Instance
+                    ) as ConstructorInfo
                 }
             }
-            return Array.Empty[ParameterInfo]()
+            return nil
         }
 
         private func TryGetOptionalDefault(parameter ParameterInfo, out value object?) bool {

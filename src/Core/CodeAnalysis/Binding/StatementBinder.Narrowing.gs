@@ -3479,7 +3479,17 @@ internal partial class StatementBinder {
         // value on their symbol so every separately emitted body can inline it.
         var constValue object? = nil
         if syntax.Keyword?.Kind == SyntaxKind.ConstKeyword && convertedInitializer != nil {
-            if declaredVariable is GlobalVariableSymbol && ConstantExpressionEvaluator.TryFindNativeInteger(
+            if TypeSymbol.IsByRefLike(convertedInitializer.Type) && ClrSpanTypes.TryResolveUtf8Type(
+                $scope.References!!,
+                out var utf8Type
+            ) &&
+                ClrTypeUtilities
+                .AreSame(convertedInitializer.Type.ClrType, utf8Type) {
+                Diagnostics.ReportInvalidUtf8StringLiteral(
+                    syntax.Initializer?.Location ?? syntax.Identifier.Location,
+                    "A readonly byte span is not a constant."
+                )
+            } else if declaredVariable is GlobalVariableSymbol && ConstantExpressionEvaluator.TryFindNativeInteger(
                 convertedInitializer,
                 out var nativeType
             ) {

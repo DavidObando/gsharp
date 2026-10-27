@@ -76,6 +76,7 @@ internal class ConversionClassifier {
     private let refKindToString(RefKind) -> string
     private let bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
     private let canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool
+    private let getCurrentFunction() -> FunctionSymbol?
 
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
@@ -137,9 +138,11 @@ internal class ConversionClassifier {
         getRefKindFromModifier(SyntaxToken?) -> RefKind,
         refKindToString(RefKind) -> string,
         bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
-        canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool
+        canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool,
+        getCurrentFunction() -> FunctionSymbol?
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
+        this.getCurrentFunction = getCurrentFunction
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
         this.bindExpression = bindExpression ?? throw ArgumentNullException("bindExpression")
         this.bindExpressionWithTargetType = bindExpressionWithTargetType ??
@@ -240,7 +243,26 @@ internal class ConversionClassifier {
         targetType,
         strict,
         explicitValues,
-        explicitOrder
+        explicitOrder,
+        constructionSyntax: nil
+    )
+
+    func BindStructuralProjection(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        targetType TypeSymbol,
+        strict bool,
+        explicitValues IReadOnlyDictionary[string, BoundExpression]?,
+        explicitOrder ImmutableArray[string],
+        constructionSyntax SyntaxNode?
+    ) BoundExpression -> BindStructuralProjectionCore(
+        diagnosticLocation,
+        expression,
+        targetType,
+        strict,
+        explicitValues,
+        explicitOrder,
+        constructionSyntax
     )
 
     /// Checks whether an implicit user conversion should outrank structural projection.
@@ -782,7 +804,7 @@ internal class ConversionClassifier {
                 sourceType != TypeSymbol.Error &&
                 targetType != TypeSymbol
                 .Error {
-                if !StructuralProjectionPlanner.TryCreate(
+                if !conversion.IsInvariantArgumentMismatch && !StructuralProjectionPlanner.TryCreate(
                     sourceType,
                     targetType,
                     strict: true,
@@ -857,23 +879,29 @@ internal class ConversionClassifier {
         if conversion.RequiresPlatformNilCheck {
             return BindPlatformCoercionCheck(diagnosticLocation, expression, type!!)
         }
-        // Issue #2732: Nullable<T>.ClrType aliases T, but its IL stack shape
-        // remains Nullable<T>. Lower an explicit nullable-to-underlying
-        // conversion to the existing `!!` unwrap before async hoisting.
-        if expression.Type is NullableTypeSymbol sourceNullable &&
-            (
-            NullableLifting.IsValueTypeNullable(sourceNullable) || NullableLifting.IsUserValueTypeNullable(
-                sourceNullable
-            )
+        // Issues #2732/#5400: extract the nullable value before conversion and async hoisting.
+        // The shared unwrap throws InvalidOperationException for a missing value.
+        if expression.Type is NullableTypeSymbol sourceNullable && NullableLifting.IsAnyValueTypeNullable(
+            sourceNullable
         ) &&
-            Conversion
-            .ClassifyNonStructural(sourceNullable.UnderlyingType, type!!).IsIdentity {
+            type is not NullableTypeSymbol &&
+            !Conversion.IsReferenceLikeTarget(type!!) && Conversion.ClassifyNonStructural(
+            sourceNullable.UnderlyingType,
+            type!!
+        )
+            .Exists {
             let unwrap = Invariant.Required(
                 BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type),
                 "nullable-to-underlying conversion has a bound bang-bang operator",
                 expression: "BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type)"
             )
-            return BoundUnaryExpression(nil, unwrap, expression)
+            return BindConversion(
+                diagnosticLocation,
+                BoundUnaryExpression(nil, unwrap, expression){IsConversionUnwrap = true},
+                type,
+                allowExplicit: true,
+                callParameter
+            )
         }
         if conversion.IsStructuralProjection {
             if TryResolveUserDefinedSymbolConversion(
@@ -954,7 +982,8 @@ internal class ConversionClassifier {
                 projectionTargetType,
                 strict: true,
                 explicitValues: nil,
-                explicitOrder: default(ImmutableArray[string])
+                explicitOrder: default(ImmutableArray[string]),
+                constructionSyntax: nil
             )
             return if object.ReferenceEquals(projectionTargetType, type) || projected is BoundErrorExpression {
                 projected
@@ -3092,7 +3121,8 @@ internal class ConversionClassifier {
                 nil,
                 receiver,
                 userDisposeAsync!!,
-                ImmutableArray[BoundExpression].Empty
+                ImmutableArray[BoundExpression].Empty,
+                getMethodGroupObservableReturnType(userDisposeAsync!!, userDisposeAsync!!.Type)
             )
             return BoundAwaitExpression(nil, call, TypeSymbol.Void)
         }
@@ -3318,7 +3348,8 @@ internal class ConversionClassifier {
         targetType TypeSymbol,
         strict bool,
         explicitValues IReadOnlyDictionary[string, BoundExpression]?,
-        explicitOrder ImmutableArray[string]
+        explicitOrder ImmutableArray[string],
+        constructionSyntax SyntaxNode?
     ) BoundExpression {
         let explicitNames = if explicitValues == nil {
             default(HashSet[string]?)
@@ -3349,6 +3380,32 @@ internal class ConversionClassifier {
             return BoundErrorExpression(expression.Syntax)
         }
         plan = resolvedPlan
+        let ownsDataInitialization = resolvedPlan.Construction.UserType?.UsesConstructorOwnedDataConstruction == true
+        let usesPrimaryConstruction = ownsDataInitialization || resolvedPlan.Construction.UserType is {IsClass: true}
+        // Check collection omissions before applying optional-call defaults.
+        let usesPrimaryZero = ownsDataInitialization ||
+            usesPrimaryConstruction &&
+            constructionSyntax is StructLiteralExpressionSyntax
+        if ownsDataInitialization && !BoundStructLiteralExpression.ValidateDataConstructor(
+            resolvedPlan.Construction.UserType!!,
+            Diagnostics,
+            constructionSyntax ?? expression.Syntax,
+            getCurrentFunction(),
+            resolvedPlan
+                .Construction
+                .UserType!!.ClrType is {} constructorType &&
+                binderCtx
+                .References
+                .CanAccessInternalMembers(constructorType.Assembly),
+            suppliedPrimaryInputs: resolvedPlan
+                .ConstructorSlots
+                .Where(
+                (slot StructuralProjectionSlot) -> slot.Source != nil || explicitNames?.Contains(slot.Name) == true
+            )
+                .Select((slot StructuralProjectionSlot) -> slot.Name)
+        ) {
+            return BoundErrorExpression(expression.Syntax)
+        }
         let sourceTemp = LocalVariableSymbol(
             "<projectionSource${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
             isReadOnly: true,
@@ -3363,6 +3420,12 @@ internal class ConversionClassifier {
                 if !explicitValues.TryGetValue(name, out var value) || explicitReads!!.ContainsKey(name) {
                     continue
                 }
+                if usesPrimaryConstruction && !plan!!.ConstructorSlots.Any(
+                    (slot StructuralProjectionSlot) -> slot.Name == name
+                ) {
+                    explicitReads!!.Add(name, value)
+                    continue
+                }
                 let explicitTemp = LocalVariableSymbol(
                     "<projectionOverride${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: true,
@@ -3374,19 +3437,81 @@ internal class ConversionClassifier {
         }
         let constructorArguments = ImmutableArray.CreateBuilder[BoundExpression](plan!!.ConstructorSlots.Length)
         for slot in plan!!.ConstructorSlots {
+            if usesPrimaryZero && slot.Source == nil && explicitNames?.Contains(slot.Name) != true &&
+                resolvedPlan
+                .Construction
+                .UserType!!
+                .PrimaryConstructorParameters
+                .FirstOrDefault((parameter ParameterSymbol) -> parameter.Name == slot.Name) is {} parameter {
+                let owner = resolvedPlan.Construction.UserType!!
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    constructionSyntax ?? expression.Syntax,
+                    owner,
+                    parameter,
+                    out var missingDeclarationShape,
+                    slot.TargetType,
+                    if owner.IsClass {
+                        resolvedPlan.Construction.ClrConstructor
+                    } else {
+                        default(ConstructorInfo?)
+                    }
+                )
+                if missingDeclarationShape && slot.TargetType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                    Diagnostics.ReportNoApplicableOverload(
+                        if constructionSyntax is StructLiteralExpressionSyntax literal {
+                            literal.TypeIdentifier.Location
+                        } else {
+                            diagnosticLocation
+                        },
+                        owner.Name
+                    )
+                    return BoundErrorExpression(expression.Syntax)
+                }
+                if zero != nil || ownsDataInitialization {
+                    constructorArguments.Add(zero ?? BoundDefaultExpression(expression.Syntax, slot.TargetType))
+                    continue
+                }
+            }
             constructorArguments.Add(
                 BindStructuralProjectionSlot(diagnosticLocation, expression.Syntax, sourceTemp, slot, explicitReads)
             )
         }
-        if plan!!
-            .Construction
-            .Kind == StructuralProjectionConstructionKind.UserDefault &&
+        var initializerSlots = plan!!.InitializerSlots
+        if usesPrimaryConstruction && !explicitOrder.IsDefaultOrEmpty {
+            let ordered = ImmutableArray.CreateBuilder[StructuralProjectionSlot](initializerSlots.Length)
+            ordered.AddRange(
+                initializerSlots.Where((slot StructuralProjectionSlot) -> explicitNames?.Contains(slot.Name) != true)
+            )
+            for name in explicitOrder {
+                ordered.AddRange(initializerSlots.Where((slot StructuralProjectionSlot) -> slot.Name == name))
+            }
+            initializerSlots = ordered.ToImmutable()
+        }
+        if targetType is StructSymbol &&
+            (ownsDataInitialization || plan!!.Construction.Kind == StructuralProjectionConstructionKind.UserDefault) &&
             plan!!
             .Construction
             .UserType is {IsClass: false} userType {
             let initializers = ImmutableArray.CreateBuilder[BoundFieldInitializer](plan!!.InitializerSlots.Length)
             let initializedFields = HashSet[FieldSymbol]()
-            for slot in plan!!.InitializerSlots {
+            for var i = 0; i < plan!!.ConstructorSlots.Length; i++ {
+                let member = BoundStructLiteralExpression.GetPrimaryMember(userType, plan!!.ConstructorSlots[i].Name)
+                initializers.Add(
+                    if member is FieldSymbol field {
+                        BoundFieldInitializer(field, constructorArguments[i])
+                    } else {
+                        BoundFieldInitializer(
+                            Invariant.Required(
+                                member as PropertySymbol,
+                                "a primary projection input has a mapped storage member",
+                                expression: "member as PropertySymbol"
+                            ),
+                            constructorArguments[i]
+                        )
+                    }
+                )
+            }
+            for slot in initializerSlots {
                 let value = BindStructuralProjectionSlot(
                     diagnosticLocation,
                     expression.Syntax,
@@ -3415,7 +3540,7 @@ internal class ConversionClassifier {
                 }
             }
             for field in userType.Fields {
-                if initializedFields.Contains(field) {
+                if ownsDataInitialization || initializedFields.Contains(field) {
                     continue
                 }
                 if TryGetStructuralProjectionFieldInitializer(
@@ -3502,7 +3627,7 @@ internal class ConversionClassifier {
             targetType
         )
         statements.Add(BoundVariableDeclaration(expression.Syntax, targetTemp, construction))
-        for slot in plan!!.InitializerSlots {
+        for slot in initializerSlots {
             let receiver = BoundVariableExpression(expression.Syntax, targetTemp)
             let value = BindStructuralProjectionSlot(
                 diagnosticLocation,

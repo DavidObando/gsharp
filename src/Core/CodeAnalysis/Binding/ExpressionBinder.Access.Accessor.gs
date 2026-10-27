@@ -84,11 +84,8 @@ internal partial class ExpressionBinder {
         // `Oahu.Decrypt.Mp4Operation[TResult](...)`. Source types are visible by
         // simple name across packages, but the qualified path above only resolves
         // CLR-backed reference types (a source type has no CLR type at bind time).
-        // When the leading segments are a pure namespace/package prefix (none names
-        // a value, type, import, or imported class) and the terminal simple name
-        // is a user aggregate, peel the redundant prefix and bind the terminal by
-        // simple name. cs2gs fully-qualifies constructor calls, so this is the
-        // common translated shape.
+        // Resolve the complete source identity instead of rebinding a terminal
+        // simple name, which can select a lexical homonym.
         if TryBindQualifiedSourceTypeConstruction(syntax, out var qualifiedSourceCtor) {
             return qualifiedSourceCtor!!
         }
@@ -2079,7 +2076,7 @@ internal partial class ExpressionBinder {
                     ce.TypeArgumentList?.Arguments.Count ?? -1
                 ) {
                     if nestedConstructorType != nil {
-                        return overloads.BindConstructorCallExpression(ce, nestedConstructorType)
+                        return overloads.BindCallExpression(ce, nestedConstructorType)
                     }
                     // Enums use the same explicit conversion as an unqualified
                     // T(value), retaining the resolved owner rather than a homonym.
@@ -2102,13 +2099,7 @@ internal partial class ExpressionBinder {
                             )
                             return BoundErrorExpression(ce)
                         }
-                        let conversionTarget TypeSymbol = if ce.NullableQuestionToken != nil {
-                            cast[TypeSymbol](NullableTypeSymbol.Get(nestedConversionType))
-                        } else {
-                            cast[TypeSymbol](nestedConversionType)
-                        }
-                        reportObsoleteUseIfApplicable(ce.Identifier.Location, conversionTarget, conversionTarget.Name)
-                        return conversions.BindConversion(ce.Arguments[0], conversionTarget, allowExplicit: true)
+                        return overloads.BindCallExpression(ce, nestedConversionType)
                     }
                 }
                 return BindUserTypeStaticCall(structSym, ce)
@@ -2532,22 +2523,22 @@ internal partial class ExpressionBinder {
     /// (cref:TryCloseImportedGenericTypeReceiver(Type, ImmutableArray{TypeSymbol}, ExpressionSyntax, out
     /// ImportedClassSymbol?, out bool))
     /// for what the flag means and why it is not a diagnostic-count snapshot.
-    /// Only the IMPORTED close can set it — a user (cref:StructSymbol) /
-    /// (cref:InterfaceSymbol) construction reports nothing here — so a
-    /// caller that consumes only the user-symbol outputs can keep using the
-    /// discarding overload above with no change in behaviour.
+    /// Qualified (cref:StructSymbol) / (cref:InterfaceSymbol) receivers also
+    /// retain committed type-argument errors and set this flag.
     /// @param index The candidate `Name[TypeArg]` receiver.
     /// @param constructedStruct The constructed generic class/struct on success.
     /// @param constructedInterface The constructed generic interface on success.
     /// @param constructedImported The constructed imported CLR generic type on success.
     /// @param failureHandled Whether a `false` result already reported its reason.
+    /// @param resolvedType The exact qualified source definition, or null for ordinary lookup.
     /// @returns Whether a constructed generic type receiver was resolved.
     private func TryResolveConstructedGenericTypeReceiver(
         index IndexExpressionSyntax,
         out constructedStruct StructSymbol?,
         out constructedInterface InterfaceSymbol?,
         out constructedImported ImportedClassSymbol?,
-        out failureHandled bool
+        out failureHandled bool,
+        resolvedType TypeSymbol? = nil
     ) bool {
         constructedStruct = nil
         constructedInterface = nil
@@ -2560,14 +2551,14 @@ internal partial class ExpressionBinder {
         // Genuine indexing (`arr[i]`, `dict[key]`) requires the target to name a
         // value. Only when the name is NOT a value do we consider the
         // constructed-generic-type interpretation.
-        if $scope.TryLookupSymbol(name) is VariableSymbol {
+        if resolvedType == nil && $scope.TryLookupSymbol(name) is VariableSymbol {
             return false
         }
         // Gate on the name actually naming a generic type definition before
         // binding the bracket contents as type arguments, so that we never emit
         // spurious type diagnostics for a non-generic-type target.
         let arity = index.Indices.Count
-        if targetName.IdentifierToken.Text == "managed" && binderCtx.CanUseIntrinsicAlias(
+        if resolvedType == nil && targetName.IdentifierToken.Text == "managed" && binderCtx.CanUseIntrinsicAlias(
             $scope,
             targetName.IdentifierToken,
             getCurrentFunction(),
@@ -2591,7 +2582,34 @@ internal partial class ExpressionBinder {
                 out failureHandled
             )
         }
-        if name == "slice" && binderCtx.CanUseNativeBufferAlias(
+        if resolvedType == nil && CanUseSpanAlias(targetName.IdentifierToken, expression: true) {
+            failureHandled = true
+            if index.Indices.Count != 1 || !TryBuildTypeClauseFromExpression(index.Indices[0], out var elementClause) {
+                Diagnostics.ReportNativeSpanType(index.Location, "span[T] requires exactly one element type")
+                return false
+            }
+            let clause = TypeClauseSyntax(
+                index.SyntaxTree,
+                nil,
+                nil,
+                nil,
+                targetName.IdentifierToken,
+                index.OpenBracketToken,
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Syntax
+                    .SeparatedSyntaxList[TypeClauseSyntax](ImmutableArray.Create[SyntaxNode](elementClause)),
+                index.CloseBracketToken,
+                nil
+            )
+            if bindTypeClause(clause) is not ImportedTypeSymbol spanType {
+                return false
+            }
+            constructedImported = ImportedClassSymbol(spanType.Type, index, spanType, $scope.References)
+            return true
+        }
+        if resolvedType == nil && name == "slice" && binderCtx.CanUseNativeBufferAlias(
             $scope,
             targetName.IdentifierToken,
             getCurrentFunction(),
@@ -2619,13 +2637,17 @@ internal partial class ExpressionBinder {
         // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
         // generic receiver fails to resolve. Disambiguate using the bracketed
         // type-argument count so `Box[int32]` selects the arity-1 `Box[T]`.
-        var userGenericDef = binderCtx.TryLookupSourceType(
-            $scope,
-            name,
-            preferredArity: arity,
-            getCurrentFunction(),
-            out var alias,
-            out var typeNameAmbiguous
+        var alias TypeSymbol? = resolvedType
+        var typeNameAmbiguous = false
+        var userGenericDef = (
+            resolvedType != nil || binderCtx.TryLookupSourceType(
+                $scope,
+                name,
+                preferredArity: arity,
+                getCurrentFunction(),
+                out alias,
+                out typeNameAmbiguous
+            )
         ) &&
             (
             (alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity) ||
@@ -2633,7 +2655,7 @@ internal partial class ExpressionBinder {
         )
         var openClrType Type? = nil
         var genericAmbiguity ImportedTypeAmbiguity? = nil
-        var clrGenericDef = !typeNameAmbiguous && $scope.TryLookupImportedGenericClass(
+        var clrGenericDef = resolvedType == nil && !typeNameAmbiguous && $scope.TryLookupImportedGenericClass(
             name,
             arity,
             out openClrType,
@@ -2653,7 +2675,9 @@ internal partial class ExpressionBinder {
         if !userGenericDef && !clrGenericDef {
             return false
         }
-        if !TryBindTypeArgumentExpressions(index.Indices, out var typeArgs) || typeArgs.Length != arity {
+        failureHandled = resolvedType != nil
+        if !TryBindTypeArgumentExpressions(index.Indices, out var typeArgs, reportInvalidSyntax: resolvedType != nil) ||
+            typeArgs.Length != arity {
             return false
         }
         if userGenericDef {
@@ -2725,20 +2749,23 @@ internal partial class ExpressionBinder {
     /// @param constructedInterface The constructed generic interface on success.
     /// @param constructedImported The constructed imported CLR generic type on success.
     /// @param failureHandled Whether a `false` result already reported its reason.
+    /// @param resolvedType The exact qualified source definition, or null for ordinary lookup.
     /// @returns Whether a constructed generic type receiver was resolved.
     private func TryResolveConstructedGenericTypeReceiver(
         generic GenericNameExpressionSyntax,
         out constructedStruct StructSymbol?,
         out constructedInterface InterfaceSymbol?,
         out constructedImported ImportedClassSymbol?,
-        out failureHandled bool
+        out failureHandled bool,
+        resolvedType TypeSymbol? = nil
     ) bool {
         constructedStruct = nil
         constructedInterface = nil
         constructedImported = nil
         failureHandled = false
         let name = generic.Identifier.ValueText
-        if generic
+        if resolvedType == nil &&
+            generic
             .Identifier
             .Text == "managed" &&
             (
@@ -2775,7 +2802,39 @@ internal partial class ExpressionBinder {
             constructedImported = ImportedClassSymbol(managedType.Type, generic, managedType, $scope.References)
             return true
         }
-        if name == "slice" &&
+        if resolvedType == nil &&
+            generic
+            .Identifier
+            .Text == "span" &&
+            (generic.ReadOnlySpanModifier != nil || CanUseSpanAlias(generic.Identifier, expression: true)) {
+            failureHandled = true
+            if !CanUseSpanAlias(generic.Identifier, expression: true) {
+                Diagnostics.ReportNativeSpanType(
+                    generic.Location,
+                    "a same-named value shadows the span type receiver; use System.ReadOnlySpan[T] explicitly"
+                )
+                return false
+            }
+            let arguments = generic.TypeArgumentList
+            let clause = TypeClauseSyntax(
+                generic.SyntaxTree,
+                nil,
+                nil,
+                nil,
+                generic.Identifier,
+                arguments.OpenBracketToken,
+                arguments.Arguments,
+                arguments.CloseBracketToken,
+                nil
+            ){ReadOnlySpanModifier = generic.ReadOnlySpanModifier}
+            if bindTypeClause(clause) is not ImportedTypeSymbol spanType {
+                return false
+            }
+            constructedImported = ImportedClassSymbol(spanType.Type, generic, spanType, $scope.References)
+            return true
+        }
+        if resolvedType == nil &&
+            name == "slice" &&
             (
             generic.ReadOnlySliceModifier != nil || binderCtx.CanUseNativeBufferAlias(
                 $scope,
@@ -2805,7 +2864,7 @@ internal partial class ExpressionBinder {
             return true
         }
         // A value-named receiver is genuine element access, never a type.
-        if $scope.TryLookupSymbol(name) is VariableSymbol {
+        if resolvedType == nil && $scope.TryLookupSymbol(name) is VariableSymbol {
             return false
         }
         let argClauses = generic.TypeArgumentList.Arguments
@@ -2814,13 +2873,17 @@ internal partial class ExpressionBinder {
         // index-expression overload — select the same-name type whose generic
         // arity matches the supplied type-argument count so `Box[int32]`
         // resolves to `Box[T]` rather than the non-generic `Box`.
-        var userGenericDef = binderCtx.TryLookupSourceType(
-            $scope,
-            name,
-            preferredArity: arity,
-            getCurrentFunction(),
-            out var alias,
-            out var typeNameAmbiguous
+        var alias TypeSymbol? = resolvedType
+        var typeNameAmbiguous = false
+        var userGenericDef = (
+            resolvedType != nil || binderCtx.TryLookupSourceType(
+                $scope,
+                name,
+                preferredArity: arity,
+                getCurrentFunction(),
+                out alias,
+                out typeNameAmbiguous
+            )
         ) &&
             (
             (alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity) ||
@@ -2828,7 +2891,7 @@ internal partial class ExpressionBinder {
         )
         var openClrType Type? = nil
         var genericAmbiguity ImportedTypeAmbiguity? = nil
-        var clrGenericDef = !typeNameAmbiguous && $scope.TryLookupImportedGenericClass(
+        var clrGenericDef = resolvedType == nil && !typeNameAmbiguous && $scope.TryLookupImportedGenericClass(
             name,
             arity,
             out openClrType,
@@ -2848,6 +2911,7 @@ internal partial class ExpressionBinder {
         if !userGenericDef && !clrGenericDef {
             return false
         }
+        failureHandled = resolvedType != nil
         let typeArgsBuilder = ImmutableArray.CreateBuilder[TypeSymbol](arity)
         for clause in argClauses {
             let bound TypeSymbol? = bindTypeClause(clause)
@@ -2940,13 +3004,15 @@ internal partial class ExpressionBinder {
     /// @param constructedInterface The constructed generic interface on success.
     /// @param constructedImported The constructed imported CLR generic type on success.
     /// @param failureHandled Whether a `false` result already reported its reason.
+    /// @param resolvedType The exact qualified source definition, or null for ordinary lookup.
     /// @returns Whether a constructed generic type receiver was resolved.
     private func TryResolveConstructedGenericTypeReceiver(
         receiver ExpressionSyntax,
         out constructedStruct StructSymbol?,
         out constructedInterface InterfaceSymbol?,
         out constructedImported ImportedClassSymbol?,
-        out failureHandled bool
+        out failureHandled bool,
+        resolvedType TypeSymbol? = nil
     ) bool {
         constructedStruct = nil
         constructedInterface = nil
@@ -2959,7 +3025,8 @@ internal partial class ExpressionBinder {
                     out constructedStruct,
                     out constructedInterface,
                     out constructedImported,
-                    out failureHandled
+                    out failureHandled,
+                    resolvedType
                 )
             }
             case generic is GenericNameExpressionSyntax {
@@ -2968,23 +3035,20 @@ internal partial class ExpressionBinder {
                     out constructedStruct,
                     out constructedInterface,
                     out constructedImported,
-                    out failureHandled
+                    out failureHandled,
+                    resolvedType
                 )
             }
             case accessorChain is AccessorExpressionSyntax when !accessorChain.IsNullConditional {
-                // A package-qualified generic type receiver written by cs2gs,
-                // e.g. `Oahu.Aux.Diagnostics.TreeDecomposition[T].field = v`. The
-                // leading namespace segments are redundant for a source type; peel
-                // them and re-dispatch on the bare constructed-generic terminal.
-                let peeled = PeelNamespacePrefix(accessorChain)
-                if !object.ReferenceEquals(peeled, accessorChain) &&
-                    (peeled is IndexExpressionSyntax or GenericNameExpressionSyntax) {
+                if TryResolveQualifiedSourceType(accessorChain, out var remainder, out var sourceType) &&
+                    (remainder is IndexExpressionSyntax or GenericNameExpressionSyntax) {
                     return TryResolveConstructedGenericTypeReceiver(
-                        peeled,
+                        remainder,
                         out constructedStruct,
                         out constructedInterface,
                         out constructedImported,
-                        out failureHandled
+                        out failureHandled,
+                        sourceType
                     )
                 }
                 return false
@@ -2995,13 +3059,15 @@ internal partial class ExpressionBinder {
         }
     }
 
-    /// Whether [`segment`](paramref) is a pure namespace/package prefix
-    /// component — it does not name a known type/alias, an import alias, or an
-    /// imported class, and (only for the leading segment of a chain, per
-    /// [`isLeadingSegment`](paramref)) does not name an in-scope value.
-    /// cs2gs fully-qualifies type references, so a leading run of such segments
-    /// in front of a same-compilation source type is redundant and must be
-    /// peeled before binding by simple name.
+    /// Whether [`segment`](paramref) is a pure namespace/package prefix component.
+    /// Import aliases prevent peeling unless they target source packages.
+    /// Leading segments also exclude values, predefined type aliases, and type parameters.
+    /// Check import aliases before canonical lookup because namespace targets do not name types.
+    /// Later components use the complete prefix through (cref:IsQualifiedSourceTypeBoundary).
+    /// A simple name from another package must not stop the qualified lookup.
+    /// Namespace aliases use source lookup to avoid recursive namespace resolution.
+    /// Source ambiguity does not exclude an independently resolved CLR receiver.
+    /// Exact lookup retains the complete prefix when binding the source type.
     ///
     /// The in-scope-value check is restricted to the leading segment because it
     /// is what distinguishes a genuine value-access chain (e.g.
@@ -3018,43 +3084,33 @@ internal partial class ExpressionBinder {
     /// @param isLeadingSegment Whether [`segment`](paramref) is the first segment being peeled from
     /// the chain (as opposed to a later, already-committed continuation).
     /// @returns Whether the segment is a pure namespace/package prefix.
-    private func IsNamespacePrefixSegment(segment string, isLeadingSegment bool = true) bool -> (
-        !isLeadingSegment || !($scope.TryLookupSymbol(segment) is VariableSymbol)
+    private func IsNamespacePrefixSegment(segment string, isLeadingSegment bool = true) bool -> !isLeadingSegment ||
+        !($scope.TryLookupSymbol(segment) is VariableSymbol) &&
+        !(
+        $scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias && !$scope.TryMatchSourcePackagePrefix(
+            import_!!.Target,
+            out _
+        )
     ) &&
-        !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _) &&
-        !($scope.TryLookupImport(segment, out var import_) && import_!!.IsAlias) &&
+        (
+        if !(import_ is ImportSymbol aliasImport && aliasImport.IsAlias) {
+            lookupType(segment) == nil
+        } else {
+            !binderCtx.TryLookupSourceType($scope, segment, preferredArity: -1, getCurrentFunction(), out _, out _)
+        }
+    ) &&
         !$scope.TryLookupImportedClass(segment, declaration: nil, out _)
 
     private func IsQualifiedSourceTypeBoundary(
         peeledSegments List[string],
         segment string
     ) bool -> peeledSegments.Count > 0 &&
-        $scope.TryLookupQualifiedSourceType(string.Join(".", peeledSegments) + "." + segment, preferredArity: -1, out _)
-
-    /// Peels a leading run of pure namespace/package segments off a dotted
-    /// accessor chain, returning the first non-namespace remainder (unchanged
-    /// when the head is not a namespace segment). Used to strip a redundant
-    /// package prefix cs2gs emits in front of a same-compilation source type.
-    /// @param expr The dotted accessor chain to peel.
-    /// @returns The first non-namespace remainder of the chain.
-    private func PeelNamespacePrefix(expr ExpressionSyntax) ExpressionSyntax {
-        var current = expr
-        var peeledAny = false
-        let peeledSegments = List[string]()
-        while current is AccessorExpressionSyntax accessor &&
-            !accessor.IsNullConditional &&
-            accessor.LeftPart is NameExpressionSyntax leftName {
-            let segment = leftName.IdentifierToken.ValueText
-            if IsQualifiedSourceTypeBoundary(peeledSegments, segment) ||
-                !IsNamespacePrefixSegment(segment, isLeadingSegment: !peeledAny) {
-                break
-            }
-            peeledSegments.Add(segment)
-            current = accessor.RightPart
-            peeledAny = true
-        }
-        return current
-    }
+        $scope
+        .TryLookupQualifiedSourceType(
+        $scope.ExpandQualifiedTypeName(peeledSegments.Append(segment).ToArray(), peeledSegments.Count + 1),
+        preferredArity: -1,
+        out _
+    )
 
     /// Closes an open imported CLR generic definition over the CLR types of the
     /// bound type arguments (e.g. `ArrayPool`1` + `byte` ->
@@ -3205,12 +3261,16 @@ internal partial class ExpressionBinder {
     /// @returns Whether every argument resolved to a type.
     private func TryBindTypeArgumentExpressions(
         argsSyntax ExpressionSyntax,
-        out typeArgs ImmutableArray[TypeSymbol]
+        out typeArgs ImmutableArray[TypeSymbol],
+        reportInvalidSyntax bool = false
     ) bool {
         typeArgs = default(ImmutableArray[TypeSymbol])
         let builder = ImmutableArray.CreateBuilder[TypeSymbol]()
         for argExpr in FlattenCommaList(argsSyntax) {
             if !TryBuildTypeClauseFromExpression(argExpr, out var typeClause) {
+                if reportInvalidSyntax {
+                    Diagnostics.ReportUndefinedType(argExpr.Location, argExpr.ToString())
+                }
                 return false
             }
             let bound TypeSymbol? = bindTypeClause(typeClause)
@@ -3228,11 +3288,12 @@ internal partial class ExpressionBinder {
 
     private func TryBindTypeArgumentExpressions(
         argumentSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
-        out typeArgs ImmutableArray[TypeSymbol]
+        out typeArgs ImmutableArray[TypeSymbol],
+        reportInvalidSyntax bool = false
     ) bool {
         let builder = ImmutableArray.CreateBuilder[TypeSymbol](argumentSyntaxes.Count)
         for argumentSyntax in argumentSyntaxes {
-            if !TryBindTypeArgumentExpressions(argumentSyntax, out var argumentTypes) {
+            if !TryBindTypeArgumentExpressions(argumentSyntax, out var argumentTypes, reportInvalidSyntax) {
                 typeArgs = default(ImmutableArray[TypeSymbol])
                 return false
             }

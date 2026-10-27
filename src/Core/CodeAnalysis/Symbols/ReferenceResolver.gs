@@ -1060,7 +1060,7 @@ class ReferenceResolver : IDisposable {
     }
 
     /// A (cref:MetadataAssemblyResolver) that resolves from a supplied
-    /// set of paths (via an inner (cref:PathAssemblyResolver)) and, when
+    /// set of images indexed by their metadata assembly names and, when
     /// that fails, degrades gracefully: instead of allowing the
     /// (cref:MetadataLoadContext) to surface an exception for an
     /// unresolved transitive dependency, it records the offending simple name
@@ -1074,25 +1074,38 @@ class ReferenceResolver : IDisposable {
         private let assemblyPaths Dictionary[string, string] = Dictionary[string, string](
             StringComparer.OrdinalIgnoreCase
         )
+        private let assemblyNamesByPath Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
         private let unresolved HashSet[string] = HashSet[string](StringComparer.OrdinalIgnoreCase)
         private let gate object = SystemObject()
 
         init(paths IEnumerable[string], sharedPaths IEnumerable[string]) {
-            let shared = sharedPaths.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            let shared = sharedPaths.Select(Path.GetFullPath).ToHashSet(StringComparer.Ordinal)
             // Read each assembly into memory so no file handles are held open.
             // This prevents MSBuild CopyRefAssembly from being blocked (#853).
             for path in paths {
                 let fullPath = Path.GetFullPath(path)
-                let fileName = Path.GetFileNameWithoutExtension(fullPath)
-                if !assemblyBytes.ContainsKey(fileName) {
+                if !assemblyNamesByPath.ContainsKey(fullPath) {
                     try {
                         let bytes = if shared.Contains(fullPath) {
                             SharedHostAssemblyBytes.GetOrAdd(fullPath, ReadAssemblyBytes)
                         } else {
                             ReadAssemblyBytes(fullPath)
                         }
-                        assemblyBytes[fileName] = bytes
-                        assemblyPaths[fileName] = fullPath
+                        using let pe = PEReader(ImmutableCollectionsMarshal.AsImmutableArray(bytes))
+                        if !pe.HasMetadata {
+                            continue
+                        }
+                        let reader = pe.GetMetadataReader()
+                        if !reader.IsAssembly {
+                            continue
+                        }
+                        let simpleName = reader.GetString(reader.GetAssemblyDefinition().Name)
+                        assemblyNamesByPath[fullPath] = simpleName
+                        // Keep the first supplied image for each name, before host fallback images.
+                        if !assemblyBytes.ContainsKey(simpleName) {
+                            assemblyBytes[simpleName] = bytes
+                            assemblyPaths[simpleName] = fullPath
+                        }
                     } catch (ex Exception) when ex is IOException ||
                         ex is UnauthorizedAccessException ||
                         ex is BadImageFormatException {
@@ -1122,11 +1135,13 @@ class ReferenceResolver : IDisposable {
         /// Loads an assembly by path into the given (cref:MetadataLoadContext)
         /// using in-memory bytes (no file handle held open).
         func LoadFromPath(context MetadataLoadContext, path string) Assembly {
-            let fileName = Path.GetFileNameWithoutExtension(path)
             var asm Assembly
-            if assemblyBytes.TryGetValue(fileName, out var bytes) {
+            var originalPath = path
+            let bytes = GetImageFromPath(path)
+            if bytes != nil {
                 asm = context.LoadFromByteArray(bytes)
                 ReferenceResolver.RegisterAssemblyContentFingerprint(asm, bytes, GetImage)
+                originalPath = assemblyPaths[assemblyNamesByPath[Path.GetFullPath(path)]]
             } else {
                 // Fallback: read from disk with sharing flags.
                 using let fs = FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
@@ -1135,7 +1150,7 @@ class ReferenceResolver : IDisposable {
                 asm = context.LoadFromByteArray(buffer)
                 ReferenceResolver.RegisterAssemblyContentFingerprint(asm, buffer, GetImage)
             }
-            ReferenceResolver.RegisterAssemblyOriginalPath(asm, path)
+            ReferenceResolver.RegisterAssemblyOriginalPath(asm, originalPath)
             return asm
         }
 
@@ -1144,6 +1159,20 @@ class ReferenceResolver : IDisposable {
         func GetImage(simpleName string)([]uint8)? {
             if assemblyBytes.TryGetValue(simpleName, out var image) {
                 return image
+            }
+            return nil
+        }
+
+        func GetImageFromPath(path string)([]uint8)? {
+            if assemblyNamesByPath.TryGetValue(Path.GetFullPath(path), out var simpleName) {
+                return GetImage(simpleName)
+            }
+            return nil
+        }
+
+        func GetAssemblyNameFromPath(path string) string? {
+            if assemblyNamesByPath.TryGetValue(Path.GetFullPath(path), out var simpleName) {
+                return simpleName
             }
             return nil
         }
@@ -1201,7 +1230,7 @@ class ReferenceResolver : IDisposable {
             private let SharedHostAssemblyBytes ConcurrentDictionary[string, []uint8] = ConcurrentDictionary[
                 string,
                 []uint8
-            ](StringComparer.OrdinalIgnoreCase)
+            ](StringComparer.Ordinal)
 
             private func ReadAssemblyBytes(path string)[]uint8 {
                 using let stream = FileStream(
@@ -1342,6 +1371,26 @@ class ReferenceResolver : IDisposable {
                 }
             }
             return nil
+        }
+
+        internal func OpenReferencedAssemblyImage(origin Assembly, simpleName string) Stream? {
+            if AssemblyImageLookups.TryGetValue(origin, out var imageOf) {
+                let image = imageOf(simpleName)
+                return if image != nil {
+                    MemoryStream(image, writable: false)
+                } else {
+                    nil
+                }
+            }
+            let assembly = AssemblyLoadContext
+                .GetLoadContext(origin)
+                ?.Assemblies
+                .FirstOrDefault((candidate Assembly) -> candidate.GetName().Name == simpleName)
+            return if assembly != nil {
+                OpenAssemblyImage(assembly)
+            } else {
+                nil
+            }
         }
 
         /// Gets a resolver that searches the runtime's currently loaded
@@ -1517,27 +1566,24 @@ class ReferenceResolver : IDisposable {
                 return Default()
             }
             // Augment the resolver with the gsc host's trusted platform assemblies
-            // as a *fallback*. User-supplied paths take precedence because the
-            // PathAssemblyResolver iterates in order, so any BCL assembly the user
+            // as a *fallback*. The resolver registers supplied identities first.
+            // Any BCL assembly the user
             // brings (e.g. from a target framework ref pack) wins over the host
             // copy. The host fallback only kicks in for dependencies the user did
             // not enumerate (typical when a user DLL pulls in extra BCL pieces).
             let resolverPaths = List[string](paths)
             let hostPaths = GetHostTrustedPlatformAssemblies()
-            let userPathFileNames = HashSet[string](StringComparer.OrdinalIgnoreCase)
-            for path in paths {
-                userPathFileNames.Add(Path.GetFileName(path))
-            }
-            let fallbackHostPaths = List[string]()
-            let seenResolverFile = HashSet[string](userPathFileNames, StringComparer.OrdinalIgnoreCase)
-            for host in hostPaths {
-                if seenResolverFile.Add(Path.GetFileName(host)) {
-                    resolverPaths.Add(host)
-                    fallbackHostPaths.Add(host)
-                }
-            }
-            let resolver = FallbackMetadataAssemblyResolver(resolverPaths, fallbackHostPaths)
-            let mlc = MetadataLoadContext(resolver, coreAssemblyName: ChooseCoreAssemblyName(resolverPaths))
+            resolverPaths.AddRange(hostPaths)
+            let resolver = FallbackMetadataAssemblyResolver(resolverPaths, hostPaths)
+            let userAssemblyNames = paths
+                .Select(resolver.GetAssemblyNameFromPath)
+                .OfType[string]()
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            let fallbackHostPaths = hostPaths.Where(
+                (path string) -> !userAssemblyNames.Contains(resolver.GetAssemblyNameFromPath(path) ?? string.Empty)
+            )
+                .ToList()
+            let mlc = MetadataLoadContext(resolver, coreAssemblyName: ChooseCoreAssemblyName(resolverPaths, resolver))
             let builder = ImmutableArray.CreateBuilder[Assembly]()
             let seen = HashSet[string](StringComparer.OrdinalIgnoreCase)
             for path in paths {
@@ -1581,7 +1627,7 @@ class ReferenceResolver : IDisposable {
                     break
                 }
             }
-            if userHasNonBcl && !SuppliesDownlevelCoreLibrary(paths) {
+            if userHasNonBcl && !SuppliesDownlevelCoreLibrary(paths, resolver) {
                 for host in fallbackHostPaths {
                     if !IsBclOrRuntimeAssemblyPath(host) {
                         continue
@@ -1601,7 +1647,7 @@ class ReferenceResolver : IDisposable {
                 mlc,
                 missing,
                 hostFallbackAssemblyNames: fallbackHostPaths
-                    .Select(Path.GetFileNameWithoutExtension)
+                    .Select(resolver.GetAssemblyNameFromPath)
                     .OfType[string]()
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
             )
@@ -1665,7 +1711,7 @@ class ReferenceResolver : IDisposable {
                 )
             }
             for path in resolverPaths {
-                let image = supplier.GetImage(Path.GetFileNameWithoutExtension(path))
+                let image = supplier.GetImageFromPath(path)
                 // The context loads a dependency only when a signature needs it, and skips an unreadable one.
                 // The set skips it at construction, so one bad dependency does not hide the others.
                 if image != nil && seen.Add(image) && HasAssemblyMetadata(image) {
@@ -1712,6 +1758,11 @@ class ReferenceResolver : IDisposable {
             }
             for path in paths {
                 if string.Equals(Path.GetFullPath(path), bundledPath, StringComparison.OrdinalIgnoreCase) {
+                    return
+                }
+                if Path.GetFileName(bundledPath) == "Gsharp.Runtime.Values.dll" && File.Exists(path) &&
+                    AssemblyName
+                    .GetAssemblyName(path).Name == NativeSliceTypes.AssemblyName {
                     return
                 }
             }
@@ -2189,7 +2240,10 @@ class ReferenceResolver : IDisposable {
             return builder.ToImmutable()
         }
 
-        private func ChooseCoreAssemblyName(paths IReadOnlyList[string]) string? {
+        private func ChooseCoreAssemblyName(
+            paths IReadOnlyList[string],
+            resolver FallbackMetadataAssemblyResolver
+        ) string? {
             // MetadataLoadContext needs a "core assembly" — the one declaring the
             // primitive types (Object, String, etc.). Most modern reference packs
             // define them in System.Runtime.dll, but netstandard2.0 defines them in
@@ -2197,19 +2251,21 @@ class ReferenceResolver : IDisposable {
             // back to it. Inspect the candidates rather than guessing by filename.
             var hasMscorlib = false
             for path in paths {
-                let fileName = Path.GetFileNameWithoutExtension(path)
+                let assemblyName = resolver.GetAssemblyNameFromPath(path)
+                let image = resolver.GetImageFromPath(path)
                 if (
-                    string.Equals(fileName, "System.Runtime", StringComparison.OrdinalIgnoreCase) || string.Equals(
-                        fileName,
+                    string.Equals(assemblyName, "System.Runtime", StringComparison.OrdinalIgnoreCase) || string.Equals(
+                        assemblyName,
                         "mscorlib",
                         StringComparison.OrdinalIgnoreCase
                     ) ||
-                        string.Equals(fileName, "netstandard", StringComparison.OrdinalIgnoreCase)
+                        string.Equals(assemblyName, "netstandard", StringComparison.OrdinalIgnoreCase)
                 ) &&
-                    DeclaresSystemObject(path) {
-                    return fileName
+                    image != nil &&
+                    DeclaresSystemObject(image) {
+                    return assemblyName
                 }
-                hasMscorlib |= string.Equals(fileName, "mscorlib", StringComparison.OrdinalIgnoreCase)
+                hasMscorlib |= string.Equals(assemblyName, "mscorlib", StringComparison.OrdinalIgnoreCase)
             }
             return if hasMscorlib {
                 "mscorlib"
@@ -2224,33 +2280,33 @@ class ReferenceResolver : IDisposable {
         /// paths count: the host's own `mscorlib.dll` and `netstandard.dll` are facades
         /// that declare nothing.
         /// @param paths The supplied reference paths.
+        /// @param resolver The selected metadata names and images.
         /// @returns `true` when the target's core library is a downlevel one.
-        private func SuppliesDownlevelCoreLibrary(paths IReadOnlyList[string]) bool {
+        private func SuppliesDownlevelCoreLibrary(
+            paths IReadOnlyList[string],
+            resolver FallbackMetadataAssemblyResolver
+        ) bool {
             for path in paths {
-                let fileName = Path.GetFileNameWithoutExtension(path)
+                let assemblyName = resolver.GetAssemblyNameFromPath(path)
+                let image = resolver.GetImageFromPath(path)
                 if (
-                    string.Equals(fileName, "netstandard", StringComparison.OrdinalIgnoreCase) || string.Equals(
-                        fileName,
+                    string.Equals(assemblyName, "netstandard", StringComparison.OrdinalIgnoreCase) || string.Equals(
+                        assemblyName,
                         "mscorlib",
                         StringComparison.OrdinalIgnoreCase
                     )
                 ) &&
-                    DeclaresSystemObject(path) {
+                    image != nil &&
+                    DeclaresSystemObject(image) {
                     return true
                 }
             }
             return false
         }
 
-        private func DeclaresSystemObject(path string) bool {
+        private func DeclaresSystemObject(image[]uint8) bool {
             try {
-                using let stream = FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete
-                )
-                using let peReader = PEReader(stream)
+                using let peReader = PEReader(ImmutableCollectionsMarshal.AsImmutableArray(image))
                 if !peReader.HasMetadata {
                     return false
                 }
@@ -2264,9 +2320,7 @@ class ReferenceResolver : IDisposable {
                         return true
                     }
                 }
-            } catch (ex Exception) when ex is IOException ||
-                ex is UnauthorizedAccessException ||
-                ex is BadImageFormatException { }
+            } catch (BadImageFormatException) { }
             return false
         }
 

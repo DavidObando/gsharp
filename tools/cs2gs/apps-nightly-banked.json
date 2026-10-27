@@ -1,3 +1,7 @@
 {
-  "banked": []
+  "banked": [
+    "code-exploder",
+    "gsharp-csharp",
+    "oahu"
+  ]
 }

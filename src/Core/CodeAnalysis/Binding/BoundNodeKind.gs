@@ -108,5 +108,6 @@ enum BoundNodeKind {
     ConstructorChainingExpression,
     BaseInterfaceCallExpression,
     BaseClassCallExpression,
-    TypeParameterConstructionExpression
+    TypeParameterConstructionExpression,
+    Utf8StringExpression
 }

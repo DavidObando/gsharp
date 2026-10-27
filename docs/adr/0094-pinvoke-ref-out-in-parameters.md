@@ -72,8 +72,9 @@ For every P/Invoke parameter whose `ParameterSymbol.RefKind` is `Ref`, `Out`, or
 | `int8` … `int64`, `uint8` … `uint64`       | OK      | —                                     |
 | `nint`, `nuint`                            | OK      | —                                     |
 | `float32`, `float64`                       | OK      | —                                     |
-| Struct annotated with `@StructLayout(LayoutKind.Sequential|Explicit)` whose fields are all blittable (ADR-0093 §2) | OK | — |
-| Struct without `@StructLayout`, or with non-blittable fields | Error | GS0349 (existing — "type is not blittable") |
+| Non-generic source or imported value struct with Sequential or Explicit layout and recursively blittable fields (ADR-0093 §2; source structs default to Sequential) | OK | — |
+| Value struct with non-blittable fields, Auto layout, or by-ref-like shape | Error | GS0349 (existing — "type is not blittable") |
+| Generic aggregate (even when its fields are blittable) | Error | GS0352 (unsupported aggregate-marshalling shape) |
 | `bool`, `char`                             | Error   | GS0352 (new)                          |
 | `string`                                   | Error   | GS0352 (new)                          |
 | `object`, `decimal`, `null`                | Error   | GS0352 (new)                          |

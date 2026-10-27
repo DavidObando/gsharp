@@ -135,6 +135,7 @@ open class BoundNodeKindExhaustivenessTests {
             []string{
                 "ErrorExpression",
                 "LiteralExpression",
+                "Utf8StringExpression",
                 "VariableExpression",
                 "AssignmentExpression",
                 "UnaryExpression",
@@ -280,6 +281,7 @@ open class BoundNodeKindExhaustivenessTests {
             []string{
                 "ErrorExpression",
                 "LiteralExpression",
+                "Utf8StringExpression",
                 "VariableExpression",
                 "AssignmentExpression",
                 "UnaryExpression",

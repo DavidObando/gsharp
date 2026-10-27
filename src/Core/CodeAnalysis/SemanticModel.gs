@@ -8,9 +8,11 @@ import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Threading
@@ -23,15 +25,12 @@ import System.Threading
 partial class SemanticModel {
     private let compilation Compilation
     private let syntaxTree SyntaxTree
-    private let index Lazy[SemanticModel.Index]
+    private let index IndexCell
 
     internal init(compilation Compilation, syntaxTree SyntaxTree) {
         this.compilation = compilation
         this.syntaxTree = syntaxTree
-        index = Lazy[SemanticModel.Index](
-            () -> BuildIndex(compilation, syntaxTree),
-            LazyThreadSafetyMode.ExecutionAndPublication
-        )
+        index = IndexCell((token CancellationToken) -> BuildIndex(compilation, syntaxTree, token))
     }
 
     /// Gets the compilation this model answers queries against.
@@ -39,6 +38,22 @@ partial class SemanticModel {
 
     /// Gets the syntax tree this model covers.
     prop SyntaxTree SyntaxTree -> syntaxTree
+
+    /// Returns the diagnostics of (cref:Compilation.Compilation.GetDiagnostics) whose location is in
+    /// this tree, in the order that query returns them (ADR-0212 §7b). It adds nothing: a parse
+    /// diagnostic of this tree appears once, already filtered by source suppressions.
+    /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build.
+    /// @returns The diagnostics, or an empty array.
+    func GetDiagnostics(cancellationToken CancellationToken = default(CancellationToken)) ImmutableArray[Diagnostic] {
+        let all = compilation.GetDiagnostics(cancellationToken)
+        let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+        for diagnostic in all {
+            if object.ReferenceEquals(diagnostic.Location.Text, syntaxTree.Text) {
+                builder.Add(diagnostic)
+            }
+        }
+        return builder.ToImmutable()
+    }
 
     /// Returns the outermost bound node produced from [`node`](paramref),
     /// or `null` when the node has no bound counterpart —
@@ -51,6 +66,7 @@ partial class SemanticModel {
     /// @returns The bound node, or null.
     func GetBoundNode(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) BoundNode? {
         cancellationToken.ThrowIfCancellationRequested()
+        index.Get(cancellationToken)
         if index.Value.BoundBySyntax.TryGetValue(node, out var bound) {
             return PublicCompletionView(bound)
         }
@@ -111,11 +127,27 @@ partial class SemanticModel {
     /// @returns The declared symbol, or null when the node declares nothing.
     func GetDeclaredSymbol(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) Symbol? {
         cancellationToken.ThrowIfCancellationRequested()
-        return if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
-            symbol
-        } else {
-            default(Symbol?)
+        index.Get(cancellationToken)
+        if index.Value.DeclaredBySyntax.TryGetValue(node, out var symbol) {
+            return symbol
         }
+        // A shared class or a part of a partial type is declared by a node the binder copied or
+        // merged; its identifier is the same token in the copy and in the tree.
+        if node is StructDeclarationSyntax structDeclaration &&
+            index
+            .Value
+            .TypesByIdentifier
+            .TryGetValue(structDeclaration.Identifier, out var declaredStruct) {
+            return declaredStruct
+        }
+        if node is InterfaceDeclarationSyntax interfaceDeclaration &&
+            index
+            .Value
+            .TypesByIdentifier
+            .TryGetValue(interfaceDeclaration.Identifier, out var declaredInterface) {
+            return declaredInterface
+        }
+        return nil
     }
 
     /// Returns the symbol referenced by [`node`](paramref) — the
@@ -136,6 +168,7 @@ partial class SemanticModel {
     /// @returns The resolution result; (cref:SymbolInfo.Symbol) is null when nothing is referenced.
     func GetSymbolInfo(node SyntaxNode, cancellationToken CancellationToken = default(CancellationToken)) SymbolInfo {
         cancellationToken.ThrowIfCancellationRequested()
+        index.Get(cancellationToken)
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
             return SymbolInfo(GetTokenSymbol(token))
         }
@@ -262,12 +295,49 @@ partial class SemanticModel {
         BoundNodeProperties[](BoundNode) -> object?
     ) : IEquatable[BoundNodeAccessors] { }
 
+    /// Builds the index once. Concurrent first readers wait for that one build (ADR-0212 §8).
+    /// A reader's token cancels only its wait; the build runs under the compilation's lifetime token.
+    /// A cancelled build publishes nothing, so a failed attempt is never cached.
+    private class IndexCell {
+        private let gate SemaphoreSlim = SemaphoreSlim(1, 1)
+        private let build Func[CancellationToken, SemanticModel.Index]
+        private var value SemanticModel.Index?
+
+        internal init(build Func[CancellationToken, SemanticModel.Index]) {
+            this.build = build
+        }
+
+        internal prop Value SemanticModel.Index -> Get(default(CancellationToken))
+
+        internal func Get(cancellationToken CancellationToken) SemanticModel.Index {
+            let published = Volatile.Read[SemanticModel.Index?](&this.value)
+            if published != nil {
+                return published
+            }
+            gate.Wait(cancellationToken)
+            try {
+                if value != nil {
+                    return value!!
+                }
+                let built = build(cancellationToken)
+                Volatile.Write[SemanticModel.Index?](&this.value, built)
+                return built
+            } finally {
+                gate.Release()
+            }
+        }
+    }
+
     private data class Index(
         BoundBySyntax Dictionary[SyntaxNode, BoundNode],
         DeclaredBySyntax Dictionary[SyntaxNode, Symbol],
         StaticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
         LogicalCompletions Dictionary[BoundExpression, BoundExpression?],
-        StaticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        StaticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?],
+        TypeClauseTokens Dictionary[SyntaxToken, TypeSymbol],
+        LocalDeclarations ImmutableArray[(Anchor SyntaxNode, Local Symbol)],
+        LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]],
+        TypesByIdentifier Dictionary[SyntaxToken, Symbol]
     ) : IEquatable[SemanticModel.Index] { }
 
     /// Records the outermost bound node per syntax node (first-win in a
@@ -280,6 +350,7 @@ partial class SemanticModel {
         private let staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
         private let logicalCompletions Dictionary[BoundExpression, BoundExpression?]
         private let staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        private var literalDepth int32
 
         init(
             tree SyntaxTree,
@@ -310,6 +381,28 @@ partial class SemanticModel {
         override func VisitExpression(node BoundExpression?) {
             Record(node)
             base.VisitExpression(node)
+            // The walker treats a function literal as a leaf. Its body is walked here for the
+            // declarations it holds (a literal's parameters and locals), not for anchoring: syntax
+            // inside a literal keeps answering no bound node.
+            if node is BoundFunctionLiteralExpression literal {
+                // A parameter the body never reads is not reached through the body.
+                for parameter in literal.Function.Parameters {
+                    SemanticModel.RecordDeclarations(parameter, tree, declaredBySyntax)
+                }
+                literalDepth++
+                VisitStatement(literal.Body)
+                literalDepth--
+            }
+        }
+
+        protected override func VisitTryStatement(node BoundTryStatement) {
+            // A catch variable the handler never reads is not reached through the handler.
+            for clause in node.CatchClauses {
+                if clause.Variable is {} caught {
+                    SemanticModel.RecordDeclarations(caught, tree, declaredBySyntax)
+                }
+            }
+            base.VisitTryStatement(node)
         }
 
         override func VisitPattern(node BoundPattern?) {
@@ -321,11 +414,12 @@ partial class SemanticModel {
             if node == nil {
                 return
             }
-            if node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
+            if literalDepth == 0 && node.Syntax is {} syntax && object.ReferenceEquals(syntax.SyntaxTree, tree) &&
                 !boundBySyntax.ContainsKey(syntax) {
                 boundBySyntax.Add(syntax, node)
             }
-            if node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
+            if literalDepth == 0 &&
+                node is BoundExpression{LogicalCompletionOperand: {} operand} completion &&
                 operand.Syntax is {} origin &&
                 object
                 .ReferenceEquals(origin.SyntaxTree, tree) {
@@ -335,7 +429,8 @@ partial class SemanticModel {
                     logicalCompletions[operand] = nil
                 }
             }
-            if node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
+            if literalDepth == 0 &&
+                node is BoundExpression{StaticMemberSyntax: {} member, StaticQualifierType: not nil} expression &&
                 object
                 .ReferenceEquals(member.SyntaxTree, tree) {
                 if !staticQualifierReads.TryGetValue(member, out var existing) {
@@ -345,7 +440,8 @@ partial class SemanticModel {
                     staticQualifierReads[member] = nil
                 }
             }
-            if node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
+            if literalDepth == 0 &&
+                node is BoundExpression{StaticQualifierSyntax: {} qualifier, StaticQualifierType: {} qualifierType} &&
                 object
                 .ReferenceEquals(qualifier.SyntaxTree, tree) {
                 if !staticQualifierTypes.TryGetValue(qualifier, out var existingType) {
@@ -354,6 +450,13 @@ partial class SemanticModel {
                     // Reads that disagree on the qualifier's type are not authority.
                     staticQualifierTypes[qualifier] = nil
                 }
+            }
+            // A variable declared at an identifier the symbol does not remember (an element of a
+            // destructured lambda parameter or of a tuple `for`) is anchored by the declaration
+            // node the binder built for it.
+            if node is BoundVariableDeclaration{Variable: {} declared, Syntax: SyntaxToken anchor} &&
+                object.ReferenceEquals(anchor.SyntaxTree, tree) && !declaredBySyntax.ContainsKey(anchor) {
+                declaredBySyntax.Add(anchor, declared)
             }
             for getter in SemanticModel.GetAccessors(node.GetType()).SymbolProperties {
                 if getter(node) is Symbol symbol {
@@ -373,16 +476,109 @@ partial class SemanticModel {
             BoundNodeAccessors
         ]()
 
-        private func BuildIndex(compilation Compilation, tree SyntaxTree) SemanticModel.Index {
+        private func BuildIndex(
+            compilation Compilation,
+            tree SyntaxTree,
+            cancellationToken CancellationToken
+        ) SemanticModel
+            .Index {
             let boundBySyntax = Dictionary[SyntaxNode, BoundNode](ReferenceEqualityComparer.Instance)
             let declaredBySyntax = Dictionary[SyntaxNode, Symbol](ReferenceEqualityComparer.Instance)
             let staticQualifierReads = Dictionary[SyntaxNode, BoundExpression?](ReferenceEqualityComparer.Instance)
             let logicalCompletions = Dictionary[BoundExpression, BoundExpression?](ReferenceEqualityComparer.Instance)
             let staticQualifierTypes = Dictionary[SyntaxNode, TypeSymbol?](ReferenceEqualityComparer.Instance)
-            let program = compilation.BoundProgram
-            let globalScope = compilation.GlobalScope
+            // The binds take the compilation's build gate themselves, so they finish before this thread holds it.
+            let program = compilation.GetBoundProgram(cancellationToken)
+            let globalScope = compilation.GetGlobalScope(cancellationToken)
+            // The walk reads symbols that ReplaceSyntaxTree re-points, so it holds the gate (ADR-0212 §8).
+            compilation.EnterBuildGate(cancellationToken)
+            try {
+                return BuildIndex_Locked(
+                    compilation,
+                    tree,
+                    program,
+                    globalScope,
+                    boundBySyntax,
+                    declaredBySyntax,
+                    staticQualifierReads,
+                    logicalCompletions,
+                    staticQualifierTypes
+                )
+            } finally {
+                compilation.ExitBuildGate()
+            }
+        }
+
+        private func BuildIndex_Locked(
+            compilation Compilation,
+            tree SyntaxTree,
+            program BoundProgram,
+            globalScope BoundGlobalScope,
+            boundBySyntax Dictionary[SyntaxNode, BoundNode],
+            declaredBySyntax Dictionary[SyntaxNode, Symbol],
+            staticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
+            logicalCompletions Dictionary[BoundExpression, BoundExpression?],
+            staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        ) SemanticModel
+            .Index {
+            let typeClauseTokens = Dictionary[SyntaxToken, TypeSymbol](ReferenceEqualityComparer.Instance)
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
+            }
+            SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
+            // A shared class's declaration node is a copy the binder made when it moved the members
+            // into the shared block; the identifier token is the same object in both.
+            let structsByIdentifier = Dictionary[SyntaxToken, Symbol](ReferenceEqualityComparer.Instance)
+            for declaredStruct in program.Structs {
+                if declaredStruct.Declaration is {} structDeclaration && object.ReferenceEquals(
+                    structDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) {
+                    structsByIdentifier.TryAdd(structDeclaration.Identifier, declaredStruct)
+                }
+                // Every part of a partial type resolves to the merged type: the merged declaration
+                // lists the identifier location of each part.
+                if declaredStruct.Declaration is {PartialPartLocations: {IsDefaultOrEmpty: false} partLocations} {
+                    for part in tree.Root.Members.OfType[StructDeclarationSyntax]() {
+                        if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
+                            for location in partLocations {
+                                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
+                                    location
+                                    .Span
+                                    .Start == partIdentifier
+                                    .Span
+                                    .Start {
+                                    structsByIdentifier.TryAdd(partIdentifier, declaredStruct)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // The same for an interface: the merged declaration of a partial interface lists its parts.
+            for declaredInterface in program.Interfaces {
+                if declaredInterface.Declaration is {} interfaceDeclaration && object.ReferenceEquals(
+                    interfaceDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) {
+                    structsByIdentifier.TryAdd(interfaceDeclaration.Identifier, declaredInterface)
+                }
+                if declaredInterface.Declaration is {} merged && !merged.PartialPartLocations.IsDefaultOrEmpty {
+                    for part in tree.Root.Members.OfType[InterfaceDeclarationSyntax]() {
+                        if part.Identifier is {} partIdentifier && !partIdentifier.IsMissing {
+                            for location in merged.PartialPartLocations {
+                                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) &&
+                                    location
+                                    .Span
+                                    .Start == partIdentifier
+                                    .Span
+                                    .Start {
+                                    structsByIdentifier.TryAdd(partIdentifier, declaredInterface)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             let walker = IndexingWalker(
                 tree,
@@ -399,12 +595,19 @@ partial class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
+            SemanticModel.RecordSymbolTypeClauses(declaredBySyntax, tree, typeClauseTokens)
+            let localDeclarations = SemanticModel.CollectLocalDeclarations(declaredBySyntax)
+            compilation.WorkBudget.CancellationToken.ThrowIfCancellationRequested()
             return SemanticModel.Index(
                 boundBySyntax,
                 declaredBySyntax,
                 staticQualifierReads,
                 logicalCompletions,
-                staticQualifierTypes
+                staticQualifierTypes,
+                typeClauseTokens,
+                localDeclarations,
+                SemanticModel.GroupByName(localDeclarations),
+                structsByIdentifier
             )
         }
 
@@ -426,6 +629,9 @@ partial class SemanticModel {
             }
             for declaredInterface in program.Interfaces {
                 yield declaredInterface
+                for property in declaredInterface.Properties {
+                    yield property
+                }
             }
             for declaredStruct in program.Structs {
                 // ADR-0169 / issue #3795: anchor member containment as the model's
