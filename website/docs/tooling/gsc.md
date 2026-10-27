@@ -77,6 +77,7 @@ gsc @app.rsp
 | `/nullability:enabled`, `/nullability:oblivious` | `enabled` reads oblivious imports as nullable (legacy). `oblivious` reads imports as platform types and marks this compilation's own declarations oblivious. Prefer the default for new projects. |
 | `/nowarn:<ids>` | Suppress warning diagnostics with the listed comma- or semicolon-separated IDs. IDs may be canonical, such as `GS9100`, or numeric, such as `9100`; numeric forms normalize to `GS####`. |
 | `/warnaserror` | Promote all warnings to errors. |
+| `/warnaserror-` | Disable global warning promotion. The last global enable or disable option wins; selected-ID settings remain unchanged. |
 | `/warnaserror:<ids>` | Promote the listed warning IDs to errors. |
 | `/warnaserror+:<ids>` | Alias for promoting the listed warning IDs to errors. |
 | `/warnaserror-:<ids>` | Keep the listed IDs as warnings even when global `/warnaserror` is set. |

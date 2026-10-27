@@ -60,6 +60,7 @@ value lowering of ordinary source `[N]T`.
 |------|-----------------|--------|
 | `/nowarn:<ids>` | `<NoWarn>` | Suppress the listed warning IDs. Errors cannot be suppressed. |
 | `/warnaserror` | `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` | Promote every warning to an error. |
+| `/warnaserror-` | — | Disable global promotion. The last global enable or disable option wins; selected-ID settings remain unchanged. |
 | `/warnaserror+:<ids>` | `<WarningsAsErrors>` | Promote only the listed IDs to errors. |
 | `/warnaserror-:<ids>` | — | Exempt the listed IDs from a global `/warnaserror`. |
 
