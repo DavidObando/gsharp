@@ -470,7 +470,11 @@ shared class ClrTypeUtilities {
     )
 
     /// Retains the nearest eligible declaration for each property name.
-    func SafeGetNearestProperties(type Type, flags BindingFlags, eligible(PropertyInfo) -> bool)[]PropertyInfo {
+    internal func SafeGetNearestProperties(
+        type Type,
+        flags BindingFlags,
+        eligible(PropertyInfo) -> bool
+    )[]PropertyInfo {
         let properties = List[PropertyInfo]()
         let names = HashSet[string](StringComparer.Ordinal)
         var current Type? = type
