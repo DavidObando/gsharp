@@ -116,7 +116,7 @@ Print(cast[Box[string]](Input()))
 let implicit Box[string] = Input()
 Print(implicit)
 Print(Input())
-Print(Read.Accept(Input()))
+Print(Read.Accept(cast[Box[string]](Input())))
 Print(Box[string]{...Input(), Tail: Tail(), Value: Override()})
 `, "ProjectionRoutes", true, "/r:" +
                 if referenceAssembly {
