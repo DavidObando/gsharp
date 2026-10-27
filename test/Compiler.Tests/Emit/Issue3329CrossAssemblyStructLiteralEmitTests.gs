@@ -764,6 +764,24 @@ Console.WriteLine(nonrecord.Value.N.ToString() + "/" + nonrecord.Stamp.ToString(
             ),
             fixture.RunBytes(consumer)
         )
+        const unmappedSource = `import qualified5296
+data struct Local { public var N int32 }
+data struct Unrelated(Other int32)
+let bad = GenericForeign[Local]{...Unrelated{Other: 4}}`
+        let rejectedReference = Path.Combine(fixture.Directory, "unmapped.ref.dll")
+        let (code, output) = fixture.TryCompile(
+            unmappedSource,
+            "unmapped",
+            executable: true,
+            "/r:" + selected,
+            "/refout:" + rejectedReference
+        )
+        Assert.NotEqual(0, code)
+        Assert.True(output.Contains("unmapped.gs(4,36,4,55): error GS0155:", StringComparison.Ordinal), output)
+        Assert.Equal(1, output.Split("error GS0155:", StringSplitOptions.None).Length - 1)
+        Assert.False(output.Contains("error GS0267:", StringComparison.Ordinal), output)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "unmapped.dll")))
+        Assert.False(File.Exists(rejectedReference))
     }
 
     @Theory

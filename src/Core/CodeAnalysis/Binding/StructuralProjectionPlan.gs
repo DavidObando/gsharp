@@ -612,7 +612,8 @@ internal shared class StructuralProjectionPlanner {
             constructorSlots.ToImmutable(),
             initializerSlots.ToImmutable()
         )
-        return HasMappedSlot(plan!!, explicitNames) || (dataType != nil && constructor == nil)
+        return HasMappedSlot(plan!!, explicitNames) ||
+            (dataType != nil && constructor == nil && ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _))
     }
 
     private func TryCreateSlot(
