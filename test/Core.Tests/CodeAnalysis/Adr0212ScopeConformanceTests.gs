@@ -263,6 +263,42 @@ open class Adr0212ScopeConformanceTests {
     }
 
     @Fact
+    func InstanceInitializer_SeesPrimaryConstructorParameters() {
+        let position = Program.IndexOf("= n + 1", StringComparison.Ordinal) + 2
+        Assert.IsType[ParameterSymbol](Assert.Single(Compiled.LookupSymbols(position, "n")))
+    }
+
+    @Fact
+    func FieldInitializer_DoesNotSeeInheritedStaticsAheadOfGlobals() {
+        let position = Program.IndexOf("= FuShadow() + 1", StringComparison.Ordinal) + 2
+        Assert.Null(
+            Assert.IsType[FunctionSymbol](Assert.Single(Compiled.LookupSymbols(position, "FuShadow"))).ContainingType
+        )
+    }
+
+    @Fact
+    func InheritedMethod_DoesNotShadowASharedVariable() {
+        let found = Assert.Single(
+            Compiled.LookupSymbols(Program.IndexOf("// PFuMethodVar", StringComparison.Ordinal), "MX")
+        )
+        Assert.IsType[FieldSymbol](found)
+    }
+
+    @Fact
+    func StaticInitializer_SeesTheImplicitScopeContext() {
+        Assert.Contains("ctx", Names("PFuStaticCtx"))
+    }
+
+    @Fact
+    func NestedPartialType_InAnUnnamedTree_IsTheMergedType() {
+        let text = "class Outer {\n partial class N { var A int32 }\n partial class N {\n func Use() int32 { return A }\n }\n}\n"
+        let tree = SyntaxTree.Parse(text)
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let position = text.IndexOf("return A", StringComparison.Ordinal) + 7
+        Assert.Contains("A", model.LookupSymbols(position).Select((s Symbol) -> s.Name).ToList())
+    }
+
+    @Fact
     func Globals_AreListedInSourceOrderAcrossKinds() {
         let text = "var first = 1\nfunc second() int32 { return 1 }\nenum Third { A }\nvar fourth = 2\n"
         let tree = SyntaxTree.Parse(SourceText.From(text, "order.gs"))
@@ -735,6 +771,46 @@ interface FuIS {
         func Make() int32 { return 1 }
         func Twice() int32 {
             return Make() * 2 // PFuIShared
+        }
+    }
+}
+
+class FuPrimary(n int32) {
+    var value int32 = n + 1
+}
+
+func FuShadow() int32 { return 5 }
+
+open class FuSBase {
+    shared {
+        func FuShadow() int32 { return 1 }
+    }
+}
+
+class FuSDerived : FuSBase {
+    var Q int32 = FuShadow() + 1
+}
+
+open class FuMBase {
+    func MX() int32 { return 1 }
+}
+
+class FuMDerived : FuMBase {
+    shared {
+        var MX int32 = 1
+    }
+    func G() int32 {
+        return MX // PFuMethodVar
+    }
+}
+
+class FuStaticCtx {
+    shared {
+        init {
+            scope {
+                let c = ctx
+                c // PFuStaticCtx
+            }
         }
     }
 }

@@ -148,14 +148,17 @@ partial class SemanticModel {
             return declaredInterface
         }
         // A part of a nested partial type: the binder merged it in place (#5340).
-        if node is StructDeclarationSyntax partStruct &&
+        if node is StructDeclarationSyntax partStruct && object.ReferenceEquals(partStruct.SyntaxTree, syntaxTree) &&
             index
             .Value
             .TypesByPartStart
             .TryGetValue(partStruct.Identifier.Span.Start, out var declaredPartStruct) {
             return declaredPartStruct
         }
-        if node is InterfaceDeclarationSyntax partInterface &&
+        if node is InterfaceDeclarationSyntax partInterface && object.ReferenceEquals(
+            partInterface.SyntaxTree,
+            syntaxTree
+        ) &&
             index
             .Value
             .TypesByPartStart
@@ -620,6 +623,20 @@ partial class SemanticModel {
                 walker.Visit(body)
             }
             walker.Visit(program.Statement)
+            // The `shared { init { ... } }` bodies are not in the function table (#5340).
+            for declaredStruct in program.Structs {
+                if declaredStruct.Declaration is {} initDeclaration && object.ReferenceEquals(
+                    initDeclaration.Identifier.SyntaxTree,
+                    tree
+                ) &&
+                    !declaredStruct
+                    .StaticInitializerStatements
+                    .IsDefaultOrEmpty {
+                    for statement in declaredStruct.StaticInitializerStatements {
+                        walker.Visit(statement)
+                    }
+                }
+            }
             SemanticModel.RecordSymbolTypeClauses(declaredBySyntax, tree, typeClauseTokens)
             let localDeclarations = SemanticModel.CollectLocalDeclarations(declaredBySyntax)
             compilation.WorkBudget.CancellationToken.ThrowIfCancellationRequested()
@@ -647,7 +664,11 @@ partial class SemanticModel {
                 return
             }
             for location in locations {
-                if SourcePathIdentity.AreSame(location.FileName, tree.Text?.FileName) {
+                // An unnamed tree has no path to compare: its text identifies it.
+                if object.ReferenceEquals(location.Text, tree.Text) || SourcePathIdentity.AreSame(
+                    location.FileName,
+                    tree.Text?.FileName
+                ) {
                     typesByPartStart.TryAdd(location.Span.Start, declared)
                 }
             }

@@ -235,6 +235,10 @@ partial class SemanticModel {
         // Every type further out offers its static members, as a nested type sees them without qualification.
         var node SyntaxNode? = innermost
         var insideMember = false
+        // A field initializer sees the statics of its own type only, and an instance one sees the primary
+        // constructor parameters (#5340).
+        var inInitializer = false
+        var inInstanceInitializer = false
         // A member without a receiver is a static context, also where the syntax has no `shared` block
         // (an interface flattens its `shared` members).
         var isShared = EnclosingSymbolOf(innermost, default(CancellationToken)) is FunctionSymbol{
@@ -254,6 +258,8 @@ partial class SemanticModel {
                 // A field initializer runs without a receiver: it sees the static members only (#5340).
                 insideMember = true
                 isShared = true
+                inInitializer = true
+                inInstanceInitializer = current.Parent is not SharedBlockSyntax
             } else if current is SharedBlockSyntax {
                 isShared = true
             } else if current is StructDeclarationSyntax or InterfaceDeclarationSyntax {
@@ -265,7 +271,20 @@ partial class SemanticModel {
                     }
                     if type != nil {
                         let before = result.Count
-                        AddTypeMembers(type, !sawType && insideMember && !isShared, name, result, seen)
+                        if inInstanceInitializer && !sawType && type is StructSymbol primaryOwner {
+                            AddPrimaryParameters(primaryOwner, name, result, seen)
+                            if name != nil && result.Count > before {
+                                return
+                            }
+                        }
+                        AddTypeMembers(
+                            type,
+                            !sawType && insideMember && !isShared,
+                            name,
+                            result,
+                            seen,
+                            ownStaticsOnly: !sawType && inInitializer
+                        )
                         if name != nil && result.Count > before {
                             return
                         }
@@ -274,8 +293,25 @@ partial class SemanticModel {
                 sawType = true
                 insideMember = false
                 isShared = false
+                inInitializer = false
+                inInstanceInitializer = false
             }
             node = current.Parent
+        }
+    }
+
+    private func AddPrimaryParameters(
+        owner StructSymbol,
+        name string?,
+        result ImmutableArray[Symbol].Builder,
+        seen HashSet[string]
+    ) {
+        for parameter in owner.PrimaryConstructorParameters {
+            if IsListable(parameter.Name) &&
+                (name == nil || string.Equals(parameter.Name, name, StringComparison.Ordinal)) &&
+                seen.Add(parameter.Name) {
+                result.Add(parameter)
+            }
         }
     }
 
@@ -284,10 +320,13 @@ partial class SemanticModel {
         includeInstance bool,
         name string?,
         result ImmutableArray[Symbol].Builder,
-        seen HashSet[string]
+        seen HashSet[string],
+        ownStaticsOnly bool = false
     ) {
         let query = if includeInstance {
             MemberQuery.All
+        } else if ownStaticsOnly {
+            MemberQuery.Static()
         } else {
             MemberQuery.InheritedStatic()
         }
@@ -300,10 +339,12 @@ partial class SemanticModel {
             // The binder binds an instance member before a static one of the same name, whatever the depth.
             var member Symbol? = nil
             if includeInstance {
-                member = TypeMemberModel.LookupMember(type, name, MemberQuery.Instance())
-                if member != nil && !IsReceiverlessMember(member, type) {
-                    member = nil
-                }
+                // Only the kinds the binder seeds before the statics; a method does not shadow a variable.
+                // The nearest accessible match wins.
+                member = TypeMemberModel.EnumerateMembers(type, MemberQuery.Instance(InstanceSeededKinds()))
+                    .FirstOrDefault(
+                    (m Symbol) -> string.Equals(m.Name, name, StringComparison.Ordinal) && IsReceiverlessMember(m, type)
+                )
             }
             if member == nil {
                 member = TypeMemberModel.LookupMember(type, name, query)
@@ -382,11 +423,14 @@ partial class SemanticModel {
         return 1
     }
 
+    private func InstanceSeededKinds() MemberKinds -> MemberKinds.Field | MemberKinds.Property | MemberKinds.Event
+
+    /// Whether the binder seeds [`member`](paramref) before the static members: an instance field,
+    /// property or event. A method does not shadow a variable.
     private func IsInstanceMember(member Symbol) bool {
         return switch member {
             case field is FieldSymbol: !field.IsStatic && !field.IsConst
             case property is PropertySymbol: !property.IsStatic
-            case function is FunctionSymbol: function.IsInstanceMethod
             case declaredEvent is EventSymbol: !declaredEvent.IsStatic
             default: false
         }
@@ -883,14 +927,26 @@ partial class SemanticModel {
                 // Sorts after every file name that starts with a printable character.
                 return "\uffff"
             }
-            return symbol.DeclaringSyntaxNodes[0].SyntaxTree?.Text?.FileName ?? string.Empty
+            return DeclarationAnchor(symbol).SyntaxTree?.Text?.FileName ?? string.Empty
+        }
+
+        /// The node that places a symbol. A merged partial type spans every part, so its primary identifier
+        /// places it instead.
+        private func DeclarationAnchor(symbol Symbol) SyntaxNode {
+            if symbol is StructSymbol{Declaration: {} structDeclaration} {
+                return structDeclaration.Identifier
+            }
+            if symbol is InterfaceSymbol{Declaration: {} interfaceDeclaration} {
+                return interfaceDeclaration.Identifier
+            }
+            return symbol.DeclaringSyntaxNodes[0]
         }
 
         private func DeclarationStart(symbol Symbol) int32 {
             if symbol.DeclaringSyntaxNodes.IsDefaultOrEmpty {
                 return 0
             }
-            return symbol.DeclaringSyntaxNodes[0].Span.Start
+            return DeclarationAnchor(symbol).Span.Start
         }
 
         /// Whether a name is one a user wrote, as opposed to a synthesized one.
