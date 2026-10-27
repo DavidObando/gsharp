@@ -157,7 +157,7 @@ func Run() int32 {
 }
 enum Color { Red, Green }
 delegate Handler[T](value T) T;
-class Holder {
+class Holder[T] {
     enum Mode { On, Off }
 }`
         let original = Parse("A.gs", template.Replace("%BODY%", "return 1"))
@@ -167,7 +167,9 @@ class Holder {
             scope_.Delegates.Single(),
             ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32)
         )
-        Assert.NotEmpty(scope_.Enums)
+        let nested = scope_.Enums.Single((e EnumSymbol) -> e.Name == "Mode")
+        let constructedEnum = EnumSymbol.ConstructNested(nested, ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32))
+        Assert.NotSame(nested, constructedEnum)
         Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope_, original, edited))
         Assert.Equal(2, scope_.Enums.Length)
         for enumSymbol in scope_.Enums {
@@ -175,6 +177,7 @@ class Holder {
         }
         Assert.Same(edited, scope_.Delegates.Single().Declaration.SyntaxTree)
         Assert.Same(edited, constructed.Declaration.SyntaxTree)
+        Assert.Same(edited, constructedEnum.Declaration.SyntaxTree)
     }
 
     /// ADR-0195 / issue #4674: a `shared class` is bound from a normalized copy of its
