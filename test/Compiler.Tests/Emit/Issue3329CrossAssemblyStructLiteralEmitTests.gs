@@ -670,6 +670,32 @@ public record struct Foreign(int X = 17) { public int Y = 3; }
 public record struct Authored(int X = 17) {
     public int Y = 3;
     public Authored() : this(8) { Y = 4; }
+}
+public static class Effects {
+    public static string Trace = "";
+    public static bool Throw;
+    public static int Mark(string mark, int value) {
+        Trace += mark;
+        if (Throw && mark == "D") throw new System.InvalidOperationException("default");
+        return value;
+    }
+}
+public record struct GenericForeign<T>(T Value) {
+    public int Stamp { get; } = Effects.Mark("P", 7);
+    public int X { get; set; }
+}
+public record struct GenericAuthored<T>(T Value) {
+    public int Stamp { get; } = Effects.Mark("P", 7);
+    public int X { get; set; }
+    public GenericAuthored() : this(default!) {
+        Effects.Mark("D", 0);
+        Stamp = 8;
+    }
+}
+public struct Ordinary<T> {
+    public T Value;
+    public int Stamp;
+    public Ordinary(T Value) { this.Value = Value; Stamp = 11; }
 }`, "qualified5296", reference)
         IlVerifier.Verify(producer)
         let selected = if useReferenceAssembly {
@@ -688,9 +714,56 @@ Console.WriteLine(first.X.ToString() + "/" + first.Y.ToString())
 Console.WriteLine(second.X.ToString() + "/" + second.Y.ToString())
 Console.WriteLine(third.X.ToString() + "/" + third.Y.ToString())
 Console.WriteLine(fourth.X.ToString() + "/" + fourth.Y.ToString())
-Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())`, "consumer", executable: true, "/r:" + selected)
+Console.WriteLine(ordinary.X.ToString() + "/" + ordinary.Y.ToString())
+data struct Local { public var N int32 }
+data struct Source[T](Value T)
+func Supply(value Local) Source[Local] {
+    Effects.Trace = Effects.Trace + "S"
+    return Source[Local]{Value: value}
+}
+func Scoped[T](value T) string {
+    let source = Source[T]{Value: value}
+    Effects.Trace = ""
+    let result = GenericForeign[T]{...source, X: Effects.Mark("E", 6)}
+    return result.Stamp.ToString() + "/" + result.X.ToString() + ":" + Effects.Trace
+}
+let local = Local{N: 3}
+let scalar = Source[int32]{Value: 5}
+Effects.Trace = ""
+let reified = GenericForeign[int32]{...scalar, X: Effects.Mark("E", 9)}
+Console.WriteLine(reified.Value.ToString() + "/" + reified.Stamp.ToString() + "/" + reified.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let plain = qualified5296.GenericForeign[Local]{Value: local, X: Effects.Mark("E", 8)}
+Console.WriteLine(plain.Value.N.ToString() + "/" + plain.Stamp.ToString() + "/" + plain.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let spread = qualified5296.GenericForeign[Local]{...Supply(local), X: Effects.Mark("E", 9)}
+Console.WriteLine(spread.Value.N.ToString() + "/" + spread.Stamp.ToString() + "/" + spread.X.ToString() + ":" + Effects.Trace)
+Console.WriteLine(Scoped[Local](local))
+Effects.Trace = ""
+let authoredPlain = GenericAuthored[Local]{Value: local, X: Effects.Mark("E", 8)}
+Console.WriteLine(authoredPlain.Value.N.ToString() + "/" + authoredPlain.Stamp.ToString() + "/" + authoredPlain.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+let authoredSpread = GenericAuthored[Local]{...Supply(local), X: Effects.Mark("E", 9)}
+Console.WriteLine(authoredSpread.Value.N.ToString() + "/" + authoredSpread.Stamp.ToString() + "/" + authoredSpread.X.ToString() + ":" + Effects.Trace)
+Effects.Trace = ""
+Effects.Throw = true
+try { let rejected = GenericAuthored[Local]{...Supply(local), X: Effects.Mark("E", 9)} }
+catch (error Exception) { Console.WriteLine(Effects.Trace + ":" + error.Message) }
+Effects.Throw = false
+Effects.Trace = ""
+let primaryCall = GenericForeign[Local](local)
+Console.WriteLine(primaryCall.Value.N.ToString() + "/" + primaryCall.Stamp.ToString() + ":" + Effects.Trace)
+let input = Source[Local]{Value: local}
+let nonrecord = Ordinary[Local]{...input}
+Console.WriteLine(nonrecord.Value.N.ToString() + "/" + nonrecord.Stamp.ToString())`, "consumer", executable: true, "/r:" +
+                selected)
         IlVerifier.Verify(consumer, []string{producer})
-        Assert.Equal(ExpectedConsoleBytes("0/0\n9/0\n8/4\n9/4\n3/3\n"), fixture.RunBytes(consumer))
+        Assert.Equal(
+            ExpectedConsoleBytes(
+                "0/0\n9/0\n8/4\n9/4\n3/3\n5/0/9:E\n3/0/8:E\n3/0/9:SE\n0/6:E\n3/8/8:PDE\n3/8/9:SPDE\nSPD:default\n3/7:P\n3/11\n"
+            ),
+            fixture.RunBytes(consumer)
+        )
     }
 
     @Theory

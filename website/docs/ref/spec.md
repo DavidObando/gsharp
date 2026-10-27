@@ -1281,7 +1281,8 @@ Constructor-owned field initialization follows these rules. Plain struct literal
   An omitted nonnullable array input also reports `GS0267` when required primary collection shape metadata is missing.
   An explicit primary value remains legal; nullable omission remains null.
   Select the primary constructor on the open generic definition, then map that same method to the closed type.
-  A foreign type without G# primary metadata uses its accessible parameterless constructor or its implicit zero path.
+  A foreign type without G# primary metadata uses its accessible parameterless constructor or its implicit zero path,
+  including foreign record structs in symbolic generic spreads. Member names do not select a parameterized constructor.
   Field names do not authorize selection of an unrelated parameterized constructor.
   Implementation and reference assemblies expose the same constructor contract.
 * Data struct constructors may initialize their own readonly `let` fields.

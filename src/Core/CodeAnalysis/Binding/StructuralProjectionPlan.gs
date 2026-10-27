@@ -473,8 +473,7 @@ internal shared class StructuralProjectionPlanner {
         var constructor ConstructorInfo? = nil
         var constructorParameters = Array.Empty[ParameterInfo]()
         // The aggregate supplies construction metadata, not the symbolic target identity.
-        let dataType = if ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _) &&
-            ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
+        let dataType = if ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, nil, out var aggregate) &&
             aggregate!!.UsesConstructorOwnedDataConstruction {
             aggregate
         } else {
