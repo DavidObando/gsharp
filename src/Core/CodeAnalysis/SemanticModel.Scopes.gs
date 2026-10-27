@@ -33,8 +33,9 @@ partial class SemanticModel {
     /// @remarks Contract, one row per construct that contains the position:
     /// function or method declaration answers its function; constructor
     /// declaration answers the constructor's function; accessor answers the
-    /// accessor function; property header answers the property; struct or
-    /// interface answers the type; a top-level `let` answers the global.
+    /// accessor function; `deinit` answers the destructor's function; property header
+    /// answers the property; struct or interface answers the type, also for a part
+    /// of a nested partial type; a top-level `let` answers the global.
     /// @param position A character offset into this model's tree.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The enclosing symbol, or null.
@@ -75,12 +76,14 @@ partial class SemanticModel {
     /// the pattern variable of a `switch` case or arm through that case or arm; any
     /// other pattern variable from its declaration to the end of the enclosing
     /// block.</item>
+    /// <item>The implicit `ctx` of a `scope` is visible in the scope body.</item>
     /// <item>The implicit `this` parameter of the enclosing instance method,
-    /// constructor or accessor follows the locals.</item>
+    /// constructor, destructor or accessor follows the locals.</item>
     /// <item>Members (tier 2): inside an instance method, constructor or
     /// accessor of a struct or class, the members of that type reachable without
-    /// a receiver, inherited ones included; inside a `shared` member, the
-    /// static ones.</item>
+    /// a receiver, inherited ones included; inside a `shared` member or a field
+    /// initializer, the static ones. An instance member wins over a static member of
+    /// the same name, whatever the depth, as in the binder.</item>
     /// <item>Globals (tier 3): the compilation's functions, variables, structs,
     /// interfaces, enums and delegates, then those of the prior submissions,
     /// newest first, when the compilation is a submission. A type alias is found
@@ -88,9 +91,9 @@ partial class SemanticModel {
     /// (the symbol would carry the target's name).</item>
     /// </list>
     /// Order: scope depth innermost first, then declaration order within a scope.
-    /// The globals are listed per kind (functions, variables, structs, interfaces,
-    /// enums, delegates), each kind in declaration order, and the members of a type
-    /// by their depth in its hierarchy, so the result is deterministic. Imported (CLR) types are not listed.
+    /// The globals are listed in source order across kinds (files by name, then
+    /// position), and the members of a type by their depth in its hierarchy, so the
+    /// result is deterministic. Imported (CLR) types are not listed.
     /// @param position A character offset into this model's tree.
     /// @param name When given, only the symbol of this name.
     /// @param cancellationToken Cancels index construction on first use.
@@ -247,6 +250,10 @@ partial class SemanticModel {
                 if current is ConstructorDeclarationSyntax constructor && !IsInConstructorBody(constructor, innermost) {
                     isShared = true
                 }
+            } else if current is FieldDeclarationSyntax {
+                // A field initializer runs without a receiver: it sees the static members only (#5340).
+                insideMember = true
+                isShared = true
             } else if current is SharedBlockSyntax {
                 isShared = true
             } else if current is StructDeclarationSyntax or InterfaceDeclarationSyntax {
@@ -290,7 +297,17 @@ partial class SemanticModel {
             List[StructSymbol]()
         }
         if name != nil {
-            var member = TypeMemberModel.LookupMember(type, name, query)
+            // The binder binds an instance member before a static one of the same name, whatever the depth.
+            var member Symbol? = nil
+            if includeInstance {
+                member = TypeMemberModel.LookupMember(type, name, MemberQuery.Instance())
+                if member != nil && !IsReceiverlessMember(member, type) {
+                    member = nil
+                }
+            }
+            if member == nil {
+                member = TypeMemberModel.LookupMember(type, name, query)
+            }
             if member != nil && !IsReceiverlessMember(member, type) {
                 member = nil
             }
@@ -310,7 +327,10 @@ partial class SemanticModel {
             // A constant is held apart from the other fields and is static; the nearest declaring type
             // wins over a member the hierarchy has further up.
             if FindConstant(hierarchy, name, type) is {} constant &&
-                (member == nil || DepthOf(constant, hierarchy) <= DepthOf(member, hierarchy)) {
+                (
+                member == nil ||
+                    (!IsInstanceMember(member) && DepthOf(constant, hierarchy) <= DepthOf(member, hierarchy))
+            ) {
                 member = constant
             }
             if member != nil && seen.Add(member.Name) {
@@ -338,10 +358,37 @@ partial class SemanticModel {
                 }
             }
         }
+        // The winner of a name is the instance member, then the nearest declaring type; the listing keeps
+        // the depth order.
+        let winners = HashSet[Symbol](ReferenceEqualityComparer.Instance)
+        let claimed = HashSet[string](StringComparer.Ordinal)
+        for candidate in candidates.OrderBy((c(Depth int32, Member Symbol)) -> InstanceRank(c.Member, includeInstance))
+            .ThenBy((c(Depth int32, Member Symbol)) -> c.Depth) {
+            if !seen.Contains(candidate.Member.Name) && claimed.Add(candidate.Member.Name) {
+                winners.Add(candidate.Member)
+            }
+        }
         for candidate in candidates.OrderBy((c(Depth int32, Member Symbol)) -> c.Depth) {
-            if seen.Add(candidate.Member.Name) {
+            if winners.Contains(candidate.Member) && seen.Add(candidate.Member.Name) {
                 result.Add(candidate.Member)
             }
+        }
+    }
+
+    private func InstanceRank(member Symbol, includeInstance bool) int32 {
+        if includeInstance && IsInstanceMember(member) {
+            return 0
+        }
+        return 1
+    }
+
+    private func IsInstanceMember(member Symbol) bool {
+        return switch member {
+            case field is FieldSymbol: !field.IsStatic && !field.IsConst
+            case property is PropertySymbol: !property.IsStatic
+            case function is FunctionSymbol: function.IsInstanceMethod
+            case declaredEvent is EventSymbol: !declaredEvent.IsStatic
+            default: false
         }
     }
 
@@ -471,6 +518,14 @@ partial class SemanticModel {
             }
             return nil
         }
+        if node is DeinitDeclarationSyntax destructorSyntax {
+            if destructorSyntax.FirstAncestorOrSelf[StructDeclarationSyntax]() is {} owner &&
+                StructSymbolOf(owner, cancellationToken) is {Deinitializer: {} destructor} &&
+                object.ReferenceEquals(destructor.Declaration, destructorSyntax) {
+                return destructor.Function
+            }
+            return nil
+        }
         if node is PropertyAccessorSyntax accessor {
             if accessor.FirstAncestorOrSelf[PropertyDeclarationSyntax]() is {} declaration &&
                 GetDeclaredSymbol(declaration.Identifier, cancellationToken) is PropertySymbol property {
@@ -555,6 +610,17 @@ partial class SemanticModel {
         let parent = anchor.Parent
         // A token the binder synthesized (the implicit `ctx` of a `scope`) has no place in the tree.
         if parent == nil {
+            // The token sits at the `scope` keyword: its owner is the statement that starts there, and the
+            // context is visible in the body (#5340).
+            if FindInnermostNode(anchor.Span.Start).FirstAncestorOrSelf[ScopeStatementSyntax]() is {} scopeStatement &&
+                scopeStatement
+                .ScopeKeyword
+                .Span
+                .Start == anchor
+                .Span
+                .Start {
+                return BodyRegion(scopeStatement, scopeStatement.Body)
+            }
             return nil
         }
         if parent is IfLetBindingClauseSyntax clause {
@@ -785,7 +851,14 @@ partial class SemanticModel {
             ) {
                 AddGlobalEntry(ordered, byName, alias.Key, alias.Value)
             }
-            return GlobalTable(ordered.ToImmutable(), byName)
+            // Source order across kinds: by file name, then position. A symbol without syntax comes last.
+            // The sort is stable, so equal keys keep their kind order.
+            let sorted = ordered
+                .ToImmutable()
+                .OrderBy((entry(Name string, Symbol Symbol)) -> DeclarationFile(entry.Symbol), StringComparer.Ordinal)
+                .ThenBy((entry(Name string, Symbol Symbol)) -> DeclarationStart(entry.Symbol))
+                .ToImmutableArray()
+            return GlobalTable(sorted, byName)
         }
 
         private func AddGlobalEntry(
@@ -803,6 +876,21 @@ partial class SemanticModel {
                 // type under the alias would give two symbols one name.
                 ordered.Add((globalName, symbol))
             }
+        }
+
+        private func DeclarationFile(symbol Symbol) string {
+            if symbol.DeclaringSyntaxNodes.IsDefaultOrEmpty {
+                // Sorts after every file name that starts with a printable character.
+                return "\uffff"
+            }
+            return symbol.DeclaringSyntaxNodes[0].SyntaxTree?.Text?.FileName ?? string.Empty
+        }
+
+        private func DeclarationStart(symbol Symbol) int32 {
+            if symbol.DeclaringSyntaxNodes.IsDefaultOrEmpty {
+                return 0
+            }
+            return symbol.DeclaringSyntaxNodes[0].Span.Start
         }
 
         /// Whether a name is one a user wrote, as opposed to a synthesized one.
@@ -888,6 +976,13 @@ partial class SemanticModel {
                     .Concat(declaredInterface.PrivateMethods)
                     .Concat(declaredInterface.StaticPrivateMethods) {
                     RecordFunctionTypeClauses(method, tree, typeClauseTokens)
+                }
+                // The `shared` fields and constants of an interface (#5340).
+                if declaredInterface.Declaration is {} interfaceDeclaration {
+                    let interfaceFields = declaredInterface.StaticFields.Concat(declaredInterface.ConstFields).ToArray()
+                    for staticField in interfaceDeclaration.StaticFields {
+                        RecordFieldTypeClause(staticField, interfaceFields, tree, typeClauseTokens)
+                    }
                 }
             }
             for aggregate in globalScope.Structs {
