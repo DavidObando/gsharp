@@ -391,8 +391,20 @@ partial class SemanticModel {
                     isVirtual: accessor?.IsVirtual == true,
                     isOverride: false,
                     isStatic: accessor?.IsStatic == true,
+                    isInitOnly: setter != nil && ImportedTypeSymbol.IsInitOnlySetter(setter),
+                    getterAccessibility: if getter == nil {
+                        default(Accessibility?)
+                    } else {
+                        ClrAccessibility(getter.Attributes)
+                    },
+                    setterAccessibility: if setter == nil {
+                        default(Accessibility?)
+                    } else {
+                        ClrAccessibility(setter.Attributes)
+                    },
                     metadataIsAbstract: accessor?.IsAbstract == true
                 )
+                symbol.ReturnRefKind = RefCapabilities.GetReturnRefKind(property)
                 symbol.ImportedMember = property
                 symbol.AnchorContainingType(declaringType)
                 return symbol

@@ -1023,6 +1023,15 @@ shared class SignatureHelpComputer {
         }
         let signatures = candidates.Select((c Symbol) -> BuildSignature(c)).ToList()
         var active = candidates.FindIndex((c Symbol) -> object.ReferenceEquals(c, resolved))
+        // A constructed owner substitutes the candidates; the selected callee is the declared one.
+        if active < 0 && resolved is FunctionSymbol{Declaration: {} resolvedDeclaration} {
+            active = candidates.FindIndex(
+                (c Symbol) -> c is FunctionSymbol candidate && object.ReferenceEquals(
+                    candidate.Declaration,
+                    resolvedDeclaration
+                )
+            )
+        }
         if active < 0 && resolved is ImportedFunctionSymbol resolvedImported {
             active = candidates.FindIndex(
                 (c Symbol) -> c is ImportedFunctionSymbol imported && imported.Method.MetadataToken ==
@@ -1056,9 +1065,8 @@ shared class SignatureHelpComputer {
                 .Parameters
                 .Select((p ParameterSymbol) -> ParameterInformation{Label: "${p.Name} ${FormatType(p.Type)}"})
                 .ToList()
-            case imported is ImportedFunctionSymbol: imported
-                .Method
-                .GetParameters()
+            case imported is ImportedFunctionSymbol: ImportedFunctionSymbol
+                .GetLogicalParameters(imported.Method)
                 .Select(
                 (p ParameterInfo) -> ParameterInformation{
                     Label: "${p.Name} ${SymbolDisplay.ToDisplayString(p.ParameterType, SymbolDisplayFormat.Signature)}"

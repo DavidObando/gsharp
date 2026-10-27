@@ -520,7 +520,8 @@ shared class SymbolDisplay {
         }
         builder.Add(SymbolDisplayPartKind.MethodName, method.Name)
         builder.Punctuation("(")
-        let parameters = method.GetParameters()
+        // The hidden context parameter of a suspending G# method is not a parameter a caller supplies.
+        let parameters = ImportedFunctionSymbol.GetLogicalParameters(method)
         for var i = 0; i < parameters.Length; i++ {
             if i > 0 {
                 builder.Punctuation(",")
