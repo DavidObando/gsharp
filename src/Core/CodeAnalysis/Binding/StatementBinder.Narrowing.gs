@@ -4484,7 +4484,8 @@ internal partial class StatementBinder {
         }
 
         // Whether the nearest declaration of [`name`](paramref) that is in scope at [`site`](paramref) is a local or
-        // a parameter of the closure that holds the site. Only a variable declaration and a parameter count: an
+        // a parameter of the closure that holds the site. A local is in scope after its initializer, so a write inside
+        // the initializer names an enclosing variable. Only a variable declaration and a parameter count: an
         // unmodelled declaration (a pattern variable, a loop variable) gives false and keeps the name.
         private func IsDeclaredByAssigningClosure(name string, site SyntaxNode) bool {
             let assigning = ScopeOwnerOf(site)
@@ -4503,7 +4504,7 @@ internal partial class StatementBinder {
                     ) &&
                         child
                         .Span
-                        .Start <= siteStart &&
+                        .End <= siteStart &&
                         child
                         .Span
                         .Start > declarationStart {

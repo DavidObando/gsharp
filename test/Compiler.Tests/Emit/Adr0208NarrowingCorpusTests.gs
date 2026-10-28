@@ -210,7 +210,8 @@ open class Adr0208NarrowingCorpusTests {
                 "out-alias_out_ref_alias",
                 "q1_5456_closure_own_local_survives_unknown_callable",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
-                "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable"
+                "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
+                "q4_5456_initializer_write_names_the_enclosing_variable"
             },
             names
         )
@@ -1686,6 +1687,23 @@ func Main() {
         }
     })
 }`, "", "run", "a", ""}
+            yield[]object{"q4_5456_initializer_write_names_the_enclosing_variable", `import System
+
+class Rec {
+    var Id string = "a"
+}
+func Find() Rec? { return Rec{} }
+func Pick(g () -> void) () -> void { return g }
+func Main() {
+    var hit Rec? = Find()
+    let clear = func() {
+        var hit Rec? = (hit = nil)
+    }
+    if hit == nil { return }
+    let f = Pick(clear)
+    f()
+    Console.WriteLine(hit.Id)
+}`, "GS0158@16:27", "reject", "", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
