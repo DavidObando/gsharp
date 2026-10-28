@@ -19,6 +19,7 @@ import System.Linq
 import System.Reflection
 import System.Text
 import System.Text.RegularExpressions
+import System.Threading.Tasks
 import Xunit
 
 /// Issue #3956 / ADR-0172: tuple element names are metadata over the positional
@@ -235,6 +236,165 @@ return view
         }
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedSymbolicValueTuple_NestedSourceDefinitionIdentity(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = TupleDriverReferences()
+        let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
+        let contractReference = Path.Combine(fixture.Directory, "TupleAssessment.ref.dll")
+        let producer = CSharpCompilation.Create(
+            "TupleAssessment",
+            []SyntaxTree{CSharpSyntaxTree.ParseText(TupleProducer)},
+            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
+        )
+        {
+            using let stream = File.Create(contract)
+            Assert.True(producer.Emit(stream).Success)
+        }
+        {
+            using let stream = File.Create(contractReference)
+            Assert.True(
+                producer.Emit(stream, options: EmitOptions(metadataOnly: true, includePrivateMembers: false)).Success
+            )
+        }
+        let selected = if referenceAssembly {
+            contractReference
+        } else {
+            contract
+        }
+        let source = `package NestedSourceIdentity
+import System
+import TupleAssessment5413
+public class A { public struct Item {} }
+public class B { public struct Item {} }
+public class Exports { shared {
+public func Adapt(view IView[string, System.ValueTuple[A.Item, int32]]) IView[string?, (A.Item, int32)] {
+return view
+}
+} }
+`
+        let image = CompileTupleDriver(fixture.Directory, "SameOwner", source, selected, references, nil)
+        VerifyTupleDriver(image, contract, references)
+        let assembly = EmittedFixture.LoadTogether(contract, image)[1]
+        let method = assembly.GetType("NestedSourceIdentity.Exports", throwOnError: true)!!.GetMethod("Adapt")!!
+        let tuple = method.ReturnType.GetGenericArguments()[1]
+        Assert.Equal(tuple, Assert.Single(method.GetParameters()).ParameterType.GetGenericArguments()[1])
+        Assert.Equal(
+            assembly.GetType("NestedSourceIdentity.A+Item", throwOnError: true),
+            tuple.GetGenericArguments()[0]
+        )
+        Assert.NotEqual(
+            assembly.GetType("NestedSourceIdentity.B+Item", throwOnError: true),
+            tuple.GetGenericArguments()[0]
+        )
+        let rejected = source.Replace("IView[string?, (A.Item, int32)]", "IView[string?, (B.Item, int32)]")
+        CompileTupleDriver(fixture.Directory, "DifferentOwner", rejected, selected, references, "8,8,8,12")
+    }
+
+    @Fact
+    func DeepMixedImportedSymbolicValueTuple_VisitsConstructedContractsOnce() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        using let producer = GSharp.Core.Tests.CSharpFixture(TupleProducer, assemblyName: "TupleAssessment")
+        let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
+        File.Copy(producer.AssemblyPath, contract)
+        let references = TupleDriverReferences()
+        var imported = "System.ValueTuple[C, int32]"
+        var native = "(C, int32)"
+        for var depth = 0; depth < 36; depth++ {
+            imported = "System.ValueTuple[List[" + imported + "], int32]"
+            native = "(List[" + native + "], int32)"
+        }
+        let source = `package DeepMixedTupleIdentity
+import System
+import System.Collections.Generic
+import TupleAssessment5413
+public class C {}
+public class Exports { shared {
+public func Adapt(view IView[string, ` + imported + `]) IView[string?, ` + native + `] {
+return view
+}
+} }
+`
+        let image = CompileTupleDriver(fixture.Directory, "DeepMixed", source, contract, references, nil)
+        VerifyTupleDriver(image, contract, references)
+        let assembly = EmittedFixture.LoadTogether(contract, image)[1]
+        let method = assembly.GetType("DeepMixedTupleIdentity.Exports", throwOnError: true)!!.GetMethod("Adapt")!!
+        var tuple = method.ReturnType.GetGenericArguments()[1]
+        Assert.Equal(tuple, Assert.Single(method.GetParameters()).ParameterType.GetGenericArguments()[1])
+        let returnMetadata = NullabilityInfoContext().Create(method.ReturnParameter)
+        Assert.Equal(NullabilityState.Nullable, returnMetadata.GenericTypeArguments[0].ReadState)
+        var metadata = returnMetadata.GenericTypeArguments[1]
+        for var depth = 0; depth < 37; depth++ {
+            Assert.Equal(typeof(ValueTuple[_, _]), tuple.GetGenericTypeDefinition())
+            let arguments = tuple.GetGenericArguments()
+            Assert.Equal(typeof(int32), arguments[1])
+            tuple = arguments[0]
+            metadata = metadata.GenericTypeArguments[0]
+            if depth < 36 {
+                Assert.Equal(typeof(List[_]), tuple.GetGenericTypeDefinition())
+                tuple = Assert.Single(tuple.GetGenericArguments())
+                Assert.Equal(NullabilityState.NotNull, metadata.ReadState)
+                metadata = Assert.Single(metadata.GenericTypeArguments)
+            }
+        }
+        Assert.Equal(assembly.GetType("DeepMixedTupleIdentity.C", throwOnError: true), tuple)
+        Assert.Equal(NullabilityState.NotNull, metadata.ReadState)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleDriverTimeout_WaitsForExitAndBothReadersBeforeCleanup(stdoutFirst bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        using let producer = GSharp.Core.Tests.CSharpFixture(TupleProducer, assemblyName: "TupleAssessment")
+        let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
+        File.Copy(producer.AssemblyPath, contract)
+        let references = TupleDriverReferences()
+        let image = CompileTupleDriver(
+            fixture.Directory,
+            "WaitingChild",
+            "import System.Threading\nThread.Sleep(-1)\n",
+            contract,
+            references,
+            nil
+        )
+        VerifyTupleDriver(image, contract, references)
+        let start = ProcessStartInfo("dotnet"){UseShellExecute = false}
+        start.ArgumentList.Add(image)
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start dotnet.")
+        let output = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+        let error = TaskCompletionSource[string](TaskCreationOptions.RunContinuationsAsynchronously)
+        let waiting = Task.Run(
+            func () {
+                Assert.Throws[TimeoutException](() -> WaitForTupleDriver(process, output.Task, error.Task, 0))
+            }
+        )
+        try {
+            Assert.True(process.WaitForExit(5_000), "The timed-out child must terminate.")
+            Assert.False(waiting.Wait(1_000), "Cleanup must wait for the readers.")
+            if stdoutFirst {
+                output.SetResult(true)
+            } else {
+                error.SetResult("drained")
+            }
+            Assert.False(waiting.Wait(1_000), "Cleanup must wait for both readers.")
+            output.TrySetResult(true)
+            error.TrySetResult("drained")
+            Assert.True(waiting.Wait(5_000))
+        } finally {
+            output.TrySetResult(true)
+            error.TrySetResult("drained")
+            if !process.HasExited {
+                process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+            }
+            waiting.GetAwaiter().GetResult()
+        }
+    }
+
     /// The shape from the issue, verbatim: a LINQ call over a dictionary whose
     /// value type is a named tuple carrying a `List` of named tuples. The
     /// return type comes back from the CLR signature unnamed, and flows into a
@@ -423,12 +583,46 @@ public static class ArgumentMaker<U> {
             using let output = MemoryStream()
             let read = process.StandardOutput.BaseStream.CopyToAsync(output)
             let error = process.StandardError.ReadToEndAsync()
-            if !process.WaitForExit(30_000) {
+            let errors = WaitForTupleDriver(process, read, error, 30_000)
+            return (process.ExitCode, output.ToArray(), errors)
+        }
+
+        private func WaitForTupleDriver(
+            process Process,
+            read Task,
+            error Task[string],
+            timeoutMilliseconds int32
+        ) string {
+            let finished = process.WaitForExit(timeoutMilliseconds)
+            if !finished {
                 process.Kill(entireProcessTree: true)
+                process.WaitForExit()
+            }
+            Task.WhenAll([]Task{read, error}).GetAwaiter().GetResult()
+            let errors = error.GetAwaiter().GetResult()
+            if !finished {
                 throw TimeoutException("dotnet did not finish.")
             }
-            read.GetAwaiter().GetResult()
-            return (process.ExitCode, output.ToArray(), error.GetAwaiter().GetResult())
+            return errors
+        }
+
+        private func TupleDriverReferences()[]string -> ReferenceResolver
+            .HostTrustedPlatformAssemblyPaths()
+            .Where(
+            (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
+        )
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+
+        private func VerifyTupleDriver(image string, contract string, references[]string) {
+            let arguments = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}
+            for path in references.Concat([]string{contract}) {
+                arguments.Add("-r")
+                arguments.Add(path)
+            }
+            let result = RunTupleDriver(arguments)
+            Assert.True(result.Code == 0, Encoding.UTF8.GetString(result.Output) + result.Error)
+            Assert.Empty(result.Error)
         }
 
         private func CompileVerifyAndRun(source string) string {

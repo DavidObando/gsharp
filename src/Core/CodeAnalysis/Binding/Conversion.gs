@@ -2856,14 +2856,45 @@ class Conversion {
         private func IsTupleTypeArgumentPair(from TypeSymbol, to TypeSymbol) bool ->
         TupleTypeSymbol.TryGetTupleShape(from, out _) && TupleTypeSymbol.TryGetTupleShape(to, out _)
 
+        private func HaveSameTypeArgumentDefinition(from TypeSymbol, to TypeSymbol) bool {
+            if IsTupleTypeArgumentPair(from, to) {
+                return true
+            }
+            let a = from.StripToBareShape()
+            let b = to.StripToBareShape()
+            // Prove the constructed head only; contracts below visit its canonical positions once.
+            if TryGetConstructedGenericShape(a, out var fromOpen, out _) &&
+                TryGetConstructedGenericShape(b, out var toOpen, out _) {
+                return fromOpen.IsSameAs(toOpen)
+            }
+            if a.ClrType != nil || b.ClrType != nil {
+                return AreTypeArgumentsEquivalent(a, b)
+            }
+            if a is StructSymbol fromStruct && b is StructSymbol toStruct {
+                return object.ReferenceEquals(fromStruct.Definition ?? fromStruct, toStruct.Definition ?? toStruct)
+            }
+            if a is InterfaceSymbol fromInterface && b is InterfaceSymbol toInterface {
+                return object.ReferenceEquals(
+                    fromInterface.Definition ?? fromInterface,
+                    toInterface.Definition ?? toInterface
+                )
+            }
+            if a is DelegateTypeSymbol fromDelegate && b is DelegateTypeSymbol toDelegate {
+                return object.ReferenceEquals(
+                    fromDelegate.Definition ?? fromDelegate,
+                    toDelegate.Definition ?? toDelegate
+                )
+            }
+            return AreTypeArgumentsEquivalent(a, b)
+        }
+
         private func HaveIdenticalTypeArgumentContracts(from TypeSymbol, to TypeSymbol) bool {
-            // Tuple identity uses this contract walk; a separate equivalence walk would visit every child twice.
             // Value optionality changes storage even when the symbol relays its underlying CLR type.
             if from.ReferenceNullability != to.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
                 from.StripToBareShape() as NullableTypeSymbol
             ) !=
             NullableLifting.IsAnyValueTypeNullable(to.StripToBareShape() as NullableTypeSymbol) ||
-                (!IsTupleTypeArgumentPair(from, to) && !AreTypeArgumentsEquivalent(from, to)) {
+                !HaveSameTypeArgumentDefinition(from, to) {
                 return false
             }
             let fromPositions = from.GetElementPositions()
@@ -4438,7 +4469,7 @@ class Conversion {
         /// Issue #1088: compares two symbolic generic type arguments for identity,
         /// recovering same-compilation user types whose (cref:TypeSymbol.ClrType)
         /// has erased to `object` (or is `null`). Same-compilation
-        /// symbols are reference-equal; distinct user types differ by reference / name
+        /// symbols are identified by their defining symbols, not their simple names,
         /// so genuine negative conversions (e.g. `Channel[A]` → `Channel[B]`)
         /// still report GS0155.
         private func AreTypeArgumentsEquivalent(a TypeSymbol?, b TypeSymbol?) bool {
@@ -4482,10 +4513,9 @@ class Conversion {
             if a.ClrType != nil && b.ClrType != nil {
                 return ClrTypeUtilities.AreSame(a.ClrType, b.ClrType)
             }
-            // Both arguments are same-compilation user types with a null ClrType:
-            // compare by symbol kind and name so distinct user types stay distinct.
+            // Same-named source types can belong to different owners or declarations.
             if a.ClrType == nil && b.ClrType == nil {
-                return a.GetType() == b.GetType() && string.Equals(a.Name, b.Name, StringComparison.Ordinal)
+                return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b)
             }
             return false
         }
