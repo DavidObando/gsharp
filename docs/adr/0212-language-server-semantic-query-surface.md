@@ -394,7 +394,13 @@ class SemanticModel {
   the compilation's assembly name): source members through `TypeMemberModel`,
   imported members through `MemberLookup` with their types read through the
   ADR-0193 readers, inherited members included. The first implementation
-  reproduces today's `TryComputeMemberCompletions` item set. Extension
+  reproduces today's `TryComputeMemberCompletions` item set; issue #5441 adds
+  what that set missed and the binder binds: the public instance members of
+  an imported base class (`object` when a class has none), the members an
+  imported interface inherits from its base interfaces, the default methods of
+  the interfaces a class implements, and the built-in members of a slice,
+  array, map, channel or sequence over a source element type, which has no CLR
+  type. Extension
   members in scope follow the type's own members (question 12, resolved in
   #5440): source extension functions by file path then start, then imported
   extension methods by holder class then metadata token.

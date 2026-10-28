@@ -30,6 +30,7 @@ open class Adr0212MemberConformanceTests {
         let mismatches = List[string]()
         var compared = 0
         ExtensionsCompared = 0
+        RowsCompared.Clear()
         for file in Directory.GetFiles(Path.Combine(RepositoryRoot(), "samples"), "*.gs").OrderBy(
             (f string) -> f,
             StringComparer.Ordinal
@@ -39,6 +40,7 @@ open class Adr0212MemberConformanceTests {
         }
         Assert.True(compared > 500, "compared ${compared} members")
         Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
+        AssertRowsReached()
         AssertNoMismatches(mismatches)
     }
 
@@ -46,6 +48,7 @@ open class Adr0212MemberConformanceTests {
     func MemberQueries_AgreeWithTheBinder_OnTheLanguageServerSources() {
         let mismatches = List[string]()
         ExtensionsCompared = 0
+        RowsCompared.Clear()
         let directory = Path.Combine(RepositoryRoot(), "src", "LanguageServer")
         let trees = Directory
             .GetFiles(directory, "*.gs")
@@ -60,6 +63,17 @@ open class Adr0212MemberConformanceTests {
 
     shared {
         private var ExtensionsCompared int32 = 0
+        private const BuiltInRow string = "built-in"
+        private const ImportedBaseRow string = "imported base class"
+        private const InterfaceBaseRow string = "imported base interface"
+        private const DefaultMethodRow string = "default interface method"
+        private let RowsCompared Dictionary[string, int32] = Dictionary[string, int32]()
+
+        private func AssertRowsReached() {
+            for row in[]string{BuiltInRow, ImportedBaseRow, InterfaceBaseRow, DefaultMethodRow} {
+                Assert.True(RowsCompared.GetValueOrDefault(row) > 0, "the corpus reaches the row '${row}'")
+            }
+        }
 
         private func Recording(compilation Compilation) Compilation {
             compilation.RecordMemberGroups = true
@@ -165,8 +179,9 @@ open class Adr0212MemberConformanceTests {
             if receiverType == nil || receiverType is TypeParameterSymbol {
                 return 0
             }
-            if KnownGap(bound, receiverType) {
-                return 0
+            let row = RowOf(bound, receiverType)
+            if row != string.Empty {
+                RowsCompared[row] = RowsCompared.GetValueOrDefault(row) + 1
             }
             if IsExtension(bound) {
                 ExtensionsCompared++
@@ -192,31 +207,32 @@ open class Adr0212MemberConformanceTests {
             default: false
         }
 
-        /// The shapes that the query leaves out for now, each one also missing from the completion list that
-        /// the query replaces. Each has a follow-up issue; a shape that is not listed here must conform.
-        /// - A member of a base class, or of a base interface, that comes from an imported type.
-        /// - A default method of an interface, called on the class that implements it.
-        /// - The built-in members of the slice, array, map, channel and sequence types.
-        private func KnownGap(bound Symbol, receiverType TypeSymbol) bool {
+        /// The contract row a member belongs to when it is one of the shapes that a type's own members do not
+        /// cover, or an empty string. Each row is compared like any other member; the counts only show that the
+        /// corpus reaches it.
+        private func RowOf(bound Symbol, receiverType TypeSymbol) string {
             if receiverType is SliceTypeSymbol or
                 ArrayTypeSymbol or
                 MapTypeSymbol or
                 ChannelTypeSymbol or
                 SequenceTypeSymbol {
-                return true
+                return BuiltInRow
             }
             if ImportedOf(bound) is {} imported {
                 if receiverType is StructSymbol {
-                    return true
+                    return ImportedBaseRow
                 }
                 if imported.DeclaringType is {} declaring &&
                     receiverType.ClrType is {} receiverClr &&
                     declaring.IsInterface &&
                     !declaring.IsEquivalentTo(receiverClr) {
-                    return true
+                    return InterfaceBaseRow
                 }
             }
-            return bound is FunctionSymbol && receiverType is StructSymbol && bound.ContainingType is InterfaceSymbol
+            if bound is FunctionSymbol && receiverType is StructSymbol && bound.ContainingType is InterfaceSymbol {
+                return DefaultMethodRow
+            }
+            return string.Empty
         }
 
         /// Two symbols are the same member when they have the same name and the same declaration: the

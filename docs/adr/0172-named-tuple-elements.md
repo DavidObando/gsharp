@@ -85,7 +85,8 @@ positional-only premise**; an amendment note there points here.
 - **Phase B**: metadata interop — emit `TupleElementNamesAttribute` on
   tuple-typed parameters/returns/fields/properties (C# flattened pre-order
   encoding) and decode it on import, so C#-authored named tuples surface
-  their names in G# and vice versa.
+  their names in G# and vice versa. Long tuples include null name padding
+  for each synthesized CLR `Rest` node before that node's element subtrees.
 - **Phase C**: cs2gs preserves names end-to-end (type mapping, printer,
   member access, literal labels) + corpus/selfmig re-baseline.
 - **Phase D**: language-server polish (hover, element-name completion).

@@ -81,18 +81,98 @@ class Store {
     }
 
     @Fact
-    func ArityNine_LogicalElementsOnly_TRestInvisible() {
-        let assembly = CompileToAssembly(`package P
-
-class Big {
-    shared {
-        func Make() (a int32, b int32, c int32, d int32, e int32, f int32, g int32, h int32, i int32) {
-            return 1, 2, 3, 4, 5, 6, 7, 8, 9
+    func LongTuples_MatchRoslynNamesAndPhysicalSignatures() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let shapes = List[(Gs string, Cs string)]()
+        for arity in[]int32{7, 8, 9, 14, 15} {
+            shapes.Add(
+                (
+                    "(" + string.Join(", ", Enumerable.Range(1, arity).Select((i int32) -> "E$i int32")) + ")",
+                    "(" + string.Join(", ", Enumerable.Range(1, arity).Select((i int32) -> "int E$i")) + ")"
+                )
+            )
+        }
+        shapes.Add(
+            (
+                "(Head (X int32, Y int32), B int32, C int32, D int32, E int32, F int32, G int32, H int32)",
+                "((int X, int Y) Head, int B, int C, int D, int E, int F, int G, int H)"
+            )
+        )
+        shapes.Add(
+            (
+                "(A int32, B int32, C int32, D int32, E int32, F int32, G int32, Tail (X int32, Y int32))",
+                "(int A, int B, int C, int D, int E, int F, int G, (int X, int Y) Tail)"
+            )
+        )
+        shapes.Add(
+            (
+                "System.Collections.Generic.Dictionary[(A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32), (X int32, Y int32)]",
+                "System.Collections.Generic.Dictionary<(int A, int B, int C, int D, int E, int F, int G, int H), (int X, int Y)>"
+            )
+        )
+        shapes.Add(
+            (
+                "(int32, int32, int32, int32, int32, int32, int32, (X int32, Y int32))",
+                "(int, int, int, int, int, int, int, (int X, int Y))"
+            )
+        )
+        for var i = 0; i < shapes.Count; i++ {
+            let shape = shapes[i]
+            let gs = fixture.Compile(`public class Export {
+    public var Field ` + shape.Gs + `
+    public prop Value ` + shape.Gs + ` { get; set; }
+    public func Echo(value ` + shape.Gs + `) ` + shape.Gs + ` -> value
+}`, "TupleExport$i", false)
+            let cs = fixture.CompileCSharp(`public class Export {
+    public ` + shape.Cs + ` Field;
+    public ` + shape.Cs + ` Value { get; set; }
+    public ` + shape.Cs + ` Echo(` + shape.Cs + ` value) => value;
+}`, "RoslynTupleControl$i")
+            IlVerifier.Verify(gs)
+            IlVerifier.Verify(cs)
+            let actual = EmittedFixture.Load(gs).GetType("Default.Export")!!
+            let expected = EmittedFixture.Load(cs).GetType("Export")!!
+            let actualEcho = actual.GetMethod("Echo")!!
+            let expectedEcho = expected.GetMethod("Echo")!!
+            Assert.Equal(expectedEcho.ReturnType.ToString(), actualEcho.ReturnType.ToString())
+            Assert.Equal(ReadNames(expectedEcho.ReturnParameter), ReadNames(actualEcho.ReturnParameter))
+            Assert.Equal(ReadNames(expectedEcho.GetParameters()[0]), ReadNames(actualEcho.GetParameters()[0]))
+            Assert.Equal(ReadNames(expected.GetField("Field")!!), ReadNames(actual.GetField("Field")!!))
+            Assert.Equal(ReadNames(expected.GetProperty("Value")!!), ReadNames(actual.GetProperty("Value")!!))
         }
     }
-}`)
-        let make = assembly.GetTypes().Single((t Type) -> t.Name == "Big").GetMethod("Make")!!
-        Assert.Equal([]string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}, ReadNames(make.ReturnParameter))
+
+    @Fact
+    func EightElementExport_IsReadableByCSharp() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.Compile(`public class Plain {
+    public func Get() (A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32) -> (1,2,3,4,5,6,7,8)
+}`, "Default", false)
+        IlVerifier.Verify(library)
+        let consumer = fixture.CompileCSharp(`public class Reader {
+    public static int Read() => new Default.Plain().Get().H;
+}`, "Reader", library)
+        IlVerifier.Verify(consumer, additionalReferences: []string{library})
+        Assert.Equal(8, EmittedFixture.Load(consumer).GetType("Reader")!!.GetMethod("Read")!!.Invoke(nil, nil))
+    }
+
+    @Fact
+    func RoslynLongTuple_WithFollowingTuple_KeepsImportedNames() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.CompileCSharp(`namespace TupleContracts;
+public class Contract {
+    public static ((int A, int B, int C, int D, int E, int F, int G, int H) Long, (int X, int Y) Next) Get()
+        => ((1,2,3,4,5,6,7,8), (9,10));
+}`, "RoslynLongTupleContract")
+        IlVerifier.Verify(library)
+        let consumer = fixture.Compile(`import System
+import TupleContracts
+let result = Contract.Get()
+Console.Write(result.Long.H)
+Console.Write(result.Next.X)
+Console.Write(result.Next.Y)`, "tuple-import", true, "/reference:" + library)
+        IlVerifier.Verify(consumer, additionalReferences: []string{library})
+        Assert.Equal("8910", fixture.Run(consumer))
     }
 
     @Fact
