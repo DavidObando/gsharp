@@ -251,6 +251,13 @@ internal sealed class RegionEffects {
         set;
     }
 
+    /// Whether a declaration with a type or an assignment takes a value that is not a literal. A user-defined
+    /// conversion may run code there (rule W4); the consumer asks whether the package declares any.
+    prop ContainsConversionCandidate bool {
+        get;
+        set;
+    }
+
     /// Gets the names read in the region that no declaration of the region encloses (a bare name can bind to a
     /// property getter of the enclosing type; the consumer resolves it at the entry scope, rule W5).
     prop BareReads List[string] {
@@ -315,6 +322,7 @@ internal sealed class RegionEffects {
         ContainsOperatorCandidate = ContainsOperatorCandidate || other.ContainsOperatorCandidate
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
+        ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
         OperatorHasUnresolvedOperand = OperatorHasUnresolvedOperand || other.OperatorHasUnresolvedOperand
         for name in other.OperatorOperandNames {
             if !OperatorOperandNames.Contains(name) {

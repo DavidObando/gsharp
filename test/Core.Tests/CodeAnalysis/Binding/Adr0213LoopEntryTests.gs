@@ -317,6 +317,75 @@ func Replace() bool {
     }
     return false
 }`, "GS0158")
+            Add("bare-property-setter-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class H {
+    var Store int32 = 0
+    prop P int32 {
+        get { return 1 }
+        set {
+            g = nil
+        }
+    }
+    func Run() int32 {
+        var t = 0
+        if g != nil {
+            for var i = 0; i < 2; i++ {
+                let c string = g
+                P = 1
+                t = 1
+            }
+        }
+        return t
+    }
+}
+func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155")
+            Add("member-property-setter-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class H {
+    var Store int32 = 0
+    prop P int32 {
+        get { return 1 }
+        set {
+            g = nil
+        }
+    }
+    func Run() int32 {
+        var t = 0
+        if g != nil {
+            for var i = 0; i < 2; i++ {
+                let c string = g
+                this.P = 1
+                t = 1
+            }
+        }
+        return t
+    }
+}
+func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155")
+            Add("user-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class V { var N int32 = 1 }
+func operator implicit (v V) int32 {
+    g = nil
+    return 1
+}
+func Run() int32 {
+    let v = V{}
+    var t = 0
+    if g != nil {
+        for var i = 0; i < 2; i++ {
+            let c string = g
+            let converted int32 = v
+            t = 1
+        }
+    }
+    return t
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0155")
             return rows
         }
     }

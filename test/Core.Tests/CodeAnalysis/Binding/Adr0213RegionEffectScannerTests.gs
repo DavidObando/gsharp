@@ -435,8 +435,8 @@ open class Adr0213RegionEffectScannerTests {
                 "while c { Run(ref xs[0]) }",
                 "flags=[call,member-write,member-read,alias-take,ref-arg] writes=[]"
             )
-            Add("W3", "member-write", "while c { x.F = 1 }", "flags=[member-write] writes=[]")
-            Add("W3", "index-write", "while c { xs[0] = 1 }", "flags=[member-write] writes=[]")
+            Add("W3", "member-write", "while c { x.F = 1 }", "flags=[call,member-write] writes=[]")
+            Add("W3", "index-write", "while c { xs[0] = 1 }", "flags=[call,member-write] writes=[]")
             Add("W3", "pointer-write", "while c { *p = 1 }", "flags=[member-write,pointer-write] writes=[]")
             // W4: any call is a call.
             Add("W4", "invocation", "while c { Work() }", "flags=[call] writes=[]")

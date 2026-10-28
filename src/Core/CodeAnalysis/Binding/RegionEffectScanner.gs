@@ -457,6 +457,8 @@ internal sealed class RegionEffectScanner {
                 .FieldAssignmentExpression {
                 if Active() {
                     current.ContainsMemberWrite = true
+                    // A setter or an indexer runs user code.
+                    current.ContainsCall = true
                 }
                 if kind == SyntaxKind.CompoundIndexAssignmentExpression ||
                     kind == SyntaxKind
@@ -591,6 +593,9 @@ internal sealed class RegionEffectScanner {
 
     private func VisitVariableDeclaration(declaration VariableDeclarationSyntax) {
         Visit(declaration.Initializer)
+        if Active() && declaration.Initializer != nil && declaration.Initializer.Kind != SyntaxKind.LiteralExpression {
+            current.ContainsConversionCandidate = true
+        }
         let name = declaration.Identifier.ValueText
         // The storage that a `ref` local names is fixed where it is declared, before a later declaration
         // of the same name can hide it (rule W3).
@@ -670,12 +675,21 @@ internal sealed class RegionEffectScanner {
                 write.FollowedByExit
             )
         }
-        for name in record.OperatorOperandNames {
-            if IsDeclared(name) {
-                current.OperatorHasUnresolvedOperand = true
+        if Active() {
+            for name in record.OperatorOperandNames {
+                if IsDeclared(name) {
+                    current.OperatorHasUnresolvedOperand = true
+                }
             }
         }
+        let bareBefore = current.BareReads.ToArray()
         current.AbsorbFlags(record, Active())
+        // A name that an enclosing declaration of the region hides is no property read.
+        for name in record.BareReads {
+            if IsDeclared(name) && !bareBefore.Contains(name) {
+                current.BareReads.Remove(name)
+            }
+        }
     }
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
@@ -902,6 +916,9 @@ internal sealed class RegionEffectScanner {
         var proof = RegionWriteProof.None
         var typeName string? = nil
         var rightName string? = nil
+        if Active() && value != nil && value.Kind != SyntaxKind.LiteralExpression {
+            current.ContainsConversionCandidate = true
+        }
         if value != nil {
             ClassifyProof(value, out proof, out typeName, out rightName)
         }

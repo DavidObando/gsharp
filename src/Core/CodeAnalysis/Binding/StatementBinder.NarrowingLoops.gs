@@ -89,11 +89,36 @@ internal partial class StatementBinder {
             set;
         }
 
+        /// Whether the region writes a bare property (a setter), or converts a value in a package that declares a
+        /// user-defined conversion (rule W4).
+        prop RunsUserCodeOnWrite bool {
+            get;
+            set;
+        }
+
         /// Whether a bare name that the region reads binds to a property of the enclosing type (rule W5).
         prop ReadsProperty bool {
             get;
             set;
         }
+    }
+
+    private var packageDeclaresConversions bool? = nil
+
+    // Whether a type of the package declares a user-defined conversion operator.
+    private func PackageDeclaresConversions() bool {
+        if packageDeclaresConversions == nil {
+            var found = false
+            for declared in $scope.GetDeclaredStructs() {
+                for method in declared.StaticMethods {
+                    if method.Name == "op_Implicit" || method.Name == "op_Explicit" {
+                        found = true
+                    }
+                }
+            }
+            packageDeclaresConversions = found
+        }
+        return packageDeclaresConversions == true
     }
 
     private func SameRoot(first VariableSymbol, second VariableSymbol) bool {
@@ -110,6 +135,9 @@ internal partial class StatementBinder {
 
     private func ResolveRegionWrites(effects RegionEffects) ResolvedRegionWrites {
         let resolved = ResolvedRegionWrites()
+        if effects.ContainsConversionCandidate && PackageDeclaresConversions() {
+            resolved.RunsUserCodeOnWrite = true
+        }
         if effects.ContainsOperatorCandidate {
             resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand
             for name in effects.OperatorOperandNames {
@@ -140,6 +168,9 @@ internal partial class StatementBinder {
             let symbol = $scope.TryLookupSymbol(write.Name)
             if symbol is not VariableSymbol variable {
                 continue
+            }
+            if variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
+                resolved.RunsUserCodeOnWrite = true
             }
             if variable is ImplicitFieldVariableSymbol or
                 ImplicitPropertyVariableSymbol or
@@ -375,7 +406,8 @@ internal partial class StatementBinder {
         let callLike = effects.ContainsCall ||
             effects.ContainsSuspension ||
             effects.ContainsIteration ||
-            resolved.RunsUserOperator
+            resolved.RunsUserOperator ||
+            resolved.RunsUserCodeOnWrite
         // Rule W5: every member or index read is an unknown getter, which is a call.
         let readLike = effects.ContainsMemberRead || resolved.ReadsProperty
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite
@@ -751,14 +783,15 @@ internal partial class StatementBinder {
         let facts = Dictionary[AccessPath, TypeSymbol]()
         for entry in elseFacts {
             let path = entry.Key
-            var removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, nil).Killed
+            var removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
             if !removed &&
                 filterNames != nil &&
                 (
                 headerEffects.ContainsCall ||
                     headerEffects.ContainsMemberRead ||
                     resolved.ReadsProperty ||
-                    resolved.RunsUserOperator
+                    resolved.RunsUserOperator ||
+                    resolved.RunsUserCodeOnWrite
             ) &&
                 (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path)) {
                 removed = true
