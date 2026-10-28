@@ -395,6 +395,76 @@ return view
         }
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedSymbolicValueTuple_PhysicalGenericRestPreservesFamilyAndAnnotations(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let references = TupleDriverReferences()
+        let contract = Path.Combine(fixture.Directory, "TupleRestAssessment.dll")
+        let contractReference = Path.Combine(fixture.Directory, "TupleRestAssessment.ref.dll")
+        let producer = CSharpCompilation.Create(
+            "TupleRestAssessment",
+            []SyntaxTree{CSharpSyntaxTree.ParseText(TupleRestProducer)},
+            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
+        )
+        {
+            using let stream = File.Create(contract)
+            Assert.True(producer.Emit(stream).Success)
+        }
+        {
+            using let stream = File.Create(contractReference)
+            Assert.True(
+                producer.Emit(stream, options: EmitOptions(metadataOnly: true, includePrivateMembers: false)).Success
+            )
+        }
+        let selected = if referenceAssembly {
+            contractReference
+        } else {
+            contract
+        }
+        let source = `package PhysicalTupleRest
+import System
+import TupleRestAssessment
+public class C {}
+public class Exports { shared {
+public func Lift(value C) IView[string?, (System.Tuple[string?, int32, int32, int32, int32, int32, int32, System.Tuple[C, int32]], int32)] {
+let view = RestMaker[C].Ordinary(value)
+return view
+}
+} }
+`
+        let image = CompileTupleDriver(fixture.Directory, "MatchingRest", source, selected, references, nil)
+        VerifyTupleDriver(image, contract, references)
+        let assembly = EmittedFixture.LoadTogether(contract, image)[1]
+        let method = assembly.GetType("PhysicalTupleRest.Exports", throwOnError: true)!!.GetMethod("Lift")!!
+        let outer = method.ReturnType.GetGenericArguments()[1]
+        Assert.Equal(typeof(ValueTuple[_, _]), outer.GetGenericTypeDefinition())
+        let tuple = outer.GetGenericArguments()[0]
+        Assert.Equal(typeof(Tuple[_, _, _, _, _, _, _, _]), tuple.GetGenericTypeDefinition())
+        let slots = tuple.GetGenericArguments()
+        Assert.Equal(8, slots.Length)
+        Assert.Equal(typeof(string), slots[0])
+        for var i = 1; i < 7; i++ {
+            Assert.Equal(typeof(int32), slots[i])
+        }
+        let rest = slots[7]
+        Assert.False(rest.IsValueType)
+        Assert.Equal(typeof(Tuple[_, _]), rest.GetGenericTypeDefinition())
+        Assert.Equal(Assert.Single(method.GetParameters()).ParameterType, rest.GetGenericArguments()[0])
+        Assert.Equal(assembly.GetType("PhysicalTupleRest.C", throwOnError: true), rest.GetGenericArguments()[0])
+        Assert.Equal(typeof(int32), rest.GetGenericArguments()[1])
+        let metadata = NullabilityInfoContext().Create(method.ReturnParameter)
+        Assert.Equal(NullabilityState.Nullable, metadata.GenericTypeArguments[0].ReadState)
+        let tupleMetadata = metadata.GenericTypeArguments[1].GenericTypeArguments[0]
+        Assert.Equal(NullabilityState.Nullable, tupleMetadata.GenericTypeArguments[0].ReadState)
+        Assert.Equal(NullabilityState.NotNull, tupleMetadata.GenericTypeArguments[7].ReadState)
+        Assert.Equal(NullabilityState.NotNull, tupleMetadata.GenericTypeArguments[7].GenericTypeArguments[0].ReadState)
+        let rejected = source.Replace("System.Tuple[C, int32]", "System.ValueTuple[C, int32]")
+        CompileTupleDriver(fixture.Directory, "DifferentRestFamily", rejected, selected, references, "8,8,8,12")
+    }
+
     /// The shape from the issue, verbatim: a LINQ call over a dictionary whose
     /// value type is a named tuple carrying a `List` of named tuples. The
     /// return type comes back from the CLR signature unnamed, and flows into a
@@ -476,6 +546,24 @@ Console.WriteLine(only.Value.Awaits[0].Item1)`
     }
 
     shared {
+        private const TupleRestProducer string = `#nullable enable
+using System;
+namespace TupleRestAssessment;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public static class RestMaker<T> {
+    public static IView<string, (Tuple<string?, int, int, int, int, int, int, Tuple<T, int>>, int)> Ordinary(T value) {
+        var tuple = new Tuple<string?, int, int, int, int, int, int, Tuple<T, int>>(
+            null, 1, 2, 3, 4, 5, 6, new Tuple<T, int>(value, 42));
+        return new ViewImpl<string, (Tuple<string?, int, int, int, int, int, int, Tuple<T, int>>, int)>(
+            "rest", (tuple, 99));
+    }
+}
+`
+
         private const TupleProducer string = `#nullable enable
 namespace TupleAssessment5413;
 public interface IView<out T, out U> { T First { get; } U Second { get; } }

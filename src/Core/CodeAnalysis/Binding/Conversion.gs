@@ -2856,17 +2856,50 @@ class Conversion {
         private func IsTupleTypeArgumentPair(from TypeSymbol, to TypeSymbol) bool ->
         TupleTypeSymbol.TryGetTupleShape(from, out _) && TupleTypeSymbol.TryGetTupleShape(to, out _)
 
-        private func HaveSameTypeArgumentDefinition(from TypeSymbol, to TypeSymbol) bool {
-            if IsTupleTypeArgumentPair(from, to) {
+        private func TryGetIdenticalTypeArgumentPositions(
+            from TypeSymbol,
+            to TypeSymbol,
+            out fromPositions ImmutableArray[TypeSymbol],
+            out toPositions ImmutableArray[TypeSymbol]
+        ) bool {
+            fromPositions = ImmutableArray[TypeSymbol].Empty
+            toPositions = ImmutableArray[TypeSymbol].Empty
+            // Only native tuples need logical positions; the recognizer proves the imported ValueTuple layout.
+            if (from.StripToBareShape() is TupleTypeSymbol || to.StripToBareShape() is TupleTypeSymbol) &&
+                IsTupleTypeArgumentPair(from, to) {
+                fromPositions = from.GetElementPositions()
+                toPositions = to.GetElementPositions()
                 return true
             }
+            // Imported generic contracts retain annotated physical slots, including TRest.
+            let fromGeneric = TryGetConstructedGenericShape(
+                UnwrapPlatformAndNullable(from),
+                out var fromOpen,
+                out fromPositions
+            )
+            let toGeneric = TryGetConstructedGenericShape(
+                UnwrapPlatformAndNullable(to),
+                out var toOpen,
+                out toPositions
+            )
+            if fromGeneric && toGeneric {
+                return ClrTypeUtilities.AreSame(fromOpen, toOpen)
+            }
+            if !HaveSameTypeArgumentDefinition(from, to) {
+                return false
+            }
+            if !fromGeneric {
+                fromPositions = from.GetElementPositions()
+            }
+            if !toGeneric {
+                toPositions = to.GetElementPositions()
+            }
+            return true
+        }
+
+        private func HaveSameTypeArgumentDefinition(from TypeSymbol, to TypeSymbol) bool {
             let a = from.StripToBareShape()
             let b = to.StripToBareShape()
-            // Prove the constructed head only; contracts below visit its canonical positions once.
-            if TryGetConstructedGenericShape(a, out var fromOpen, out _) &&
-                TryGetConstructedGenericShape(b, out var toOpen, out _) {
-                return fromOpen.IsSameAs(toOpen)
-            }
             if a.ClrType != nil || b.ClrType != nil {
                 return AreTypeArgumentsEquivalent(a, b)
             }
@@ -2894,11 +2927,9 @@ class Conversion {
                 from.StripToBareShape() as NullableTypeSymbol
             ) !=
             NullableLifting.IsAnyValueTypeNullable(to.StripToBareShape() as NullableTypeSymbol) ||
-                !HaveSameTypeArgumentDefinition(from, to) {
+                !TryGetIdenticalTypeArgumentPositions(from, to, out var fromPositions, out var toPositions) {
                 return false
             }
-            let fromPositions = from.GetElementPositions()
-            let toPositions = to.GetElementPositions()
             if fromPositions.Length != toPositions.Length {
                 return false
             }
