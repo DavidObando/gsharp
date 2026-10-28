@@ -9265,19 +9265,19 @@ partial class Binder {
         }
 
         /// Speculatively binds [`expression`](paramref) against the program's
-        /// scope to infer its (cref:TypeSymbol), discarding any diagnostics.
-        /// Used by the language server to offer member completions on arbitrary
-        /// receiver expressions (e.g. `(a + b).`, `foo().`, `arr[0].`,
-        /// `a.b.`). Top-level variables are reachable through the reconstructed
-        /// parent scope; locals/parameters of an enclosing function must be supplied
-        /// via [`additionalLocals`](paramref).
+        /// scope to read its (cref:TypeSymbol), discarding any diagnostics. The
+        /// one engine of (cref:SemanticModel.GetSpeculativeTypeInfo) (ADR-0212).
+        /// Top-level variables are reachable through the reconstructed parent
+        /// scope; locals/parameters of an enclosing function must be supplied
+        /// via [`additionalLocals`](paramref). The binder starts with empty
+        /// narrowing state (ADR-0212 Q15).
         /// @param globalScope The bound global scope of the compilation.
         /// @param references The reference resolver supplying imported types.
         /// @param containingFunction The function enclosing the expression, or `null` for top-level statements.
         /// @param additionalLocals In-scope locals/parameters to declare before binding, or `null`.
-        /// @param expression The receiver expression to infer a type for.
-        /// @returns The inferred non-error, non-void type, or `null` when inference fails.
-        func TryInferExpressionType(
+        /// @param expression The expression to read a type for.
+        /// @returns The non-error, non-void type, or `null` when binding fails.
+        internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
             references ReferenceResolver,
             containingFunction FunctionSymbol?,
@@ -9299,6 +9299,9 @@ partial class Binder {
                 let previousTree = parentScope.SetCurrentReferencingSyntaxTree(expression.SyntaxTree)
                 try {
                     if additionalLocals != nil {
+                        // The locals go in a child scope, as a body's block scope is a child of the
+                        // function scope that holds the implicit members, so a local shadows a field.
+                        binder.$scope = BoundScope(binder.$scope)
                         for local in additionalLocals {
                             if local != nil {
                                 binder.$scope.TryDeclareVariable(local)
@@ -9320,7 +9323,7 @@ partial class Binder {
                     parentScope.SetCurrentReferencingSyntaxTree(previousTree)
                 }
             } catch (Exception) {
-                // Inference must never throw into the editor pipeline.
+                // Speculation must never throw into the editor pipeline.
                 return nil
             }
         }

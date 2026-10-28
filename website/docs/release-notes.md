@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **`SemanticModel.GetSpeculativeTypeInfo` replaces `Binder.TryInferExpressionType`** (issue #5308). `GetSpeculativeTypeInfo(position, expression)` binds an expression as if it stood at `position`, with the locals of the scope query, the file's imports, and the compilation's nullability mode, and answers its type (`TypeInfo.None` on failure, `void` or error). Flow narrowing in force at `position` is excluded from the contract (ADR-0212 Q15). `Binder.TryInferExpressionType` is removed from the public surface. A local now shadows a same-named field in the speculative bind, and the locals of top-level statements, constructors, accessors and `deinit` bodies are in scope. No change to `gsc` output.
+
 - **`GetEnclosingSymbol` answers the empty part of a nested partial type** (issue #5455). A position inside a later part of a nested `partial` type that has no member now answers the merged type, not the outer type. The merged declaration keeps the extent of every part for the lookup.
 
 - **Narrowing treats a closure's own locals as private** (issue #5456). A local that a closure declares and only that closure assigns is no longer in the closure-assigned set. An unknown callable no longer removes its narrowing. A write from a nested closure, or to a variable the closure does not declare, still counts. No current diagnostic or emitted output changes in `src/Core`, Core.Tests, gsc or the pinned Oahu inputs.

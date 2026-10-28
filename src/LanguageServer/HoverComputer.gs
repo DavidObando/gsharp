@@ -368,19 +368,10 @@ async sequence[T]
         compilation Compilation,
         target ExpressionSyntax
     ) TypeSymbol? {
-        let (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, tree, target.Span.Start)
-        return GSharp
-            .Core
-            .CodeAnalysis
-            .Binding
-            .Binder
-            .TryInferExpressionType(
-            compilation.GlobalScope,
-            compilation.References ?? ReferenceResolver.Default(),
-            function,
-            locals,
-            target
-        )
+        return BoundSemantics
+            .GetPositionModel(compilation, tree)
+            ?.GetSpeculativeTypeInfo(target.Span.Start, target)
+            .Type
     }
 
     /// Resolves a member access on a user-defined G# type (struct/class).
@@ -1828,19 +1819,10 @@ shared class CompletionComputer {
         if receiver == nil {
             return nil
         }
-        let (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, content.SyntaxTree, offset)
-        let receiverType TypeSymbol? = GSharp
-            .Core
-            .CodeAnalysis
-            .Binding
-            .Binder
-            .TryInferExpressionType(
-            compilation.GlobalScope,
-            compilation.References ?? ReferenceResolver.Default(),
-            function,
-            locals,
-            receiver
-        )
+        let receiverType TypeSymbol? = BoundSemantics
+            .GetPositionModel(compilation, content.SyntaxTree)
+            ?.GetSpeculativeTypeInfo(offset, receiver)
+            .Type
         if receiverType == nil {
             // Caret is in an initializer position but the target type can't be inferred —
             // suppress the global list rather than offering irrelevant keywords/symbols.
@@ -2031,28 +2013,15 @@ shared class CompletionComputer {
             // segment) and speculatively bind it to infer the member type.
             let receiverExpression ExpressionSyntax? = ReconstructReceiverExpression(content, chainRoot, accessor)
             if receiverExpression != nil {
-                let (function, locals) = SemanticLookup.GetExpressionBindingContext(
-                    compilation,
-                    content.SyntaxTree,
-                    offset
-                )
                 // Issue #4989: the receiver's bound (flow) type when the binder has
                 // one; a speculative bind of the reconstructed chain otherwise
                 // (incomplete code). The bound query takes the receiver segment in
                 // the document's own tree, which the binder indexed.
                 let receiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, accessor.LeftPart) ??
-                    GSharp
-                    .Core
-                    .CodeAnalysis
-                    .Binding
-                    .Binder
-                    .TryInferExpressionType(
-                    compilation.GlobalScope,
-                    compilation.References ?? ReferenceResolver.Default(),
-                    function,
-                    locals,
-                    receiverExpression
-                )
+                    BoundSemantics
+                    .GetPositionModel(compilation, content.SyntaxTree)
+                    ?.GetSpeculativeTypeInfo(offset, receiverExpression)
+                    .Type
                 if receiverType != nil {
                     AddInstanceTypeMembers(items, seen, receiverType)
                 }

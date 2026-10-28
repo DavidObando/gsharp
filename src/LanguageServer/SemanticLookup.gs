@@ -815,40 +815,6 @@ shared class SemanticLookup {
         }
     }
 
-    /// Computes the binding context for an expression at [`offset`](paramref):
-    /// the enclosing function (or `null` at top level) and the
-    /// locals/parameters in scope there. Used to speculatively infer receiver
-    /// types for member completions on arbitrary expressions.
-    /// @param compilation The compilation to inspect.
-    /// @param tree The syntax tree the offset belongs to; scopes the function search to that file.
-    /// @param offset The source offset of the expression.
-    /// @returns The enclosing function symbol and the in-scope local symbols.
-    func GetExpressionBindingContext(compilation Compilation, tree SyntaxTree?, offset int32)(
-        Function FunctionSymbol?,
-        Locals IReadOnlyList[VariableSymbol]
-    ) {
-        // Spans are per-file offsets; the supplied tree scopes the query so a function in
-        // another file can't be chosen by offset overlap in a multi-file compilation.
-        if tree == nil {
-            return (nil, Array.Empty[VariableSymbol]())
-        }
-        let model = BoundSemantics.GetPositionModel(compilation, tree)
-        if model == nil {
-            return (nil, Array.Empty[VariableSymbol]())
-        }
-        // Constructors and accessors have no declaring function syntax; only a declared
-        // function (or method) is a context, as before.
-        if model.GetEnclosingSymbol(offset) is not FunctionSymbol{Declaration: not nil} function {
-            // Top-level statements: globals are reachable through the parent scope.
-            return (nil, Array.Empty[VariableSymbol]())
-        }
-        let locals = List[VariableSymbol](model.LookupSymbols(offset).OfType[VariableSymbol]())
-        if function.ThisParameter != nil && !locals.Contains(function.ThisParameter) {
-            locals.Add(function.ThisParameter)
-        }
-        return (function, locals)
-    }
-
     /// Resolves a bare type name (e.g. `Console`) to a CLR (cref:Type)
     /// reachable through the document's `import` declarations, the implicit
     /// `System` namespace, or a fully-qualified name.
