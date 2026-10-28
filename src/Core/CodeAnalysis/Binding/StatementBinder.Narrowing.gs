@@ -2006,8 +2006,14 @@ internal partial class StatementBinder {
             if sourcePropertyRunsUserCode || sourceConstructionRunsUserCode {
                 MarkMayMutateGlobalRoots()
             }
-            // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped.
-            if node is BoundCallOperationExpression {
+            // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
+            // callable value, which keeps its own classification (AnalyzeCallableInvocation).
+            if node is BoundClrConstructorCallExpression or
+                BoundClrConversionCallExpression or
+                BoundTypeParameterConstructionExpression {
+                MayRunEscapedClosure = true
+            }
+            if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
                 MayRunEscapedClosure = true
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
@@ -2311,6 +2317,15 @@ internal partial class StatementBinder {
             AnalyzeCallableArguments(node.Arguments)
             base.VisitBaseClassCallExpression(node)
         }
+
+        // `callback.Invoke()` on a delegate value: the explicit form of `callback()`.
+        private func IsCallableValueInvocation(
+            node BoundExpression
+        ) bool -> node is BoundImportedInstanceCallExpression{
+            Method: {Name: "Invoke"},
+            Receiver: {Type: var receiverType}
+        } &&
+            IsCallableType(receiverType)
 
         protected open override func VisitImportedInstanceCallExpression(node BoundImportedInstanceCallExpression) {
             if string.Equals(node.Method.Name, "Invoke", StringComparison.Ordinal) &&

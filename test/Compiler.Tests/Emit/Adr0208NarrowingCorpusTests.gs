@@ -208,6 +208,7 @@ open class Adr0208NarrowingCorpusTests {
                 "o6_callback_run_through_another_callback",
                 "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias",
+                "p10_5237_clr_constructor_enumerates_an_escaped_closure",
                 "p1_5237_escaped_closure_run_by_declared_function",
                 "p2_5237_loop_form_escaped_closure",
                 "p3_5237_root_no_closure_assigns_keeps_the_fact",
@@ -216,6 +217,7 @@ open class Adr0208NarrowingCorpusTests {
                 "p6_5237_ref_local_alias_of_closure_assigned_local",
                 "p7_5237_iterator_runs_escaped_closure",
                 "p8_5237_call_replaces_a_closure_assigned_callable",
+                "p9_5237_explicit_invoke_of_an_external_callback_keeps_the_fact",
                 "q1_5456_closure_own_local_survives_unknown_callable",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
@@ -1895,6 +1897,39 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"p9_5237_explicit_invoke_of_an_external_callback_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    callback.Invoke()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1", "R15"}
+            yield[]object{"p10_5237_clr_constructor_enumerates_an_escaped_closure", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Items(h () -> void) sequence[int32] {
+    yield 1
+    h()
+    yield 2
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let items = Items(clear)
+    if x == nil { return 0 }
+    let list = List[int32](items)
+    return x.Value + list.Count
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@18:14", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
