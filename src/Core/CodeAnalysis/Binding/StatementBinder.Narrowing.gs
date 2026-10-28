@@ -2020,7 +2020,17 @@ internal partial class StatementBinder {
                 BoundClrBinaryOperatorExpression or
                 BoundClrUnaryOperatorExpression or
                 BoundFunctionPointerInvocationExpression or
+                BoundEventSubscriptionExpression or
+                BoundClrEventSubscriptionExpression or
                 BoundTypeParameterConstructionExpression {
+                MayRunEscapedClosure = true
+            }
+            // A hole of a type other than a built-in value or a string calls its `ToString`.
+            if node is BoundInterpolatedStringExpression interpolation && interpolation.Parts.Any(
+                (part BoundInterpolatedStringPart) -> part.Value is {} hole &&
+                    hole.Type != TypeSymbol.String &&
+                    !TypeSymbol.IsLegalPointeeType(hole.Type)
+            ) {
                 MayRunEscapedClosure = true
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {

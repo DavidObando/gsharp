@@ -211,6 +211,7 @@ open class Adr0208NarrowingCorpusTests {
                 "p10_5237_clr_constructor_enumerates_an_escaped_closure",
                 "p11_5237_type_parameter_construction_runs_a_constructor",
                 "p12_5237_function_pointer_call_runs_an_escaped_closure",
+                "p13_5237_interpolation_calls_to_string",
                 "p1_5237_escaped_closure_run_by_declared_function",
                 "p2_5237_loop_form_escaped_closure",
                 "p3_5237_root_no_closure_assigns_keeps_the_fact",
@@ -1870,13 +1871,15 @@ func Items(h () -> void) sequence[int32] {
 func Run() int32 {
     var x C? = C{}
     let clear = func() { x = nil }
+    let items = Items(clear)
     if x == nil { return 0 }
-    for v in Items(clear) {
-        Console.WriteLine(v)
+    var total = 0
+    for v in items {
+        total += v
     }
-    return x.Value
+    return x.Value + total
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0158@19:14", "reject", "", "R15"}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@21:14", "reject", "", "R15"}
             yield[]object{"p8_5237_call_replaces_a_closure_assigned_callable", `import System
 
 class C {
@@ -1969,6 +1972,27 @@ unsafe func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@15:14", "reject", "", "R15"}
+            yield[]object{"p13_5237_interpolation_calls_to_string", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Noisy {
+    override func ToString() string {
+        cleaner()
+        return "n"
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    let n = Noisy{}
+    if x == nil { return 0 }
+    let text = "${n}"
+    return x.Value + text.Length
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
