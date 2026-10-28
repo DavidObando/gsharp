@@ -263,9 +263,11 @@ internal partial class StatementBinder {
         let plainTargets = PlainAssignmentTargetCollector()
         plainTargets.VisitExpression(ifStatement.Condition)
         for (path, narrowedType) in lastEarlyExitLifts {
-            // ADR-0208 R15: a condition that runs source code can run a closure that clears a closure-assigned
-            // root after the guard, so the lift stays removed.
-            if condition.MayRunEscapedClosure && MayBeMutatedByEscapedClosure(path.Root) {
+            // ADR-0208 R15: a condition that runs source code after the test of a closure-assigned root can run a
+            // closure that clears it, so the lift stays removed.
+            if condition.MayRunEscapedClosure &&
+                MayBeMutatedByEscapedClosure(path.Root) &&
+                RunsEscapedClosureAfterTest(ifStatement.Condition, path.Root) {
                 continue
             }
             if !path.HasMembers && condition.WritableReferenceRoots.Contains(path.Root) &&
@@ -274,6 +276,58 @@ internal partial class StatementBinder {
                 .Contains(path.Root) && !branches.AssignsRoot(path.Root) {
                 SetPersistentNarrowing(persistentFrame, path, narrowedType)
             }
+        }
+    }
+
+    // ADR-0208 R15: whether an operand of the `||` chain [`condition`](paramref) that follows the last operand naming
+    // [`root`](paramref) runs source code. A fact that the chain establishes holds only until that code runs.
+    private func RunsEscapedClosureAfterTest(condition BoundExpression, root VariableSymbol) bool {
+        let operands = List[BoundExpression]()
+        FlattenLogicalOr(condition, operands)
+        var lastNaming = -1
+        for var i = 0; i < operands.Count; i++ {
+            let walker = RootMentionWalker(root)
+            walker.VisitExpression(operands[i])
+            if walker.Found {
+                lastNaming = i
+            }
+        }
+        for var i = lastNaming + 1; i < operands.Count; i++ {
+            let collector = NewCollector(nil, externalCallableAliases)
+            collector.VisitExpression(operands[i])
+            if collector.MayRunEscapedClosure {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func FlattenLogicalOr(expression BoundExpression, operands List[BoundExpression]) {
+        if expression is BoundBinaryExpression binary && binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+            FlattenLogicalOr(binary.Left, operands)
+            FlattenLogicalOr(binary.Right, operands)
+        } else {
+            operands.Add(expression)
+        }
+    }
+
+    private class RootMentionWalker : BoundTreeWalker {
+        private let root VariableSymbol
+
+        init(root VariableSymbol) {
+            this.root = root
+        }
+
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if node is BoundVariableExpression variable && object.ReferenceEquals(variable.Variable, root) {
+                Found = true
+            }
+            base.VisitExpression(node)
         }
     }
 

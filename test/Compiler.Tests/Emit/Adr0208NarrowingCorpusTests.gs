@@ -213,6 +213,7 @@ open class Adr0208NarrowingCorpusTests {
                 "p12_5237_function_pointer_call_runs_an_escaped_closure",
                 "p13_5237_interpolation_calls_to_string",
                 "p14_5237_condition_out_write_then_escaped_closure",
+                "p15_5237_condition_out_write_then_test_keeps_the_fact",
                 "p1_5237_escaped_closure_run_by_declared_function",
                 "p2_5237_loop_form_escaped_closure",
                 "p3_5237_root_no_closure_assigns_keeps_the_fact",
@@ -2018,6 +2019,30 @@ func Run() int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@22:14", "reject", "", "R15"}
+            yield[]object{"p15_5237_condition_out_write_then_test_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if !TryGet(out x) || x == nil { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
