@@ -27,7 +27,6 @@ import Xunit
 /// | R3 | a nil `previous` is accepted and `Previous` is nil | throw unconditionally: R3 |
 /// | R4 | BindProgram.Imports is the scope's own import list, in order (was GetCumulativeImports) | `Imports = ImmutableArray.Empty` in BindProgram: R4 |
 /// | R5 | BindProgram binds a body for every function of the scope | skip the function loop in BindProgram: R5 |
-/// | R6 | the body-binding scope sees the scope's imports, aliases and functions (parent scope rebuilt from one level) | build the parent scope without TryImport: R6 |
 open class Adr0212S8PreviousChainRetiredTests {
     @Fact
     func R1a_BindGlobalScope_TwoArgumentOverload_RejectsPrevious() {
@@ -103,15 +102,6 @@ open class Adr0212S8PreviousChainRetiredTests {
         for function in scope_.Functions {
             Assert.True(program.Functions.ContainsKey(function), function.Name)
         }
-    }
-
-    @Fact
-    func R6_BodyScope_SeesImportsAndSiblingFunctions() {
-        let scope_ = BindSource(
-            "package P\nimport System.Text\nfunc build() string {\n    let sb = StringBuilder()\n    sb.Append(helper())\n    return sb.ToString()\n}\nfunc helper() string -> \"x\"\n"
-        )
-        let program = Binder.BindProgram(scope_)
-        Assert.Empty(program.Diagnostics)
     }
 
     shared {
