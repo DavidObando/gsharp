@@ -393,6 +393,7 @@ internal partial class ExpressionBinder {
         var boundReceiver BoundExpression? = nil
         var receiverClrType Type? = nil
         var importedEventTarget TypeSymbol? = nil
+        var eventInfo EventInfo? = nil
         var flags BindingFlags
         // Issue #4051: set by the constructed-generic-receiver branch below when
         // its resolver failed for a reason it already REPORTED (a type argument
@@ -832,13 +833,22 @@ internal partial class ExpressionBinder {
                         return compoundResult
                     }
                 }
-                Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName)
-                return BoundErrorExpression(nil)
+                if isEventCapableOperator && boundReceiver.Type is InterfaceSymbol eventInterface {
+                    eventInfo = MemberLookup.GetInterfaceImportedBaseInstanceEvent(
+                        eventInterface,
+                        eventName,
+                        out importedEventTarget
+                    )
+                    receiverClrType = importedEventTarget?.ClrType
+                }
+                if eventInfo == nil {
+                    Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName)
+                    return BoundErrorExpression(nil)
+                }
             }
             flags = BindingFlags.Public | BindingFlags.Instance
         }
-        var eventInfo EventInfo? = nil
-        if isEventCapableOperator && receiverClrType != nil {
+        if eventInfo == nil && isEventCapableOperator && receiverClrType != nil {
             // Issue #3705: friend-visible `internal` events are candidates
             // here exactly as friend-visible methods/properties/fields are.
             let eventsIncludeInternal = CanAccessInternalsOf(receiverClrType)
