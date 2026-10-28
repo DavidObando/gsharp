@@ -1057,27 +1057,31 @@ internal shared class ClrOverloadResolution {
         if !NumericWideningLattice.IsNumericPrimitive(source?.FullName) {
             return 0
         }
-        let underlyingA = NullableLifting.GetValueTypeNullableUnderlyingClr(paramA)
-        let underlyingB = NullableLifting.GetValueTypeNullableUnderlyingClr(paramB)
+        let targetA = if paramA is {IsByRef: true} byRefA {
+            byRefA.GetElementType()
+        } else {
+            paramA
+        }
+        let targetB = if paramB is {IsByRef: true} byRefB {
+            byRefB.GetElementType()
+        } else {
+            paramB
+        }
+        let underlyingA = NullableLifting.GetValueTypeNullableUnderlyingClr(targetA)
+        let underlyingB = NullableLifting.GetValueTypeNullableUnderlyingClr(targetB)
         let numericA = NumericWideningLattice.IsNumericPrimitive(underlyingA?.FullName)
         let numericB = NumericWideningLattice.IsNumericPrimitive(underlyingB?.FullName)
         if numericA && numericB {
-            let exactA = ClrTypeUtilities.AreSame(source, underlyingA)
-            let exactB = ClrTypeUtilities.AreSame(source, underlyingB)
-            if exactA != exactB {
-                return if exactA {
-                    -1
-                } else {
-                    1
-                }
-            }
             return CompareNumericTargets(underlyingA, underlyingB, source)
         }
-        return if numericA || numericB {
-            CompareReferenceTargets(paramA, paramB)
-        } else {
-            0
+        // A nullable value boxes as its underlying value or null, including conversions to implemented interfaces.
+        if numericA && targetB?.IsValueType == false {
+            return CompareReferenceTargets(underlyingA, targetB)
         }
+        if numericB && targetA?.IsValueType == false {
+            return CompareReferenceTargets(targetA, underlyingB)
+        }
+        return 0
     }
 
     /// Compares two candidate conversion targets for the same source type per

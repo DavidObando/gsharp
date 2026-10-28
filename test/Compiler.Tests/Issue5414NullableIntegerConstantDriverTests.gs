@@ -193,6 +193,45 @@ Console.WriteLine(NullableRanks.Box(0))
 `, "byte\nbyte\nushort\nushort\nbyte\nsigned\nunsigned\nnullable\n", additionalReference: fixture.AssemblyPath)
     }
 
+    @Fact
+    func NullableNumericTargets_UseConversionDirectionInsteadOfUnderlyingIdentity() {
+        Check(`import System
+func F(value uint8?) string -> "byte"
+func F(value int32?) string -> "int"
+func Reversed(value int32?) string -> "int"
+func Reversed(value uint8?) string -> "byte"
+Console.WriteLine(F(0))
+Console.WriteLine(Reversed(0))
+Console.WriteLine(F(255))
+Console.WriteLine(F(256))
+let value int32 = 0
+Console.WriteLine(F(value))
+`, "byte\nbyte\nbyte\nint\nint\n")
+    }
+
+    @Theory
+    @InlineData("Direction", "byte\nbyte\n")
+    @InlineData("Readonly", "nullable\n")
+    @InlineData("Interface", "byte\n")
+    func ImportedNullableNumericTargets_RankValueReadonlyAndBoxingTargets(method string, expected string) {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace FinalRankingContract {
+public static class Choices {
+    public static string Direction(byte? value) => "byte";
+    public static string Direction(int? value) => "int";
+    public static string Reversed(int? value) => "int";
+    public static string Reversed(byte? value) => "byte";
+    public static string Readonly(in uint? value) => "nullable";
+    public static string Readonly(object value) => "object";
+    public static string Interface(byte? value) => "byte";
+    public static string Interface(System.IComparable value) => "interface";
+}}`)
+        var source = "import System\nimport FinalRankingContract\nConsole.WriteLine(Choices." + method + "(0))\n"
+        if method == "Direction" {
+            source += "Console.WriteLine(Choices.Reversed(0))\n"
+        }
+        Check(source, expected, additionalReference: fixture.AssemblyPath)
+    }
+
     shared {
         private func Check(
             sourceText string,
