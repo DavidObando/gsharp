@@ -16,7 +16,11 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **A call removes the narrowing of a local that a closure assigns** (issue #5237, ADR-0208 row R15). A declared function can run a closure that escaped, for example one stored in a field. After any call that can run user code, a plain local or parameter that a closure of the same function assigns is no longer narrowed. A program that read such a local after the call now reports `GS0158` or `GS0154` instead of throwing `NullReferenceException`. A by-reference parameter and a local that no other closure assigns keep their narrowing. The loop form of the same shape is rejected too. No diagnostic changes in `src/Core`, Core.Tests, gsc or the pinned Oahu inputs.
 
+- **Global scopes are no longer chained; `BoundGlobalScope.GetCumulativeImports` is removed** (issue #5312, ADR-0212 slice S8, step 1). No caller passed a non-nil `previous`, and the REPL chains through emitted metadata. `Binder.BindGlobalScope` and the `BoundGlobalScope` constructors keep the `previous` parameter and now throw `ArgumentException` for a non-nil value. `BoundGlobalScope.Imports` is the whole import list of the compilation, so use it where `GetCumulativeImports()` was called. The body-binding passes no longer walk a chain. No change to `gsc` output.
+
 - **Source-interface receivers can subscribe to inherited CLR events** (issue #5391). Qualified `+=` and `-=` operations now call the inherited event accessors, including inside default instance bodies. Generic handlers retain source and type-parameter arguments. Unsupported bare inherited event names still report errors instead of changing enclosing delegates.
+
+- **SDK builds supply metadata dependencies** (issue #5493). The compiler now receives resolved loose dependencies and NuGet runtime assemblies after selected compile references. Dependency-set changes invalidate incremental compilation even without newer input files. Reference-assembly precedence and `GS9100` warning policy remain unchanged.
 
 - **Generic channel readers retain source element types** (issue #5485). Inferred `out var` locals and method returns now preserve source-defined and generic elements through returned readers with explicit runtime references.
 

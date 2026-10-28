@@ -111,10 +111,10 @@ open class SdkLayoutTests {
         )
         Assert.Equal("$$(GsharpCompilerFullPath)", attrs["GsharpCompilerFullPath"])
         Assert.Equal("@(Compile)", attrs["Compile"])
-        // gsc must receive the full transitive closure of references — the same
-        // complete item csc consumes — so the MetadataLoadContext can resolve
-        // every transitive dependency a referenced member touches (issue #340).
-        Assert.Equal("@(ReferencePathWithRefAssemblies)", attrs["References"])
+        Assert.Equal(
+            "@(ReferencePathWithRefAssemblies);@(ReferenceDependencyPaths);@(RuntimeCopyLocalItems)",
+            attrs["References"]
+        )
         Assert.Equal("@(_GsharpCoreCompileResource)", attrs["Resources"])
         Assert.Equal("$$(OutputType)", attrs["OutputType"])
         Assert.Equal("$$(TargetFramework)", attrs["TargetFramework"])
