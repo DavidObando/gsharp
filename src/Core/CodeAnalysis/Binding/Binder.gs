@@ -809,22 +809,20 @@ partial class Binder {
             // when binding the function body so that `T` resolves inside the
             // body to the TypeParameterSymbol. Issue #312: a method may carry
             // both the enclosing type's type parameters (when it is a member of
-            // a generic class) and its own method-level type parameters; seed
+            // a generic class or interface) and its own method-level type parameters; seed
             // the full enclosing type chain first, then the method's own so
             // each inner scope shadows outer names on collision.
-            let enclosingGenericOwner StructSymbol? = (
-                function.ReceiverType ?? function.StaticOwnerType
-            ) as StructSymbol
+            let enclosingGenericOwner = function.ReceiverType ?? function.StaticOwnerType
             let outerTypeParams = if enclosingGenericOwner == nil {
                 ImmutableArray[TypeParameterSymbol].Empty
             } else {
                 StructSymbol.CollectEnclosingTypeParameters(enclosingGenericOwner)
             }
-            let ownerTypeParams = enclosingGenericOwner
-                ?.Definition
-                ?.TypeParameters ??
-                enclosingGenericOwner?.TypeParameters ??
-                ImmutableArray[TypeParameterSymbol].Empty
+            let ownerTypeParams = switch enclosingGenericOwner {
+                case owner is StructSymbol: (owner.Definition ?? owner).TypeParameters
+                case owner is InterfaceSymbol: (owner.Definition ?? owner).TypeParameters
+                default: ImmutableArray[TypeParameterSymbol].Empty
+            }
             if !outerTypeParams.IsDefaultOrEmpty || !ownerTypeParams.IsDefaultOrEmpty || function.IsGeneric {
                 this.binderCtx.CurrentTypeParameters = Dictionary[string, TypeParameterSymbol]()
                 for tp in outerTypeParams {
