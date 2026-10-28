@@ -41,7 +41,7 @@ partial class SemanticModel {
     /// properties without index parameters, fields, methods that are not special names, then events, each in
     /// metadata order; instance and static members; types read through the ADR-0193 readers at the
     /// receiver. For an interface, the members of the CLR interfaces it extends follow its own (issue #5441),
-    /// each in the same order, in the order of the interface list of the type.</item>
+    /// each in the same order, in the order of the guarded transitive interface list (cref:ClrTypeUtilities.SafeGetInterfaces).</item>
     /// <item>A slice, array, map, channel or sequence with no CLR type, because its element is a source type
     /// or a type parameter (issue #5441): the members of the type the call binder uses for the receiver
     /// (`System.Array`, `Dictionary`, `Channel`, `ChannelReader`, `ChannelWriter`, `IEnumerable`), with member
@@ -516,7 +516,9 @@ partial class SemanticModel {
         AddClrMembersOf(receiver, clrType, flags, name, result)
         // An interface does not report the members of the interfaces it extends; they are its members too.
         if clrType.IsInterface {
-            for baseInterface in MemberLookup.EnumerateSelfAndInterfaces(clrType).Skip(1) {
+            // The guarded, transitive walk: a missing reference assembly or a load context that reports only
+            // the direct interfaces does not fail the query.
+            for baseInterface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
                 AddClrMembersOf(receiver, baseInterface, flags, name, result)
             }
         }
