@@ -71,8 +71,9 @@ func Main() {
 }
 `)
         let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
-        let references = Directory
-            .GetFiles(runtimeDirectory, "*.dll")
+        let references = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")))
+            .Split(Path.PathSeparator)
+            .Where((path string) -> Path.GetDirectoryName(path) == runtimeDirectory)
             .OrderBy((path string) -> path, StringComparer.Ordinal)
             .ToArray()
         Assert.NotEmpty(references)
