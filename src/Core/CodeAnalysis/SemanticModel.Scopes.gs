@@ -603,6 +603,7 @@ partial class SemanticModel {
     private func FindInnermostNode(position int32) SyntaxNode {
         var current SyntaxNode = syntaxTree.Root
         while true {
+            var exact SyntaxNode? = nil
             var next SyntaxNode? = nil
             var touching SyntaxNode? = nil
             for child in current.GetChildren() {
@@ -612,24 +613,25 @@ partial class SemanticModel {
                 }
                 let extents = PartialPartExtentsInTree(child)
                 if extents.Count > 0 {
-                    // The merged node's span runs from its first part to its last member, so it also
-                    // covers the types declared between its parts: the extents of the parts are
-                    // authoritative (#5455).
-                    if extents.Any((extent TextSpan) -> extent.Start <= position && position < extent.End) {
-                        next = child
-                        break
+                    // The span of a merged node runs from its first part to its last member, so it also
+                    // covers what is declared between its parts (types, a merged `shared` block): the
+                    // extents of its parts decide, and they win over a span that merely overlaps them (#5455).
+                    if exact == nil && extents.Any(
+                        (extent TextSpan) -> extent.Start <= position && position < extent.End
+                    ) {
+                        exact = child
+                    } else if extents.Any((extent TextSpan) -> extent.End == position) {
+                        touching = child
                     }
                     continue
                 }
-                if span.Start <= position && position < span.End {
+                if next == nil && span.Start <= position && position < span.End {
                     next = child
-                    break
-                }
-                if span.End == position {
+                } else if span.End == position {
                     touching = child
                 }
             }
-            let chosen = next ?? touching
+            let chosen = exact ?? next ?? touching
             if chosen == nil {
                 return current
             }

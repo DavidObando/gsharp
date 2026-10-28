@@ -343,8 +343,25 @@ open class Adr0212ScopeConformanceTests {
         Assert.Equal("A", model.GetEnclosingSymbol(text.IndexOf("/* a */", StringComparison.Ordinal))!!.Name)
         Assert.Equal(
             "Outer",
-            model.GetEnclosingSymbol(text.IndexOf("partial class B { }", StringComparison.Ordinal) - 2)!!.Name
+            model.GetEnclosingSymbol(text.IndexOf("partial class B { }", StringComparison.Ordinal) - 1)!!.Name
         )
+    }
+
+    @Fact
+    func NestedPartialType_PositionAfterAPartsClosingBrace_IsTheMergedType() {
+        let text = "class Outer {\n partial class N { }  partial class N { }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "boundary.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let after = text.IndexOf("}  partial", StringComparison.Ordinal) + 1
+        Assert.Equal("N", model.GetEnclosingSymbol(after)!!.Name)
+    }
+
+    @Fact
+    func NestedPartialType_OverlappedByAMergedSharedBlock_IsTheMergedType() {
+        let text = "class Root {\n partial class Outer { shared { var A int32 } partial class N {} }\n partial class Outer { partial class N { /* here */ } shared { var B int32 } }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "shared-overlap.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("N", model.GetEnclosingSymbol(text.IndexOf("/* here */", StringComparison.Ordinal))!!.Name)
     }
 
     @Fact
