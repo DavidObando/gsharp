@@ -1739,6 +1739,58 @@ internal partial class StatementBinder {
         }
     }
 
+    // #5456: lookup indexes for one closure-name collection. Each run owns one, so no state is shared between
+    // compilations. One pass for each container keeps the collection linear in the number of writes.
+    private sealed class ClosureScopeIndex {
+        private let declarations Dictionary[
+            SyntaxNode,
+            Dictionary[string, List[VariableDeclarationSyntax]]
+        ] = Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]()
+        private let parameters Dictionary[SyntaxNode, HashSet[string]] = Dictionary[SyntaxNode, HashSet[string]]()
+
+        /// The variable declarations that are children of [`container`](paramref), by name and in source order.
+        func DeclarationsOf(container SyntaxNode) Dictionary[string, List[VariableDeclarationSyntax]] {
+            if declarations.TryGetValue(container, out var known) {
+                return known
+            }
+            let built = Dictionary[string, List[VariableDeclarationSyntax]](StringComparer.Ordinal)
+            for child in container.GetChildren() {
+                if child is VariableDeclarationSyntax variable {
+                    let key = variable.Identifier.ValueText
+                    if !built.TryGetValue(key, out var list) {
+                        list = List[VariableDeclarationSyntax]()
+                        built[key] = list
+                    }
+                    list.Add(variable)
+                }
+            }
+            declarations[container] = built
+            return built
+        }
+
+        /// The names of the parameters that [`owner`](paramref) declares, without those of the closures nested in it.
+        func ParametersOf(owner SyntaxNode) HashSet[string] {
+            if parameters.TryGetValue(owner, out var known) {
+                return known
+            }
+            let built = HashSet[string](StringComparer.Ordinal)
+            CollectParameters(owner, built)
+            parameters[owner] = built
+            return built
+        }
+
+        private func CollectParameters(node SyntaxNode, names HashSet[string]) {
+            for child in node.GetChildren() {
+                if child is ParameterSyntax{Identifier: {} identifier} {
+                    names.Add(identifier.ValueText)
+                }
+                if !StatementBinder.IsScopeOwner(child) {
+                    CollectParameters(child, names)
+                }
+            }
+        }
+    }
+
     /// Issue #2159: bound-tree walker collecting the root variable of every
     /// plain assignment target in a subtree, used to conservatively invalidate
     /// join narrowings across constructs the flow analysis does not model.
@@ -4185,6 +4237,15 @@ internal partial class StatementBinder {
     }
 
     shared {
+        internal func IsScopeOwner(node SyntaxNode) bool -> node is FunctionLiteralExpressionSyntax or
+            LambdaExpressionSyntax or
+            AnonymousClassExpressionSyntax or
+            FunctionDeclarationSyntax or
+            ConstructorDeclarationSyntax or
+            PropertyAccessorSyntax or
+            EventAccessorSyntax or
+            DeinitDeclarationSyntax
+
         private func JoinExternalCallableAliases(
             joined HashSet[VariableSymbol]?,
             next IReadOnlyCollection[VariableSymbol]
@@ -4386,16 +4447,6 @@ internal partial class StatementBinder {
         // Returns null (any name may be assigned) when the anchor is not inside a
         // function: a binder that spans several syntax trees (top-level code,
         // merged static initializers) cannot be scanned from one anchor.
-        // #5456: lookup indexes for one ComputeClosureAssignedNames run.
-        private let closureDeclarations Dictionary[
-            SyntaxNode,
-            Dictionary[string, List[VariableDeclarationSyntax]]
-        ] = Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]()
-        private let closureParameters Dictionary[SyntaxNode, HashSet[string]] = Dictionary[
-            SyntaxNode,
-            HashSet[string]
-        ]()
-
         private func ComputeClosureAssignedNames(anchor SyntaxNode) HashSet[string]? {
             var root SyntaxNode? = nil
             for var current SyntaxNode? = cast[SyntaxNode?](anchor); current != nil; current = current!!.Parent {
@@ -4413,25 +4464,28 @@ internal partial class StatementBinder {
                 return nil
             }
             let names = HashSet[string]()
-            CollectClosureAssignedNames(root, root, names)
+            CollectClosureAssignedNames(root, root, names, ClosureScopeIndex())
             CollectAddressTakenNames(root, names)
-            closureDeclarations.Clear()
-            closureParameters.Clear()
             return names
         }
 
-        private func CollectClosureAssignedNames(node SyntaxNode, root SyntaxNode, names HashSet[string]) {
+        private func CollectClosureAssignedNames(
+            node SyntaxNode,
+            root SyntaxNode,
+            names HashSet[string],
+            index ClosureScopeIndex
+        ) {
             if node is FunctionLiteralExpressionSyntax ||
                 node is LambdaExpressionSyntax ||
                 node is AnonymousClassExpressionSyntax ||
                 (node is FunctionDeclarationSyntax && !object.ReferenceEquals(node, root)) {
-                CollectEscapingAssignedNames(node, names)
+                CollectEscapingAssignedNames(node, names, index)
                 CollectRefArgumentNames(node, names)
                 CollectAddressOfNames(node, names)
                 return
             }
             for child in node.GetChildren() {
-                CollectClosureAssignedNames(child, root, names)
+                CollectClosureAssignedNames(child, root, names, index)
             }
         }
 
@@ -4439,52 +4493,43 @@ internal partial class StatementBinder {
         // name that resolves to a declaration inside the assigning closure is private to one run of that closure
         // (a nested closure is another closure), so no escaped closure can write it. A name without such a
         // declaration counts, as does every shape this walk does not model.
-        private func CollectEscapingAssignedNames(node SyntaxNode, names HashSet[string]) {
+        private func CollectEscapingAssignedNames(node SyntaxNode, names HashSet[string], index ClosureScopeIndex) {
             switch node {
                 case a is AssignmentExpressionSyntax {
-                    AddIfEscaping(a.IdentifierToken.ValueText, a, names)
+                    AddIfEscaping(a.IdentifierToken.ValueText, a, names, index)
                 }
                 case EventSubscriptionExpressionSyntax{
                     IsIncrementDecrement: true,
                     LeftHandSide: NameExpressionSyntax incName
                 } inc {
-                    AddIfEscaping(incName.IdentifierToken.ValueText, inc, names)
+                    AddIfEscaping(incName.IdentifierToken.ValueText, inc, names, index)
                 }
                 case m is MultiAssignmentStatementSyntax {
                     for t in m.Targets {
                         if t is NameExpressionSyntax ne {
-                            AddIfEscaping(ne.IdentifierToken.ValueText, ne, names)
+                            AddIfEscaping(ne.IdentifierToken.ValueText, ne, names, index)
                         }
                     }
                 }
                 // `x ??= v` is a write the shared assigned-name walker does not model.
                 case coalescing is NullCoalescingAssignmentExpressionSyntax {
                     if coalescing.Target is NameExpressionSyntax target {
-                        AddIfEscaping(target.IdentifierToken.ValueText, coalescing, names)
+                        AddIfEscaping(target.IdentifierToken.ValueText, coalescing, names, index)
                     } else {
                         CollectAllNames(coalescing.Target, names)
                     }
                 }
             }
             for child in node.GetChildren() {
-                CollectEscapingAssignedNames(child, names)
+                CollectEscapingAssignedNames(child, names, index)
             }
         }
 
-        private func AddIfEscaping(name string, site SyntaxNode, names HashSet[string]) {
-            if !IsDeclaredByAssigningClosure(name, site) {
+        private func AddIfEscaping(name string, site SyntaxNode, names HashSet[string], index ClosureScopeIndex) {
+            if !IsDeclaredByAssigningClosure(name, site, index) {
                 names.Add(name)
             }
         }
-
-        private func IsScopeOwner(node SyntaxNode) bool -> node is FunctionLiteralExpressionSyntax or
-            LambdaExpressionSyntax or
-            AnonymousClassExpressionSyntax or
-            FunctionDeclarationSyntax or
-            ConstructorDeclarationSyntax or
-            PropertyAccessorSyntax or
-            EventAccessorSyntax or
-            DeinitDeclarationSyntax
 
         private func ScopeOwnerOf(node SyntaxNode) SyntaxNode? {
             for var ancestor SyntaxNode? = node.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
@@ -4499,7 +4544,7 @@ internal partial class StatementBinder {
         // a parameter of the closure that holds the site. A local is in scope after its initializer, so a write inside
         // the initializer names an enclosing variable. Only a variable declaration and a parameter count: an
         // unmodelled declaration (a pattern variable, a loop variable) gives false and keeps the name.
-        private func IsDeclaredByAssigningClosure(name string, site SyntaxNode) bool {
+        private func IsDeclaredByAssigningClosure(name string, site SyntaxNode, index ClosureScopeIndex) bool {
             let assigning = ScopeOwnerOf(site)
             if assigning == nil {
                 return false
@@ -4513,14 +4558,15 @@ internal partial class StatementBinder {
                 if ancestor is BlockStatementSyntax or
                     BlockExpressionSyntax or
                     ForClauseStatementSyntax &&
-                    DeclarationsOf(ancestor).TryGetValue(name, out var declared) {
+                    index
+                    .DeclarationsOf(ancestor).TryGetValue(name, out var declared) {
                     for candidate in declared {
                         if candidate.Span.End <= siteStart {
                             declaration = candidate
                         }
                     }
                 }
-                if declaration == nil && IsScopeOwner(ancestor) && ParametersOf(ancestor).Contains(name) {
+                if declaration == nil && IsScopeOwner(ancestor) && index.ParametersOf(ancestor).Contains(name) {
                     return object.ReferenceEquals(ancestor, assigning)
                 }
                 if declaration != nil {
@@ -4528,49 +4574,6 @@ internal partial class StatementBinder {
                 }
             }
             return false
-        }
-
-        // The index of the variable declarations that are children of [`container`](paramref), by name and in source
-        // order. One pass for each container keeps the collection linear in the number of writes.
-        private func DeclarationsOf(container SyntaxNode) Dictionary[string, List[VariableDeclarationSyntax]] {
-            if closureDeclarations.TryGetValue(container, out var index) {
-                return index
-            }
-            let built = Dictionary[string, List[VariableDeclarationSyntax]](StringComparer.Ordinal)
-            for child in container.GetChildren() {
-                if child is VariableDeclarationSyntax variable {
-                    let key = variable.Identifier.ValueText
-                    if !built.TryGetValue(key, out var list) {
-                        list = List[VariableDeclarationSyntax]()
-                        built[key] = list
-                    }
-                    list.Add(variable)
-                }
-            }
-            closureDeclarations[container] = built
-            return built
-        }
-
-        // The names of the parameters that [`owner`](paramref) declares, without those of the closures nested in it.
-        private func ParametersOf(owner SyntaxNode) HashSet[string] {
-            if closureParameters.TryGetValue(owner, out var known) {
-                return known
-            }
-            let built = HashSet[string](StringComparer.Ordinal)
-            CollectParameters(owner, built)
-            closureParameters[owner] = built
-            return built
-        }
-
-        private func CollectParameters(node SyntaxNode, names HashSet[string]) {
-            for child in node.GetChildren() {
-                if child is ParameterSyntax{Identifier: {} identifier} {
-                    names.Add(identifier.ValueText)
-                }
-                if !IsScopeOwner(child) {
-                    CollectParameters(child, names)
-                }
-            }
         }
 
         // `out x` / `ref x` inside a closure lets the callee write the local.
