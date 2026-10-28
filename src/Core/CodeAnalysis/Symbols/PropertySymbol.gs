@@ -70,6 +70,14 @@ class PropertySymbol : Symbol {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    /// Gets the reflected member an imported symbol stands for, or null for a declared one (ADR-0212 slice S4).
+    /// @remarks The language server reads it to find documentation and cross-assembly definitions until
+    /// handle-backed imported symbols replace it (ADR-0209 stage 6).
+    prop ImportedMember PropertyInfo? {
+        get;
+        internal set;
+    }
+
     override prop Kind SymbolKind -> SymbolKind.Property
 
     /// Gets the property type.

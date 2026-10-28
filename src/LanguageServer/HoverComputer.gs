@@ -24,8 +24,6 @@ import GSharp.Core.CodeAnalysis.Documentation
 import System.Globalization
 
 shared class HoverComputer {
-    private data class ClrReceiver(Type Type, StaticMembers bool) : IEquatable[ClrReceiver] { }
-
     private data class HoverModel(
         Signature string,
         Documentation IReadOnlyList[HoverDocSection],
@@ -37,7 +35,7 @@ shared class HoverComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) Hover? {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token SyntaxToken? = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         if token == nil {
@@ -61,7 +59,7 @@ shared class HoverComputer {
             symbol = TryResolveGSharpMember(content.SyntaxTree, compilation, token)
         }
         var model HoverModel? = if symbol != nil {
-            BuildHoverModel(symbol, compilation)
+            BuildHoverModel(symbol, compilation, token)
         } else {
             BuildImportedClrModel(content.SyntaxTree, compilation, token)
         }
@@ -84,6 +82,10 @@ shared class HoverComputer {
     /// @param symbol The symbol to render.
     /// @returns The compact signature label.
     func FormatSymbol(symbol Symbol) string {
+        // An imported method renders from its reflected signature, so each overload has its own label.
+        if symbol is ImportedFunctionSymbol imported {
+            return SymbolDisplay.ToDisplayString(imported.Method, SymbolDisplayFormat.Signature)
+        }
         return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature)
     }
 
@@ -143,10 +145,10 @@ async sequence[T]
         }
     }
 
-    private func BuildHoverModel(symbol Symbol, compilation Compilation) HoverModel {
+    private func BuildHoverModel(symbol Symbol, compilation Compilation, token SyntaxToken? = nil) HoverModel {
         let signature = SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Hover, compilation)
         let overloadCount = if symbol is FunctionSymbol function {
-            CountOverloads(compilation, function)
+            CountOverloads(compilation, function, token)
         } else {
             1
         }
@@ -157,62 +159,11 @@ async sequence[T]
         if token == nil || token.Kind != SyntaxKind.IdentifierToken {
             return nil
         }
-        // Issue #4989: the imported member the binder bound the token to wins
-        // over the name-and-arity scan and the reflection lookups below, which
-        // can report a same-named member of another type.
-        let boundModel HoverModel? = switch BoundSemantics.GetImportedMember(compilation, token) {
-            case boundMethod is MethodInfo: HoverModel(
-                SymbolDisplay.ToDisplayString(boundMethod, SymbolDisplayFormat.Hover),
-                HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(boundMethod)),
-                SemanticLookup.CountSameNamedMethods(boundMethod)
-            )
-            case boundProperty is PropertyInfo: HoverModel(
-                SymbolDisplay.ToDisplayString(boundProperty, SymbolDisplayFormat.Hover),
-                HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(boundProperty)),
-                OverloadCount: 1
-            )
-            case boundField is FieldInfo: HoverModel(
-                SymbolDisplay.ToDisplayString(boundField, SymbolDisplayFormat.Hover),
-                HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(boundField)),
-                OverloadCount: 1
-            )
-            default: default(HoverModel?)
-        }
-        if boundModel != nil {
-            return boundModel
-        }
-        // Issue #891: when the token is the identifier of an invoked call (e.g.
-        // the `Single` in `report.Checks.Single(...)`), resolve the actual
-        // method the call bound to BEFORE attempting type-name resolution.
-        // Otherwise `ResolveImportedClrType("Single")` matches the unrelated
-        // type `System.Single` (float32) and hover shows the wrong content.
-        // This also handles generic extension methods, which plain reflection
-        // on the receiver type would miss.
-        let invokedCall CallExpressionSyntax? = FindNodes[CallExpressionSyntax](tree.Root).FirstOrDefault(
-            (call CallExpressionSyntax) -> MatchesToken(call.Identifier, token)
-        )
-        if invokedCall != nil {
-            // Disambiguate the program-wide same-name scan by the hovered call's
-            // receiver syntax: a value receiver (`x.M(...)`) can only bind to an
-            // instance/extension method, a type-name receiver (`T.M(...)`) only to
-            // a plain static method (issue #906).
-            let gate = ClassifyCallReceiver(tree, compilation, token, out var receiverClrType)
-            if SemanticLookup.TryResolveInvokedImportedMethod(
-                compilation,
-                token.Text,
-                invokedCall.Arguments.Count,
-                gate,
-                receiverClrType,
-                out var invokedMethod,
-                out var invokedOverloadCount
-            ) &&
-                invokedMethod != nil {
-                return HoverModel(
-                    SymbolDisplay.ToDisplayString(invokedMethod, SymbolDisplayFormat.Hover),
-                    HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(invokedMethod)),
-                    invokedOverloadCount
-                )
-            }
+        // The imported member the binder bound the token to, else the member of the receiver's type,
+        // wins over a type of the same name (`Single` in `items.Single(...)` is not `System.Single`).
+        if MemberTokenResolver.TryResolveMember(tree, compilation, token, out var member, out var overloadCount) &&
+            BoundSemantics.GetMemberInfo(member) is {} memberInfo {
+            return BuildMemberModel(memberInfo, overloadCount)
         }
         let clrType Type? = SemanticLookup.ResolveImportedClrType(
             tree,
@@ -225,9 +176,10 @@ async sequence[T]
             let documentation = HoverDocumentationRenderer.Render(AssemblyDocumentationProvider.Resolve(clrType))
             return HoverModel(signature, documentation, OverloadCount: 1)
         }
-        if !TryResolveClrMember(tree, compilation, token, out var member, out var overloadCount) {
-            return nil
-        }
+        return nil
+    }
+
+    private func BuildMemberModel(member MemberInfo, overloadCount int32) HoverModel? {
         return switch member {
             case property is PropertyInfo: HoverModel(
                 SymbolDisplay.ToDisplayString(property, SymbolDisplayFormat.Hover),
@@ -301,79 +253,6 @@ async sequence[T]
         }
     }
 
-    private func TryResolveClrMember(
-        tree SyntaxTree,
-        compilation Compilation,
-        token SyntaxToken,
-        out member MemberInfo?,
-        out overloadCount int32
-    ) bool {
-        member = nil
-        overloadCount = 0
-        for context in FindAccessorMemberContexts(tree, token).Concat(
-            FindObjectInitializerMemberContexts(tree, token)
-        ) {
-            var receiver ClrReceiver?
-            if token.Parent?.Parent is MemberCollectionElementSyntax && InferInitializerReceiverType(
-                tree,
-                compilation,
-                context.ReceiverExpression
-            )?.ClrType is {} clrType {
-                receiver = ClrReceiver(clrType, StaticMembers: false)
-            } else if !TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out receiver) ||
-                receiver == nil {
-                continue
-            }
-            let flags = BindingFlags.Public | (
-                if receiver.StaticMembers {
-                    BindingFlags.Static
-                } else {
-                    BindingFlags.Instance
-                }
-            )
-            let property PropertyInfo? = ClrTypeUtilities.SafeGetProperty(receiver.Type, context.MemberName, flags)
-            if property != nil && property.GetIndexParameters().Length == 0 {
-                member = property
-                overloadCount = 1
-                return true
-            }
-            let field FieldInfo? = ClrTypeUtilities.SafeGetField(receiver.Type, context.MemberName, flags)
-            if field != nil {
-                member = field
-                overloadCount = 1
-                return true
-            }
-            let event EventInfo? = ClrTypeUtilities.SafeGetEvent(receiver.Type, context.MemberName, flags)
-            if event != nil {
-                member = event
-                overloadCount = 1
-                return true
-            }
-            let methods = ClrTypeUtilities
-                .SafeGetMethods(receiver.Type, flags)
-                .Where((m MethodInfo) -> m.Name == context.MemberName && !m.IsSpecialName)
-                .ToArray()
-            if methods.Length == 0 {
-                continue
-            }
-            member = methods[0]
-            overloadCount = methods.Length
-            return true
-        }
-        return false
-    }
-
-    private func InferInitializerReceiverType(
-        tree SyntaxTree,
-        compilation Compilation,
-        target ExpressionSyntax
-    ) TypeSymbol? {
-        return BoundSemantics
-            .GetPositionModel(compilation, tree)
-            ?.GetSpeculativeTypeInfo(target.Span.Start, target)
-            .Type
-    }
-
     /// Resolves a member access on a user-defined G# type (struct/class).
     /// For example, hovering over `Name` in `person.Name` where
     /// `person` is a G#-defined class resolves to the (cref:PropertySymbol),
@@ -384,29 +263,12 @@ async sequence[T]
             return nil
         }
         // Case 1: member access expression (e.g. var x = person.Name), or an
-        // object-initializer property name (e.g. Point() { X = 1 }) whose receiver
-        // is the constructed G# struct/class type.
-        for context in FindAccessorMemberContexts(tree, token).Concat(
-            FindObjectInitializerMemberContexts(tree, token)
-        ) {
-            let receiverType = if token.Parent?.Parent is MemberCollectionElementSyntax {
-                InferInitializerReceiverType(tree, compilation, context.ReceiverExpression)
-            } else {
-                (ResolveReceiverStructSymbol(tree, compilation, context.ReceiverExpression) as TypeSymbol?)
-            }
-            if receiverType is StructSymbol structSymbol {
-                let member Symbol? = LookupMemberOnStruct(structSymbol, context.MemberName)
-                if member != nil {
-                    return member
-                }
-            } else if receiverType is InterfaceSymbol interfaceSymbol && TypeMemberModel.TryGetPropertyWithOwner(
-                interfaceSymbol,
-                context.MemberName,
-                out var property,
-                out _
-            ) {
-                return property
-            }
+        // object-initializer property name (e.g. Point() { X = 1 }): the member of the
+        // receiver's type (ADR-0212 slice S4).
+        if MemberTokenResolver.TryResolveMember(tree, compilation, token, out var resolved, out _) &&
+            resolved != nil &&
+            !BoundSemantics.IsImportedMember(resolved) {
+            return resolved
         }
         // Case 2: field assignment expression (e.g. person.Age = 30)
         let fieldAssignment FieldAssignmentExpressionSyntax? = FindFieldAssignmentWithHoveredField(tree.Root, token)
@@ -476,61 +338,6 @@ async sequence[T]
         return structSymbol
     }
 
-    /// Resolves the receiver expression of an accessor to its (cref:StructSymbol)
-    /// type (user-defined G# struct or class).
-    private func ResolveReceiverStructSymbol(
-        tree SyntaxTree,
-        compilation Compilation,
-        expression ExpressionSyntax
-    ) StructSymbol? {
-        // Issue #4989: the receiver's bound (flow) type is authoritative.
-        let boundType = BoundSemantics.GetExpressionType(compilation, expression)
-        if boundType != nil {
-            return boundType as StructSymbol
-        }
-        switch expression {
-            case name is NameExpressionSyntax {
-                let symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken)
-                return switch symbol {
-                    case variable is VariableSymbol: variable.Type as StructSymbol
-                    case structSym is StructSymbol: structSym
-                    default: default(StructSymbol?)
-                }
-            }
-            case call is CallExpressionSyntax {
-                let callSymbol = SemanticLookup.ResolveSymbol(compilation, call.Identifier)
-                return switch callSymbol {
-                    case function is FunctionSymbol: function.Type as StructSymbol
-                    case structSym is StructSymbol: structSym
-                    default: default(StructSymbol?)
-                }
-            }
-            case nestedAccessor is AccessorExpressionSyntax {
-                // Chained access: resolve the intermediate member's type.
-                if !TryGetAccessorMemberName(nestedAccessor.RightPart, token: nil, out var intermediateName) {
-                    return nil
-                }
-                let outerStruct StructSymbol? = ResolveReceiverStructSymbol(tree, compilation, nestedAccessor.LeftPart)
-                if outerStruct == nil {
-                    return nil
-                }
-                if intermediateName == nil {
-                    return nil
-                }
-                let member = LookupMemberOnStruct(outerStruct, intermediateName)
-                return switch member {
-                    case property is PropertySymbol: property.Type as StructSymbol
-                    case field is FieldSymbol: field.Type as StructSymbol
-                    case function is FunctionSymbol: function.Type as StructSymbol
-                    default: default(StructSymbol?)
-                }
-            }
-            default {
-                return nil
-            }
-        }
-    }
-
     /// Looks up a member (property, field, event, or method) by name on a G# struct/class symbol,
     /// including inherited members from base classes.
     private func LookupMemberOnStruct(structSymbol StructSymbol, memberName string) Symbol? {
@@ -539,142 +346,6 @@ async sequence[T]
         // historic order (property → field → event → method, instance then static,
         // walking the base chain).
         return TypeMemberModel.LookupMember(structSymbol, memberName, MemberQuery.All)
-    }
-
-    private func FindAccessorMemberContexts(tree SyntaxTree, token SyntaxToken?) sequence[
-        (ReceiverExpression ExpressionSyntax, MemberName string)
-    ] {
-        if token == nil || token.Kind != SyntaxKind.IdentifierToken {
-            yield break
-        }
-        for accessor in FindNodes[AccessorExpressionSyntax](tree.Root).Where(
-            (a AccessorExpressionSyntax) -> a
-                .RightPart
-                .Span
-                .Start <= token
-                .Span
-                .Start &&
-                token
-                .Span
-                .End <= a
-                .RightPart
-                .Span
-                .End
-        )
-            .OrderBy((a AccessorExpressionSyntax) -> a.Span.Length) {
-            if TryResolveAccessorMemberContext(
-                tree,
-                accessor.RightPart,
-                accessor.LeftPart,
-                token,
-                out var receiverExpression,
-                out var memberName
-            ) &&
-                receiverExpression != nil &&
-                memberName != nil {
-                yield(receiverExpression, memberName)
-            }
-        }
-    }
-
-    /// Issue #522 / #897: yields the member-resolution context for a token that is the
-    /// (cref:PropertyInitializerSyntax.PropertyIdentifier) of a C#-style object
-    /// initializer (`T(args) { Prop = v }`). The "receiver" is the constructor call
-    /// ((cref:ObjectCreationExpressionSyntax.Target)) whose constructed type the
-    /// property/field is looked up on — mirroring the accessor member contexts so the
-    /// same CLR and G# resolution paths apply to initializer property names.
-    private func FindObjectInitializerMemberContexts(tree SyntaxTree, token SyntaxToken?) sequence[
-        (ReceiverExpression ExpressionSyntax, MemberName string)
-    ] {
-        if token == nil || token.Kind != SyntaxKind.IdentifierToken {
-            yield break
-        }
-        for creation in FindNodes[ObjectCreationExpressionSyntax](tree.Root) {
-            for initializer in creation.Initializers {
-                if MatchesToken(initializer.PropertyIdentifier, token) {
-                    if creation.Target != nil {
-                        yield(creation.Target!!, initializer.PropertyIdentifier.Text)
-                    }
-                }
-            }
-        }
-        for collection in FindNodes[CollectionInitializerExpressionSyntax](tree.Root) {
-            for member in collection.Elements.OfType[MemberCollectionElementSyntax]() {
-                if MatchesToken(member.Initializer.FieldIdentifier, token) && SemanticLookup.GetInitializerTarget(
-                    collection
-                ) is {} target {
-                    yield(target, member.Initializer.FieldIdentifier.ValueText)
-                }
-            }
-        }
-    }
-
-    private func TryResolveAccessorMemberContext(
-        tree SyntaxTree,
-        expression ExpressionSyntax,
-        receiver ExpressionSyntax,
-        token SyntaxToken,
-        out receiverExpression ExpressionSyntax?,
-        out memberName string?
-    ) bool {
-        receiverExpression = nil
-        memberName = nil
-        switch expression {
-            case name is NameExpressionSyntax when MatchesToken(name.IdentifierToken, token) {
-                receiverExpression = receiver
-                memberName = name.IdentifierToken.Text
-                return true
-            }
-            case call is CallExpressionSyntax when MatchesToken(call.Identifier, token) {
-                receiverExpression = receiver
-                memberName = call.Identifier.Text
-                return true
-            }
-            case nested is AccessorExpressionSyntax {
-                if TryResolveAccessorMemberContext(
-                    tree,
-                    nested.LeftPart,
-                    receiver,
-                    token,
-                    out receiverExpression,
-                    out memberName
-                ) {
-                    return true
-                }
-                // Rebuild the left prefix as a receiver expression for the nested right segment.
-                let nestedReceiver = AccessorExpressionSyntax(tree, receiver, nested.DotToken, nested.LeftPart)
-                return TryResolveAccessorMemberContext(
-                    tree,
-                    nested.RightPart,
-                    nestedReceiver,
-                    token,
-                    out receiverExpression,
-                    out memberName
-                )
-            }
-            default {
-                return false
-            }
-        }
-    }
-
-    private func TryGetAccessorMemberName(
-        expression ExpressionSyntax,
-        token SyntaxToken?,
-        out memberName string?
-    ) bool {
-        memberName = switch expression {
-            case name is NameExpressionSyntax when token == nil ||
-                MatchesToken(name.IdentifierToken, token): name
-                .IdentifierToken
-                .Text
-            case call is CallExpressionSyntax when token == nil ||
-                MatchesToken(call.Identifier, token): call
-                .Identifier
-                .Text
-            default: default(string?)
-        }
-        return memberName != nil
     }
 
     private func MatchesToken(candidate SyntaxToken?, token SyntaxToken?) bool {
@@ -694,144 +365,6 @@ async sequence[T]
                 .End &&
                 string.Equals(candidate.Text, token.Text, StringComparison.Ordinal)
         )
-    }
-
-    private func TryResolveClrReceiver(
-        tree SyntaxTree,
-        compilation Compilation,
-        expression ExpressionSyntax,
-        out receiver ClrReceiver?
-    ) bool {
-        // Issue #4989: a value receiver's bound (flow) type first.
-        if BoundSemantics.GetExpressionType(compilation, expression)?.ClrType is {} boundClrType {
-            receiver = ClrReceiver(boundClrType, StaticMembers: false)
-            return true
-        }
-        switch expression {
-            case name is NameExpressionSyntax {
-                if TryResolveClrTypeFromSymbol(
-                    SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken),
-                    out var symbolType
-                ) &&
-                    symbolType != nil {
-                    receiver = ClrReceiver(symbolType, StaticMembers: false)
-                    return true
-                }
-                let importedType Type? = SemanticLookup.ResolveImportedClrType(
-                    tree,
-                    compilation,
-                    name.IdentifierToken.Text
-                )
-                if importedType != nil {
-                    receiver = ClrReceiver(importedType, StaticMembers: true)
-                    return true
-                }
-            }
-            case call is CallExpressionSyntax when TryResolveClrTypeFromSymbol(
-                SemanticLookup.ResolveSymbol(compilation, call.Identifier),
-                out var callType
-            ) &&
-                callType != nil {
-                receiver = ClrReceiver(callType!!, StaticMembers: false)
-                return true
-            }
-            case constructorCall is CallExpressionSyntax {
-                // A constructor call on an imported CLR type (e.g. `ProcessStartInfo("x")`)
-                // whose identifier does not resolve to a symbol: fall back to resolving the
-                // type by name so instance members of the constructed object are available
-                // (object-initializer property names, etc.).
-                let constructedType Type? = SemanticLookup.ResolveImportedClrType(
-                    tree,
-                    compilation,
-                    constructorCall.Identifier.Text
-                )
-                if constructedType != nil {
-                    receiver = ClrReceiver(constructedType, StaticMembers: false)
-                    return true
-                }
-            }
-            case accessor is AccessorExpressionSyntax when TryResolveClrMemberExpression(
-                tree,
-                compilation,
-                accessor,
-                out var memberType
-            ) &&
-                memberType != nil {
-                receiver = ClrReceiver(memberType!!, StaticMembers: false)
-                return true
-            }
-        }
-        receiver = default(ClrReceiver?)
-        return false
-    }
-
-    private func TryResolveClrMemberExpression(
-        tree SyntaxTree,
-        compilation Compilation,
-        accessor AccessorExpressionSyntax,
-        out memberType Type?
-    ) bool {
-        memberType = nil
-        if !TryGetAccessorMemberName(accessor.RightPart, token: nil, out var memberName) {
-            return false
-        }
-        if memberName == nil {
-            return false
-        }
-        if !TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver) || receiver == nil {
-            let gsharpReceiver StructSymbol? = ResolveReceiverStructSymbol(tree, compilation, accessor.LeftPart)
-            if gsharpReceiver == nil {
-                return false
-            }
-            let gsharpMember = LookupMemberOnStruct(gsharpReceiver, memberName)
-            return TryResolveClrTypeFromSymbol(gsharpMember, out memberType)
-        }
-        let flags = BindingFlags.Public | (
-            if receiver.StaticMembers {
-                BindingFlags.Static
-            } else {
-                BindingFlags.Instance
-            }
-        )
-        let property PropertyInfo? = ClrTypeUtilities.SafeGetProperty(receiver.Type, memberName, flags)
-        if property != nil && property.GetIndexParameters().Length == 0 {
-            memberType = property.PropertyType
-            return true
-        }
-        let field FieldInfo? = ClrTypeUtilities.SafeGetField(receiver.Type, memberName, flags)
-        if field != nil {
-            memberType = field.FieldType
-            return true
-        }
-        let event EventInfo? = ClrTypeUtilities.SafeGetEvent(receiver.Type, memberName, flags)
-        if event != nil {
-            memberType = event.EventHandlerType
-            return true
-        }
-        let method MethodInfo? = ClrTypeUtilities.SafeGetMethods(receiver.Type, flags).FirstOrDefault(
-            (m MethodInfo) -> m.Name == memberName && !m.IsSpecialName
-        )
-        if method == nil {
-            return false
-        }
-        memberType = method.ReturnType
-        return true
-    }
-
-    private func TryResolveClrTypeFromSymbol(symbol Symbol?, out clrType Type?) bool {
-        clrType = switch symbol {
-            case importedClass is ImportedClassSymbol: importedClass.ClassType
-            case importedType is ImportedTypeSymbol: importedType.Type
-            case typeSymbol is TypeSymbol: typeSymbol.ClrType
-            case variable is VariableSymbol: variable.Type?.ClrType
-            case property is PropertySymbol: property.Type?.ClrType
-            case field is FieldSymbol: field.Type?.ClrType
-            case event is EventSymbol: event.Type?.ClrType
-            case function is FunctionSymbol: function.Type?.ClrType
-            case function is ImportedFunctionSymbol: function.Type?.ClrType
-            default: default(Type?)
-        }
-        return clrType != nil
     }
 
     private func FindNodes[T SyntaxNode](root SyntaxNode) sequence[T] {
@@ -876,7 +409,14 @@ async sequence[T]
         return sb.ToString()
     }
 
-    private func CountOverloads(compilation Compilation, function FunctionSymbol) int32 {
+    private func CountOverloads(compilation Compilation, function FunctionSymbol, token SyntaxToken?) int32 {
+        // A call counts the candidates that overload resolution considered (ADR-0212 slice S4).
+        if token?.Parent is CallExpressionSyntax call && object.ReferenceEquals(call.Identifier, token) {
+            let group = BoundSemantics.GetMemberGroup(compilation, token)
+            if !group.IsDefaultOrEmpty {
+                return group.Length
+            }
+        }
         // ADR-0112: count via the canonical layer (non-inherited, matching the
         // historic single-declaring-type count).
         if function.StaticOwnerType is StructSymbol staticOwner {
@@ -908,142 +448,6 @@ async sequence[T]
     private func FormatType(type TypeSymbol) string {
         return type?.Name ?? "void"
     }
-
-    /// Issue #906: classifies the receiver syntax of the call whose identifier is
-    /// [`token`](paramref), so the program-wide imported-method scan can reject
-    /// candidates with an inconsistent dispatch shape. A value receiver (a local,
-    /// member access, call result, etc.) gates to instance / receiver-dispatched
-    /// extension methods; a type-name receiver (`string`, `Console`,
-    /// `System.Linq.Enumerable`, …) gates to plain static methods. When known,
-    /// the receiver's CLR type is returned as a tie-breaker for same-shaped collisions.
-    private func ClassifyCallReceiver(
-        tree SyntaxTree,
-        compilation Compilation,
-        token SyntaxToken,
-        out receiverClrType Type?
-    ) SemanticLookup
-        .CallReceiverGate {
-        receiverClrType = nil
-        // The hovered call is the right part of an accessor (`receiver.M(...)`); a
-        // bare call (`M(...)`) has no receiver and keeps the legacy name+arity match.
-        // A dotted chain such as `report.Checks.Single(...)` parses
-        // right-associatively, so the token's enclosing accessors yield several
-        // candidate receivers (`Checks`, then `report.Checks`). Pick the most
-        // complete one — the widest span — so the receiver reflects the full chain
-        // (`report.Checks`) rather than a bare trailing segment (`Checks`) that
-        // would not resolve on its own.
-        let receiverExpression ExpressionSyntax? = FindAccessorMemberContexts(tree, token)
-            .Select((context(ReceiverExpression ExpressionSyntax, MemberName string)) -> context.ReceiverExpression)
-            .Where((expr ExpressionSyntax) -> expr != nil)
-            .OrderByDescending((expr ExpressionSyntax) -> expr.Span.Length)
-            .FirstOrDefault()
-        if receiverExpression == nil {
-            return SemanticLookup.CallReceiverGate.None
-        }
-        switch receiverExpression {
-            case name is NameExpressionSyntax {
-                let symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken)
-                if IsValueSymbol(symbol) {
-                    // Issue #4989: the receiver's bound (flow) type first.
-                    receiverClrType = BoundSemantics.GetExpressionType(compilation, name)?.ClrType
-                    if receiverClrType == nil {
-                        TryResolveClrTypeFromSymbol(symbol, out receiverClrType)
-                    }
-                    return SemanticLookup.CallReceiverGate.Value
-                }
-                // A bare-name receiver that is not a value is a type-name receiver: a
-                // declared/imported type, or a primitive keyword type (e.g.
-                // `string.Concat(...)`). Resolve its CLR type from the reference context
-                // (so it can be compared against candidate methods' declaring types),
-                // preferring the imported/primitive resolution over a builtin TypeSymbol
-                // whose ClrType may be unset.
-                let primitiveClrName string? = PrimitiveClrTypeName(name.IdentifierToken.Text)
-                if primitiveClrName != nil {
-                    receiverClrType = SemanticLookup.ResolveImportedClrType(tree, compilation, primitiveClrName)
-                    return SemanticLookup.CallReceiverGate.TypeName
-                }
-                let importedType Type? = SemanticLookup.ResolveImportedClrType(
-                    tree,
-                    compilation,
-                    name.IdentifierToken.Text
-                )
-                if importedType != nil {
-                    receiverClrType = importedType
-                    return SemanticLookup.CallReceiverGate.TypeName
-                }
-                if symbol is TypeSymbol {
-                    TryResolveClrTypeFromSymbol(symbol, out receiverClrType)
-                    return SemanticLookup.CallReceiverGate.TypeName
-                }
-                return SemanticLookup.CallReceiverGate.None
-            }
-            case accessor is AccessorExpressionSyntax {
-                // A dotted name that resolves wholesale to a type is a static receiver
-                // (e.g. `System.Linq.Enumerable.Concat(...)`); otherwise it is a member
-                // access on a value (e.g. `report.Checks.Single(...)`).
-                if TryFlattenDottedName(accessor, out var dotted) && dotted != nil {
-                    let dottedType Type? = SemanticLookup.ResolveImportedClrType(tree, compilation, dotted)
-                    if dottedType != nil {
-                        receiverClrType = dottedType
-                        return SemanticLookup.CallReceiverGate.TypeName
-                    }
-                }
-                if TryResolveClrReceiver(tree, compilation, accessor, out var clrReceiver) &&
-                    clrReceiver != nil &&
-                    !clrReceiver.StaticMembers {
-                    receiverClrType = clrReceiver.Type
-                }
-                return SemanticLookup.CallReceiverGate.Value
-            }
-            default {
-                // Call results, indexers, parenthesised/literal receivers are all values.
-                if TryResolveClrReceiver(tree, compilation, receiverExpression, out var valueReceiver) &&
-                    valueReceiver != nil &&
-                    !valueReceiver.StaticMembers {
-                    receiverClrType = valueReceiver.Type
-                }
-                return SemanticLookup.CallReceiverGate.Value
-            }
-        }
-    }
-
-    private func IsValueSymbol(symbol Symbol?) bool {
-        return (symbol is VariableSymbol or PropertySymbol or FieldSymbol)
-    }
-
-    private func TryFlattenDottedName(expression ExpressionSyntax, out dotted string?) bool {
-        dotted = switch expression {
-            case name is NameExpressionSyntax: name.IdentifierToken.Text
-            case accessor is AccessorExpressionSyntax when TryFlattenDottedName(accessor.LeftPart, out var left) &&
-                accessor.RightPart is NameExpressionSyntax right: left +
-                "." +
-                right
-                .IdentifierToken
-                .Text
-            default: default(string?)
-        }
-        return dotted != nil
-    }
-
-    private func PrimitiveClrTypeName(keyword string) string? {
-        return switch keyword {
-            case "bool": "System.Boolean"
-            case "char": "System.Char"
-            case "string": "System.String"
-            case "int8" or "sbyte": "System.SByte"
-            case "uint8" or "byte": "System.Byte"
-            case "int16": "System.Int16"
-            case "uint16": "System.UInt16"
-            case "int32": "System.Int32"
-            case "uint32": "System.UInt32"
-            case "int64": "System.Int64"
-            case "uint64": "System.UInt64"
-            case "float32": "System.Single"
-            case "float64": "System.Double"
-            case "object": "System.Object"
-            default: default(string?)
-        }
-    }
 }
 
 /// A rendered hover documentation section: an optional bold heading and a Markdown body.
@@ -1059,7 +463,7 @@ shared class ReferencesComputer {
         includeDeclaration bool,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[Location] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let target Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -1079,7 +483,7 @@ shared class ReferencesComputer {
         includeDeclaration bool,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[SyntaxToken] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let target Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -1159,7 +563,7 @@ shared class RenameComputer {
         if !SemanticLookup.IsValidIdentifier(newName) {
             return nil
         }
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let target Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -1231,7 +635,7 @@ shared class DefinitionComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[Location] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token SyntaxToken? = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let symbol Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -1260,13 +664,13 @@ shared class DefinitionComputer {
         // the same way HoverComputer does and map the result to a Location via
         // CrossAssemblyDefinitionResolver.
         if token != nil && token.Kind == SyntaxKind.IdentifierToken {
-            if ImportedClrMemberResolver.TryResolveClrType(content.SyntaxTree, compilation, token, out var clrType) &&
+            if MemberTokenResolver.TryResolveImportedType(content.SyntaxTree, compilation, token, out var clrType) &&
                 clrType != nil &&
                 CrossAssemblyDefinitionResolver.TryResolveType(workspace, clrType, out var typeLocation) &&
                 typeLocation != nil {
                 return []Location{typeLocation}
             }
-            if ImportedClrMemberResolver.TryResolveClrMember(
+            if MemberTokenResolver.TryResolveImportedMember(
                 content.SyntaxTree,
                 compilation,
                 token,
@@ -1572,7 +976,7 @@ shared class SignatureHelpComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) SignatureHelp? {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         // Walk backwards from cursor to find the function name token before the opening paren
         let source = content.SyntaxTree.Text.ToString()
@@ -1602,20 +1006,76 @@ shared class SignatureHelpComputer {
         if funcToken?.Kind == SyntaxKind.CloseSquareBracketToken {
             funcToken = funcToken!!.FirstAncestorOrSelf[CallExpressionSyntax]()?.Identifier
         }
-        let symbol = SemanticLookup.ResolveSymbol(compilation, funcToken, ct)
-        if symbol is not FunctionSymbol function {
+        // One signature per candidate that overload resolution considered (ADR-0212 slice S4); the
+        // overload the call resolved to is the active one.
+        let group = BoundSemantics.GetMemberGroup(compilation, funcToken)
+        let resolved = BoundSemantics.GetImportedSymbol(compilation, funcToken) ?? SemanticLookup.ResolveSymbol(
+            compilation,
+            funcToken,
+            ct
+        )
+        let candidates = group.Where((g Symbol) -> g is FunctionSymbol or ImportedFunctionSymbol).ToList()
+        if candidates.Count == 0 && resolved is FunctionSymbol single {
+            candidates.Add(single)
+        }
+        if candidates.Count == 0 {
             return nil
         }
-        let parameters = function
-            .Parameters
-            .Select((p ParameterSymbol) -> ParameterInformation{Label: "${p.Name} ${FormatType(p.Type)}"})
-            .ToList()
-        let signature = SignatureInformation{Label: HoverComputer.FormatSymbol(function), Parameters: parameters}
-        return SignatureHelp{
-            Signatures: []SignatureInformation{signature},
-            ActiveSignature: 0,
-            ActiveParameter: Math.Min(activeParameter, Math.Max(0, parameters.Count - 1))
+        let signatures = candidates.Select((c Symbol) -> BuildSignature(c)).ToList()
+        var active = candidates.FindIndex((c Symbol) -> object.ReferenceEquals(c, resolved))
+        // A constructed owner substitutes the candidates; the selected callee is the declared one.
+        if active < 0 && resolved is FunctionSymbol{Declaration: {} resolvedDeclaration} {
+            active = candidates.FindIndex(
+                (c Symbol) -> c is FunctionSymbol candidate && object.ReferenceEquals(
+                    candidate.Declaration,
+                    resolvedDeclaration
+                )
+            )
         }
+        if active < 0 && resolved is ImportedFunctionSymbol resolvedImported {
+            active = candidates.FindIndex(
+                (c Symbol) -> c is ImportedFunctionSymbol imported && imported.Method.MetadataToken ==
+                resolvedImported
+                    .Method
+                    .MetadataToken &&
+                    imported
+                    .Method
+                    .Module == resolvedImported
+                    .Method
+                    .Module &&
+                    imported
+                    .Method
+                    .DeclaringType == resolvedImported
+                    .Method
+                    .DeclaringType
+            )
+        }
+        active = Math.Max(active, 0)
+        let activeCount = signatures[active].Parameters.Count()
+        return SignatureHelp{
+            Signatures: signatures,
+            ActiveSignature: active,
+            ActiveParameter: Math.Min(activeParameter, Math.Max(0, activeCount - 1))
+        }
+    }
+
+    private func BuildSignature(candidate Symbol) SignatureInformation {
+        let parameters = switch candidate {
+            case function is FunctionSymbol: function
+                .Parameters
+                .Select((p ParameterSymbol) -> ParameterInformation{Label: "${p.Name} ${FormatType(p.Type)}"})
+                .ToList()
+            case imported is ImportedFunctionSymbol: ImportedFunctionSymbol
+                .GetLogicalParameters(imported.Method)
+                .Select(
+                (p ParameterInfo) -> ParameterInformation{
+                    Label: "${p.Name} ${SymbolDisplay.ToTypeDisplayString(p.ParameterType, SymbolDisplayFormat.Signature.QualifyNames)}"
+                }
+            )
+                .ToList()
+            default: List[ParameterInformation]()
+        }
+        return SignatureInformation{Label: HoverComputer.FormatSymbol(candidate), Parameters: parameters}
     }
 
     private func FormatType(type TypeSymbol) string {
@@ -1629,7 +1089,7 @@ shared class CompletionComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[CompletionItem] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         // Issue #917: completion-as-you-type. When the caret sits in (or immediately
         // after) a partial identifier — e.g. `prin<caret>` or `x.To<caret>` — compute
@@ -1830,7 +1290,7 @@ shared class CompletionComputer {
         }
         let items = List[CompletionItem]()
         let seen = HashSet[string](StringComparer.Ordinal)
-        AddObjectInitializerMembers(receiverType, items, seen)
+        AddObjectInitializerMembers(content, compilation, offset, receiverType, items, seen)
         return items
     }
 
@@ -1941,46 +1401,122 @@ shared class CompletionComputer {
     /// Adds the writable instance members (settable properties / writable fields) of
     /// [`receiverType`](paramref) as object-initializer completions.
     private func AddObjectInitializerMembers(
+        content DocumentContent,
+        compilation Compilation,
+        offset int32,
         receiverType TypeSymbol,
         items List[CompletionItem],
         seen HashSet[string]
     ) {
-        if receiverType is StructSymbol structSymbol {
-            // ADR-0112 A1: route object-initializer completion through the canonical
-            // member-resolution layer. Instance fields/properties, walking the base
-            // chain, preserves the historic enumeration (fields then properties per
-            // level) and the same writable-member set object initializers accept.
-            AddStructMembersFromModel(
-                items,
-                seen,
-                structSymbol,
-                MemberQuery.Instance(MemberKinds.Field | MemberKinds.Property)
-            )
+        AddMembers(items, seen, content, compilation, offset, receiverType, staticMembers: false, initializer: true)
+    }
+
+    /// Adds the members of [`type`](paramref) that a member access at [`offset`](paramref) can name
+    /// (ADR-0212 slice S4, `SemanticModel.LookupMembers`). A value receiver offers instance members; a
+    /// type name offers static ones. An enum offers its members for the type name only. A source class or
+    /// struct offers no events, as before. An interface name offers nothing.
+    private func AddMembers(
+        items List[CompletionItem],
+        seen HashSet[string],
+        content DocumentContent,
+        compilation Compilation,
+        offset int32,
+        type TypeSymbol?,
+        staticMembers bool,
+        initializer bool = false
+    ) {
+        if type == nil {
             return
         }
-        if receiverType is InterfaceSymbol interfaceSymbol {
-            AddInterfaceInstanceMembers(items, seen, interfaceSymbol)
+        var receiver TypeSymbol = type
+        while receiver is NullableTypeSymbol or PlatformTypeSymbol {
+            receiver = if receiver is NullableTypeSymbol nullable {
+                nullable.UnderlyingType
+            } else {
+                cast[PlatformTypeSymbol](receiver).UnderlyingType
+            }
+        }
+        if staticMembers && receiver is InterfaceSymbol {
             return
         }
-        let clrType Type? = receiverType?.ClrType
-        if clrType == nil {
+        for member in BoundSemantics.LookupMembers(compilation, content.SyntaxTree, offset, type) {
+            if receiver is EnumSymbol {
+                if !staticMembers {
+                    continue
+                }
+            } else if MemberTokenResolver.IsStatic(member) != staticMembers {
+                continue
+            }
+            if receiver is StructSymbol && member is EventSymbol {
+                continue
+            }
+            if initializer && !IsInitializable(member, receiver) {
+                continue
+            }
+            AddMemberItem(items, seen, member)
+        }
+    }
+
+    // The members that an object initializer sets: the fields and properties of a source type, the
+    // settable properties and writable fields of an imported one, every member of an interface.
+    private func IsInitializable(member Symbol, receiver TypeSymbol) bool {
+        if receiver is InterfaceSymbol {
+            return true
+        }
+        return switch member {
+            case property is PropertySymbol: receiver is StructSymbol && !BoundSemantics.IsImportedMember(property) ||
+                property.HasSetter
+            case field is FieldSymbol: receiver is StructSymbol && !BoundSemantics.IsImportedMember(field) ||
+                (!field.IsReadOnly && !field.IsConst)
+            default: false
+        }
+    }
+
+    private func AddMemberItem(items List[CompletionItem], seen HashSet[string], member Symbol) {
+        if string.IsNullOrEmpty(member.Name) || seen.Contains(member.Name) {
             return
         }
-        let flags = BindingFlags.Public | BindingFlags.Instance
-        for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
-            if property.CanWrite && property.GetIndexParameters().Length == 0 {
+        switch member {
+            case field is FieldSymbol {
+                AddItem(
+                    items,
+                    seen,
+                    field.Name,
+                    if field.IsConst {
+                        CompletionItemKind.Constant
+                    } else {
+                        CompletionItemKind.Field
+                    },
+                    if BoundSemantics.IsImportedMember(field) {
+                        "${field.Name}: ${SymbolDisplay.ToTypeDisplayString(field.Type)}"
+                    } else {
+                        HoverComputer.FormatSymbol(field)
+                    }
+                )
+            }
+            case property is PropertySymbol {
                 AddItem(
                     items,
                     seen,
                     property.Name,
                     CompletionItemKind.Property,
-                    "${property.Name}: ${property.PropertyType.Name}"
+                    "${property.Name}: ${SymbolDisplay.ToTypeDisplayString(property.Type)}"
                 )
             }
-        }
-        for field in ClrTypeUtilities.SafeGetFields(clrType, flags) {
-            if !field.IsInitOnly && !field.IsLiteral {
-                AddItem(items, seen, field.Name, CompletionItemKind.Field, "${field.Name}: ${field.FieldType.Name}")
+            case clrEvent is EventSymbol {
+                AddItem(items, seen, clrEvent.Name, CompletionItemKind.Event, clrEvent.Name)
+            }
+            case enumMember is EnumMemberSymbol {
+                AddItem(
+                    items,
+                    seen,
+                    enumMember.Name,
+                    CompletionItemKind.EnumMember,
+                    "${enumMember.EnumType.Name}.${enumMember.Name}"
+                )
+            }
+            case FunctionSymbol or ImportedFunctionSymbol {
+                AddItem(items, seen, member.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(member))
             }
         }
     }
@@ -2023,7 +1559,7 @@ shared class CompletionComputer {
                     ?.GetSpeculativeTypeInfo(offset, receiverExpression)
                     .Type
                 if receiverType != nil {
-                    AddInstanceTypeMembers(items, seen, receiverType)
+                    AddMembers(items, seen, content, compilation, offset, receiverType, staticMembers: false)
                 }
             }
             // Whether or not inference succeeded, suppress the global keyword list
@@ -2036,38 +1572,70 @@ shared class CompletionComputer {
         let boundReceiverType TypeSymbol? = BoundSemantics.GetExpressionType(compilation, leftName)
         switch receiver {
             case variable is VariableSymbol {
-                AddInstanceTypeMembers(items, seen, boundReceiverType ?? variable.Type)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? variable.Type,
+                    staticMembers: false
+                )
             }
             case property is PropertySymbol {
-                AddInstanceTypeMembers(items, seen, boundReceiverType ?? property.Type)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? property.Type,
+                    staticMembers: false
+                )
             }
             case field is FieldSymbol {
-                AddInstanceTypeMembers(items, seen, boundReceiverType ?? field.Type)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? field.Type,
+                    staticMembers: false
+                )
             }
             case event is EventSymbol {
-                AddInstanceTypeMembers(items, seen, boundReceiverType ?? event.Type)
-            }
-            case enumSymbol is EnumSymbol {
-                AddEnumMembers(items, seen, enumSymbol)
-            }
-            case structType is StructSymbol {
-                AddStructStaticMembers(items, seen, structType)
+                AddMembers(
+                    items,
+                    seen,
+                    content,
+                    compilation,
+                    offset,
+                    boundReceiverType ?? event.Type,
+                    staticMembers: false
+                )
             }
             case typeSymbol is TypeSymbol {
-                AddClrMembers(items, seen, typeSymbol.ClrType, staticMembers: true)
+                AddMembers(items, seen, content, compilation, offset, typeSymbol, staticMembers: true)
             }
             case nil {
                 // An imported CLR type referenced by name (e.g. `Console`).
-                AddClrMembers(
-                    items,
-                    seen,
-                    SemanticLookup.ResolveImportedClrType(
-                        content.SyntaxTree,
-                        compilation,
-                        leftName.IdentifierToken.Text
-                    ),
-                    staticMembers: true
+                let imported Type? = SemanticLookup.ResolveImportedClrType(
+                    content.SyntaxTree,
+                    compilation,
+                    leftName.IdentifierToken.Text
                 )
+                if imported != nil {
+                    AddMembers(
+                        items,
+                        seen,
+                        content,
+                        compilation,
+                        offset,
+                        ImportedTypeSymbol.Get(imported),
+                        staticMembers: true
+                    )
+                }
             }
         }
         return items
@@ -2165,177 +1733,6 @@ shared class CompletionComputer {
             for descendant in FindAccessors(child) {
                 yield descendant
             }
-        }
-    }
-
-    private func AddInstanceTypeMembers(items List[CompletionItem], seen HashSet[string], type TypeSymbol) {
-        // ADR-0172: a tuple receiver offers its declared element names first,
-        // then the positional ItemN spellings (both resolve).
-        if type is TupleTypeSymbol tupleType {
-            for var i = 0; i < tupleType.Arity; i++ {
-                let elementDetail = SymbolDisplay.ToTypeDisplayString(tupleType.ElementTypes[i])
-                if tupleType.HasNames && tupleType.ElementNames[i] is {} elementName && seen.Add(elementName) {
-                    items.Add(CompletionItem{Label: elementName, Kind: CompletionItemKind.Field, Detail: elementDetail})
-                }
-                let positional = "Item" + (i + 1).ToString(CultureInfo.InvariantCulture)
-                if seen.Add(positional) {
-                    items.Add(CompletionItem{Label: positional, Kind: CompletionItemKind.Field, Detail: elementDetail})
-                }
-            }
-            return
-        }
-        if type is StructSymbol structType {
-            AddStructInstanceMembers(items, seen, structType)
-            return
-        }
-        if type is InterfaceSymbol interfaceType {
-            AddInterfaceInstanceMembers(items, seen, interfaceType)
-            return
-        }
-        AddClrMembers(items, seen, type?.ClrType, staticMembers: false)
-    }
-
-    private func AddInterfaceInstanceMembers(
-        items List[CompletionItem],
-        seen HashSet[string],
-        interfaceType InterfaceSymbol
-    ) {
-        // ADR-0112: enumerate user-declared interface members (this interface
-        // and its user base interfaces) through the canonical layer.
-        for member in TypeMemberModel.EnumerateMembers(
-            interfaceType,
-            MemberQuery.Instance(MemberKinds.Property | MemberKinds.Event | MemberKinds.Method)
-        ) {
-            switch member {
-                case property is PropertySymbol {
-                    AddItem(
-                        items,
-                        seen,
-                        property.Name,
-                        CompletionItemKind.Property,
-                        "${property.Name}: ${property.Type?.Name}"
-                    )
-                }
-                case event is EventSymbol {
-                    AddItem(items, seen, event.Name, CompletionItemKind.Event, event.Name)
-                }
-                case method is FunctionSymbol {
-                    AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method))
-                }
-            }
-        }
-        // Issue #1181: a user interface that extends an imported/BCL interface
-        // also surfaces that interface's (and its transitive CLR bases')
-        // members on an interface-typed receiver — keep the completion surface
-        // consistent with the binder's member resolution.
-        for clrBaseIface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceType) {
-            AddClrMembers(items, seen, clrBaseIface, staticMembers: false)
-        }
-    }
-
-    private func AddStructInstanceMembers(items List[CompletionItem], seen HashSet[string], structType StructSymbol) {
-        // ADR-0112: enumerate instance members through the canonical layer.
-        // Events are intentionally excluded to preserve the historic completion
-        // set (fields, properties, methods only), walking the base chain.
-        AddStructMembersFromModel(
-            items,
-            seen,
-            structType,
-            MemberQuery.Instance(MemberKinds.Field | MemberKinds.Property | MemberKinds.Method)
-        )
-    }
-
-    private func AddStructStaticMembers(items List[CompletionItem], seen HashSet[string], structType StructSymbol) {
-        // ADR-0112: static members through the canonical layer (no base-chain
-        // walk, fields/properties/methods only — matching historic behavior).
-        AddStructMembersFromModel(
-            items,
-            seen,
-            structType,
-            MemberQuery.Static(MemberKinds.Field | MemberKinds.Property | MemberKinds.Method)
-        )
-    }
-
-    private func AddStructMembersFromModel(
-        items List[CompletionItem],
-        seen HashSet[string],
-        structType StructSymbol,
-        query MemberQuery
-    ) {
-        for member in TypeMemberModel.EnumerateMembers(structType, query) {
-            switch member {
-                case field is FieldSymbol {
-                    AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field))
-                }
-                case property is PropertySymbol {
-                    AddItem(
-                        items,
-                        seen,
-                        property.Name,
-                        CompletionItemKind.Property,
-                        "${property.Name}: ${property.Type?.Name}"
-                    )
-                }
-                case method is FunctionSymbol {
-                    AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method))
-                }
-            }
-        }
-    }
-
-    private func AddEnumMembers(items List[CompletionItem], seen HashSet[string], enumSymbol EnumSymbol) {
-        for member in enumSymbol.Members {
-            AddItem(items, seen, member.Name, CompletionItemKind.EnumMember, "${enumSymbol.Name}.${member.Name}")
-        }
-    }
-
-    private func AddClrMembers(items List[CompletionItem], seen HashSet[string], clrType Type?, staticMembers bool) {
-        if clrType == nil {
-            return
-        }
-        if clrType == nil {
-            return
-        }
-        let flags = BindingFlags.Public | (
-            if staticMembers {
-                BindingFlags.Static
-            } else {
-                BindingFlags.Instance
-            }
-        )
-        for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
-            if property.GetIndexParameters().Length == 0 {
-                AddItem(
-                    items,
-                    seen,
-                    property.Name,
-                    CompletionItemKind.Property,
-                    "${property.Name}: ${property.PropertyType.Name}"
-                )
-            }
-        }
-        for field in ClrTypeUtilities.SafeGetFields(clrType, flags) {
-            let kind = if field.IsLiteral {
-                CompletionItemKind.Constant
-            } else {
-                CompletionItemKind.Field
-            }
-            AddItem(items, seen, field.Name, kind, "${field.Name}: ${field.FieldType.Name}")
-        }
-        for method in ClrTypeUtilities.SafeGetMethods(clrType, flags) {
-            if method.IsSpecialName {
-                continue
-            }
-            AddItem(
-                items,
-                seen,
-                method.Name,
-                CompletionItemKind.Method,
-                "${method.Name}(...): ${method.ReturnType.Name}"
-            )
-        }
-        for evt in ClrTypeUtilities.SafeGetEvents(clrType, flags) {
-            AddItem(items, seen, evt.Name, CompletionItemKind.Event, evt.Name)
         }
     }
 

@@ -55,14 +55,7 @@ open class BindingReferenceGateTests {
 
         // Simple names in the binding namespace, one per line.
         private const AllowedNames string = `
-            BoundBlockStatement
-            BoundClrPropertyAccessExpression
-            BoundConstrainedStaticCallExpression
-            BoundExpression
             BoundGlobalScope
-            BoundImportedCallExpression
-            BoundImportedInstanceCallExpression
-            BoundNode
             BoundProgram
 `
 

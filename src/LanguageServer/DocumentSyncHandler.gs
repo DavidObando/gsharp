@@ -60,7 +60,7 @@ shared class DocumentSyncHandler {
             compilation = project.GetCompilation()
         } else {
             syntaxTree = SyntaxTree.Parse(text)
-            compilation = Compilation(syntaxTree)
+            compilation = ServerCompilation.Create(syntaxTree)
         }
         return BuildResult(syntaxTree, compilation, useProject, skipBinding, project, workspace)
     }
@@ -93,7 +93,7 @@ shared class DocumentSyncHandler {
         if useProject && project != nil {
             compilation = project.GetCompilationForSnapshot(filePath, syntaxTree)
         } else {
-            compilation = Compilation(syntaxTree)
+            compilation = ServerCompilation.Create(syntaxTree)
         }
         return BuildResult(syntaxTree, compilation, useProject, skipBinding, project, workspace)
     }
