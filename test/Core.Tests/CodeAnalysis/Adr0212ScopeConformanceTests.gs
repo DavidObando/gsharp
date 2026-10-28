@@ -135,7 +135,8 @@ open class Adr0212ScopeConformanceTests {
     }
 
     @Fact
-    func ImplicitScopeContext_HasNoPlaceInTheTree() {
+    func ImplicitScopeContext_IsVisibleInsideItsScopeOnly() {
+        Assert.Contains("ctx", Names("PInScope"))
         Assert.DoesNotContain("ctx", Names("PAfterScope"))
         Assert.DoesNotContain("ctx", Names("PEscaped"))
     }
@@ -196,6 +197,122 @@ open class Adr0212ScopeConformanceTests {
             Compiled.LookupSymbols(Source().IndexOf("// PLimit", StringComparison.Ordinal), "Limit")
         )
         Assert.True(Assert.IsType[FieldSymbol](found).IsConst)
+    }
+
+    // ---- #5340: one test per row of the contract of the rare declaration shapes ----
+    // Row: field initializer -> the `shared` members of its type, never the instance ones.
+    // Row: `deinit` -> the destructor function; `this` and the members resolve.
+    // Row: a part of a nested partial type -> the merged type, at any depth.
+    // Row: type clause of an interface `const` or `shared` field -> the type it names.
+    // Row: instance member of a base and `shared` member of a derived type of one name -> the instance member.
+    // Row: implicit `ctx` of a `scope` -> visible in the scope body only.
+    // Row: globals -> source order across kinds, files by name.
+
+    @Fact
+    func FieldInitializer_SeesTheSharedMembersOfItsType() {
+        let position = Program.IndexOf("Make() + S", StringComparison.Ordinal) + 8
+        let names = Compiled.LookupSymbols(position).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("Make", names)
+        Assert.Contains("S", names)
+        Assert.DoesNotContain("A", names)
+        Assert.DoesNotContain("this", names)
+    }
+
+    @Fact
+    func Deinit_IsADeclarationWithThis() {
+        let enclosing = Compiled.GetEnclosingSymbol(Program.IndexOf("// PFuDeinit", StringComparison.Ordinal))
+        Assert.IsType[FunctionSymbol](enclosing)
+        let names = Names("PFuDeinit")
+        Assert.Contains("this", names)
+        Assert.Contains("Tag", names)
+    }
+
+    @Fact
+    func NestedPartialType_EveryPartIsTheMergedType() {
+        let position = Program.IndexOf("// PFuPart", StringComparison.Ordinal)
+        Assert.Equal("UsePart", Compiled.GetEnclosingSymbol(position)!!.Name)
+        Assert.Contains("A", Names("PFuPart"))
+        let second = Program.IndexOf("func UsePart()", StringComparison.Ordinal)
+        Assert.Equal("N", Compiled.GetEnclosingSymbol(second - 5)!!.Name)
+    }
+
+    @Fact
+    func InterfaceConstTypeClause_NamesItsType() {
+        let tree = SyntaxTree.Parse(SourceText.From(Program, "conformance.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let field = tree
+            .Root
+            .DescendantNodes()
+            .OfType[FieldDeclarationSyntax]()
+            .Single((f FieldDeclarationSyntax) -> f.Identifier.Text == "K")
+        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(field.Type.Identifier).Symbol)
+        let sharedField = tree
+            .Root
+            .DescendantNodes()
+            .OfType[FieldDeclarationSyntax]()
+            .Single((f FieldDeclarationSyntax) -> f.Identifier.Text == "W")
+        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(sharedField.Type.Identifier).Symbol)
+    }
+
+    @Fact
+    func InstanceMemberOfABase_WinsOverASharedMemberOfTheDerivedType() {
+        let found = Assert.Single(Compiled.LookupSymbols(Program.IndexOf("// PFuHides", StringComparison.Ordinal), "X"))
+        Assert.False(Assert.IsType[FieldSymbol](found).IsStatic)
+        let listed = Names("PFuHides").Count((n string) -> n == "X")
+        Assert.Equal(1, listed)
+    }
+
+    @Fact
+    func InstanceInitializer_SeesPrimaryConstructorParameters() {
+        let position = Program.IndexOf("= n + 1", StringComparison.Ordinal) + 2
+        Assert.IsType[ParameterSymbol](Assert.Single(Compiled.LookupSymbols(position, "n")))
+    }
+
+    @Fact
+    func FieldInitializer_DoesNotSeeInheritedStaticsAheadOfGlobals() {
+        let position = Program.IndexOf("= FuShadow() + 1", StringComparison.Ordinal) + 2
+        Assert.Null(
+            Assert.IsType[FunctionSymbol](Assert.Single(Compiled.LookupSymbols(position, "FuShadow"))).ContainingType
+        )
+    }
+
+    @Fact
+    func ConstInitializer_DoesNotSeePrimaryParametersOrInheritedConstants() {
+        let inherited = Program.IndexOf("var V int32 = 2", StringComparison.Ordinal) + 16
+        Assert.Empty(Compiled.LookupSymbols(inherited, "FuK"))
+        let primary = Program.IndexOf("const Z int32 = 3", StringComparison.Ordinal) + 16
+        Assert.Empty(Compiled.LookupSymbols(primary, "FuP"))
+    }
+
+    @Fact
+    func InheritedMethod_DoesNotShadowASharedVariable() {
+        let found = Assert.Single(
+            Compiled.LookupSymbols(Program.IndexOf("// PFuMethodVar", StringComparison.Ordinal), "MX")
+        )
+        Assert.IsType[FieldSymbol](found)
+    }
+
+    @Fact
+    func StaticInitializer_SeesTheImplicitScopeContext() {
+        Assert.Contains("ctx", Names("PFuStaticCtx"))
+    }
+
+    @Fact
+    func NestedPartialType_InAnUnnamedTree_IsTheMergedType() {
+        let text = "class Outer {\n partial class N { var A int32 }\n partial class N {\n func Use() int32 { return A }\n }\n}\n"
+        let tree = SyntaxTree.Parse(text)
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let position = text.IndexOf("return A", StringComparison.Ordinal) + 7
+        Assert.Contains("A", model.LookupSymbols(position).Select((s Symbol) -> s.Name).ToList())
+    }
+
+    @Fact
+    func Globals_AreListedInSourceOrderAcrossKinds() {
+        let text = "var first = 1\nfunc second() int32 { return 1 }\nenum Third { A }\nvar fourth = 2\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "order.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let names = model.LookupSymbols(0).Select((s Symbol) -> s.Name).ToList()
+        Assert.Equal([]string{"first", "second", "Third", "fourth"}, names)
     }
 
     @Fact
@@ -307,14 +424,6 @@ open class Adr0212ScopeConformanceTests {
             if bound == nil || bound is TypeParameterSymbol || bound is ImportedFunctionSymbol {
                 return 0
             }
-            // Known gap, #5340: the implicit `ctx` of a `scope` is declared by a token with no place in the
-            // tree, so the scope queries do not offer it.
-            if !bound
-                .DeclaringSyntaxNodes
-                .IsDefaultOrEmpty &&
-                bound.DeclaringSyntaxNodes[0] is SyntaxToken{Parent: nil} {
-                return 0
-            }
             // Known gap, #5334: the variable of an `is` pattern follows the binder's flow regions.
             if bound.GetType().Name == "PatternVariableSymbol" {
                 return 0
@@ -385,7 +494,8 @@ open class Adr0212ScopeConformanceTests {
                 return
             }
             let owner = clause.Parent
-            // A lambda inside a call the binder could not bind (an unresolved import) has no bound parameter.
+            // Known gap, #5340: a lambda inside a call the binder could not bind (an unresolved import) has no
+            // bound parameter, so no symbol exists to answer.
             if owner is ParameterSyntax parameterOwner &&
                 parameterOwner.Identifier is {} parameterName &&
                 model.GetDeclaredSymbol(parameterName) == nil && owner.Parent is LambdaExpressionSyntax {
@@ -517,6 +627,8 @@ func Decon() int32 {
 func Scoped() int32 {
     scope {
         let a = 1
+        let c = ctx
+        a + 0 // PInScope
     }
     return 0 // PAfterScope
 }
@@ -626,6 +738,114 @@ func Channels() int32 {
     }
     let afterSelect = seen // PAfterSelect
     return afterSelect
+}
+
+class FuInit {
+    shared {
+        var S int32 = 1
+        func Make() int32 { return 1 }
+    }
+    var A int32 = Make() + S
+    var B int32 = S + 1
+}
+
+open class FuRes(Tag string) {
+    deinit {
+        Console.WriteLine(this.Tag)
+        // PFuDeinit
+    }
+}
+
+class FuOuter {
+    partial class N {
+        var A int32
+    }
+    partial class N {
+        func UsePart() int32 {
+            return A // PFuPart
+        }
+    }
+}
+
+interface FuIC {
+    shared {
+        const K int32 = 1
+        var W int32 = 2
+    }
+}
+
+interface FuIS {
+    shared {
+        func Make() int32 { return 1 }
+        func Twice() int32 {
+            return Make() * 2 // PFuIShared
+        }
+    }
+}
+
+class FuPrimary(n int32) {
+    var value int32 = n + 1
+}
+
+func FuShadow() int32 { return 5 }
+
+open class FuSBase {
+    shared {
+        func FuShadow() int32 { return 1 }
+    }
+}
+
+class FuSDerived : FuSBase {
+    var Q int32 = FuShadow() + 1
+}
+
+open class FuCBase {
+    const FuK int32 = 1
+}
+
+class FuCDerived : FuCBase {
+    var V int32 = 2
+}
+
+class FuCPrimary(FuP int32) {
+    const Z int32 = 3
+}
+
+open class FuMBase {
+    func MX() int32 { return 1 }
+}
+
+class FuMDerived : FuMBase {
+    shared {
+        var MX int32 = 1
+    }
+    func G() int32 {
+        return MX // PFuMethodVar
+    }
+}
+
+class FuStaticCtx {
+    shared {
+        init {
+            scope {
+                let c = ctx
+                c // PFuStaticCtx
+            }
+        }
+    }
+}
+
+open class FuBase {
+    var X int32
+}
+
+class FuDerived : FuBase {
+    shared {
+        var X int32 = 1
+    }
+    func F() int32 {
+        return X // PFuHides
+    }
 }
 `
     }
