@@ -160,6 +160,8 @@ internal sealed class RegionEffects {
         Writes = List[RegionWrite]()
         Calls = List[RegionCall]()
         Declared = List[string]()
+        BareReads = List[string]()
+        OperatorOperandNames = List[string]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -249,6 +251,25 @@ internal sealed class RegionEffects {
         set;
     }
 
+    /// Gets the names read in the region that no declaration of the region encloses (a bare name can bind to a
+    /// property getter of the enclosing type; the consumer resolves it at the entry scope, rule W5).
+    prop BareReads List[string] {
+        get;
+    }
+
+    /// Gets the names that are operands of an operator candidate (a binary or unary operator with no literal
+    /// operand), in order of first appearance.
+    prop OperatorOperandNames List[string] {
+        get;
+    }
+
+    /// Whether an operator candidate has an operand that is not a plain name or a literal (a user-defined operator
+    /// may be selected by its type, which the walker cannot see).
+    prop OperatorHasUnresolvedOperand bool {
+        get;
+        set;
+    }
+
     /// Gets the number of member and index reads in the region (rule W5).
     prop MemberReadCount int32 {
         get;
@@ -294,6 +315,17 @@ internal sealed class RegionEffects {
         ContainsOperatorCandidate = ContainsOperatorCandidate || other.ContainsOperatorCandidate
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
+        OperatorHasUnresolvedOperand = OperatorHasUnresolvedOperand || other.OperatorHasUnresolvedOperand
+        for name in other.OperatorOperandNames {
+            if !OperatorOperandNames.Contains(name) {
+                OperatorOperandNames.Add(name)
+            }
+        }
+        for name in other.BareReads {
+            if !BareReads.Contains(name) {
+                BareReads.Add(name)
+            }
+        }
     }
 
     /// A compact text of the record, for the report and for tests: the flags set, then the

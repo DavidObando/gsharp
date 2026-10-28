@@ -258,6 +258,12 @@ internal sealed class RegionEffectScanner {
             default { }
         }
         switch kind {
+            case SyntaxKind.NameExpression {
+                let read = cast[NameExpressionSyntax](node).IdentifierToken.ValueText
+                if Active() && !IsDeclared(read) && !current.BareReads.Contains(read) {
+                    current.BareReads.Add(read)
+                }
+            }
             case SyntaxKind.BlockStatement {
                 VisitBlock(cast[BlockStatementSyntax](node))
             }
@@ -458,6 +464,7 @@ internal sealed class RegionEffectScanner {
                     if Active() {
                         // An operator or a setter can run code.
                         current.ContainsOperatorCandidate = true
+                        current.OperatorHasUnresolvedOperand = true
                     }
                 }
                 VisitChildren(node)
@@ -485,6 +492,8 @@ internal sealed class RegionEffectScanner {
                 let binary = cast[BinaryExpressionSyntax](node)
                 if Active() && IsOperatorCandidate(binary) {
                     current.ContainsOperatorCandidate = true
+                    RecordOperatorOperand(binary.Left)
+                    RecordOperatorOperand(binary.Right)
                 }
                 VisitChildren(node)
             }
@@ -642,10 +651,18 @@ internal sealed class RegionEffectScanner {
     // reaches its storage (W3). The nested record stays as it was: it is cached and shared.
     private func Compose(record RegionEffects) {
         for write in record.Writes {
+            // A callable that an enclosing declaration names like the type takes call binding (probe d2).
+            let shadowed = write.Proof == RegionWriteProof.Construction &&
+                write.ConstructedTypeName != nil &&
+                IsDeclared(write.ConstructedTypeName)
             PlaceWrite(
                 write.Name,
                 write.Position,
-                write.Proof,
+                if shadowed {
+                    RegionWriteProof.None
+                } else {
+                    write.Proof
+                },
                 write.ConstructedTypeName,
                 write.RightSideName,
                 write.RightSideDeclaration,
@@ -824,6 +841,8 @@ internal sealed class RegionEffectScanner {
             RecordWrite(name.IdentifierToken.ValueText, name.IdentifierToken.Span.Start, nil)
             if Active() && !subscription.IsIncrementDecrement {
                 current.ContainsOperatorCandidate = true
+                RecordOperatorOperand(name)
+                RecordOperatorOperand(subscription.Value)
             }
         } else {
             // An event subscription, a compound member write or an increment of a member.
@@ -1004,6 +1023,7 @@ internal sealed class RegionEffectScanner {
         }
         if Active() && IsUnaryOperatorCandidate(unary) {
             current.ContainsOperatorCandidate = true
+            RecordOperatorOperand(unary.Operand)
         }
         Visit(unary.Operand)
     }
@@ -1068,6 +1088,26 @@ internal sealed class RegionEffectScanner {
             RecordUnnamedStorageWrite(operand)
             Visit(operand)
         }
+    }
+
+    // An operand of an operator candidate: a name is resolved by the consumer, a literal is ruled out, anything
+    // else may have a user-defined type.
+    private func RecordOperatorOperand(operand ExpressionSyntax?) {
+        var expression ExpressionSyntax? = operand
+        while expression is ParenthesizedExpressionSyntax parenthesized {
+            expression = parenthesized.Expression
+        }
+        if expression is LiteralExpressionSyntax {
+            return
+        }
+        if expression is NameExpressionSyntax name {
+            let text = name.IdentifierToken.ValueText
+            if !current.OperatorOperandNames.Contains(text) {
+                current.OperatorOperandNames.Add(text)
+            }
+            return
+        }
+        current.OperatorHasUnresolvedOperand = true
     }
 
     private func IsOperatorCandidate(binary BinaryExpressionSyntax) bool {

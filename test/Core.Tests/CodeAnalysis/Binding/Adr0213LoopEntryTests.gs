@@ -224,6 +224,60 @@ func Run(n int32) int32 {
     }
     return total
 }`, "GS0158 GS0130")
+            Add("bare-property-read-runs-a-getter (W5)", `package T
+import System
+var g string? = "safe"
+class H {
+    prop P int32 {
+        get {
+            g = nil
+            return 1
+        }
+    }
+    func Run() int32 {
+        var t = 0
+        if g != nil {
+            for var i = 0; i < 2; i++ {
+                let c string = g
+                if c == "x" { t = t + 100 }
+                t = t + P
+            }
+        }
+        return t
+    }
+}
+func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155")
+            Add("user-defined-operator-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class V { var N int32 = 1 }
+func (a V) operator +(b V) V {
+    g = nil
+    return V{}
+}
+func Run() int32 {
+    var t = 0
+    let a = V{}
+    if g != nil {
+        for var i = 0; i < 2; i++ {
+            let c string = g
+            let s = a + a
+            if c == "x" { t = t + 100 }
+            t = t + 1
+        }
+    }
+    return t
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0155")
+            Add("break-in-the-post-statement-leaves-the-loop (R7 f)", `package T
+import System
+func Run() int32 {
+    var s string? = nil
+    var i = 0
+    for ; s == nil; i = 1 + { break 0 } {
+    }
+    return s.Length
+}`, "GS0158")
             return rows
         }
     }

@@ -81,6 +81,19 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        /// Whether an operator of the region may be user-defined: an operand is not a plain name or a literal, or
+        /// a name that is an operand has a type that is not built in.
+        prop RunsUserOperator bool {
+            get;
+            set;
+        }
+
+        /// Whether a bare name that the region reads binds to a property of the enclosing type (rule W5).
+        prop ReadsProperty bool {
+            get;
+            set;
+        }
     }
 
     private func SameRoot(first VariableSymbol, second VariableSymbol) bool {
@@ -97,6 +110,25 @@ internal partial class StatementBinder {
 
     private func ResolveRegionWrites(effects RegionEffects) ResolvedRegionWrites {
         let resolved = ResolvedRegionWrites()
+        if effects.ContainsOperatorCandidate {
+            resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand
+            for name in effects.OperatorOperandNames {
+                // A declaration of the region is not found here, and its type is unknown: it counts.
+                if $scope.TryLookupSymbol(name) is VariableSymbol operand {
+                    let operandType = StripAllNullability(operand.Type)
+                    if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) {
+                        resolved.RunsUserOperator = true
+                    }
+                } else {
+                    resolved.RunsUserOperator = true
+                }
+            }
+        }
+        for name in effects.BareReads {
+            if $scope.TryLookupSymbol(name) is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
+                resolved.ReadsProperty = true
+            }
+        }
         for write in effects.Writes {
             if write.ViaCallArgument {
                 resolved.WritesViaCallArgument = true
@@ -317,8 +349,9 @@ internal partial class StatementBinder {
     }
 
     private func ConvertsImplicitly(from TypeSymbol, to TypeSymbol) bool {
-        let conversion = Conversion.Classify(from, to)
-        return conversion.Exists && conversion.IsImplicit
+        // A structural projection between unrelated classes makes a new object of the other type, so only a
+        // conversion that keeps the representation proves a type-test fact.
+        return Conversion.IsRepresentationPreservingImplicit(from, to)
     }
 
     /// The consumer rule of ADR-0213 section 7, steps (i) to (vii), for one fact.
@@ -334,9 +367,13 @@ internal partial class StatementBinder {
         if effects.ContainsUnknownKind {
             return RegionKillDecision(true, "W6", "-")
         }
-        let callLike = effects.ContainsCall || effects.ContainsSuspension || effects.ContainsIteration
+        // A user-defined operator is a call (ADR-0208 construct table).
+        let callLike = effects.ContainsCall ||
+            effects.ContainsSuspension ||
+            effects.ContainsIteration ||
+            resolved.RunsUserOperator
         // Rule W5: every member or index read is an unknown getter, which is a call.
-        let readLike = effects.ContainsMemberRead
+        let readLike = effects.ContainsMemberRead || resolved.ReadsProperty
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite
         let mayMutateMemberPaths = callLike || readLike || memberWrite
         var indirectCall = effects.ContainsIteration || effects.ContainsSuspension
@@ -669,7 +706,7 @@ internal partial class StatementBinder {
         if elseFacts == nil || elseFacts.Count == 0 {
             return
         }
-        let hasBreak = ContainsBreakFor(loopBody)
+        let hasBreak = ContainsBreakFor(loop)
         if NarrowingComparison.LoopsEnabled {
             for entry in elseFacts {
                 // The frames hold the state after the loop. A fact that they hold is not a gain.
@@ -689,24 +726,61 @@ internal partial class StatementBinder {
                 )
             }
         }
+        // The loop ends when the header is false, so the break of a block expression in the header or in the post
+        // statement also leaves it: the whole loop is scanned.
         if hasBreak || binderCtx.FunctionContainsUserGotoOrLabel {
             return
         }
-        let header = NewCollector(nil, externalCallableAliases)
-        header.VisitExpression(condition)
+        // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
+        // a getter, an operator, a write to the root, a write through `ref` or a filter of an enclosing try.
+        let headerSyntax = HeaderSyntax(loop)
+        if headerSyntax == nil {
+            return
+        }
+        let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
+        let resolved = ResolveRegionWrites(headerEffects)
+        let filters = CollectCatchFiltersAbove(loop)
+        var filterNames HashSet[string]? = nil
+        if filters.Count > 0 {
+            filterNames = CollectEnclosingFilterNames(filters)
+        }
         let facts = Dictionary[AccessPath, TypeSymbol]()
         for entry in elseFacts {
             let path = entry.Key
-            let removed = header.AssignsRoot(path.Root) ||
-                MayBeMutatedByUnknownWrite(header, path) ||
-                (header.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
-                DropsOnMemberMutation(path, header)
+            var removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, nil).Killed
+            if !removed &&
+                filterNames != nil &&
+                (headerEffects.ContainsCall || headerEffects.ContainsMemberRead || resolved.ReadsProperty) &&
+                (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path)) {
+                removed = true
+            }
             if !removed {
                 facts[path] = entry.Value
             }
         }
         if facts.Count > 0 {
             loopExitFacts[loop] = facts
+        }
+    }
+
+    // The condition of a loop statement, or `nil`.
+    private func HeaderSyntax(loop SyntaxNode) SyntaxNode? {
+        switch loop.Kind {
+            case SyntaxKind.WhileStatement {
+                return cast[WhileStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForConditionStatement {
+                return cast[ForConditionStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForClauseStatement {
+                return cast[ForClauseStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.DoWhileStatement {
+                return cast[DoWhileStatementSyntax](loop).Condition
+            }
+            default {
+                return nil
+            }
         }
     }
 

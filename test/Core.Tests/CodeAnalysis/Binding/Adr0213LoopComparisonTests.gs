@@ -446,7 +446,8 @@ func Run(sb StringBuilder, n int32) int32 {
     var total = 0
     for var i = 0; i < n; i++ {
         let len = sb.Length
-        total = total + x.Value + len
+        total = x.Value
+        total = len
     }
     clear()
     return total
@@ -476,10 +477,10 @@ func Run(n int32) int32 {
     if x == nil { return 0 }
     var total = 0
     for var i = 0; i < n; i++ {
-        total = total + x.Value
+        total = x.Value
         if b is Derived {
             let c = b.Count
-            total = total + c
+            total = c
         }
     }
     return total
