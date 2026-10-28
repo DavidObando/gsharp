@@ -440,6 +440,20 @@ class Program {
         private const Contract string = `#nullable enable
 using System;
 namespace Admission5262 {
+    public interface IWriteOnly { int Value { set; } }
+    public interface IStatic { static int Value => 9; }
+    public interface IReadable<T> { T Value { get; } }
+    public class Both : IWriteOnly, IStatic, IReadable<int> {
+        int stored = 2;
+        public int Reads, Writes;
+        public int Value {
+            get { Reads++; Console.Write("G"); return stored; }
+            set { Writes++; stored = value; Console.Write("S" + value); }
+        }
+    }
+    public static class Bridge {
+        public static int Read(IReadable<int> item) => item.Value;
+    }
     public interface IEmpty {}
     public interface IInitValue { int Value { get; init; } }
     public class InitStore : IInitValue {
@@ -606,7 +620,7 @@ namespace Admission5262 {
             Assert.Equal(Encoding.UTF8.GetBytes(expected), result.Output)
         }
 
-        private func Check(source string, oracle string, consumer string, expected string) {
+        internal func Check(source string, oracle string, consumer string, expected string) {
             WithDirectory(
                 func (directory string, references[]string) {
                     let contract = Path.Combine(directory, "Contract.dll")
@@ -680,7 +694,15 @@ namespace Admission5262 {
                             Assert.Equal("Admission5262", reader.GetString(declaring.Namespace))
                             Assert.Contains(
                                 reader.GetString(declaring.Name),
-                                []string{"IValue", "IValue`1", "IOptional`1", "IOblivious", "IRestricted", "InitStore"}
+                                []string{
+                                    "IValue",
+                                    "IValue`1",
+                                    "IOptional`1",
+                                    "IOblivious",
+                                    "IRestricted",
+                                    "InitStore",
+                                    "IWriteOnly"
+                                }
                             )
                             metadata.Add(
                                 reader.GetString(declaring.Name) + ":" + Convert.ToHexString(
@@ -713,19 +735,24 @@ namespace Admission5262 {
             )
         }
 
-        private func Reject(source string, diagnostic string, span string) {
+        private func Reject(source string, diagnostic string, span string) ->
+        Reject(source, []string{diagnostic}, []string{span})
+
+        internal func Reject(source string, diagnostics[]string, spans[]string) {
             WithDirectory(
                 func (directory string, references[]string) {
                     let compiled = Compile(directory, source, references)
                     let text = Encoding.UTF8.GetString(compiled.Output) + compiled.Error
                     Assert.Equal(1, compiled.Code)
                     let errors = Regex.Matches(text, `Library\.gs\(([^)]+)\): error (GS\d+):`)
-                    let error = Assert.Single(errors.Cast[Match]())
-                    Assert.Equal(diagnostic, error.Groups[2].Value)
-                    let coordinates = span.Split(',')
-                    coordinates[0] = (int32.Parse(coordinates[0]) + 2).ToString()
-                    coordinates[2] = (int32.Parse(coordinates[2]) + 2).ToString()
-                    Assert.Equal(string.Join(",", coordinates), error.Groups[1].Value)
+                    Assert.Equal(diagnostics.Length, errors.Count)
+                    for var i = 0; i < diagnostics.Length; i++ {
+                        Assert.Equal(diagnostics[i], errors[i].Groups[2].Value)
+                        let coordinates = spans[i].Split(',')
+                        coordinates[0] = (int32.Parse(coordinates[0]) + 2).ToString()
+                        coordinates[2] = (int32.Parse(coordinates[2]) + 2).ToString()
+                        Assert.Equal(string.Join(",", coordinates), errors[i].Groups[1].Value)
+                    }
                     for extension in[]string{".dll", ".ref.dll", ".pdb"} {
                         Assert.False(File.Exists(Path.Combine(directory, "Library" + extension)), text)
                     }
