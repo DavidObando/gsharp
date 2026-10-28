@@ -405,6 +405,29 @@ internal class MemberLookup {
         return result
     }
 
+    /// Enumerates every visible `static [Extension]` method of the imported extension-holding classes,
+    /// for the semantic model's member query (ADR-0212 question 12). Holders keep reference-set order and
+    /// the methods of a holder follow metadata order, so the answer does not depend on hash order.
+    /// @returns The visible extension methods, each once.
+    func CollectAllImportedExtensionMethods() List[MethodInfo] {
+        let result = List[MethodInfo]()
+        for type in this.GetImportedExtensionClasses() {
+            let metadata = importedExtensionIndexes.GetValue(type, BuildImportedExtensionIndex)
+            let seen = HashSet[MethodInfo]()
+            let methods = List[MethodInfo]()
+            for entry in metadata.Methods {
+                for method in entry.Value {
+                    if IsVisibleImportedMethod(method) && method.GetParameters().Length > 0 && seen.Add(method) {
+                        methods.Add(method)
+                    }
+                }
+            }
+            methods.Sort((left MethodInfo, right MethodInfo) -> left.MetadataToken.CompareTo(right.MetadataToken))
+            result.AddRange(methods)
+        }
+        return result
+    }
+
     /// A type declared in a namespace, with its position in the reference
     /// set's assembly and metadata order.
     private data class HolderCandidate(Candidate Type, Ordinal int32) { }

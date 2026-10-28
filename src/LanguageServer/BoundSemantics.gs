@@ -107,6 +107,18 @@ shared class BoundSemantics {
         default: false
     }
 
+    /// Tells whether [`symbol`](paramref) is an extension: an extension function declared in source, or an
+    /// imported static method marked with the extension attribute. An extension is called on a value, so it
+    /// is an instance member for completion and for the choice of a member by receiver kind.
+    func IsExtensionMember(symbol Symbol?) bool -> switch symbol {
+        case function is ImportedFunctionSymbol: function.Method.IsDefined(
+            typeof(System.Runtime.CompilerServices.ExtensionAttribute),
+            false
+        )
+        case function is FunctionSymbol: function.IsExtension
+        default: false
+    }
+
     /// Gets the reflected member behind an imported member symbol, for documentation and for
     /// cross-assembly definitions, until imported symbols carry handles (ADR-0209 stage 6).
     func GetMemberInfo(symbol Symbol?) MemberInfo? -> switch symbol {

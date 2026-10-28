@@ -291,8 +291,13 @@ open class Adr0212MemberQueryTests {
             ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32, TypeSymbol.String),
             ImmutableArray.Create[string?]("left", "right")
         )
-        let names = model.LookupMembers(Position("PLookup"), pair).Select((s Symbol) -> s.Name).ToList()
-        Assert.Equal([]string{"left", "Item1", "right", "Item2"}, names)
+        // `System.TupleExtensions.ToTuple` follows as an imported extension (ADR-0212 question 12).
+        let members = model.LookupMembers(Position("PLookup"), pair)
+        Assert.Equal(
+            []string{"left", "Item1", "right", "Item2"},
+            members.OfType[FieldSymbol]().Select((s Symbol) -> s.Name).ToList()
+        )
+        Assert.DoesNotContain(members.Take(4), (s Symbol) -> s is ImportedFunctionSymbol)
     }
 
     @Fact

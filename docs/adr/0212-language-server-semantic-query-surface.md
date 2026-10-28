@@ -394,8 +394,10 @@ class SemanticModel {
   the compilation's assembly name): source members through `TypeMemberModel`,
   imported members through `MemberLookup` with their types read through the
   ADR-0193 readers, inherited members included. The first implementation
-  reproduces today's `TryComputeMemberCompletions` item set; extension
-  members in scope are a follow-up (open question Q12).
+  reproduces today's `TryComputeMemberCompletions` item set. Extension
+  members in scope follow the type's own members (question 12, resolved in
+  #5440): source extension functions by file path then start, then imported
+  extension methods by holder class then metadata token.
 - `GetMemberGroup(node)` returns the candidates a call or member-access name
   resolved among, in declaration order; signature help and the hover overload
   count consume it.
@@ -617,6 +619,12 @@ removing the cache-taking `BindProgram` overloads and `TryInferExpressionType`).
 12. **Extension members in `LookupMembers`.** Today's member completion does
     not list them; adding them is a feature, not preservation.
     **Recommendation: not in S4; a follow-up issue once `LookupMembers` exists.**
+    **Resolved (#5440):** `LookupMembers` appends them after the type's own
+    members. Applicability is the binder's: the scope's extension lookup for
+    source functions, the file's imports with
+    `ClrOverloadResolution.MayAcceptExtensionReceiver` for imported methods.
+    `GetMemberGroup` for a call through an extension stays outside the
+    contract.
 13. **Freezing `Compilation` options after the first query.** Today every
     option is a public setter; a host that sets `Nullability` after reading
     `GlobalScope` gets inconsistent results. **Recommendation: not in this

@@ -4228,7 +4228,7 @@ internal partial class ExpressionBinder {
         /// @param userClass The user-declared class receiver or argument.
         /// @param clrInterface The projected CLR interface type, on success.
         /// @returns `true` when an implemented CLR interface was found.
-        private func TryProjectUserClassReceiverInterface(
+        internal func TryProjectUserClassReceiverInterface(
             userClass StructSymbol,
             @NotNullWhen(true) out clrInterface Type?
         ) bool {

@@ -29,6 +29,7 @@ open class Adr0212MemberConformanceTests {
     func MemberQueries_AgreeWithTheBinder_OnTheSamples() {
         let mismatches = List[string]()
         var compared = 0
+        ExtensionsCompared = 0
         for file in Directory.GetFiles(Path.Combine(RepositoryRoot(), "samples"), "*.gs").OrderBy(
             (f string) -> f,
             StringComparer.Ordinal
@@ -37,12 +38,14 @@ open class Adr0212MemberConformanceTests {
             compared += CompareCompilation(Recording(Compilation(tree)), mismatches)
         }
         Assert.True(compared > 500, "compared ${compared} members")
+        Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
         AssertNoMismatches(mismatches)
     }
 
     @Fact
     func MemberQueries_AgreeWithTheBinder_OnTheLanguageServerSources() {
         let mismatches = List[string]()
+        ExtensionsCompared = 0
         let directory = Path.Combine(RepositoryRoot(), "src", "LanguageServer")
         let trees = Directory
             .GetFiles(directory, "*.gs")
@@ -51,10 +54,13 @@ open class Adr0212MemberConformanceTests {
             .ToArray()
         let compared = CompareCompilation(Recording(Compilation(trees)), mismatches)
         Assert.True(compared > 1000, "compared ${compared} members")
+        Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
         AssertNoMismatches(mismatches)
     }
 
     shared {
+        private var ExtensionsCompared int32 = 0
+
         private func Recording(compilation Compilation) Compilation {
             compilation.RecordMemberGroups = true
             return compilation
@@ -162,6 +168,9 @@ open class Adr0212MemberConformanceTests {
             if KnownGap(bound, receiverType) {
                 return 0
             }
+            if IsExtension(bound) {
+                ExtensionsCompared++
+            }
             let members = model.LookupMembers(token.Span.Start, receiverType, token.ValueText)
             let category = "member " + bound.GetType().Name + " of " + receiverType.GetType().Name
             if members.IsDefaultOrEmpty {
@@ -172,7 +181,8 @@ open class Adr0212MemberConformanceTests {
             return 1
         }
 
-        /// An extension function or method is not a member of its receiver type (ADR-0212 question 12).
+        /// A call through an extension is not in the member-group contract (the group holds the candidates of a
+        /// direct call); the members query holds the extension (ADR-0212 question 12).
         private func IsExtension(called Symbol) bool -> switch called {
             case function is ImportedFunctionSymbol: function.Method.IsDefined(
                 typeof(System.Runtime.CompilerServices.ExtensionAttribute),
@@ -188,9 +198,6 @@ open class Adr0212MemberConformanceTests {
         /// - A default method of an interface, called on the class that implements it.
         /// - The built-in members of the slice, array, map, channel and sequence types.
         private func KnownGap(bound Symbol, receiverType TypeSymbol) bool {
-            if IsExtension(bound) {
-                return true
-            }
             if receiverType is SliceTypeSymbol or
                 ArrayTypeSymbol or
                 MapTypeSymbol or

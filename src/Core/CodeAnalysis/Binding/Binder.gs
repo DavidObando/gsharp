@@ -9341,6 +9341,98 @@ partial class Binder {
             }
         }
 
+        /// Collects the extension functions and extension methods in scope at a file that a member access on
+        /// [`receiverType`](paramref) could name (ADR-0212 question 12). Source extensions go through the
+        /// scope's own lookup and imported ones through the import-aware holder index and
+        /// `ClrOverloadResolution.MayAcceptExtensionReceiver`, the rules a call applies. Nothing is bound.
+        /// @param globalScope The bound global scope of the compilation.
+        /// @param references The reference resolver supplying imported types.
+        /// @param containingFunction The function enclosing the position, or `null`.
+        /// @param receiverType The receiver type, without nullability wrappers.
+        /// @param name When given, only extensions of this name.
+        /// @param referencingTree The tree (file) whose imports apply.
+        /// @returns The source extension functions and the imported extension methods, or empty arrays when the
+        /// lookup fails.
+        internal func CollectExtensionMembers(
+            globalScope BoundGlobalScope?,
+            references ReferenceResolver,
+            containingFunction FunctionSymbol?,
+            receiverType TypeSymbol,
+            name string?,
+            referencingTree SyntaxTree
+        )(Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo]) {
+            if globalScope == nil {
+                return (ImmutableArray[FunctionSymbol].Empty, ImmutableArray[MethodInfo].Empty)
+            }
+            try {
+                let parentScope = CreateParentScope(
+                    globalScope,
+                    references,
+                    globalScope.PreprocessorSymbols,
+                    preserveLatestImportSyntaxTrees: true
+                )
+                let binder = Binder(parentScope, containingFunction)
+                let previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name)
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
+                try {
+                    let source = if name == nil {
+                        binder.$scope.TryLookupAllExtensionFunctions(receiverType)
+                    } else {
+                        binder.$scope.TryLookupExtensionFunctions(receiverType, name)
+                    }
+                    let imported = ImmutableArray.CreateBuilder[MethodInfo]()
+                    let probe = ImportedExtensionProbeReceiver(receiverType)
+                    if probe != nil {
+                        let candidates = if name == nil {
+                            binder.memberLookup.CollectAllImportedExtensionMethods()
+                        } else {
+                            binder.memberLookup.CollectImportedExtensionMethods(name)
+                        }
+                        for candidate in candidates {
+                            // Whether a generic candidate's constraints hold is found by closing it, and a
+                            // closing that the runtime rejects (a `MemoryExtensions` overload over a
+                            // string, say) means the candidate does not apply. One such candidate must not
+                            // drop the others.
+                            try {
+                                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, probe, nil, nil) {
+                                    imported.Add(candidate)
+                                }
+                            } catch (ex Exception) when !(ex is OutOfMemoryException) {
+                                continue
+                            }
+                        }
+                    }
+                    return (source, imported.ToImmutable())
+                } finally {
+                    parentScope.SetCurrentDeclaringPackage(previousPackage)
+                    parentScope.SetCurrentReferencingSyntaxTree(previousTree)
+                }
+            } catch (Exception) {
+                // The query must never throw into the editor pipeline.
+                return (ImmutableArray[FunctionSymbol].Empty, ImmutableArray[MethodInfo].Empty)
+            }
+        }
+
+        // A receiver without a CLR shape of its own is probed through the shape a call projects it to: a
+        // declared class through its implemented interface, anything else through its erased CLR type.
+        private func ImportedExtensionProbeReceiver(receiverType TypeSymbol) TypeSymbol? {
+            if receiverType.ClrType != nil && !TypeSymbol.ContainsSameCompilationUserType(receiverType) {
+                return receiverType
+            }
+            var projected Type? = nil
+            if receiverType is StructSymbol{IsClass: true} userClass &&
+                ExpressionBinder.TryProjectUserClassReceiverInterface(userClass, out var implemented) {
+                projected = implemented
+            } else if !MemberLookup.TryProjectErasedClrType(receiverType, out projected) {
+                return default(TypeSymbol?)
+            }
+            return if projected == nil {
+                default(TypeSymbol?)
+            } else {
+                ImportedTypeSymbol.GetWithoutNullability(projected, NullabilityFreeReason.TypeStructure)
+            }
+        }
+
         internal func IsUnsupportedRichBaseArgument(
             initializer BaseConstructorInitializer,
             argumentIndex int32,

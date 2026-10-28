@@ -93,8 +93,12 @@ internal shared class MemberTokenResolver {
             if chosen != nil {
                 member = chosen
                 overloadCount = if chosen is FunctionSymbol or ImportedFunctionSymbol {
+                    // The extensions of the same name are other methods, counted with an extension only.
                     candidates.Count(
-                        (c Symbol) -> c is FunctionSymbol or ImportedFunctionSymbol && IsStatic(c) == IsStatic(chosen)
+                        (c Symbol) -> c is FunctionSymbol or
+                            ImportedFunctionSymbol &&
+                            IsStatic(c) == IsStatic(chosen) &&
+                            BoundSemantics.IsExtensionMember(c) == BoundSemantics.IsExtensionMember(chosen)
                     )
                 } else {
                     1
@@ -130,7 +134,7 @@ internal shared class MemberTokenResolver {
         case field is FieldSymbol: field.IsStatic
         case property is PropertySymbol: property.IsStatic
         case clrEvent is EventSymbol: clrEvent.IsStatic
-        case function is ImportedFunctionSymbol: function.Method.IsStatic
+        case function is ImportedFunctionSymbol: function.Method.IsStatic && !BoundSemantics.IsExtensionMember(function)
         case function is FunctionSymbol: function.IsStatic || function.StaticOwnerType != nil
         case EnumMemberSymbol _: true
         default: false
@@ -147,7 +151,11 @@ internal shared class MemberTokenResolver {
             candidates.Where((c Symbol) -> c.ContainingType == nil || object.ReferenceEquals(c.ContainingType, nearest))
                 .ToImmutableArray()
         }
-        let usable = ofNearest.Where((c Symbol) -> !BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers)
+        // An extension is called on a value, never on the type name.
+        let usable = ofNearest.Where(
+            (c Symbol) -> (!BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers) &&
+                !(staticMembers && BoundSemantics.IsExtensionMember(c))
+        )
             .ToList()
         let preferred = usable.Where((c Symbol) -> IsStatic(c) == staticMembers).ToList()
         let pool = if preferred.Count > 0 {
