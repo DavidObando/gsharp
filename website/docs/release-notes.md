@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Long named tuples retain CLR metadata padding** (issue #5390). Exports now include unnamed positions for each synthesized `Rest` node. C# consumers can read eight-element tuple returns. Imported names after long tuples retain their positions.
+
 - **Global scopes are no longer chained; `BoundGlobalScope.GetCumulativeImports` is removed** (issue #5312, ADR-0212 slice S8, step 1). No caller passed a non-nil `previous`, and the REPL chains through emitted metadata. `Binder.BindGlobalScope` and the `BoundGlobalScope` constructors keep the `previous` parameter and now throw `ArgumentException` for a non-nil value. `BoundGlobalScope.Imports` is the whole import list of the compilation, so use it where `GetCumulativeImports()` was called. The body-binding passes no longer walk a chain. No change to `gsc` output.
 
 - **cs2gs preserves included sibling projects** (issue #5495). Excluding one project no longer hides an included sibling's generated project from repository inventory validation. Missing included projects and unexpected output still fail validation.
