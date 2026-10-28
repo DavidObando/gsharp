@@ -25,7 +25,7 @@ partial class SemanticModel {
     /// inside `if p != nil` with `p Point?` sees the declared `Point?`. Use
     /// (cref:GetReceiverTypeInfo) for the flow type of an expression the binder bound.
     /// @param position A character offset into this model's tree.
-    /// @param expression The expression to bind; its tree supplies the imports.
+    /// @param expression The expression to bind; this model's tree supplies the imports, also for an expression parsed on its own.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The type; (cref:TypeInfo.Type) is null when the bind fails or the type is an error or `void`.
     func GetSpeculativeTypeInfo(
@@ -42,8 +42,11 @@ partial class SemanticModel {
         let locals = List[VariableSymbol](LookupSymbols(position, nil, cancellationToken).OfType[VariableSymbol]())
         if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol enclosing {
             function = enclosing
+            // The scope query leaves `this` out where the receiver does not exist yet, as in the
+            // arguments of a constructor's `: base(...)`. There the binder gets no function, so it
+            // seeds neither the receiver nor the instance members, as normal binding does not.
             if enclosing.ThisParameter != nil && !locals.Contains(enclosing.ThisParameter) {
-                locals.Add(enclosing.ThisParameter)
+                function = nil
             }
         }
         using let nullabilityScope = NullabilityOptions.Enter(compilation.Nullability, compilation.PlatformNilChecks)
@@ -52,7 +55,8 @@ partial class SemanticModel {
             compilation.References ?? ReferenceResolver.Default(),
             function,
             locals,
-            expression
+            expression,
+            syntaxTree
         )
         return TypeInfo(type)
     }

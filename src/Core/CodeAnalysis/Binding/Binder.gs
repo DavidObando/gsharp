@@ -9276,13 +9276,16 @@ partial class Binder {
         /// @param containingFunction The function enclosing the expression, or `null` for top-level statements.
         /// @param additionalLocals In-scope locals/parameters to declare before binding, or `null`.
         /// @param expression The expression to read a type for.
+        /// @param referencingTree The tree (file) the expression stands in; its imports apply. An expression
+        /// parsed on its own would otherwise look up names through its own, import-less tree.
         /// @returns The non-error, non-void type, or `null` when binding fails.
         internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
             references ReferenceResolver,
             containingFunction FunctionSymbol?,
             additionalLocals IEnumerable[VariableSymbol]?,
-            expression ExpressionSyntax?
+            expression ExpressionSyntax?,
+            referencingTree SyntaxTree
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9296,7 +9299,7 @@ partial class Binder {
                 )
                 let binder = Binder(parentScope, containingFunction)
                 let previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name)
-                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(expression.SyntaxTree)
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
                 try {
                     if additionalLocals != nil {
                         // The locals go in a child scope, as a body's block scope is a child of the

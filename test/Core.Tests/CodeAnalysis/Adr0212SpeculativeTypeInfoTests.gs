@@ -28,6 +28,8 @@ import Xunit
 /// | local declared after `position` | not in scope: no type | `LocalDeclaredAfterPosition_IsNotInScope` |
 /// | receiver inside a method | `this` and the members resolve | `MethodBody_SeesThisAndMembers` |
 /// | no enclosing declared function | the globals resolve | `TopLevel_SeesGlobals` |
+/// | arguments of a constructor's `: base(...)` | no instance access, as in normal binding | `ConstructorBaseArguments_RejectInstanceAccess_BodyAcceptsIt` |
+/// | expression parsed on its own | the model's tree supplies the imports | `DetachedExpression_UsesTheModelsImports` |
 /// | narrowing in force at `position` (Q15) | excluded: the declared type | `FlowNarrowing_IsExcluded_FromTheContract` |
 /// | bind fails, `void` or error type | `TypeInfo.None` | `FailedBind_AnswersNone`, `VoidCall_AnswersNone` |
 /// | diagnostics | none escape | `NoDiagnosticEscapes` |
@@ -116,6 +118,27 @@ open class Adr0212SpeculativeTypeInfoTests {
         for use in uses {
             Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(use.Span.Start, use).Type)
         }
+    }
+
+    // The scope query leaves `this` out of the arguments of `: base(...)`; the speculative bind must not
+    // accept instance access there, while the constructor body keeps it.
+    @Fact
+    func ConstructorBaseArguments_RejectInstanceAccess_BodyAcceptsIt() {
+        let (model, tree) = Create(Program)
+        let inArguments = Expression(tree, "Field2", "BaseArg")
+        Assert.Null(model.GetSpeculativeTypeInfo(inArguments.Span.Start, inArguments).Type)
+        let inBody = Expression(tree, "Field2 + 1", "CtorBody")
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(inBody.Span.Start, inBody).Type)
+    }
+
+    // An expression parsed on its own has no imports; the model's tree supplies them.
+    @Fact
+    func DetachedExpression_UsesTheModelsImports() {
+        let (model, tree) = Create(Program)
+        let detachedTree = SyntaxTree.Parse(SourceText.From("func f() {\n    Path.GetTempPath()\n}\n", "detached.gs"))
+        let detached = detachedTree.Root.DescendantNodes().OfType[ExpressionStatementSyntax]().Single().Expression
+        let anchor = Expression(tree, "s.Length", "InLocal")
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(anchor.Span.Start, detached).Type)
     }
 
     @Fact
@@ -250,6 +273,19 @@ class Holder {
     func M() {
         // InMethod
         Count + 1
+    }
+}
+open class Base2 {
+    var Field2 int32
+    init(v int32) { }
+}
+class Derived2 : Base2 {
+    init(n int32) : base(
+        // BaseArg
+        Field2
+    ) {
+        // CtorBody
+        Field2 + 1
     }
 }
 // TopLevel
