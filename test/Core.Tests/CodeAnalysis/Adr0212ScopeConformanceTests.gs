@@ -335,6 +335,19 @@ open class Adr0212ScopeConformanceTests {
     }
 
     @Fact
+    func NestedPartialType_InterleavedParts_AreEachTheirOwnMergedType() {
+        let text = "class Outer {\n partial class A { }\n partial class B { }\n partial class B { /* b */ }\n partial class A { func F() { } /* a */ }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "interleaved.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("B", model.GetEnclosingSymbol(text.IndexOf("/* b */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("A", model.GetEnclosingSymbol(text.IndexOf("/* a */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal(
+            "Outer",
+            model.GetEnclosingSymbol(text.IndexOf("partial class B { }", StringComparison.Ordinal) - 2)!!.Name
+        )
+    }
+
+    @Fact
     func Globals_AreListedInSourceOrderAcrossKinds() {
         let text = "var first = 1\nfunc second() int32 { return 1 }\nenum Third { A }\nvar fourth = 2\n"
         let tree = SyntaxTree.Parse(SourceText.From(text, "order.gs"))

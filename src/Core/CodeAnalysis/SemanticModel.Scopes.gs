@@ -610,14 +610,18 @@ partial class SemanticModel {
                 if span.Length == 0 {
                     continue
                 }
-                if span.Start <= position && position < span.End {
-                    next = child
-                    break
+                let extents = PartialPartExtentsInTree(child)
+                if extents.Count > 0 {
+                    // The merged node's span runs from its first part to its last member, so it also
+                    // covers the types declared between its parts: the extents of the parts are
+                    // authoritative (#5455).
+                    if extents.Any((extent TextSpan) -> extent.Start <= position && position < extent.End) {
+                        next = child
+                        break
+                    }
+                    continue
                 }
-                // The binder merges the parts of a nested partial type into one node that spans only
-                // the first part, so a position in another part (an empty one has no member to lead
-                // to it) belongs to the merged type through the part extents it kept (#5455).
-                if InPartialPartExtent(child, position) {
+                if span.Start <= position && position < span.End {
                     next = child
                     break
                 }
@@ -633,7 +637,9 @@ partial class SemanticModel {
         }
     }
 
-    private func InPartialPartExtent(node SyntaxNode, position int32) bool {
+    /// The extents of the parts of a merged partial type that lie in this tree; empty for any other node.
+    private func PartialPartExtentsInTree(node SyntaxNode) List[TextSpan] {
+        let result = List[TextSpan]()
         let extents = if node is StructDeclarationSyntax structDeclaration {
             structDeclaration.PartialPartExtents
         } else if node is InterfaceDeclarationSyntax interfaceDeclaration {
@@ -642,26 +648,18 @@ partial class SemanticModel {
             ImmutableArray[TextLocation].Empty
         }
         if extents.IsDefaultOrEmpty {
-            return false
+            return result
         }
         for extent in extents {
             // An unnamed tree has no path to compare: its text identifies it.
-            if (
-                object.ReferenceEquals(extent.Text, syntaxTree.Text) || SourcePathIdentity.AreSame(
-                    extent.FileName,
-                    syntaxTree.Text?.FileName
-                )
-            ) &&
-                extent
-                .Span
-                .Start <= position &&
-                position < extent
-                .Span
-                .End {
-                return true
+            if object.ReferenceEquals(extent.Text, syntaxTree.Text) || SourcePathIdentity.AreSame(
+                extent.FileName,
+                syntaxTree.Text?.FileName
+            ) {
+                result.Add(extent.Span)
             }
         }
-        return false
+        return result
     }
 
     private func Depth(node SyntaxNode) int32 {
