@@ -31,6 +31,11 @@ GSharp has one execution backend. The emit pipeline produces managed PEs — wri
 | Compiler driver | `gsc` (`src/Compiler`) | Parse command-line args (`/out`, `/r`, `/target`, `/targetframework`, response files), produce the PE, and write `<name>.runtimeconfig.json` for executable outputs. |
 | MSBuild SDK | `Gsharp.NET.Sdk` | Wire `CoreCompile` into `Microsoft.NET.Sdk` so `.gsproj` files participate in the standard build pipeline. The SDK's task DLL is `netstandard2.0`; the compiler payload is `net10.0` invoked as `dotnet gsc.dll`. |
 
+Field planning reserves each aggregate field's token before any method body is emitted.
+Early interface bodies can therefore reference fields on later types without changing metadata order.
+Reserved tokens stay separate from emitted fields so backing-field emission still identifies duplicate storage.
+Generic field references retain their constructed `TypeSpec` owner (ADR-0087).
+
 ## Side-effect spilling
 
 The general `SideEffectSpiller` lowering pass (`src/Core/CodeAnalysis/Lowering/SideEffectSpiller.gs`) runs after interpolated-string lowering and before the async / iterator state-machine rewriters. For each bound-tree context that the emit pipeline historically re-evaluated more than once — currently `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundPropertyAssignmentExpression`, and `BoundClrPropertyAssignmentExpression` — it spills every side-effecting sub-expression (per `SideEffectAnalyzer.HasObservableSideEffect`) into a fresh local inside a `BoundBlockExpression` wrapper, then substitutes a variable read for the original sub-expression. The emit phase therefore sees only `BoundVariableExpression` reads in the duplicating positions, eliminating an entire class of bugs (issue #452 — covers P0-1, P1-1, P1-2, P1-12). Expressions classified as pure (literals, variable reads, conversions of pure operands, pure binary / unary, field / tuple access of pure receivers, `len`/`cap` of pure operands) are left untouched; everything else is conservatively spilled.

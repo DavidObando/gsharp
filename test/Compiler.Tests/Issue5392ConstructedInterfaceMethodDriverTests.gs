@@ -3,6 +3,7 @@ package GSharp.Compiler.Tests
 import GSharp.Compiler
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Text
@@ -143,18 +144,38 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
     }
 
     shared {
-        private func CompileVerifyAndRun(source string, expected string) {
+        internal func CompileVerifyAndRun(
+            source string,
+            expected string,
+            issue string = "5392",
+            reference string? = nil,
+            runtimeReference string? = nil
+        ) {
             var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
             while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
                 root = root.Parent
             }
             Assert.NotNull(root)
-            let directory = Path.Combine(root!!.FullName, "out", "5392", "tests", Guid.NewGuid().ToString("N"))
+            let directory = Path.Combine(root!!.FullName, "out", issue, "tests", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {
                 let sourcePath = Path.Combine(directory, "Program.gs")
                 let assemblyPath = Path.Combine(directory, "Program.dll")
                 File.WriteAllText(sourcePath, source)
+                let arguments = List[string]{
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    "/deterministic+",
+                    "/debug:none",
+                    "/out:" + assemblyPath,
+                    sourcePath
+                }
+                if reference != nil {
+                    arguments.Add("/reference:" + reference)
+                }
+                if runtimeReference != nil {
+                    File.Copy(runtimeReference, Path.Combine(directory, Path.GetFileName(runtimeReference)))
+                }
                 using let stdout = StringWriter()
                 using let stderr = StringWriter()
                 let originalOut = Console.Out
@@ -163,23 +184,21 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
                 try {
                     Console.SetOut(stdout)
                     Console.SetError(stderr)
-                    code = Program.Main(
-                        []string{
-                            "/target:exe",
-                            "/targetframework:net10.0",
-                            "/deterministic+",
-                            "/debug:none",
-                            "/out:" + assemblyPath,
-                            sourcePath
-                        }
-                    )
+                    code = Program.Main(arguments.ToArray())
                 } finally {
                     Console.SetOut(originalOut)
                     Console.SetError(originalError)
                 }
                 Assert.True(code == 0, stdout.ToString() + stderr.ToString())
                 Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
-                IlVerifier.Verify(assemblyPath)
+                IlVerifier.Verify(
+                    assemblyPath,
+                    additionalReferences: if runtimeReference != nil {
+                        []string{runtimeReference}
+                    } else {
+                        []string{}
+                    }
+                )
                 let start = ProcessStartInfo("dotnet"){
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
@@ -191,12 +210,21 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
                 let error = process.StandardError.ReadToEndAsync()
                 using let output = MemoryStream()
                 let read = process.StandardOutput.BaseStream.CopyToAsync(output)
-                if !process.WaitForExit(30_000) {
-                    process.Kill(entireProcessTree: true)
+                var exited bool
+                try {
+                    exited = process.WaitForExit(30_000)
+                } finally {
+                    if !process.HasExited {
+                        process.Kill(entireProcessTree: true)
+                    }
                     process.WaitForExit()
-                    Assert.Fail("constructed interface consumer timed out")
+                    try {
+                        read.GetAwaiter().GetResult()
+                    } finally {
+                        error.GetAwaiter().GetResult()
+                    }
                 }
-                read.GetAwaiter().GetResult()
+                Assert.True(exited, "interface consumer timed out")
                 let errorText = error.GetAwaiter().GetResult()
                 Assert.True(process.ExitCode == 0, errorText)
                 Assert.Equal("", errorText)
