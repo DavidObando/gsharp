@@ -388,6 +388,7 @@ open class ProjectState {
             created.AssemblyName = assemblyName
         }
         created.IncrementalBodyReuse = incrementalBodyReuse
+        created.RecordMemberGroups = true
         return created
     }
 

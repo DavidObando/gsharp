@@ -106,7 +106,7 @@ shared class CodeActionComputer {
         // global-scope errors that could plausibly host a nullability fix:
         // requesting code-actions on a clean file is a common no-op flow
         // (hover / format / right-click in an editor) and must stay cheap.
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let requestSpan = RangeToSpan(content, $range)
         for diag in EnumerateRelevantDiagnostics(compilation, content.SyntaxTree, ct) {
             ct.ThrowIfCancellationRequested()

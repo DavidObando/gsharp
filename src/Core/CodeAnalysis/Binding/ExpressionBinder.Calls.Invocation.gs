@@ -1416,6 +1416,23 @@ internal partial class ExpressionBinder {
         receiverSyntax ExpressionSyntax? = nil,
         receiverStart int32? = nil
     ) BoundExpression {
+        let frame = CallCandidateRecorder.Begin(ce)
+        try {
+            let bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+            CallCandidateRecorder.Stamp(frame, bound)
+            return bound
+        } finally {
+            CallCandidateRecorder.End(frame)
+        }
+    }
+
+    private func BindAccessorCallWithReceiver(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        ce CallExpressionSyntax,
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
         if receiver != nil && NativeSliceTypes.TryGetElement(receiver.Type, out _, out _) {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             let saved = DeclareRangeTemp("callReceiver", receiver.Type, receiver, statements)

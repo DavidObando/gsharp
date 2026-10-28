@@ -1275,7 +1275,7 @@ abstract class BoundTreeRewriter {
         if newReceiver == node.Receiver && builder == nil {
             return node
         }
-        return BoundImportedInstanceCallExpression(
+        let copy = BoundImportedInstanceCallExpression(
             node.Syntax,
             newReceiver,
             node.Method,
@@ -1287,6 +1287,8 @@ abstract class BoundTreeRewriter {
             node.ConstrainedInterfaceType,
             node.IsNonVirtualBaseCall
         )
+        node.CopyMemberGroupTo(copy)
+        return copy
     }
 
     /// Rewrites an array creation expression.
@@ -1674,11 +1676,12 @@ abstract class BoundTreeRewriter {
                 builder.Add(newArg)
             }
         }
-        return if builder == nil {
-            node
-        } else {
-            node.WithArguments(builder.ToImmutable())
+        if builder == nil {
+            return node
         }
+        let copy = node.WithArguments(builder.ToImmutable())
+        node.CopyMemberGroupTo(copy)
+        return copy
     }
 
     /// Rewrites a CLR property/field access on a CLR receiver.
