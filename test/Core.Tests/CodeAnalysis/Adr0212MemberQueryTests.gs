@@ -250,6 +250,7 @@ open class Adr0212MemberQueryTests {
         // The type's own members, then its base class's, then the static members of the type itself.
         Assert.Equal([]string{"Tag", "Speak", "Use", "Legs", "Speak", "Speak", "Speak", "Inside", "Make"}, own)
         // `Dog` has no imported base: what follows are the members of `object` (issue #5441).
+        Assert.Contains(members.Skip(own.Count), (s Symbol) -> s.Name == "ToString")
         Assert.All(
             members.Skip(own.Count),
             (s Symbol) -> Assert.Equal("Object", cast[ImportedFunctionSymbol](s).Method.DeclaringType!!.Name)
