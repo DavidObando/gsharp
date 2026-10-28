@@ -306,6 +306,64 @@ open class Adr0212ScopeConformanceTests {
         Assert.Contains("A", model.LookupSymbols(position).Select((s Symbol) -> s.Name).ToList())
     }
 
+    // Row: the empty part of a nested partial type -> the merged type, the same as a part with members.
+    @Fact
+    func NestedPartialType_EmptyPart_IsTheMergedType() {
+        let text = "class Outer {\n partial class N { var A int32 }\n partial class N { /* here */ }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "empty-part.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let position = text.IndexOf("/* here */", StringComparison.Ordinal)
+        let enclosing = model.GetEnclosingSymbol(position)
+        Assert.Equal("N", enclosing!!.Name)
+        Assert.IsType[StructSymbol](enclosing)
+        Assert.Equal(
+            "Outer",
+            model.GetEnclosingSymbol(text.IndexOf("partial class N { var", StringComparison.Ordinal) - 2)!!.Name
+        )
+    }
+
+    @Fact
+    func NestedPartialType_EmptyPartsAtEveryDepthAndKind_AreTheMergedType() {
+        let text = "class Outer {\n partial class Mid {\n  partial class Deep { }\n  partial class Deep { /* deep */ }\n }\n partial class Mid { /* mid */ }\n partial interface I { }\n partial interface I { /* iface */ }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "empty-parts.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("Deep", model.GetEnclosingSymbol(text.IndexOf("/* deep */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("Mid", model.GetEnclosingSymbol(text.IndexOf("/* mid */", StringComparison.Ordinal))!!.Name)
+        let iface = model.GetEnclosingSymbol(text.IndexOf("/* iface */", StringComparison.Ordinal))
+        Assert.Equal("I", iface!!.Name)
+        Assert.IsType[InterfaceSymbol](iface)
+    }
+
+    @Fact
+    func NestedPartialType_InterleavedParts_AreEachTheirOwnMergedType() {
+        let text = "class Outer {\n partial class A { }\n partial class B { }\n partial class B { /* b */ }\n partial class A { func F() { } /* a */ }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "interleaved.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("B", model.GetEnclosingSymbol(text.IndexOf("/* b */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("A", model.GetEnclosingSymbol(text.IndexOf("/* a */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal(
+            "Outer",
+            model.GetEnclosingSymbol(text.IndexOf("partial class B { }", StringComparison.Ordinal) - 1)!!.Name
+        )
+    }
+
+    @Fact
+    func NestedPartialType_PositionAfterAPartsClosingBrace_IsTheMergedType() {
+        let text = "class Outer {\n partial class N { }  partial class N { }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "boundary.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let after = text.IndexOf("}  partial", StringComparison.Ordinal) + 1
+        Assert.Equal("N", model.GetEnclosingSymbol(after)!!.Name)
+    }
+
+    @Fact
+    func NestedPartialType_OverlappedByAMergedSharedBlock_IsTheMergedType() {
+        let text = "class Root {\n partial class Outer { shared { var A int32 } partial class N {} }\n partial class Outer { partial class N { /* here */ } shared { var B int32 } }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "shared-overlap.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("N", model.GetEnclosingSymbol(text.IndexOf("/* here */", StringComparison.Ordinal))!!.Name)
+    }
+
     @Fact
     func Globals_AreListedInSourceOrderAcrossKinds() {
         let text = "var first = 1\nfunc second() int32 { return 1 }\nenum Third { A }\nvar fourth = 2\n"

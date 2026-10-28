@@ -366,4 +366,20 @@ partial class InterfaceDeclarationSyntax : MemberSyntax {
             _partialTypeParameterLists = value
         }
     }
+
+    /// Gets or sets the whole-node location of every part of a merged `partial`
+    /// type, in part order. The merged node spans only the first part's braces, so
+    /// a position in a later part (an empty one has no member to lead to it) is
+    /// resolved through these. Empty on an ordinary declaration. Internal: the
+    /// semantic model is the only reader.
+    private var _partialPartExtents ImmutableArray[TextLocation] = ImmutableArray[TextLocation].Empty
+
+    internal prop PartialPartExtents ImmutableArray[TextLocation] {
+        get {
+            return _partialPartExtents
+        }
+        set {
+            _partialPartExtents = value
+        }
+    }
 }
