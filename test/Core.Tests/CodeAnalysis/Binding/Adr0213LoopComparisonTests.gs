@@ -432,7 +432,7 @@ func Run() int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run()) }`, "15|x|nullability|old-kept/new-killed|W4(unknown-write)|R7 c", "1/0/0")
+func Main() { Console.WriteLine(Run()) }`, "", "1/1/0")
             Add("q4-shadow-let-in-loop", `import System
 func Get() string? { return "xy" }
 func Consume(n int32) { }
@@ -497,7 +497,7 @@ func Run(n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(2)) }`, "24|x|nullability|old-kept/new-killed|W5(unknown-write)|R7 e", "1/0/0")
+func Main() { Console.WriteLine(Run(2)) }`, "", "1/1/0")
             Add("q14-enclosing-filter-reenters-loop", `import System
 func Clear(ref s string?) bool {
     s = nil

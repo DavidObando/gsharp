@@ -25,7 +25,8 @@ internal sealed class StatementEffects {
         mayMutateAnyRoot bool,
         mayMutateAnyRootViaPointer bool,
         mayMutateGlobalRoots bool,
-        mayMutateWritableReferenceRoots bool
+        mayMutateWritableReferenceRoots bool,
+        mayRunEscapedClosure bool
     ) {
         AssignedRoots = assignedRoots
         WritableReferenceRoots = writableReferenceRoots
@@ -34,6 +35,7 @@ internal sealed class StatementEffects {
         MayMutateAnyRootViaPointer = mayMutateAnyRootViaPointer
         MayMutateGlobalRoots = mayMutateGlobalRoots
         MayMutateWritableReferenceRoots = mayMutateWritableReferenceRoots
+        MayRunEscapedClosure = mayRunEscapedClosure
     }
 
     /// Gets the roots the node assigns, in order of first write.
@@ -67,13 +69,19 @@ internal sealed class StatementEffects {
         get;
     }
 
+    /// Whether the node runs source code that can run a closure that escaped (ADR-0208 row R15).
+    prop MayRunEscapedClosure bool {
+        get;
+    }
+
     prop IsEmpty bool -> AssignedRoots.IsEmpty &&
         WritableReferenceRoots.IsEmpty &&
         !MayMutateMemberPaths &&
         !MayMutateAnyRoot &&
         !MayMutateAnyRootViaPointer &&
         !MayMutateGlobalRoots &&
-        !MayMutateWritableReferenceRoots
+        !MayMutateWritableReferenceRoots &&
+        !MayRunEscapedClosure
 
     func AssignsRoot(root VariableSymbol) bool -> AssignedRoots.Contains(root)
 
@@ -93,7 +101,8 @@ internal sealed class StatementEffects {
             MayMutateAnyRoot || other.MayMutateAnyRoot,
             MayMutateAnyRootViaPointer || other.MayMutateAnyRootViaPointer,
             MayMutateGlobalRoots || other.MayMutateGlobalRoots,
-            MayMutateWritableReferenceRoots || other.MayMutateWritableReferenceRoots
+            MayMutateWritableReferenceRoots || other.MayMutateWritableReferenceRoots,
+            MayRunEscapedClosure || other.MayRunEscapedClosure
         )
     }
 
@@ -104,6 +113,7 @@ internal sealed class StatementEffects {
             MayMutateAnyRootViaPointer == other.MayMutateAnyRootViaPointer &&
             MayMutateGlobalRoots == other.MayMutateGlobalRoots &&
             MayMutateWritableReferenceRoots == other.MayMutateWritableReferenceRoots &&
+            MayRunEscapedClosure == other.MayRunEscapedClosure &&
             SameRoots(AssignedRoots, other.AssignedRoots) &&
             SameRoots(WritableReferenceRoots, other.WritableReferenceRoots)
     }
@@ -117,6 +127,7 @@ internal sealed class StatementEffects {
             (MayMutateAnyRootViaPointer || !other.MayMutateAnyRootViaPointer) &&
             (MayMutateGlobalRoots || !other.MayMutateGlobalRoots) &&
             (MayMutateWritableReferenceRoots || !other.MayMutateWritableReferenceRoots) &&
+            (MayRunEscapedClosure || !other.MayRunEscapedClosure) &&
             other
             .AssignedRoots
             .All((root VariableSymbol) -> AssignedRoots.Contains(root)) && other.WritableReferenceRoots.All(
@@ -161,6 +172,7 @@ internal sealed class StatementEffects {
             false,
             false,
             false,
+            false,
             false
         )
 
@@ -175,7 +187,8 @@ internal sealed class StatementEffects {
             mayMutateAnyRoot bool,
             mayMutateAnyRootViaPointer bool,
             mayMutateGlobalRoots bool,
-            mayMutateWritableReferenceRoots bool
+            mayMutateWritableReferenceRoots bool,
+            mayRunEscapedClosure bool = false
         ) StatementEffects {
             return StatementEffects(
                 assignedRoots.ToImmutableArray(),
@@ -184,7 +197,8 @@ internal sealed class StatementEffects {
                 mayMutateAnyRoot,
                 mayMutateAnyRootViaPointer,
                 mayMutateGlobalRoots,
-                mayMutateWritableReferenceRoots
+                mayMutateWritableReferenceRoots,
+                mayRunEscapedClosure
             )
         }
 

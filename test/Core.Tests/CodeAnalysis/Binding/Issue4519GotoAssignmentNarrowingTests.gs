@@ -4901,13 +4901,15 @@ Console.WriteLine(Run(func() { }, false))`, "4")
         AssertRuns(`import System
 
 func Run(callback (() -> void), fail bool) int32 {
+    // ADR-0208 R15: a constructor call is a call, so build the exception before the fact is established.
+    let failure = Exception()
     var text string? = nil
     text = "safe"
     let clear = func() { text = nil }
     var action = callback
     try {
         if fail {
-            throw Exception()
+            throw failure
         }
     }
     catch {
