@@ -1730,7 +1730,7 @@ internal partial class StatementBinder {
 
     private func MayBeMutatedByUnknownWrite(mutations AssignedRootsCollector, path AccessPath) bool ->
     MayBeMutatedByUnknownWrite(mutations.MayMutateAnyRoot, mutations.MayMutateAnyRootViaPointer, path) ||
-        (mutations.MayRunEscapedClosure && MayBeMutatedByEscapedClosure(path.Root))
+        (mutations.MayRunEscapedClosureOn(path.Root) && MayBeMutatedByEscapedClosure(path.Root))
 
     // ADR-0208 R15 (#5237): a node that runs source code can run a closure that escaped and assigns [`root`](paramref),
     // or the plain variable that a `ref` local names. A by-reference parameter keeps its fact (amendment A3).
@@ -1917,6 +1917,10 @@ internal partial class StatementBinder {
         private let callableInvocations List[VariableSymbol] = List[VariableSymbol]()
         private let enclosingGlobalAssignments Stack[VariableSymbol] = Stack[VariableSymbol]()
         private var globalMutationProtectedRoots HashSet[VariableSymbol]?
+        // ADR-0208 R15: the variables whose assignment encloses every node that can run an escaped closure. The
+        // assignment replaces the value afterwards, so its own postcondition survives (`x = Make()`).
+        private let enclosingAssignments Stack[VariableSymbol] = Stack[VariableSymbol]()
+        private var escapedClosureProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
 
@@ -2096,21 +2100,21 @@ internal partial class StatementBinder {
                 BoundEventSubscriptionExpression or
                 BoundClrEventSubscriptionExpression or
                 BoundTypeParameterConstructionExpression {
-                MayRunEscapedClosure = true
+                MarkRunsEscapedClosure()
             }
             // A hole of a type other than a built-in value or a string calls its `ToString`.
-            if node is BoundInterpolatedStringExpression interpolation && !MayRunEscapedClosure {
+            if node is BoundInterpolatedStringExpression interpolation {
                 for part in interpolation.Parts {
                     if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
                         hole.Type
                     ) {
-                        MayRunEscapedClosure = true
+                        MarkRunsEscapedClosure()
                         break
                     }
                 }
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
-                MayRunEscapedClosure = true
+                MarkRunsEscapedClosure()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
                 // ADR-0208 R12 (#5292, amendment A3): a plain function call does not write by-reference storage;
@@ -2796,7 +2800,7 @@ internal partial class StatementBinder {
         // (ADR-0208 row R15).
         private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true, runsSourceCode bool = true) {
             if runsSourceCode {
-                MayRunEscapedClosure = true
+                MarkRunsEscapedClosure()
             }
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
@@ -2811,6 +2815,21 @@ internal partial class StatementBinder {
                 globalMutationProtectedRoots!!.IntersectWith(protectedRoots)
             }
         }
+
+        private func MarkRunsEscapedClosure() {
+            MayRunEscapedClosure = true
+            let protectedRoots = enclosingAssignments.ToHashSet()
+            if escapedClosureProtectedRoots == nil {
+                escapedClosureProtectedRoots = protectedRoots
+            } else {
+                escapedClosureProtectedRoots!!.IntersectWith(protectedRoots)
+            }
+        }
+
+        /// Whether a node of this walk can run an escaped closure that writes [`root`](paramref) after the walk
+        /// started. A root that every such node assigns afterwards is not in the set (ADR-0208 row R15).
+        func MayRunEscapedClosureOn(root VariableSymbol) bool -> MayRunEscapedClosure &&
+            (escapedClosureProtectedRoots == nil || !escapedClosureProtectedRoots!!.Contains(root))
 
         private func TryGetFunctionLiterals(
             expression BoundExpression,
@@ -2910,7 +2929,13 @@ internal partial class StatementBinder {
             if protectedGlobalRoot != nil {
                 enclosingGlobalAssignments.Push(protectedGlobalRoot)
             }
+            if node.Variable != nil {
+                enclosingAssignments.Push(node.Variable)
+            }
             base.VisitAssignmentExpression(node)
+            if node.Variable != nil {
+                enclosingAssignments.Pop()
+            }
             if protectedGlobalRoot != nil {
                 enclosingGlobalAssignments.Pop()
             }

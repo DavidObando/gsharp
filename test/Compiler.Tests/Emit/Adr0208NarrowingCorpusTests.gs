@@ -215,6 +215,7 @@ open class Adr0208NarrowingCorpusTests {
                 "p14_5237_condition_out_write_then_escaped_closure",
                 "p15_5237_condition_out_write_then_test_keeps_the_fact",
                 "p16_5237_condition_call_reads_the_root_after_the_test",
+                "p17_5237_assignment_after_the_call_keeps_its_own_fact",
                 "p1_5237_escaped_closure_run_by_declared_function",
                 "p2_5237_loop_form_escaped_closure",
                 "p3_5237_root_no_closure_assigns_keeps_the_fact",
@@ -2068,6 +2069,19 @@ func Run() int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@22:14", "reject", "", "R15"}
+            yield[]object{"p17_5237_assignment_after_the_call_keeps_its_own_fact", `import System
+
+func Make() string { return "abc" }
+func Run() int32 {
+    var x string? = nil
+    let clear = func() { x = nil }
+    try {
+    } finally {
+        x = Make()
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "3", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
