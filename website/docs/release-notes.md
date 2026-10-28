@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Generic channel readers retain source element types** (issue #5485). Inferred `out var` locals and method returns now preserve source-defined and generic elements through returned readers with explicit runtime references.
+
 - **`SemanticModel.LookupMembers` lists extension members** ([#5440](https://github.com/DavidObando/gsharp/issues/5440), ADR-0212 question 12). After the members of the type, the query answers the extension functions declared in source and the extension methods of the imported namespaces whose receiver can take the type, by the rules a call uses. Member completion now offers them on a value receiver and never on a type name, and the hover overload count of a member counts extensions with extensions only. A call through an extension is still outside `GetMemberGroup`. No change to `gsc` output.
 
 - **Channel member references retain symbolic elements** (issue #5481). `Reader` and `Writer` getters now preserve source-defined and generic element types in their inherited CLR owner. Shared member-owner recovery also retains reordered generic base arguments.
