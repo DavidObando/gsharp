@@ -403,6 +403,7 @@ internal shared class PartialTypeMerger {
                 (p StructDeclarationSyntax) -> p.Identifier?.Location ?? default(TextLocation)
             )
                 .ToImmutableArray(),
+            PartialPartExtents = parts.Select((p StructDeclarationSyntax) -> p.Location).ToImmutableArray(),
             PartialTypeParameterLists = if typeParametersMatch {
                 parts
                     .Select((p StructDeclarationSyntax) -> p.TypeParameterList)
@@ -589,6 +590,7 @@ internal shared class PartialTypeMerger {
                 (p InterfaceDeclarationSyntax) -> p.Identifier?.Location ?? default(TextLocation)
             )
                 .ToImmutableArray(),
+            PartialPartExtents = parts.Select((p InterfaceDeclarationSyntax) -> p.Location).ToImmutableArray(),
             PartialTypeParameterLists = if typeParametersMatch {
                 parts
                     .Select((p InterfaceDeclarationSyntax) -> p.TypeParameterList)

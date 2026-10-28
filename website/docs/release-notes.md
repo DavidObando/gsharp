@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **`GetEnclosingSymbol` answers the empty part of a nested partial type** (issue #5455). A position inside a later part of a nested `partial` type that has no member now answers the merged type, not the outer type. The merged declaration keeps the extent of every part for the lookup.
+
 - **Narrowing treats a closure's own locals as private** (issue #5456). A local that a closure declares and only that closure assigns is no longer in the closure-assigned set. An unknown callable no longer removes its narrowing. A write from a nested closure, or to a variable the closure does not declare, still counts. No current diagnostic or emitted output changes in `src/Core`, Core.Tests, gsc or the pinned Oahu inputs.
 
 - **Scope queries answer the rare declaration shapes** (issue #5340). `LookupSymbols` and `GetEnclosingSymbol` now answer field initializers (the `shared` members of the type), `deinit` bodies (the destructor function and `this`), every part of a nested partial type, the implicit `ctx` of a `scope`, and an instance member of a base class that a `shared` member of a derived class shares a name with (the instance member, as in the binder). `GetSymbolInfo` names the type of an interface `shared` field or constant. The global names are listed in source order across kinds.
