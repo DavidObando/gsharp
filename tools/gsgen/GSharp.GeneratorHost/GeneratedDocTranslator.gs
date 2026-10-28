@@ -155,16 +155,16 @@ shared class GeneratedDocTranslator {
                 } else {
                     default(string?)
                 }
-                var unit = CSharpToGSharpTranslator(
+                let translator = CSharpToGSharpTranslator(
                     preservePartialParts: true,
                     packageFilter: package_,
                     includeFileAttributes: unitIndex == 0,
                     includeGlobalNamespace: unitIndex == 0,
                     widenObliviousReferenceFields: true,
                     translatedFilePaths: translatedFilePaths,
-                    emitGeneratedImplementingParts: true,
-                    semanticOnlyAbstractTypes: semanticOnlyAbstractTypes
-                ).TranslateDocument(loaded)
+                    emitGeneratedImplementingParts: true
+                ){SemanticOnlyAbstractTypes = semanticOnlyAbstractTypes}
+                var unit = translator.TranslateDocument(loaded)
                 let hostDiagnostics = List[GeneratorHostDiagnostic]()
                 unit = SpellDataTypeParts(unit, dataTypes ?? Array.Empty[StubDataType](), hostDiagnostics)
                 // Skip a unit that carried no translatable content.

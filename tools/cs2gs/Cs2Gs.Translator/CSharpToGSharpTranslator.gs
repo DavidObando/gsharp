@@ -98,7 +98,20 @@ partial class CSharpToGSharpTranslator {
     // Issues #5252/#5253 (gsgen): the types the stub rendered abstract only
     // semantically, keyed by (cref:SemanticAbstractTypeKey), each with
     // whether the user declared it `open`. Null or empty for none.
-    private let semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]?
+    private var semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]?
+
+    /// Gets or sets the types the gsgen stub rendered `abstract` only because they inherit
+    /// unimplemented abstract members (issues #5252/#5253), keyed by
+    /// (cref:SemanticAbstractTypeKey) and mapped to whether the user declared them
+    /// `open`. A generated part of such a type states neither `abstract` nor `open`
+    /// (the user's part states the shape, gsc unions the parts) and its members are
+    /// `open` only when the user declared the type `open`. `null` (default) for none.
+    /// A property rather than a constructor parameter, so the constructor's
+    /// signature (which already-compiled callers bind to) is unchanged.
+    prop SemanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? {
+        get -> semanticOnlyAbstractTypes
+        set -> semanticOnlyAbstractTypes = value
+    }
 
     // The translated project's directory, when known, so the translator applies
     // the loader's full generated-source rule (the obj/bin path half of
@@ -193,13 +206,6 @@ partial class CSharpToGSharpTranslator {
     /// @param projectDirectory The translated project's directory, or `null` when
     /// unknown (in-memory sources). Used only to recognize a partial method
     /// part in a build-generated file ((cref:Loading.GeneratedSourceDetection)).
-    /// @param semanticOnlyAbstractTypes Issues #5252/#5253: the types the gsgen stub rendered
-    /// `abstract` only because they inherit unimplemented abstract members, keyed by
-    /// (cref:SemanticAbstractTypeKey) and mapped to whether the user declared
-    /// them `open`. A generated part of such a type states neither `abstract` nor
-    /// `open` (the user's part states the shape, gsc unions the parts) and its
-    /// members are `open` only when the user declared the type `open`. `null`
-    /// (default) for none.
     init(
         preservePartialParts bool = true,
         markMergedTypePartial bool = false,
@@ -213,14 +219,12 @@ partial class CSharpToGSharpTranslator {
         emitPartialMethodPairs bool = false,
         translatedFilePaths IReadOnlyCollection[string]? = nil,
         emitGeneratedImplementingParts bool = false,
-        includeGlobalNamespace bool = false,
-        semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? = nil
+        includeGlobalNamespace bool = false
     ) {
         // Arms the telemetry's exit dump (when requested) for every run that
         // translates, including one in which no forgiveness rule ever fires.
         NullForgivenessTelemetry.EnsureInitialized()
         this.emitGeneratedImplementingParts = emitGeneratedImplementingParts
-        this.semanticOnlyAbstractTypes = semanticOnlyAbstractTypes
         this.includeGlobalNamespace = includeGlobalNamespace
         this.translatedFilePaths = if translatedFilePaths == nil {
             default(HashSet[string]?)
