@@ -211,7 +211,8 @@ open class Adr0208NarrowingCorpusTests {
                 "q1_5456_closure_own_local_survives_unknown_callable",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
-                "q4_5456_initializer_write_names_the_enclosing_variable"
+                "q4_5456_initializer_write_names_the_enclosing_variable",
+                "q5_5456_do_condition_is_outside_the_body_declaration"
             },
             names
         )
@@ -1698,6 +1699,23 @@ func Main() {
     var hit Rec? = Find()
     let clear = func() {
         var hit Rec? = (hit = nil)
+    }
+    if hit == nil { return }
+    let f = Pick(clear)
+    f()
+    Console.WriteLine(hit.Id)
+}`, "GS0158@16:27", "reject", "", ""}
+            yield[]object{"q5_5456_do_condition_is_outside_the_body_declaration", `import System
+
+class Rec {
+    var Id string = "a"
+}
+func Find() Rec? { return Rec{} }
+func Pick(g () -> void) () -> void { return g }
+func Main() {
+    var hit Rec? = Find()
+    let clear = func() {
+        do var hit Rec? = nil while (hit = nil) != nil
     }
     if hit == nil { return }
     let f = Pick(clear)

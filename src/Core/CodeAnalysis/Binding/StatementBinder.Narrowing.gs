@@ -4496,8 +4496,13 @@ internal partial class StatementBinder {
             for var ancestor SyntaxNode? = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
                 var declaration SyntaxNode? = nil
                 var declarationStart = -1
+                // A declaration is in scope for the later children of a block or of a `for` clause only. A statement
+                // that holds a declaration as its body (`do var x ... while (x = ...)`) does not scope it over its condition.
+                let scopesDeclarations = ancestor is BlockStatementSyntax or
+                    BlockExpressionSyntax or
+                    ForClauseStatementSyntax
                 for child in ancestor.GetChildren() {
-                    if child is VariableDeclarationSyntax variable && string.Equals(
+                    if scopesDeclarations && child is VariableDeclarationSyntax variable && string.Equals(
                         variable.Identifier.ValueText,
                         name,
                         StringComparison.Ordinal
