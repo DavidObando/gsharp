@@ -4386,6 +4386,16 @@ internal partial class StatementBinder {
         // Returns null (any name may be assigned) when the anchor is not inside a
         // function: a binder that spans several syntax trees (top-level code,
         // merged static initializers) cannot be scanned from one anchor.
+        // #5456: lookup indexes for one ComputeClosureAssignedNames run.
+        private let closureDeclarations Dictionary[
+            SyntaxNode,
+            Dictionary[string, List[VariableDeclarationSyntax]]
+        ] = Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]()
+        private let closureParameters Dictionary[SyntaxNode, HashSet[string]] = Dictionary[
+            SyntaxNode,
+            HashSet[string]
+        ]()
+
         private func ComputeClosureAssignedNames(anchor SyntaxNode) HashSet[string]? {
             var root SyntaxNode? = nil
             for var current SyntaxNode? = cast[SyntaxNode?](anchor); current != nil; current = current!!.Parent {
@@ -4405,6 +4415,8 @@ internal partial class StatementBinder {
             let names = HashSet[string]()
             CollectClosureAssignedNames(root, root, names)
             CollectAddressTakenNames(root, names)
+            closureDeclarations.Clear()
+            closureParameters.Clear()
             return names
         }
 
@@ -4495,30 +4507,21 @@ internal partial class StatementBinder {
             let siteStart = site.Span.Start
             for var ancestor SyntaxNode? = site.Parent; ancestor != nil; ancestor = ancestor!!.Parent {
                 var declaration SyntaxNode? = nil
-                var declarationStart = -1
                 // A declaration is in scope for the later children of a block or of a `for` clause only. A statement
-                // that holds a declaration as its body (`do var x ... while (x = ...)`) does not scope it over its condition.
-                let scopesDeclarations = ancestor is BlockStatementSyntax or
+                // that holds a declaration as its body (`do var x ... while (x = ...)`) does not scope it over its
+                // condition.
+                if ancestor is BlockStatementSyntax or
                     BlockExpressionSyntax or
-                    ForClauseStatementSyntax
-                for child in ancestor.GetChildren() {
-                    if scopesDeclarations && child is VariableDeclarationSyntax variable && string.Equals(
-                        variable.Identifier.ValueText,
-                        name,
-                        StringComparison.Ordinal
-                    ) &&
-                        child
-                        .Span
-                        .End <= siteStart &&
-                        child
-                        .Span
-                        .Start > declarationStart {
-                        declaration = child
-                        declarationStart = child.Span.Start
+                    ForClauseStatementSyntax &&
+                    DeclarationsOf(ancestor).TryGetValue(name, out var declared) {
+                    for candidate in declared {
+                        if candidate.Span.End <= siteStart {
+                            declaration = candidate
+                        }
                     }
                 }
-                if declaration == nil && IsScopeOwner(ancestor) {
-                    declaration = FindParameter(ancestor, ancestor, name)
+                if declaration == nil && IsScopeOwner(ancestor) && ParametersOf(ancestor).Contains(name) {
+                    return object.ReferenceEquals(ancestor, assigning)
                 }
                 if declaration != nil {
                     return object.ReferenceEquals(ScopeOwnerOf(declaration), assigning)
@@ -4527,24 +4530,47 @@ internal partial class StatementBinder {
             return false
         }
 
-        private func FindParameter(owner SyntaxNode, node SyntaxNode, name string) SyntaxNode? {
-            for child in node.GetChildren() {
-                if child is ParameterSyntax{Identifier: {} identifier} parameter && string.Equals(
-                    identifier.ValueText,
-                    name,
-                    StringComparison.Ordinal
-                ) &&
-                    object.ReferenceEquals(ScopeOwnerOf(child), owner) {
-                    return child
-                }
-                if !IsScopeOwner(child) {
-                    let found = FindParameter(owner, child, name)
-                    if found != nil {
-                        return found
+        // The index of the variable declarations that are children of [`container`](paramref), by name and in source
+        // order. One pass for each container keeps the collection linear in the number of writes.
+        private func DeclarationsOf(container SyntaxNode) Dictionary[string, List[VariableDeclarationSyntax]] {
+            if closureDeclarations.TryGetValue(container, out var index) {
+                return index
+            }
+            let built = Dictionary[string, List[VariableDeclarationSyntax]](StringComparer.Ordinal)
+            for child in container.GetChildren() {
+                if child is VariableDeclarationSyntax variable {
+                    let key = variable.Identifier.ValueText
+                    if !built.TryGetValue(key, out var list) {
+                        list = List[VariableDeclarationSyntax]()
+                        built[key] = list
                     }
+                    list.Add(variable)
                 }
             }
-            return nil
+            closureDeclarations[container] = built
+            return built
+        }
+
+        // The names of the parameters that [`owner`](paramref) declares, without those of the closures nested in it.
+        private func ParametersOf(owner SyntaxNode) HashSet[string] {
+            if closureParameters.TryGetValue(owner, out var known) {
+                return known
+            }
+            let built = HashSet[string](StringComparer.Ordinal)
+            CollectParameters(owner, built)
+            closureParameters[owner] = built
+            return built
+        }
+
+        private func CollectParameters(node SyntaxNode, names HashSet[string]) {
+            for child in node.GetChildren() {
+                if child is ParameterSyntax{Identifier: {} identifier} {
+                    names.Add(identifier.ValueText)
+                }
+                if !IsScopeOwner(child) {
+                    CollectParameters(child, names)
+                }
+            }
         }
 
         // `out x` / `ref x` inside a closure lets the callee write the local.
