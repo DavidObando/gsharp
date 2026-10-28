@@ -614,6 +614,13 @@ partial class SemanticModel {
                     next = child
                     break
                 }
+                // The binder merges the parts of a nested partial type into one node that spans only
+                // the first part, so a position in another part (an empty one has no member to lead
+                // to it) belongs to the merged type through the part extents it kept (#5455).
+                if InPartialPartExtent(child, position) {
+                    next = child
+                    break
+                }
                 if span.End == position {
                     touching = child
                 }
@@ -624,6 +631,37 @@ partial class SemanticModel {
             }
             current = chosen
         }
+    }
+
+    private func InPartialPartExtent(node SyntaxNode, position int32) bool {
+        let extents = if node is StructDeclarationSyntax structDeclaration {
+            structDeclaration.PartialPartExtents
+        } else if node is InterfaceDeclarationSyntax interfaceDeclaration {
+            interfaceDeclaration.PartialPartExtents
+        } else {
+            ImmutableArray[TextLocation].Empty
+        }
+        if extents.IsDefaultOrEmpty {
+            return false
+        }
+        for extent in extents {
+            // An unnamed tree has no path to compare: its text identifies it.
+            if (
+                object.ReferenceEquals(extent.Text, syntaxTree.Text) || SourcePathIdentity.AreSame(
+                    extent.FileName,
+                    syntaxTree.Text?.FileName
+                )
+            ) &&
+                extent
+                .Span
+                .Start <= position &&
+                position < extent
+                .Span
+                .End {
+                return true
+            }
+        }
+        return false
     }
 
     private func Depth(node SyntaxNode) int32 {

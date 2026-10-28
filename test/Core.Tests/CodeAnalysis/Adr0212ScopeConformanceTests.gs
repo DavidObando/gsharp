@@ -306,6 +306,34 @@ open class Adr0212ScopeConformanceTests {
         Assert.Contains("A", model.LookupSymbols(position).Select((s Symbol) -> s.Name).ToList())
     }
 
+    // Row: the empty part of a nested partial type -> the merged type, the same as a part with members.
+    @Fact
+    func NestedPartialType_EmptyPart_IsTheMergedType() {
+        let text = "class Outer {\n partial class N { var A int32 }\n partial class N { /* here */ }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "empty-part.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let position = text.IndexOf("/* here */", StringComparison.Ordinal)
+        let enclosing = model.GetEnclosingSymbol(position)
+        Assert.Equal("N", enclosing!!.Name)
+        Assert.IsType[StructSymbol](enclosing)
+        Assert.Equal(
+            "Outer",
+            model.GetEnclosingSymbol(text.IndexOf("partial class N { var", StringComparison.Ordinal) - 2)!!.Name
+        )
+    }
+
+    @Fact
+    func NestedPartialType_EmptyPartsAtEveryDepthAndKind_AreTheMergedType() {
+        let text = "class Outer {\n partial class Mid {\n  partial class Deep { }\n  partial class Deep { /* deep */ }\n }\n partial class Mid { /* mid */ }\n partial interface I { }\n partial interface I { /* iface */ }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "empty-parts.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("Deep", model.GetEnclosingSymbol(text.IndexOf("/* deep */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("Mid", model.GetEnclosingSymbol(text.IndexOf("/* mid */", StringComparison.Ordinal))!!.Name)
+        let iface = model.GetEnclosingSymbol(text.IndexOf("/* iface */", StringComparison.Ordinal))
+        Assert.Equal("I", iface!!.Name)
+        Assert.IsType[InterfaceSymbol](iface)
+    }
+
     @Fact
     func Globals_AreListedInSourceOrderAcrossKinds() {
         let text = "var first = 1\nfunc second() int32 { return 1 }\nenum Third { A }\nvar fourth = 2\n"
