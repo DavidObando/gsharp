@@ -871,12 +871,21 @@ shared class ClrTypeUtilities {
     /// metadata-load contexts).
     /// @param interfaceSymbol The user interface whose imported base interfaces to collect.
     /// @returns The transitive CLR base interface (cref:Type)s, each appearing once.
-    func GetTransitiveClrBaseInterfaces(interfaceSymbol InterfaceSymbol?) IReadOnlyList[Type] {
+    func GetTransitiveClrBaseInterfaces(interfaceSymbol InterfaceSymbol?) IReadOnlyList[Type] ->
+    GetTransitiveClrBaseInterfaces(interfaceSymbol, out _)
+
+    /// Collects imported bases and their originating symbolic contexts in matching order.
+    internal func GetTransitiveClrBaseInterfaces(
+        interfaceSymbol InterfaceSymbol?,
+        out declaringContexts IReadOnlyList[TypeSymbol]
+    ) IReadOnlyList[Type] {
+        let contexts = List[TypeSymbol]()
+        declaringContexts = contexts
         if interfaceSymbol == nil {
             return Array.Empty[Type]()
         }
         let result = List[Type]()
-        let AddClr = func (clr Type?) {
+        let AddClr = func (clr Type?, context TypeSymbol) {
             if clr == nil || !clr.IsInterface {
                 return
             }
@@ -886,8 +895,9 @@ shared class ClrTypeUtilities {
                 }
             }
             result.Add(clr)
+            contexts.Add(context)
             for transitive in SafeGetInterfaces(clr) {
-                AddClr(transitive)
+                AddClr(transitive, context)
             }
         }
         // A user base interface may itself extend a CLR interface, so walk the
@@ -899,7 +909,7 @@ shared class ClrTypeUtilities {
             }
             for clrBase in iface.BaseClrInterfaces {
                 if clrBase?.ClrType is Type clrType {
-                    AddClr(clrType)
+                    AddClr(clrType, clrBase)
                 }
             }
         }
