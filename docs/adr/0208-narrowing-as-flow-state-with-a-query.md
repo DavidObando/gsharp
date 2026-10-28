@@ -962,6 +962,18 @@ Details per row:
   exemption of open question 7 stays deferred to #5196. Tests: the probe
   q3 with a mutant witness (the predicate returns false), and a root that
   no closure assigns keeps its fact.
+  The external-callable alias set follows the same rule (#5482): a call that
+  `MayRunEscapedClosure` drops an alias when a closure can assign the alias
+  or the plain variable in its `ref` chain, not only when the alias's own
+  name is closure-assigned (`StatementBinder.NamesClosureAssignedStorage`,
+  read by `ApplyCallableAliasExitState`; the header and catch-filter sites
+  are covered through the statement exit state, and no row witnesses them
+  separately). A `ref` local names its target in the
+  initializer, which the address-taken name set counts, so a `ref` alias of
+  a plain local loses its classification at a call whenever any name is
+  closure-assigned. Tests: `r1` to `r6`; the `ref` alias of a callable
+  value without an intervening call, and a plain alias across a call, keep
+  the fact.
 - **Join of strengthened facts (no row).** Probe d5 is accepted today and
   after; the join definition in section 6 keeps the common implied type.
   PR 2 adds d5 as a test with a mutant witness (equality-only join), and g1
