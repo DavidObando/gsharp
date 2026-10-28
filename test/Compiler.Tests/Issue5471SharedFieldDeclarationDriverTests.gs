@@ -98,4 +98,48 @@ System.Console.Write(Trace.Calls)
 `
         Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "IS" + expected + "|iRAD|1", "5471")
     }
+
+    @Fact
+    func DefaultBody_PreservesLaterInstanceFieldRowAndEffects() {
+        const source = `interface IEditor {
+    func Edit(value Payload) int32 {
+        let before = value.Target
+        value.Target += Trace.Delta()
+        return before
+    }
+}
+class Payload {
+    var Sentinel int32 = 41
+    var Target int32 = 7
+}
+class Trace {
+    shared {
+        var Item Payload = Payload()
+        var Events string = ""
+        var Calls int32 = 0
+        func Receiver() Payload {
+            Events += "R"
+            return Item
+        }
+        func Delta() int32 {
+            Events += "D"
+            Calls++
+            return 3
+        }
+    }
+}
+class Default : IEditor { }
+let editor IEditor = Default()
+System.Console.Write(editor.Edit(Trace.Receiver()))
+System.Console.Write("|")
+System.Console.Write(Trace.Item.Target)
+System.Console.Write("|")
+System.Console.Write(Trace.Item.Sentinel)
+System.Console.Write("|")
+System.Console.Write(Trace.Events)
+System.Console.Write("|")
+System.Console.Write(Trace.Calls)
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "7|10|41|RD|1", "5471")
+    }
 }
