@@ -516,7 +516,7 @@ class BoundScope {
     /// would consider.
     /// @param receiverType The static type of the receiver.
     /// @returns The applicable extension functions, in scope-chain then declaration order.
-    func TryLookupAllExtensionFunctions(receiverType TypeSymbol) ImmutableArray[FunctionSymbol] {
+    internal func TryLookupAllExtensionFunctions(receiverType TypeSymbol) ImmutableArray[FunctionSymbol] {
         let names = List[string]()
         let seen = HashSet[string](StringComparer.Ordinal)
         var scope_ BoundScope? = this

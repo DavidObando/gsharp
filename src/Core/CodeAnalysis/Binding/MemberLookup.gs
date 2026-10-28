@@ -409,7 +409,7 @@ internal class MemberLookup {
     /// for the semantic model's member query (ADR-0212 question 12). Holders keep reference-set order and
     /// the methods of a holder follow metadata order, so the answer does not depend on hash order.
     /// @returns The visible extension methods, each once.
-    func CollectAllImportedExtensionMethods() List[MethodInfo] {
+    internal func CollectAllImportedExtensionMethods() List[MethodInfo] {
         let result = List[MethodInfo]()
         for type in this.GetImportedExtensionClasses() {
             let metadata = importedExtensionIndexes.GetValue(type, BuildImportedExtensionIndex)
