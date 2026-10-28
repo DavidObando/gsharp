@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Member queries in the semantic model** ([#5307](https://github.com/DavidObando/gsharp/issues/5307), ADR-0212 slice S4). `SemanticModel.LookupMembers(position, type, name)` returns the members of a type that a member access can name, and `SemanticModel.GetMemberGroup(node)` returns the candidates that overload resolution considered for a call. Imported members answer as symbols with types read through the nullability readers. Member completion, the hover member fallback, and Go to Definition on imported members now use these queries, and `ImportedClrMemberResolver` is removed. Signature help lists one signature for each candidate, including imported overloads, and the hover overload count of a call is the size of its group. Completion no longer lists private or protected members from outside their type.
+
 - **`GetEnclosingSymbol` answers the empty part of a nested partial type** (issue #5455). A position inside a later part of a nested `partial` type that has no member now answers the merged type, not the outer type. The merged declaration keeps the extent of every part for the lookup.
 
 - **Narrowing treats a closure's own locals as private** (issue #5456). A local that a closure declares and only that closure assigns is no longer in the closure-assigned set. An unknown callable no longer removes its narrowing. A write from a nested closure, or to a variable the closure does not declare, still counts. No current diagnostic or emitted output changes in `src/Core`, Core.Tests, gsc or the pinned Oahu inputs.

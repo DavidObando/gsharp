@@ -680,6 +680,17 @@ internal partial class OverloadResolver {
     /// @param resolvedType The exact qualified target, or null for ordinary lookup.
     /// @returns The bound call or conversion.
     func BindCallExpression(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
+        let frame = CallCandidateRecorder.Begin(syntax)
+        try {
+            let bound = BindCallExpressionCore(syntax, resolvedType)
+            CallCandidateRecorder.Stamp(frame, bound)
+            return bound
+        } finally {
+            CallCandidateRecorder.End(frame)
+        }
+    }
+
+    private func BindCallExpressionCore(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
         if syntax.ConversionTypeClause != nil {
             let compositeConversionType TypeSymbol? = bindTypeClause(syntax.ConversionTypeClause)
             if compositeConversionType == nil {

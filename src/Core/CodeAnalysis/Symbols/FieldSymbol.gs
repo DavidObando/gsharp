@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Syntax
 import System.Collections.Immutable
+import System.Reflection
 
 /// Represents a field declared on a user-defined struct (Phase 3.B.1).
 class FieldSymbol : Symbol {
@@ -47,6 +48,14 @@ class FieldSymbol : Symbol {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
+    /// Gets the reflected member an imported symbol stands for, or null for a declared one (ADR-0212 slice S4).
+    /// @remarks The language server reads it to find documentation and cross-assembly definitions until
+    /// handle-backed imported symbols replace it (ADR-0209 stage 6).
+    prop ImportedMember FieldInfo? {
+        get;
+        internal set;
+    }
+
     override prop Kind SymbolKind -> SymbolKind.Field
 
     /// Gets the declaring field or primary-constructor parameter syntax, or `null` for imported and

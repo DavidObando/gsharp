@@ -581,6 +581,7 @@ class ImportedTypeSymbol : TypeSymbol {
                     MapAccessibility(field),
                     isReadOnly: field.IsInitOnly
                 )
+                fieldSymbol.ImportedMember = field
                 fieldBuilder.Add(fieldSymbol)
                 fieldByToken[field.MetadataToken] = fieldSymbol
             }
@@ -589,25 +590,26 @@ class ImportedTypeSymbol : TypeSymbol {
                 let getter MethodInfo? = property.GetMethod
                 let setter MethodInfo? = property.SetMethod
                 let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
-                propertyBuilder.Add(
-                    PropertySymbol(
-                        property.Name,
-                        if propertyType is ByRefTypeSymbol byRefProperty {
-                            byRefProperty.PointeeType
-                        } else {
-                            propertyType
-                        },
-                        GetPropertyAccessibility(property),
-                        hasGetter: getter != nil && IsVisible(getter, includeInternal),
-                        hasSetter: setter != nil && IsVisible(setter, includeInternal),
-                        isAutoProperty: false,
-                        isVirtual: (getter ?? setter)?.IsVirtual == true,
-                        isOverride: (getter ?? setter) is {} accessor && ClrTypeUtilities.SafeIsOverride(accessor),
-                        isStatic: (getter ?? setter)?.IsStatic == true,
-                        isInitOnly: setter != nil && IsInitOnlySetter(setter),
-                        metadataIsAbstract: (getter ?? setter)?.IsAbstract == true
-                    ){ReturnRefKind = RefCapabilities.GetReturnRefKind(property)}
-                )
+                let propertySymbol =
+                PropertySymbol(
+                    property.Name,
+                    if propertyType is ByRefTypeSymbol byRefProperty {
+                        byRefProperty.PointeeType
+                    } else {
+                        propertyType
+                    },
+                    GetPropertyAccessibility(property),
+                    hasGetter: getter != nil && IsVisible(getter, includeInternal),
+                    hasSetter: setter != nil && IsVisible(setter, includeInternal),
+                    isAutoProperty: false,
+                    isVirtual: (getter ?? setter)?.IsVirtual == true,
+                    isOverride: (getter ?? setter) is {} accessor && ClrTypeUtilities.SafeIsOverride(accessor),
+                    isStatic: (getter ?? setter)?.IsStatic == true,
+                    isInitOnly: setter != nil && IsInitOnlySetter(setter),
+                    metadataIsAbstract: (getter ?? setter)?.IsAbstract == true
+                ){ReturnRefKind = RefCapabilities.GetReturnRefKind(property)}
+                propertySymbol.ImportedMember = property
+                propertyBuilder.Add(propertySymbol)
             }
             let primaryConstructorParameters = BuildPrimaryConstructorParameters(
                 type,

@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Runtime.CompilerServices
@@ -26,7 +27,7 @@ import System.Runtime.CompilerServices
 /// callers then fall back to their syntactic lookup.
 shared class BoundSemantics {
     /// Gets the symbol the binder declared at, or resolved, [`token`](paramref).
-    /// Imported CLR members are not reported here; see (cref:GetImportedMember).
+    /// Imported CLR members are not reported here; see (cref:GetImportedSymbol).
     /// @param compilation The compilation the token's tree belongs to.
     /// @param token An identifier token.
     /// @returns The symbol, or null when the binder has no answer for the token.
@@ -35,7 +36,86 @@ shared class BoundSemantics {
         if bound == nil {
             return nil
         }
-        return bound.Model.GetSymbolInfo(bound.Token).Symbol
+        let symbol = bound.Model.GetSymbolInfo(bound.Token).Symbol
+        return if IsImportedMember(symbol) {
+            default(Symbol?)
+        } else {
+            symbol
+        }
+    }
+
+    /// Gets the imported member the binder bound [`token`](paramref) to: an imported method,
+    /// property, field or event.
+    /// @param compilation The compilation the token's tree belongs to.
+    /// @param token An identifier token naming a member or a call.
+    /// @returns The member symbol, or null when the token does not name an imported member.
+    func GetImportedSymbol(compilation Compilation?, token SyntaxToken?) Symbol? {
+        let bound = Bind(compilation, token, matchStaleTree: false)
+        if bound == nil {
+            return nil
+        }
+        let symbol = bound.Model.GetSymbolInfo(bound.Token).Symbol
+        return if IsImportedMember(symbol) {
+            symbol
+        } else {
+            default(Symbol?)
+        }
+    }
+
+    /// Gets the candidates the call or member name at [`token`](paramref) resolved among.
+    /// @param compilation The compilation the token's tree belongs to.
+    /// @param token An identifier token naming a call or a member.
+    /// @returns The candidates in the order of (cref:SemanticModel.GetMemberGroup), empty when the binder has no answer.
+    func GetMemberGroup(compilation Compilation?, token SyntaxToken?) ImmutableArray[Symbol] {
+        let bound = Bind(compilation, token, matchStaleTree: false)
+        if bound == nil {
+            return ImmutableArray[Symbol].Empty
+        }
+        return bound.Model.GetMemberGroup(bound.Token)
+    }
+
+    /// Gets the members of [`type`](paramref) that a member access at [`position`](paramref) of
+    /// [`tree`](paramref) can name.
+    /// @param compilation The compilation to query.
+    /// @param tree The tree of the position, possibly a stale parse of the file.
+    /// @param position A character offset into [`tree`](paramref).
+    /// @param type The receiver type.
+    /// @param name When given, only the members of this name.
+    /// @returns The members in the order of (cref:SemanticModel.LookupMembers), empty when the compilation holds no tree of the file.
+    func LookupMembers(
+        compilation Compilation?,
+        tree SyntaxTree?,
+        position int32,
+        type TypeSymbol,
+        name string? = nil
+    ) ImmutableArray[Symbol] {
+        if compilation == nil {
+            return ImmutableArray[Symbol].Empty
+        }
+        let model = GetPositionModel(compilation, tree)
+        if model == nil {
+            return ImmutableArray[Symbol].Empty
+        }
+        return model.LookupMembers(position, type, name)
+    }
+
+    /// Tells whether [`symbol`](paramref) stands for a member of an imported CLR type.
+    func IsImportedMember(symbol Symbol?) bool -> switch symbol {
+        case ImportedFunctionSymbol _: true
+        case property is PropertySymbol: property.ImportedMember != nil
+        case field is FieldSymbol: field.ImportedMember != nil
+        case clrEvent is EventSymbol: clrEvent.ImportedMember != nil
+        default: false
+    }
+
+    /// Gets the reflected member behind an imported member symbol, for documentation and for
+    /// cross-assembly definitions, until imported symbols carry handles (ADR-0209 stage 6).
+    func GetMemberInfo(symbol Symbol?) MemberInfo? -> switch symbol {
+        case function is ImportedFunctionSymbol: function.Method
+        case property is PropertySymbol: property.ImportedMember
+        case field is FieldSymbol: field.ImportedMember
+        case clrEvent is EventSymbol: clrEvent.ImportedMember
+        default: default(MemberInfo?)
     }
 
     /// Gets the symbol a simple name resolves to at [`token`](paramref)'s position, by the scope
@@ -59,30 +139,6 @@ shared class BoundSemantics {
             default(Symbol?)
         } else {
             symbols[0]
-        }
-    }
-
-    /// Gets the CLR member the binder bound [`token`](paramref) to when the
-    /// token names an imported method or property.
-    /// @param compilation The compilation the token's tree belongs to.
-    /// @param token An identifier token naming a member or a call.
-    /// @returns The bound member, or null when the token does not name an imported member.
-    func GetImportedMember(compilation Compilation?, token SyntaxToken?) MemberInfo? {
-        let bound = Bind(compilation, token, matchStaleTree: false)
-        if bound == nil {
-            return nil
-        }
-        let member MemberInfo? = switch bound.Model.GetReferencedExpression(bound.Token) {
-            case instanceCall is BoundImportedInstanceCallExpression: instanceCall.Method
-            case staticCall is BoundImportedCallExpression: staticCall.Function?.Method
-            case constrained is BoundConstrainedStaticCallExpression: constrained.ClrMethod
-            case property is BoundClrPropertyAccessExpression: property.Member
-            default: default(MemberInfo?)
-        }
-        return if member != nil && member.Name == bound.Token.Text {
-            member
-        } else {
-            default(MemberInfo?)
         }
     }
 

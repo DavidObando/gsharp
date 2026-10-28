@@ -55,6 +55,14 @@ abstract class BoundCallOperationExpression : BoundExpression {
         get;
     }
 
+    /// Gets the candidates overload resolution considered for this call: (cref:FunctionSymbol)s or
+    /// reflected methods, in the order the resolver held them, or the default array when the resolver
+    /// had a single candidate (ADR-0212 slice S4).
+    internal prop MemberGroup ImmutableArray[object] {
+        get;
+        set;
+    }
+
     /// Gets the arguments, in source order.
     abstract prop Arguments ImmutableArray[BoundExpression] {
         get;
