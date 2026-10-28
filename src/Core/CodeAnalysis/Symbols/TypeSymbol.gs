@@ -1129,6 +1129,11 @@ open partial class TypeSymbol : Symbol {
                 return MemberLookup.IsNaturalStructuralDelegateTarget(left, right) ||
                     MemberLookup.IsNaturalStructuralDelegateTarget(right, left)
             }
+            if left is ChannelTypeSymbol leftChannel &&
+                right is ChannelTypeSymbol rightChannel &&
+                leftChannel.Direction != rightChannel.Direction {
+                return false
+            }
             if left is ArrayTypeSymbol leftArray &&
                 right is ArrayTypeSymbol rightArray &&
                 leftArray.Length != rightArray.Length {

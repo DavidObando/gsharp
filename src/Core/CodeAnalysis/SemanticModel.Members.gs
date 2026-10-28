@@ -35,9 +35,22 @@ partial class SemanticModel {
     /// receiver.</item>
     /// </list>
     /// A member that is private or protected is returned only when the enclosing declaration of
-    /// [`position`](paramref) may access it. Imported members are public ones. Extension methods are not
-    /// returned (ADR-0212 question 12). With [`name`](paramref), only members of that name: a method name
-    /// returns every overload, in declaration order.
+    /// [`position`](paramref) may access it. Imported members are public ones. With [`name`](paramref), only
+    /// members of that name: a method name returns every overload, in declaration order.
+    /// Extension members (ADR-0212 question 12), last and for every receiver type that is not an error:
+    /// <list type="table">
+    /// <item>Extension function declared in source: each one in scope whose receiver type can take the
+    /// receiver, found by the rule a call by that name uses, as the function symbol. Order: file path
+    /// (ordinal), then start position.</item>
+    /// <item>Extension method of an imported class: each `static [Extension]` method of the classes in the
+    /// namespaces the file imports whose first parameter can take the receiver, by the rule of the call
+    /// binder, as an imported function symbol whose parameters include the receiver. A receiver with no CLR
+    /// shape (a declared class) is probed as its imported base class, and through the interface it implements
+    /// when it has none or the base is `object`. Order: the
+    /// holder classes in reference order, then metadata order. Generic methods keep their open signature.</item>
+    /// </list>
+    /// An extension is listed even where a member of the same name hides it at a call, and the receiver
+    /// of a static access (a type name) gets the same extensions as an instance.
     /// @param position A character offset into this model's tree.
     /// @param type The receiver type.
     /// @param name When given, only the members of this name.
@@ -102,7 +115,57 @@ partial class SemanticModel {
                 }
             }
         }
+        AddExtensionMembers(position, receiver, name, cancellationToken, result)
         return result.ToImmutable()
+    }
+
+    /// Adds the extension functions and extension methods in scope at [`position`](paramref) whose receiver
+    /// can take [`receiver`](paramref). The applicability rules are the binder's (see
+    /// `Binder.CollectExtensionMembers`); only the order is set here.
+    private func AddExtensionMembers(
+        position int32,
+        receiver TypeSymbol,
+        name string?,
+        cancellationToken CancellationToken,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        if object.ReferenceEquals(receiver, TypeSymbol.Error) || receiver == TypeSymbol.Void {
+            return
+        }
+        let function FunctionSymbol? = switch GetEnclosingSymbol(position, cancellationToken) {
+            case enclosing is FunctionSymbol: enclosing
+            case property is PropertySymbol: property.GetterSymbol ?? property.SetterSymbol
+            default: default(FunctionSymbol?)
+        }
+        using let nullabilityScope = NullabilityOptions.Enter(compilation.Nullability, compilation.PlatformNilChecks)
+        let found = Binder.CollectExtensionMembers(
+            compilation.GlobalScope,
+            compilation.References ?? ReferenceResolver.Default(),
+            function,
+            receiver,
+            name,
+            syntaxTree,
+            compilation.Submission?.DefaultPackageName ?? "Default"
+        )
+        // Declared extensions by file path (ordinal), then start, so the order does not depend on the order
+        // files were bound in. Imported ones keep holder order, then metadata order.
+        let declared = found
+            .Source
+            .Select(
+            (f FunctionSymbol) -> (
+                Function: f,
+                File: f.Declaration?.SyntaxTree.Text?.FileName ?? string.Empty,
+                Start: f.Declaration?.Span.Start ?? int32.MaxValue
+            )
+        )
+            .OrderBy((e(Function FunctionSymbol, File string, Start int32)) -> e.File, StringComparer.Ordinal)
+            .ThenBy((e(Function FunctionSymbol, File string, Start int32)) -> e.Start)
+        for entry in declared {
+            result.Add(entry.Function)
+        }
+        for method in found.Imported {
+            result.Add(ImportedMemberSymbol(default(TypeSymbol?), method))
+        }
     }
 
     /// Returns the candidates the call or the member name at [`node`](paramref) resolved among, from the
