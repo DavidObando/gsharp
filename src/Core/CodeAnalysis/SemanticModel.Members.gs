@@ -45,7 +45,8 @@ partial class SemanticModel {
     /// <item>Extension method of an imported class: each `static [Extension]` method of the classes in the
     /// namespaces the file imports whose first parameter can take the receiver, by the rule of the call
     /// binder, as an imported function symbol whose parameters include the receiver. A receiver with no CLR
-    /// shape (a declared class) is probed through the interface it implements, else as `object`. Order: the
+    /// shape (a declared class) is probed as its imported base class, and through the interface it implements
+    /// when it has none or the base is `object`. Order: the
     /// holder classes in reference order, then metadata order. Generic methods keep their open signature.</item>
     /// </list>
     /// An extension is listed even where a member of the same name hides it at a call, and the receiver
