@@ -4955,8 +4955,22 @@ internal partial class StatementBinder {
             return false
         }
 
-        /// ADR-0208 R11 (#5170): whether constructing [`type`](paramref) can run user code: a
-        /// field initializer or constructor of the generic definition, or of any base class.
+        /// ADR-0208 R11 (#5170), R15 (#5237) and #5483: the one definition of whether constructing
+        /// [`type`](paramref) can run user code. R11 (mutable globals) and R15 (closure-assigned locals) both read
+        /// it. The type, the generic definition of a constructed type, and every base class are checked for
+        ///
+        /// | member                                              | runs at construction |
+        /// | --------------------------------------------------- | -------------------- |
+        /// | instance field initializer                          | yes                  |
+        /// | primary constructor                                 | yes                  |
+        /// | explicit constructor                                | yes                  |
+        /// | `shared { init { ... } }` block of a class (non-beforefieldinit `.cctor`, runs at the first `newobj`) | yes |
+        /// | `shared { init { ... } }` block of a value type (a literal or `default` is `initobj`, which does not run it) | no |
+        /// | `shared` field initializer only (`beforefieldinit`, runs at the first static field access, which is user code that is classified where it is written) | no |
+        /// | none of the above                                   | no                   |
+        ///
+        /// The static-block test reads the declaration (`DeclaresStaticInitializerBlock`), not the bound
+        /// statements, which exist only after the body of the type is bound.
         internal func ConstructionRunsUserCode(type StructSymbol) bool {
             var current StructSymbol? = type
             for var depth = 0; current != nil && depth < 64; depth++ {
@@ -4967,7 +4981,8 @@ internal partial class StatementBinder {
                     definition.HasPrimaryConstructor ||
                     !definition
                     .EffectiveExplicitConstructors
-                    .IsDefaultOrEmpty {
+                    .IsDefaultOrEmpty ||
+                    (definition.IsClass && definition.DeclaresStaticInitializerBlock) {
                     return true
                 }
                 current = definition.BaseClass
