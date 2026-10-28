@@ -38,14 +38,10 @@ class RepositoryMirrorTests {
             File.WriteAllText(Path.Combine(shared, name + ".cs"), "public class " + name + " {}")
         }
         File.WriteAllBytes(Path.Combine(shared, "asset.bin"), []byte{0, 255, 13, 10})
-        let cli = Path.Combine(
-            GsharpTestProjectRunner.FindRepoRoot()!!,
-            "out",
-            "bin",
-            "Release",
-            "Cs2Gs.Cli",
-            "cs2gs.dll"
-        )
+        // Use the loaded driver, not the C# source tree selected by CS2GS_TEST_SOURCE_ROOT.
+        let cli = typeof(Cs2Gs.Cli.Program).Assembly.Location
+        let compiler string? = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
+        Assert.NotNull(compiler)
         let result = await ProcessRunner.RunAsync(
             "dotnet",
             []string{
@@ -61,6 +57,8 @@ class RepositoryMirrorTests {
                 "global-json",
                 "--config",
                 "Release",
+                "--gsc",
+                compiler!!,
                 "--translate-only",
                 "--exclude",
                 "shared/Excluded.csproj"
