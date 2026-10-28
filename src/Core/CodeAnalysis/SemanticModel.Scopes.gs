@@ -639,9 +639,10 @@ partial class SemanticModel {
         }
     }
 
+    private let NoExtents List[TextSpan] = List[TextSpan]()
+
     /// The extents of the parts of a merged partial type that lie in this tree; empty for any other node.
     private func PartialPartExtentsInTree(node SyntaxNode) List[TextSpan] {
-        let result = List[TextSpan]()
         let extents = if node is StructDeclarationSyntax structDeclaration {
             structDeclaration.PartialPartExtents
         } else if node is InterfaceDeclarationSyntax interfaceDeclaration {
@@ -649,9 +650,11 @@ partial class SemanticModel {
         } else {
             ImmutableArray[TextLocation].Empty
         }
+        // Nearly every node is not a merged partial type: answer without allocating.
         if extents.IsDefaultOrEmpty {
-            return result
+            return NoExtents
         }
+        let result = List[TextSpan]()
         for extent in extents {
             // An unnamed tree has no path to compare: its text identifies it.
             if object.ReferenceEquals(extent.Text, syntaxTree.Text) || SourcePathIdentity.AreSame(
