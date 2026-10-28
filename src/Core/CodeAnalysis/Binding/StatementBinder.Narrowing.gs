@@ -279,23 +279,27 @@ internal partial class StatementBinder {
         }
     }
 
-    // ADR-0208 R15: whether an operand of the `||` chain [`condition`](paramref) that follows the last operand naming
+    // ADR-0208 R15: whether an operand of the `||` chain [`condition`](paramref) that follows the last test of
     // [`root`](paramref) runs source code. A fact that the chain establishes holds only until that code runs.
     private func RunsEscapedClosureAfterTest(condition BoundExpression, root VariableSymbol) bool {
         let operands = List[BoundExpression]()
         FlattenLogicalOr(condition, operands)
-        var lastNaming = -1
+        let runsCode = List[bool]()
+        var lastTest = -1
         for var i = 0; i < operands.Count; i++ {
-            let walker = RootMentionWalker(root)
-            walker.VisitExpression(operands[i])
-            if walker.Found {
-                lastNaming = i
-            }
-        }
-        for var i = lastNaming + 1; i < operands.Count; i++ {
             let collector = NewCollector(nil, externalCallableAliases)
             collector.VisitExpression(operands[i])
-            if collector.MayRunEscapedClosure {
+            runsCode.Add(collector.MayRunEscapedClosure)
+            let walker = RootMentionWalker(root)
+            walker.VisitExpression(operands[i])
+            // An operand is a test of the root when it only reads it, or when its code is the call that writes
+            // the root through `out`/`ref`. An operand that runs other code after reading the root is not.
+            if walker.Found && (!collector.MayRunEscapedClosure || collector.WritableReferenceRoots.Contains(root)) {
+                lastTest = i
+            }
+        }
+        for var i = lastTest + 1; i < operands.Count; i++ {
+            if runsCode[i] {
                 return true
             }
         }
