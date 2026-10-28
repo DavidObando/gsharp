@@ -1095,8 +1095,7 @@ internal partial class MethodBodyEmitter {
             }
             // Reuse the nominal classifier for source-class upcasts, including symbolic imported bases (#5388, #4731).
             if a is StructSymbol srcClass2 && srcClass2.IsClass && b != nil {
-                if Conversion.ClassifyCore(a, b, allowStructuralProjection: false, allowExplicitReference: false)
-                    .IsImplicit {
+                if Conversion.IsRepresentationPreservingImplicit(srcClass2, b) {
                     return true
                 }
             }

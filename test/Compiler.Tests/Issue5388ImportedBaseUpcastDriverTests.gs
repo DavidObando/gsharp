@@ -173,11 +173,124 @@ class Program {
         }
     }
 
-    private func Check(fixture CSharpFixture, source string, oracle string, expected string) {
+    @Theory
+    @InlineData("Reader", "int32")
+    @InlineData("Writer", "int32")
+    @InlineData("Reader", "Payload")
+    @InlineData("Writer", "Payload")
+    func SourceClass_DoesNotInheritReferenceChangingProjection(view string, element string) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let declaration = "func View(value Wrap) Channel" + view + "[" + element + "] -> "
+        let source = "import System.Threading.Channels\nstruct Payload { var Value uint32 }\n" +
+            "class Wrap : Channel[" +
+            element +
+            "] {}\n" +
+            declaration +
+            "value\nfunc Main() {}\n"
+        let result = Compile(fixture, source, RuntimeReferences())
+        Assert.NotEqual(0, result.Code)
+        let errors = Regex.Matches(
+            Encoding.UTF8.GetString(result.Bytes) + result.Error,
+            `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+        )
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0155", error.Groups[5].Value)
+        Assert.Equal("4", error.Groups[1].Value)
+        Assert.Equal((declaration.Length + 1).ToString(), error.Groups[2].Value)
+        Assert.Equal("4", error.Groups[3].Value)
+        Assert.Equal((declaration.Length + 6).ToString(), error.Groups[4].Value)
+        for path in[]string{"Consumer.dll", "Consumer.ref.dll", "Consumer.pdb"} {
+            Assert.False(File.Exists(Path.Combine(fixture.DirectoryPath, path)))
+        }
+    }
+
+    @Theory
+    @InlineData("Reader")
+    @InlineData("Writer")
+    func DirectChannelProjection_UsesGetterAndPreservesNominalBaseUpcast(view string) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Threading.Channels
+import UpcastControl
+class Wrap : Channel[int32] {}
+shared class Counts { var Receivers int32 = 0 }
+func Target(value Channel[int32]) Channel[int32] {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func View(value Channel[int32]) Channel@VIEW@[int32] -> value
+func Up(value Wrap) Channel[int32] -> value
+func Main() {
+    let channel = Channel.CreateUnbounded[int32]()
+    let view = View(Target(channel))
+    Console.Write(Object.ReferenceEquals(view, channel.@VIEW@))
+    Console.Write("|")
+    Console.Write(Counts.Receivers)
+    Console.Write("|")
+    @TRANSFER@
+    Console.Write(value)
+    Console.Write("|")
+    let wrap = Wrap()
+    Console.Write(Object.ReferenceEquals(Up(wrap), wrap))
+    Console.Write("|")
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`.Replace("@VIEW@", view).Replace(
+            "@TRANSFER@",
+            if view == "Reader" {
+                "Console.Write(channel.Writer.TryWrite(37))\n    Console.Write(view.TryRead(out var value))"
+            } else {
+                "Console.Write(view.TryWrite(37))\n    Console.Write(channel.Reader.TryRead(out var value))"
+            }
+        )
+        let oracle = `using System;
+using System.Threading.Channels;
+using UpcastControl;
+class Wrap : Channel<int> {}
+class Program {
+    static int receivers;
+    static Channel<int> Target(Channel<int> value) { receivers++; Console.Write("R"); return value; }
+    static Channel@VIEW@<int> View(Channel<int> value) => value.@VIEW@;
+    static Channel<int> Up(Wrap value) => value;
+    static void Main() {
+        var channel = Channel.CreateUnbounded<int>();
+        var view = View(Target(channel));
+        Console.Write(Object.ReferenceEquals(view, channel.@VIEW@));
+        Console.Write("|");
+        Console.Write(receivers);
+        Console.Write("|");
+        @TRANSFER@
+        Console.Write(value);
+        Console.Write("|");
+        var wrap = new Wrap();
+        Console.Write(Object.ReferenceEquals(Up(wrap), wrap));
+        Console.Write("|");
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`.Replace("@VIEW@", view).Replace(
+            "@TRANSFER@",
+            if view == "Reader" {
+                "Console.Write(channel.Writer.TryWrite(37));\n        Console.Write(view.TryRead(out var value));"
+            } else {
+                "Console.Write(view.TryWrite(37));\n        Console.Write(channel.Reader.TryRead(out var value));"
+            }
+        )
+        Check(fixture, source, oracle, "RTrue|1|TrueTrue37|True|1", RuntimeReferences())
+    }
+
+    private func Check(
+        fixture CSharpFixture,
+        source string,
+        oracle string,
+        expected string,
+        references IEnumerable[string]? = nil
+    ) {
         Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
         output.WriteLine("Contract source:\n" + Contract)
         output.WriteLine("Oracle source:\n" + oracle)
-        let result = Compile(fixture, source)
+        let result = Compile(fixture, source, references)
         Assert.True(result.Code == 0, Encoding.UTF8.GetString(result.Bytes) + result.Error)
         Assert.Empty(result.Error)
         let image = Path.Combine(fixture.DirectoryPath, "Consumer.dll")
@@ -190,7 +303,7 @@ class Program {
         for content in bytes {
             Assert.NotEmpty(content)
         }
-        let repeat = Compile(fixture, source)
+        let repeat = Compile(fixture, source, references)
         Assert.Equal(0, repeat.Code)
         Assert.Equal(result.Bytes, repeat.Bytes)
         Assert.Equal(result.Error, repeat.Error)
@@ -237,7 +350,11 @@ class Program {
         }
     }
 
-    private func Compile(fixture CSharpFixture, source string)(Code int32, Bytes[]uint8, Error string) {
+    private func Compile(fixture CSharpFixture, source string, references IEnumerable[string]? = nil)(
+        Code int32,
+        Bytes[]uint8,
+        Error string
+    ) {
         let path = Path.Combine(fixture.DirectoryPath, "Consumer.gs")
         File.WriteAllText(path, source)
         output.WriteLine("G# source:\n" + source)
@@ -245,19 +362,21 @@ class Program {
         RecordArtifact(typeof(Issue5388ImportedBaseUpcastDriverTests).Assembly.Location)
         RecordArtifact(typeof(Program).Assembly.Location)
         RecordArtifact(Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!!, "GSharp.Core.dll"))
-        return Run(
-            []string{
-                typeof(Program).Assembly.Location,
-                path,
-                "/target:exe",
-                "/targetframework:net10.0",
-                "/deterministic+",
-                "/debug:portable",
-                "/out:" + Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
-                "/refout:" + Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
-                "/reference:" + fixture.AssemblyPath
-            }
-        )
+        let arguments = List[string]{
+            typeof(Program).Assembly.Location,
+            path,
+            "/target:exe",
+            "/targetframework:net10.0",
+            "/deterministic+",
+            "/debug:portable",
+            "/out:" + Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
+            "/refout:" + Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
+            "/reference:" + fixture.AssemblyPath
+        }
+        if references != nil {
+            arguments.AddRange(references.Select((reference string) -> "/reference:" + reference))
+        }
+        return Run(arguments)
     }
 
     private func Verify(image string, contract string?) {

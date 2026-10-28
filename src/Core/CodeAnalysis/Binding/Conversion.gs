@@ -1512,12 +1512,9 @@ class Conversion {
                 // Preserve symbolic arguments when an imported base has no faithful CLR probe.
                 // Classes and interfaces share this nominal conversion path (#5388, #4731).
                 for c in GetStructHierarchy(fromClass) {
-                    if c.ImportedBaseType is {} importedBase && ClassifyCore(
-                        importedBase,
-                        to,
-                        allowStructuralProjection: false,
-                        allowExplicitReference: false
-                    ).IsImplicit {
+                    if to != nil &&
+                        c.ImportedBaseType is {} importedBase &&
+                        IsRepresentationPreservingImplicit(importedBase, to) {
                         return Conversion.Implicit
                     }
                 }
@@ -2184,6 +2181,10 @@ class Conversion {
                 !IsReferenceLikeTarget(target) {
                 return false
             }
+            // Symbolic imported owners must prove nominal inheritance, not a conversion that constructs a different reference.
+            if source is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
+                return TryClassifyConstructedImportedReferenceConversion(source, target)
+            }
             return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {
                 ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
             } else {
@@ -2205,6 +2206,9 @@ class Conversion {
         /// @param type The candidate type.
         /// @returns `true` when [`type`](paramref) is reference-capable.
         internal func IsReferenceLikeTarget(type TypeSymbol) bool {
+            if type is ImportedTypeSymbol{OpenDefinition: {IsValueType: false}} {
+                return true
+            }
             if type is InterfaceSymbol {
                 return true
             }
