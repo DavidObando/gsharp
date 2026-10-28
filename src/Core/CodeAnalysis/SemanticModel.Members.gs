@@ -28,7 +28,7 @@ partial class SemanticModel {
     /// <item>Struct or class, then (issue #5441): the public instance members of the nearest imported base class
     /// (reached through source base classes), or of `object` when there is none, read at that base, in
     /// metadata order. A static or non-public member of the base is not listed. A member that the type
-    /// overrides is listed with its source override.</item>
+    /// or a source base overrides is not listed: the override stands for the slot.</item>
     /// <item>Struct or class, then (issue #5441): each default method of an interface the type or one of its
     /// base classes implements, interfaces in declaration order and their base interfaces after them, when
     /// neither the type nor a base class declares a method of that name (the rule of the call binder). A
@@ -151,17 +151,62 @@ partial class SemanticModel {
                 break
             }
         }
+        let overridden = ExternalOverrides(structure)
         if baseType == nil {
             AddClrMembers(
                 ImportedTypeSymbol.GetWithoutNullability(typeof(object), NullabilityFreeReason.TypeStructure),
                 typeof(object),
                 name,
                 result,
-                includeStatic: false
+                includeStatic: false,
+                overridden
             )
         } else if baseType.ClrType is {} baseClr {
-            AddClrMembers(baseType, baseClr, name, result, includeStatic: false)
+            AddClrMembers(baseType, baseClr, name, result, includeStatic: false, overridden)
         }
+    }
+
+    /// Returns the imported virtual accessors and methods that the source members of [`structure`](paramref) and
+    /// of its source bases override. The override stands for the slot: the imported member is not listed again.
+    private func ExternalOverrides(structure StructSymbol) List[MethodInfo] {
+        let overridden = List[MethodInfo]()
+        for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Instance(MemberKinds.All)) {
+            switch member {
+                case function is FunctionSymbol {
+                    AddIfSet(overridden, function.ExternalOverriddenMethod)
+                }
+                case property is PropertySymbol {
+                    AddIfSet(overridden, property.ExternalOverriddenGetter)
+                    AddIfSet(overridden, property.ExternalOverriddenSetter)
+                }
+                case clrEvent is EventSymbol {
+                    AddIfSet(overridden, clrEvent.ExternalOverriddenAddMethod)
+                    AddIfSet(overridden, clrEvent.ExternalOverriddenRemoveMethod)
+                    AddIfSet(overridden, clrEvent.ExternalOverriddenRaiseMethod)
+                }
+            }
+        }
+        return overridden
+    }
+
+    private func AddIfSet(list List[MethodInfo], method MethodInfo?) {
+        if method != nil {
+            list.Add(method)
+        }
+    }
+
+    // The same slot: a reflected method is a different object per reflected type, its token and module are not.
+    private func IsOverridden(accessor MethodInfo?, overridden List[MethodInfo]?) bool {
+        if accessor == nil || overridden == nil {
+            return false
+        }
+        return overridden.Any(
+            (o MethodInfo) -> o.MetadataToken == accessor.MetadataToken && string.Equals(
+                o.Module.Name,
+                accessor.Module.Name,
+                StringComparison.Ordinal
+            )
+        )
     }
 
     /// Adds the default methods of the interfaces that a class or struct implements, the ones it does not
@@ -506,20 +551,21 @@ partial class SemanticModel {
         clrType Type,
         name string?,
         result ImmutableArray[Symbol].Builder,
-        includeStatic bool = true
+        includeStatic bool = true,
+        overridden List[MethodInfo]? = nil
     ) {
         let flags = if includeStatic {
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
         } else {
             BindingFlags.Public | BindingFlags.Instance
         }
-        AddClrMembersOf(receiver, clrType, flags, name, result)
+        AddClrMembersOf(receiver, clrType, flags, name, result, overridden)
         // An interface does not report the members of the interfaces it extends; they are its members too.
         if clrType.IsInterface {
             // The guarded, transitive walk: a missing reference assembly or a load context that reports only
             // the direct interfaces does not fail the query.
             for baseInterface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
-                AddClrMembersOf(receiver, baseInterface, flags, name, result)
+                AddClrMembersOf(receiver, baseInterface, flags, name, result, overridden)
             }
         }
     }
@@ -529,12 +575,15 @@ partial class SemanticModel {
         clrType Type,
         flags BindingFlags,
         name string?,
-        result ImmutableArray[Symbol].Builder
+        result ImmutableArray[Symbol].Builder,
+        overridden List[MethodInfo]? = nil
     ) {
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
             if property.GetIndexParameters()
                 .Length == 0 &&
-                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) {
+                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) &&
+                !IsOverridden(property.GetMethod, overridden) &&
+                !IsOverridden(property.SetMethod, overridden) {
                 result.Add(ImportedMemberSymbol(receiver, property))
             }
         }
@@ -544,12 +593,15 @@ partial class SemanticModel {
             }
         }
         for method in ClrTypeUtilities.SafeGetMethods(clrType, flags) {
-            if !method.IsSpecialName && (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(method, name)) {
+            if !method.IsSpecialName &&
+                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(method, name)) &&
+                !IsOverridden(method, overridden) {
                 result.Add(ImportedMemberSymbol(receiver, method))
             }
         }
         for clrEvent in ClrTypeUtilities.SafeGetEvents(clrType, flags) {
-            if name == nil || ClrTypeUtilities.EmittedMemberNameMatches(clrEvent, name) {
+            if (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(clrEvent, name)) &&
+                !IsOverridden(clrEvent.AddMethod, overridden) {
                 result.Add(ImportedMemberSymbol(receiver, clrEvent))
             }
         }

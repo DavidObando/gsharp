@@ -85,6 +85,22 @@ open class Adr0212InheritedMemberTests {
     }
 
     @Fact
+    func ImportedBase_AMemberTheTypeOverrides_IsListedOnceAsTheOverride() {
+        // The override stands for the slot: `object.ToString`, `Stream.SetLength` and `Exception.Message` are
+        // not listed again, so a hover overload count is not doubled.
+        for pair in[](string, string){("PShown", "ToString"), ("PStream", "SetLength"), ("PFaulty", "Message")} {
+            let only = Assert.Single(Query(pair.Item1, pair.Item2))
+            Assert.IsType[StructSymbol](only.ContainingType)
+        }
+        // An overload the type does not override is still listed.
+        Assert.NotEmpty(Query("PStream", "Write"))
+        Assert.Contains(
+            Query("PShown", "Equals"),
+            (m Symbol) -> m is ImportedFunctionSymbol imported && imported.Method.DeclaringType!!.Name == "Object"
+        )
+    }
+
+    @Fact
     func ImportedBase_ArgumentNullability_IsReadAtTheBase() {
         // `class Maybes : List[string?]`: `GetRange` returns the base's `List<T>`, read at `T = string?`.
         let slice = cast[ImportedFunctionSymbol](Assert.Single(Query("PMaybes", "GetRange")))
@@ -266,6 +282,18 @@ class Maybes : List[string?] { }
 
 class Args : EventArgs { }
 
+class Shown {
+    override func ToString() string { return "shown" }
+}
+
+class Raw : MemoryStream {
+    override func SetLength(value int64) { }
+}
+
+class Faulty : Exception {
+    override prop Message string -> "faulty"
+}
+
 interface ICounted : IList[string] { }
 
 interface IShape {
@@ -303,6 +331,9 @@ func Use(
     n Names,
     maybes Maybes,
     args Args,
+    shown Shown,
+    raw Raw,
+    faulty Faulty,
     il IList[string],
     c ICounted,
     sq Square,
@@ -326,6 +357,9 @@ func Use(
     n.Add("a") // PNames
     let found = maybes.GetRange(0, 1) // PMaybes
     args.ToString() // PArgs
+    shown.ToString() // PShown
+    raw.SetLength(1) // PStream
+    let text = faulty.Message // PFaulty
     let listed = il.Count // PIList
     let counted = c.Count // PCounted
     sq.Area() // PSquare
