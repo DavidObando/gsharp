@@ -842,6 +842,22 @@ partial class StructDeclarationSyntax : MemberSyntax {
         }
     }
 
+    /// Gets or sets the whole-node location of every part of a merged `partial`
+    /// type, in part order. The merged node spans only the first part's braces, so
+    /// a position in a later part (an empty one has no member to lead to it) is
+    /// resolved through these. Empty on an ordinary declaration. Internal: the
+    /// semantic model is the only reader.
+    private var _partialPartExtents ImmutableArray[TextLocation] = ImmutableArray[TextLocation].Empty
+
+    internal prop PartialPartExtents ImmutableArray[TextLocation] {
+        get {
+            return _partialPartExtents
+        }
+        set {
+            _partialPartExtents = value
+        }
+    }
+
     /// Gets or sets a value indicating whether this declaration is the
     /// compiler-generated class behind a rich anonymous-object literal.
     internal prop IsSynthesizedRichAnonymousObject bool
@@ -955,6 +971,7 @@ partial class StructDeclarationSyntax : MemberSyntax {
             Deinitializer = Deinitializer,
             NestedTypes = nestedTypes,
             PartialTypeParameterLists = PartialTypeParameterLists,
+            PartialPartExtents = PartialPartExtents,
             IsSynthesizedRichAnonymousObject = IsSynthesizedRichAnonymousObject,
             RichAnonymousShellTypeParameterCount = RichAnonymousShellTypeParameterCount,
             DocumentationSource = DocumentationSource ?? this
