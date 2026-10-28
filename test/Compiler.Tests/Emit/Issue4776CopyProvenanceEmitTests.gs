@@ -821,6 +821,197 @@ return $"{Api.Writes}|{Api.Calls}";`
         Assert.False(File.Exists(pdb))
     }
 
+    private const PlatformOuterContract5413 string = `#nullable enable
+namespace ContextOuter5413;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public class Box<T, U>(T first, U second) { public T First = first; public U Second = second; }
+public static class Maker<T> where T : class {
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        T> Create(T value) {
+        Api.Calls++;
+        return new ViewImpl<string, T>(null!, value);
+    }
+    public static Box<
+#nullable disable
+        string,
+#nullable enable
+        T> Invariant(T value) => new(null!, value);
+}
+public static class Api {
+    public static int Calls;
+#nullable disable
+    public static string Get() { Calls++; return null; }
+    public static IView<string,
+#nullable enable
+        string
+#nullable disable
+        > Outer(bool absent) {
+        Calls++;
+        return absent ? null : new ViewImpl<string, string>(null, "outer");
+    }
+}`
+
+    @Theory
+    @InlineData(false, "outer")
+    @InlineData(true, "outer")
+    @InlineData(false, "nullable-outer")
+    @InlineData(true, "nullable-outer")
+    @InlineData(false, "local-view")
+    @InlineData(true, "local-view")
+    @InlineData(false, "nullable-tuple")
+    @InlineData(true, "nullable-tuple")
+    func ImportedPlatformViewContext_PreservesOuterChecksAndSymbolicReferences(useReference bool, context string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Outer.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(PlatformOuterContract5413, "Outer", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let body = if context == "outer" {
+            "public func Lift(absent bool) IView[string?, string?] -> Api.Outer(absent)"
+        } else if context == "nullable-outer" {
+            "public func Lift(absent bool) IView[string?, string?]? -> Api.Outer(absent)"
+        } else if context == "local-view" {
+            "public func Lift(value C) IView[string?, C?] {\nlet view = Maker[C].Create(value)\nreturn view\n}"
+        } else {
+            `public func Lift(value C) (string?, C?)? {
+let pair = (Api.Get(), value)
+return pair
+}
+public func Stored(value C) (string?, C?) {
+let pair = (Api.Get(), value)
+return pair
+}
+public func Imported(value C) System.ValueTuple[string?, C?]? {
+let pair = (Api.Get(), value)
+return pair
+}`
+        }
+        let apiReference = Path.Combine(fixture.Directory, "Views.ref.dll")
+        let api = fixture.Compile(
+            "package OuterViews5413\nimport ContextOuter5413\npublic class C {}\npublic class Exports { shared {\n" +
+                body +
+                "\n} }\n",
+            "Views",
+            executable: false,
+            []string{"/assemblyname:Views", "/r:" + selected, "/refout:" + apiReference}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let assertion = if context == "outer" {
+            `var value = Exports.Lift(false);
+if (value.First != null || value.Second != "outer") throw new Exception("View changed.");
+bool checkedNull = false;
+try {
+    Exports.Lift(true);
+    throw new Exception("The outer null crossed a non-null boundary.");
+} catch (NullReferenceException error) {
+    if (!error.Message.Contains("'Outer(absent)' was nil") || !error.Message.Contains("Views.gs:5"))
+        throw new Exception("The outer check lost its origin.", error);
+    checkedNull = true;
+}
+if (Api.Calls != 2) throw new Exception("The producer was evaluated twice.");
+return $"{value.First == null}|{value.Second}|{checkedNull}|{Api.Calls}";`
+        } else if context == "nullable-outer" {
+            `var value = Exports.Lift(false);
+var absent = Exports.Lift(true);
+if (value == null || value.First != null || value.Second != "outer" || absent != null || Api.Calls != 2)
+    throw new Exception("The nullable outer view changed.");
+return $"{value.First == null}|{value.Second}|{absent == null}|{Api.Calls}";`
+        } else if context == "local-view" {
+            `var item = new C();
+var value = Exports.Lift(item);
+if (value.First != null || !ReferenceEquals(value.Second, item) || Api.Calls != 1)
+    throw new Exception("The symbolic class reference changed.");
+return $"{value.First == null}|{ReferenceEquals(value.Second, item)}|{Api.Calls}";`
+        } else {
+            `var item = new C();
+var lifted = Exports.Lift(item);
+var stored = Exports.Stored(item);
+var imported = Exports.Imported(item);
+if (!lifted.HasValue || !imported.HasValue || lifted.Value.Item1 != null || stored.Item1 != null ||
+    imported.Value.Item1 != null || !ReferenceEquals(lifted.Value.Item2, item) ||
+    !ReferenceEquals(stored.Item2, item) || !ReferenceEquals(imported.Value.Item2, item) || Api.Calls != 3)
+    throw new Exception("The tuple reference or Nullable storage changed.");
+return $"{lifted.HasValue}|{lifted.Value.Item1 == null}|{ReferenceEquals(lifted.Value.Item2, item)}|{Api.Calls}";`
+        }
+        let caller = fixture.CompileCSharp(
+            "using System;\nusing ContextOuter5413;\nusing OuterViews5413;\npublic static class Probe {\n" +
+                "public static string Run() {\n" +
+                assertion +
+                "\n} }",
+            "Caller",
+            contract,
+            apiReference
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        let expected = if context == "outer" || context == "nullable-outer" {
+            "True|outer|True|2"
+        } else if context == "local-view" {
+            "True|True|1"
+        } else {
+            "True|True|True|3"
+        }
+        Assert.Equal(expected, assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        let rejectedLine = if context == "outer" || context == "nullable-outer" {
+            "public func Rejected() IView[string, string?] -> Api.Outer(false)"
+        } else if context == "local-view" {
+            "public func Rejected() Box[string?, C?] -> Maker[C].Invariant(C())"
+        } else {
+            "public func Rejected(value (string?, C?)?) (string?, C?) -> value"
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "package OuterReject5413\nimport ContextOuter5413\npublic class C {}\n" + rejectedLine + "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = rejectedLine.IndexOf("->", StringComparison.Ordinal) + 4
+        let end = rejectedLine.Length + 1
+        Assert.NotEqual(0, code)
+        let diagnostic = if context == "local-view" {
+            "GS0490"
+        } else {
+            "GS0155"
+        }
+        Assert.Contains("Rejected.gs(4,$start,4,$end): error $diagnostic:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;

@@ -3554,37 +3554,7 @@ class Conversion {
             }
             let fromPlatform = cast[PlatformTypeSymbol](from)
             let underlying = fromPlatform.UnderlyingType
-            // ADR-0186 §3 rule 3, for the shape the top-level arm would otherwise
-            // swallow: a platform-wrapped CONTAINER.
-            //
-            // `C[T!]` does not always arrive spelled that way. An oblivious
-            // `string[]` arrives as `[]string!` — the wrapper on the container,
-            // the element carried by the reader's nullable-flags subtree — and
-            // rule 5 says a read through it yields `T!`, which the reader agrees
-            // with: `obliviousArray()[0]` really is `string!`. Converting that to
-            // a bare `[]string` therefore IS `C[T!] -> C[T]` in substance, and
-            // rule 3 gives it no conversion.
-            //
-            // Getting this wrong was strictly worse than the status quo rather
-            // than merely incomplete: the container check fired, passed (the
-            // array is not nil), and the ELEMENT's obliviousness was erased by
-            // the conversion, so `b[0].Length` threw an unattributed NRE on a
-            // program the pre-ADR-0186 model rejects outright.
-            //
-            // A pair this cannot compare — `[]string! -> object`,
-            // `[]string! -> IEnumerable[string]`, anything that is not the same
-            // container shape — is DECLINED here, not rejected, and falls
-            // through to the ordinary rows below. A supertype view that promises
-            // non-null elements (`IEnumerable[string]`) is then rejected by
-            // `TryClassifyPlatformTypeArgumentMismatch` when the underlying pair
-            // is classified (#4420); `object` and a nilable element view are not.
-            if TryGetPlatformArgumentPairs(underlying, to, out var elementSource, out var elementTarget) {
-                for var i = 0; i < elementSource.Length; i++ {
-                    if IsIllegalPlatformArgumentRelation(RelatePlatformArguments(elementSource[i], elementTarget[i])) {
-                        return Conversion.None
-                    }
-                }
-            }
+            // Both paths classify the underlying value through the shared container/view rules before adding the outer check.
             // `T! -> T?` (and `T! -> U?` for any nilable destination): implicit,
             // no check — no conversion to non-null occurs, so interop-to-interop
             // flow costs nothing.
@@ -3707,7 +3677,7 @@ class Conversion {
                 return false
             }
             // Tuple values use elementwise conversions. An invariant argument containing a tuple still uses the recursive relation.
-            if from is TupleTypeSymbol && to is TupleTypeSymbol {
+            if UnwrapPlatformAndNullable(from) is TupleTypeSymbol && UnwrapPlatformAndNullable(to) is TupleTypeSymbol {
                 return false
             }
             // #4420: an UPCAST (`List[string!]` to `IEnumerable[string]`,
@@ -4538,7 +4508,7 @@ class Conversion {
                             return PlatformArgumentRelation.Incompatible
                         }
                         if IsVarianceArgumentCompatible(from, to, allowPlatformNilCheck: false) &&
-                            IsRepresentationPreservingImplicit(from, to) {
+                            IsImplicitReferenceVariantSlot(from, to) {
                             return if HaveIdenticalTypeArgumentContracts(source, target) {
                                 PlatformArgumentRelation.Same
                             } else {
