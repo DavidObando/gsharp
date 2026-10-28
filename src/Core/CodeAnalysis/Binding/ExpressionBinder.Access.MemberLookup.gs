@@ -1064,14 +1064,20 @@ internal partial class ExpressionBinder {
                     let clrProp = MemberLookup.GetInterfaceImportedBaseInstanceProperty(
                         ifaceSym,
                         ifaceMemberName,
+                        out var importedPropertyReceiver,
                         requireReadable: true
                     )
                     if clrProp != nil {
+                        let propertyReceiver = conversions.BindConversion(
+                            ne.Location,
+                            receiver,
+                            importedPropertyReceiver!!
+                        )
                         return BoundClrPropertyAccessExpression(
                             nil,
-                            receiver,
+                            propertyReceiver,
                             clrProp,
-                            GetInheritedClrMemberType(receiver.Type, clrProp)
+                            GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
                         )
                     }
                     for clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym) {

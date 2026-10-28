@@ -467,46 +467,60 @@ Console.Write(reader.Bare())`, "GenericInterfaceCall5262", true, "/r:" + contrac
 
     @Fact
     func ReadableInheritedPropertiesSkipWriteOnlyCandidatesWithoutLosingLexicalBarriers() {
-        using let fixture = NativeSliceLanguageTests.Fixture()
-        let contract = fixture.CompileCSharp(`using System;
-namespace Readable5262;
-public interface IWriteOnly { int Value { set; } }
-public interface IStatic { static int Value => 9; }
-public interface IReadable<T> { T Value { get; } }
-public class Both : IWriteOnly, IStatic, IReadable<int> {
-    private int stored = 2;
-    public int Value { get { Console.Write("G"); return stored; } set { stored = value; } }
-}
-public static class Bridge { public static int Read(IReadable<int> item) => item.Value; }`, "ReadableContract5262")
-        let executable = fixture.Compile(`import System
-import Readable5262
+        Issue5389InheritedImportedPropertyDriverTests.Check(`import System
 class Outer {
     shared { var Value int32 = 1 }
     interface Nested : IWriteOnly, IStatic, IReadable[int32] {
         func Bare() int32 { return Value }
         func Qualified() int32 { return this.Value }
+        func Write() { Value = 4 }
     }
     func Read() int32 -> Value
 }
 class Implementation : Both, Outer.Nested {}
-func Select(item Outer.Nested) Outer.Nested {
-    Console.Write("S")
-    return item
+class Trace {
+    shared {
+        func Select(item Outer.Nested) Outer.Nested {
+            Console.Write("S")
+            return item
+        }
+        func ReadSelected(item Outer.Nested) int32 { return Select(item).Value }
+    }
 }
-let item Outer.Nested = Implementation()
-Console.Write(Bridge.Read(item))
-Console.Write("|")
-Console.Write(item.Bare())
-Console.Write("|")
-Console.Write(item.Qualified())
-Console.Write("|")
-Console.Write(Select(item).Value)
-Console.Write("|")
-Console.Write(Outer().Read())`, "ReadableSelection5262", true, "/r:" + contract)
-        IlVerifier.Verify(executable, []string{contract})
-        Assert.Equal(Encoding.UTF8.GetBytes("G2|G2|G2|SG2|1"), fixture.RunBytes(executable))
-        let (code, output) = fixture.TryCompile(`import Readable5262
-class Outer {
+`, `public class Outer {
+    static int Value = 1;
+    public interface Nested : IWriteOnly, IStatic, IReadable<int> {
+        int Bare() { return ((IReadable<int>)this).Value; }
+        int Qualified() { return ((IReadable<int>)this).Value; }
+        void Write() { ((IWriteOnly)this).Value = 4; }
+    }
+    public int Read() { return Value; }
+}
+public class Implementation : Both, Outer.Nested {}
+public class Trace {
+    public static Outer.Nested Select(Outer.Nested item) {
+        Console.Write("S"); return item;
+    }
+    public static int ReadSelected(Outer.Nested item) {
+        return ((IReadable<int>)Select(item)).Value;
+    }
+}
+`, `class Program {
+    static void Main() {
+        var implementation = new Implementation();
+        Outer.Nested item = implementation;
+        Console.Write(Bridge.Read(item)); Console.Write("|");
+        Console.Write(item.Bare()); Console.Write("|");
+        Console.Write(item.Qualified()); Console.Write("|");
+        Console.Write(Trace.ReadSelected(item)); Console.Write("|");
+        Console.Write(new Outer().Read()); Console.Write("|");
+        item.Write();
+        Console.Write(Bridge.Read(item)); Console.Write("|");
+        Console.Write(new Outer().Read());
+        Console.Write($"|{implementation.Reads}:{implementation.Writes}");
+    }
+}`, "G2|G2|G2|SG2|1|S4G4|1|5:1")
+        Issue5389InheritedImportedPropertyDriverTests.Reject(`class Outer {
     shared { var Value int32 = 1 }
     interface Nested : IWriteOnly {
         func Bare() int32 { return Value }
@@ -514,13 +528,7 @@ class Outer {
         func Write() { Value = 4 }
         func Compound() { Value += 3 }
     }
-}`, "UnreadableBarrier5262", false, "/r:" + contract)
-        Assert.NotEqual(0, code)
-        Assert.Contains("UnreadableBarrier5262.gs(5,36,5,41): error GS0158", output)
-        Assert.Contains("UnreadableBarrier5262.gs(6,46,6,51): error GS0158", output)
-        Assert.Contains("UnreadableBarrier5262.gs(7,24,7,29): error GS0125", output)
-        Assert.Contains("UnreadableBarrier5262.gs(8,27,8,32): error GS0125", output)
-        Assert.False(File.Exists(Path.Combine(fixture.Directory, "UnreadableBarrier5262.dll")))
+}`, []string{"GS0158", "GS0158", "GS0127"}, []string{"4,36,4,41", "5,46,5,51", "7,33,7,35"})
     }
 
     @Fact
@@ -628,22 +636,38 @@ Console.Write(Outer().Read())`, "ImportedProperty5262", true, "/r:" + contract)
     }
 
     @Fact
-    func UnsupportedImportedInterfacePropertyWritesCannotMutateEnclosingFields() {
-        using let fixture = NativeSliceLanguageTests.Fixture()
-        let contract = fixture.CompileCSharp(`namespace ImportedProperties5262;
-public interface IValue { int Value { get; set; } }`, "ImportedProperties5262")
-        let (code, output) = fixture.TryCompile(`import ImportedProperties5262
-class Outer {
+    func ImportedInterfacePropertyWritesCannotMutateEnclosingFields() {
+        Issue5389InheritedImportedPropertyDriverTests.Check(`class Outer {
     shared { var Value int32 = 1 }
     interface Nested : IValue {
         func Write() { Value = 4 }
         func Compound() { Value += 4 }
     }
-}`, "RejectedImportedProperty5262", false, "/r:" + contract)
-        Assert.NotEqual(0, code)
-        Assert.Contains("RejectedImportedProperty5262.gs(5,24,5,29): error GS0125", output)
-        Assert.Contains("RejectedImportedProperty5262.gs(6,27,6,32): error GS0125", output)
-        Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectedImportedProperty5262.dll")))
+    func Read() int32 -> Value
+}
+class Implementation : ValueStore, Outer.Nested {}
+`, `public class Outer {
+    static int Value = 1;
+    public interface Nested : IValue {
+        void Write() { this.Value = 4; }
+        void Compound() { this.Value += 4; }
+    }
+    public int Read() { return Value; }
+}
+public class Implementation : ValueStore, Outer.Nested {}
+`, `class Program {
+    static void Main() {
+        var implementation = new Implementation();
+        Outer.Nested item = implementation;
+        item.Write();
+        Console.Write(implementation.Raw); Console.Write("|");
+        Console.Write(new Outer().Read()); Console.Write("|");
+        item.Compound();
+        Console.Write(implementation.Raw); Console.Write("|");
+        Console.Write(new Outer().Read());
+        Console.Write($"|{implementation.Reads}:{implementation.Writes}");
+    }
+}`, "S44|1|GS88|1|1:2")
     }
 
     @Fact
