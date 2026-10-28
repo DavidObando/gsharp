@@ -1069,6 +1069,36 @@ open partial class TypeSymbol : Symbol {
                     rightNullable.UnderlyingType
                 )
             }
+            // Imported generic aggregates can use either symbol representation (issue #5413).
+            // Compare their CLR definitions and semantic arguments, not erased closed types.
+            if left is ImportedTypeSymbol or
+                StructSymbol &&
+                right is ImportedTypeSymbol or
+                StructSymbol &&
+                left.ClrType is {IsGenericType: true} leftGeneric &&
+                right.ClrType is {IsGenericType: true} rightGeneric {
+                let leftDefinition = if leftGeneric.IsGenericTypeDefinition {
+                    leftGeneric
+                } else {
+                    leftGeneric.GetGenericTypeDefinition()
+                }
+                let rightDefinition = if rightGeneric.IsGenericTypeDefinition {
+                    rightGeneric
+                } else {
+                    rightGeneric.GetGenericTypeDefinition()
+                }
+                let leftArguments = left.GetElementPositions()
+                let rightArguments = right.GetElementPositions()
+                return ClrTypeUtilities.AreSame(leftDefinition, rightDefinition) &&
+                    leftArguments.Length == rightArguments.Length &&
+                    leftArguments
+                    .Zip(rightArguments).All(
+                    (pair(First TypeSymbol, Second TypeSymbol)) -> AreRuntimeEquivalentIgnoringReferenceNullability(
+                        pair.First,
+                        pair.Second
+                    )
+                )
+            }
             if left is StructSymbol leftStruct && right is StructSymbol rightStruct {
                 return AreSameConstructedUserTypeCore(
                     leftStruct.Definition ?? leftStruct,
@@ -1099,30 +1129,6 @@ open partial class TypeSymbol : Symbol {
                     leftDelegate.TypeArguments,
                     rightDelegate.Definition ?? rightDelegate,
                     rightDelegate.TypeArguments
-                )
-            }
-            if left is ImportedTypeSymbol{OpenDefinition: not nil} leftImported &&
-                !leftImported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                right is ImportedTypeSymbol{OpenDefinition: not nil} rightImported &&
-                !rightImported
-                .TypeArguments
-                .IsDefaultOrEmpty {
-                return ClrTypeUtilities.AreSame(leftImported.OpenDefinition, rightImported.OpenDefinition) &&
-                    leftImported
-                    .TypeArguments
-                    .Length == rightImported
-                    .TypeArguments
-                    .Length &&
-                    leftImported
-                    .TypeArguments
-                    .Zip(rightImported.TypeArguments)
-                    .All(
-                    (pair(First TypeSymbol, Second TypeSymbol)) -> AreRuntimeEquivalentIgnoringReferenceNullability(
-                        pair.First,
-                        pair.Second
-                    )
                 )
             }
             if left.GetType() != right.GetType() {

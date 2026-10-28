@@ -24,6 +24,196 @@ import GSharp.Compiler.Tests
 import GSharp.Core.CodeAnalysis
 
 class Issue4776CopyProvenanceEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedPlatformValueContainer_WidensOnlyToNullableContracts(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Platform.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable disable
+using System.Collections.Generic;
+namespace CopyPlatform5413;
+public record struct S<T>(T Value) {
+    public readonly object Anchor = Api.Construct();
+}
+public struct Plain<T> { public T Value; }
+public static class Api {
+    public static readonly object Marker = new();
+    public static int Calls, Constructions;
+    public static object Construct() { Constructions++; return Marker; }
+    public static S<string> Create() { Calls++; return new(null); }
+    public static Plain<string> Plain() { Calls++; return new() { Value = null }; }
+    public static S<S<string>> Nested() { Calls++; return new(new(null)); }
+    public static S<List<string>> NestedReference() { Calls++; return new(new() { null }); }
+    public static S<int> Value() => new(42);
+    public static S<int?> Optional() => new(null);
+    public static S<string>? Absent() => null;
+    public static S<string>? Present() => Create();
+#nullable enable
+    public static S<string> Required() => new("required");
+}`, "Platform", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        const source = `package PlatformApi5413
+import System.Collections.Generic
+import CopyPlatform5413
+public class Exports {
+    shared {
+        public func Direct() S[string?] -> Api.Create()
+        public func Local() S[string?] {
+            let value S[string?] = Api.Create()
+            return value
+        }
+        private func Receive(value S[string?]) S[string?] -> value
+        public func Argument() S[string?] -> Receive(Api.Create())
+        public func Lift() S[string?]? -> Api.Create()
+        public func Present() S[string?]? -> Api.Present()
+        public func Absent() S[string?]? -> Api.Absent()
+        public func Plain() Plain[string?] -> Api.Plain()
+        public func Nested() S[S[string?]] -> Api.Nested()
+        public func NestedReference() S[List[string?]?] -> Api.NestedReference()
+        public func Required() S[string] -> Api.Required()
+        public func Value() S[int32] -> Api.Value()
+        public func Optional() S[int32?] -> Api.Optional()
+    }
+}`
+        let apiReference = Path.Combine(fixture.Directory, "Widening.ref.dll")
+        let arguments = []string{"/assemblyname:Widening", "/r:" + selected, "/refout:" + apiReference}.Concat(
+            runtimeReferences.Select((path string) -> "/r:" + path)
+        )
+            .ToArray()
+        let api = fixture.Compile(source, "Widening", executable: false, arguments)
+        let firstImage = File.ReadAllBytes(api)
+        let firstReference = File.ReadAllBytes(apiReference)
+        let _ = fixture.Compile(source, "Widening", executable: false, arguments)
+        Assert.Equal(firstImage, File.ReadAllBytes(api))
+        Assert.Equal(firstReference, File.ReadAllBytes(apiReference))
+        let caller = fixture.CompileCSharp(`#nullable enable
+using System;
+using System.Reflection;
+using CopyPlatform5413;
+using PlatformApi5413;
+public static class Probe {
+    public static string Run() {
+        foreach (var value in new[] { Exports.Direct(), Exports.Local(), Exports.Argument() })
+            if (value.Value != null || !ReferenceEquals(value.Anchor, Api.Marker))
+                throw new Exception("Widening lost null or storage.");
+        var lifted = Exports.Lift();
+        var present = Exports.Present();
+        var nested = Exports.Nested();
+        var nestedReference = Exports.NestedReference();
+        if (!lifted.HasValue || lifted.Value.Value != null || !present.HasValue || present.Value.Value != null
+            || !ReferenceEquals(lifted.Value.Anchor, Api.Marker) || !ReferenceEquals(present.Value.Anchor, Api.Marker)
+            || Exports.Absent().HasValue || Exports.Plain().Value != null
+            || nested.Value.Value != null || !ReferenceEquals(nested.Value.Anchor, Api.Marker)
+            || !ReferenceEquals(nested.Anchor, Api.Marker)
+            || nestedReference.Value == null || nestedReference.Value.Count != 1 || nestedReference.Value[0] != null
+            || Api.Calls != 8 || Api.Constructions != 8)
+            throw new Exception("Widening changed optionality, nested storage or evaluation count.");
+        if (Exports.Required().Value != "required" || Exports.Value().Value != 42 || Exports.Optional().Value != null)
+            throw new Exception("Non-null or value-type contract changed.");
+        var context = new NullabilityInfoContext();
+        foreach (var name in new[] { "Direct", "Local", "Argument", "Plain" }) {
+            var method = typeof(Exports).GetMethod(name)!;
+            if (context.Create(method.ReturnParameter).GenericTypeArguments[0].ReadState != NullabilityState.Nullable)
+                throw new Exception("Nullable argument metadata lost: " + name);
+        }
+        var required = context.Create(typeof(Exports).GetMethod("Required")!.ReturnParameter);
+        var nestedInfo = context.Create(typeof(Exports).GetMethod("Nested")!.ReturnParameter);
+        var nestedReferenceInfo = context.Create(typeof(Exports).GetMethod("NestedReference")!.ReturnParameter);
+        if (required.GenericTypeArguments[0].ReadState != NullabilityState.NotNull
+            || nestedInfo.GenericTypeArguments[0].GenericTypeArguments[0].ReadState != NullabilityState.Nullable
+            || nestedReferenceInfo.GenericTypeArguments[0].ReadState != NullabilityState.Nullable
+            || nestedReferenceInfo.GenericTypeArguments[0].GenericTypeArguments[0].ReadState != NullabilityState.Nullable)
+            throw new Exception("Nested metadata was erased.");
+        return "null|storage|once|optional|nested|metadata";
+    }
+}`, "PlatformCaller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(
+            "null|storage|once|optional|nested|metadata",
+            assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+        )
+        for (target, expression) in[](string, string){
+            ("S[string]", "Api.Create()"),
+            ("S[object?]", "Api.Create()"),
+            ("S[S[string]]", "Api.Nested()"),
+            ("S[List[string]]", "Api.NestedReference()"),
+            ("S[List[string]?]", "Api.NestedReference()"),
+            ("S[string?]", "Api.Required()"),
+            ("S[int32]", "Api.Optional()"),
+            ("S[int32?]", "Api.Value()"),
+            ("S[string?]", "Api.Present()")
+        } {
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import System.Collections.Generic\nimport CopyPlatform5413\npublic func Rejected() " +
+                    target +
+                    " -> " +
+                    expression +
+                    "\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            let start = 28 + target.Length
+            let end = start + expression.Length
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+        for modifier in[]string{"ref", "out"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "ByRef.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "ByRef.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import CopyPlatform5413\nfunc Receive(" +
+                    modifier +
+                    " value S[int32]) { value = default }\n" +
+                    "public func Rejected() {\nvar value = Api.Optional()\nReceive(" +
+                    modifier +
+                    " value)\n}",
+                "ByRef",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("ByRef.gs(5,9,5,18): error GS0154:", StringComparison.Ordinal), output)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "ByRef.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;

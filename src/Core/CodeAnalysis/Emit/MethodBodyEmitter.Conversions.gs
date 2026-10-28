@@ -324,8 +324,8 @@ internal partial class MethodBodyEmitter {
         if to is NullableTypeSymbol toUserVtNullableLift && NullableLifting.RequiresSymbolicNullableGetValue(
             toUserVtNullableLift
         ) &&
-            Conversion
-            .ClassifyNonStructural(from, toUserVtNullableLift.UnderlyingType).IsIdentity {
+            TypeSymbol
+            .AreRuntimeEquivalentIgnoringReferenceNullability(from, toUserVtNullableLift.UnderlyingType) {
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(
                 if toUserVtNullableLift.UnderlyingType is TypeParameterSymbol {
@@ -341,14 +341,13 @@ internal partial class MethodBodyEmitter {
         // reference-compatibility shortcut below, which would otherwise
         // misclassify the lift as a no-op (the underlying primitive `T`
         // is trivially "compatible with" itself).
-        // Issue #2717: imported property and expression binding can mint
-        // distinct symbols for the same CLR T, so use the binder's identity
-        // classifier rather than symbol reference equality.
+        // Imported symbols and nullable reference arguments can differ while retaining the same runtime value storage.
+        // Use runtime identity, not conversion rank, before constructing Nullable<T> (issue #5413).
         if to is NullableTypeSymbol toValueNullableLift && ReflectionMetadataEmitter.IsValueTypeNullable(
             toValueNullableLift
         ) &&
-            Conversion
-            .ClassifyNonStructural(from, toValueNullableLift.UnderlyingType).IsIdentity {
+            TypeSymbol
+            .AreRuntimeEquivalentIgnoringReferenceNullability(from, toValueNullableLift.UnderlyingType) {
             // Issue #814 / ADR-0084 §L5: open `T → Nullable<T>` where T is an
             // open type parameter constrained to `struct`. The closed ctor
             // is unavailable (T has no CLR type), so we emit a MemberRef

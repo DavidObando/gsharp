@@ -232,9 +232,9 @@ class Conversion {
         /// ordinary upcast such as `[]string! -> object`, whose two sides
         /// have no corresponding argument positions to compare, comes back
         /// `Illegal`. This entry declines for such a pair, and for a function
-        /// shape, a value-type container and a pair whose platform-ness already
-        /// agrees; it answers only for rule 3's three illegal directions and rule
-        /// 2's one permitted widening.
+        /// shape and a pair whose platform-ness already agrees. Value-type
+        /// containers admit rule 2's widening; other argument mismatches retain
+        /// their ordinary conversion rules.
         ///
         /// Exposed for `MemberLookup`'s symbolic-indexer applicability check,
         /// which has to ask it <b>before</b> its own same-type fast path — that
@@ -3718,8 +3718,8 @@ class Conversion {
             // because that gate does not look inside a flags-annotated array
             // (`[]!string!`); the projection reads positions itself. Only the
             // illegal direction is decided here; a legal pair falls through to
-            // the rules below, unchanged. Function shapes and value-type
-            // containers are excluded for the reasons given below.
+            // the rules below, unchanged. This projection does not apply to
+            // function shapes or value-type containers.
             if !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) &&
                 TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) {
                 var hasIllegalProjection = false
@@ -3796,35 +3796,9 @@ class Conversion {
             //
             // Declining hands the pair back to the rules that already answer it,
             // which is what this arm does for every pair it cannot speak to.
-            // A VALUE-TYPE container is copied, not aliased, so rule 3's argument
-            // does not reach it either.
-            //
-            // Rule 3 exists because "two views alias one object": a `nil` written
-            // through the `C[T?]` view is read as non-null through the `C[T]`
-            // view. Assigning a struct copies it — the destination is a different
-            // object — so there is no second view to read through and nothing to
-            // be unsound about. §2 already says value types are unaffected by
-            // this ADR; this is that statement applied to the container position.
-            //
-            // Measured, and it is not hypothetical: `samples/NestedTypeOfConstructedGeneric.gs`
-            // stopped compiling under `/nullability:platform-types` with
-            // *"Cannot convert type 'Dictionary[string, int32].Enumerator' to
-            // 'Dictionary[string, int32].Enumerator'"* — the two sides differ
-            // only in an enclosing type argument's obliviousness, which the
-            // nested type's display does not render, so the diagnostic named one
-            // type twice. `List[int32].Enumerator` on the line above was
-            // unaffected because `int32` contributes no reference position.
-            //
-            // The obliviousness there is itself spurious — `counts` is a
-            // G#-constructed `Dictionary[string, int32]`, so §2's open-type-
-            // parameter rule says the argument's own nullability wins and
-            // `ProjectNullableFlags` should not be stamping an absent byte over
-            // it. That is a separate defect in the projection path, tracked
-            // rather than fixed here; this gate is correct on its own terms and
-            // holds whether or not the projection is corrected.
-            if IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) {
-                return false
-            }
+            // Value containers can widen reference arguments without changing CLR storage (issue #5413).
+            // Other mismatches retain their existing value-container conversion rules.
+            let valueContainer = IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from))
             if !TryGetPlatformArgumentPairs(from, to, out var fromArguments, out var toArguments) {
                 return false
             }
@@ -3887,6 +3861,10 @@ class Conversion {
                 return false
             }
             if hasIllegal {
+                if valueContainer {
+                    rejectsImportedParameter = false
+                    return false
+                }
                 return true
             }
             if !widens {
