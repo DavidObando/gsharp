@@ -603,6 +603,7 @@ partial class SemanticModel {
     private func FindInnermostNode(position int32) SyntaxNode {
         var current SyntaxNode = syntaxTree.Root
         while true {
+            var exact SyntaxNode? = nil
             var next SyntaxNode? = nil
             var touching SyntaxNode? = nil
             for child in current.GetChildren() {
@@ -610,20 +611,60 @@ partial class SemanticModel {
                 if span.Length == 0 {
                     continue
                 }
-                if span.Start <= position && position < span.End {
-                    next = child
-                    break
+                let extents = PartialPartExtentsInTree(child)
+                if extents.Count > 0 {
+                    // The span of a merged node runs from its first part to its last member, so it also
+                    // covers what is declared between its parts (types, a merged `shared` block): the
+                    // extents of its parts decide, and they win over a span that merely overlaps them (#5455).
+                    if exact == nil && extents.Any(
+                        (extent TextSpan) -> extent.Start <= position && position < extent.End
+                    ) {
+                        exact = child
+                    } else if extents.Any((extent TextSpan) -> extent.End == position) {
+                        touching = child
+                    }
+                    continue
                 }
-                if span.End == position {
+                if next == nil && span.Start <= position && position < span.End {
+                    next = child
+                } else if span.End == position {
                     touching = child
                 }
             }
-            let chosen = next ?? touching
+            let chosen = exact ?? next ?? touching
             if chosen == nil {
                 return current
             }
             current = chosen
         }
+    }
+
+    private let NoExtents List[TextSpan] = List[TextSpan]()
+
+    /// The extents of the parts of a merged partial type that lie in this tree; empty for any other node.
+    private func PartialPartExtentsInTree(node SyntaxNode) List[TextSpan] {
+        let extents = if node is StructDeclarationSyntax structDeclaration {
+            structDeclaration.PartialPartExtents
+        } else if node is InterfaceDeclarationSyntax interfaceDeclaration {
+            interfaceDeclaration.PartialPartExtents
+        } else {
+            ImmutableArray[TextLocation].Empty
+        }
+        // Nearly every node is not a merged partial type: answer without allocating.
+        if extents.IsDefaultOrEmpty {
+            return NoExtents
+        }
+        let result = List[TextSpan]()
+        for extent in extents {
+            // An unnamed tree has no path to compare: its text identifies it.
+            if object.ReferenceEquals(extent.Text, syntaxTree.Text) || SourcePathIdentity.AreSame(
+                extent.FileName,
+                syntaxTree.Text?.FileName
+            ) {
+                result.Add(extent.Span)
+            }
+        }
+        return result
     }
 
     private func Depth(node SyntaxNode) int32 {
