@@ -3706,6 +3706,10 @@ class Conversion {
             if IsDelegateConformanceBoundary(from) || IsDelegateConformanceBoundary(to) {
                 return false
             }
+            // Tuple values use elementwise conversions. An invariant argument containing a tuple still uses the recursive relation.
+            if from is TupleTypeSymbol && to is TupleTypeSymbol {
+                return false
+            }
             // #4420: an UPCAST (`List[string!]` to `IEnumerable[string]`,
             // `[]string!` to `IReadOnlyList[string]`) is the same aliasing hazard
             // through a supertype view: the callee reads non-null elements from a
@@ -3724,14 +3728,18 @@ class Conversion {
                 TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
                 (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) {
                 var hasIllegalProjection = false
+                var hasIncompatibleProjection = false
                 var hasUnrelatedProjection = false
                 for var i = 0; i < projected.Length; i++ {
                     let directionalEscape = IsVariantPlatformEscape(projected[i], supertypeArguments[i])
                     if IsProjectedPlatformArgumentIllegal(
                         projected[i],
                         supertypeArguments[i],
+                        to,
+                        i,
                         out var projectedRejectsImported,
-                        out var projectedIsUnrelated
+                        out var projectedIsUnrelated,
+                        out var projectedIsIncompatible
                     ) ||
                         IsCovariantPlatformEscape(projected[i], supertypeArguments[i]) {
                         hasIllegalProjection = true
@@ -3739,13 +3747,17 @@ class Conversion {
                     } else {
                         hasUnrelatedProjection |= projectedIsUnrelated
                     }
+                    hasIncompatibleProjection |= projectedIsIncompatible
                 }
-                if hasIllegalProjection {
+                if hasIncompatibleProjection {
                     return true
                 }
                 if hasUnrelatedProjection {
                     rejectsImportedParameter = false
                     return false
+                }
+                if hasIllegalProjection {
+                    return true
                 }
             }
             if !ContainsPlatformType(from) && !ContainsPlatformType(to) {
@@ -3822,7 +3834,7 @@ class Conversion {
                     hasIllegal = true
                     continue
                 }
-                switch RelatePlatformArguments(fromArguments[i], toArguments[i]) {
+                switch RelatePlatformViewArgument(to, i, fromArguments[i], toArguments[i]) {
                     case PlatformArgumentRelation.Same { }
                     case PlatformArgumentRelation.Unrelated {
                         // A platform-free position that does not agree. This arm
@@ -3865,16 +3877,16 @@ class Conversion {
                 rejectsImportedParameter = true
                 return true
             }
+            if hasUnrelated {
+                rejectsImportedParameter = false
+                return false
+            }
             if hasIllegal {
                 if valueContainer {
                     rejectsImportedParameter = false
                     return false
                 }
                 return true
-            }
-            if hasUnrelated {
-                rejectsImportedParameter = false
-                return false
             }
             if !widens {
                 // Platform-ness present but identical on both sides: not this
@@ -3906,24 +3918,29 @@ class Conversion {
         /// @param b The target argument.
         /// @returns The relation.
         private func RelatePlatformArguments(a TypeSymbol?, b TypeSymbol?) PlatformArgumentRelation {
-            if !ContainsPlatformType(a) && !ContainsPlatformType(b) {
-                // A widening elsewhere must not change this position's stated contract (issue #5413).
-                if a == nil || b == nil {
-                    return PlatformArgumentRelation.Unrelated
-                }
-                let equivalent = AreTypeArgumentsEquivalent(a, b)
-                let sameShape = TryGetPlatformArgumentPairs(a, b, out _, out _)
-                if a.ReferenceNullability != b.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
+            if a == nil || b == nil {
+                return PlatformArgumentRelation.Unrelated
+            }
+            // Stated outer contracts remain invariant even when a descendant is platform-typed.
+            if a is not PlatformTypeSymbol &&
+                b is not PlatformTypeSymbol &&
+                (
+                a.ReferenceNullability != b.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
                     a as NullableTypeSymbol
                 ) !=
-                NullableLifting.IsAnyValueTypeNullable(b as NullableTypeSymbol) {
-                    return if sameShape ||
-                        AreTypeArgumentsEquivalent(UnwrapPlatformAndNullable(a), UnwrapPlatformAndNullable(b)) {
-                        PlatformArgumentRelation.Incompatible
-                    } else {
-                        PlatformArgumentRelation.Unrelated
-                    }
+                NullableLifting.IsAnyValueTypeNullable(b as NullableTypeSymbol)
+            ) {
+                return if TryGetPlatformArgumentPairs(a, b, out _, out _) ||
+                    AreTypeArgumentsEquivalent(UnwrapPlatformAndNullable(a), UnwrapPlatformAndNullable(b)) {
+                    PlatformArgumentRelation.Incompatible
+                } else {
+                    PlatformArgumentRelation.Unrelated
                 }
+            }
+            if !ContainsPlatformType(a) && !ContainsPlatformType(b) {
+                // A widening elsewhere must not change this position's stated contract (issue #5413).
+                let equivalent = AreTypeArgumentsEquivalent(a, b)
+                let sameShape = TryGetPlatformArgumentPairs(a, b, out _, out _)
                 if !equivalent && !sameShape {
                     return PlatformArgumentRelation.Unrelated
                 }
@@ -3997,7 +4014,7 @@ class Conversion {
                 // nullability-differing pair earns that.
                 return if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     sourcePlatform.UnderlyingType,
-                    UnwrapPlatformAndNullable(b) ?? b!!
+                    UnwrapPlatformAndNullable(b) ?? b
                 ) {
                     PlatformArgumentRelation.IllegalFromPlatform
                 } else {
@@ -4026,7 +4043,7 @@ class Conversion {
                 // simply different types, which is `Unrelated` — "this arm cannot
                 // decide" — not `Illegal`.
                 return if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    UnwrapPlatformAndNullable(a) ?? a!!,
+                    UnwrapPlatformAndNullable(a) ?? a,
                     targetPlatform.UnderlyingType
                 ) {
                     PlatformArgumentRelation.IllegalToPlatform
@@ -4105,6 +4122,9 @@ class Conversion {
             if hasIncompatible {
                 return PlatformArgumentRelation.Incompatible
             }
+            if hasUnrelated {
+                return PlatformArgumentRelation.Unrelated
+            }
             if hasIllegalFromPlatform && (hasIllegalToPlatform || hasIllegalUnknown) {
                 return PlatformArgumentRelation.IllegalMixed
             }
@@ -4116,9 +4136,6 @@ class Conversion {
             }
             if hasIllegalToPlatform {
                 return PlatformArgumentRelation.IllegalToPlatform
-            }
-            if hasUnrelated {
-                return PlatformArgumentRelation.Unrelated
             }
             return if widens {
                 PlatformArgumentRelation.Widening
@@ -4448,11 +4465,15 @@ class Conversion {
         private func IsProjectedPlatformArgumentIllegal(
             projected TypeSymbol,
             target TypeSymbol,
+            container TypeSymbol?,
+            index int32,
             out rejectsImportedParameter bool,
-            out isUnrelated bool
+            out isUnrelated bool,
+            out isIncompatible bool
         ) bool {
-            let relation = RelatePlatformArguments(projected, target)
+            let relation = RelatePlatformViewArgument(container, index, projected, target)
             isUnrelated = relation == PlatformArgumentRelation.Unrelated
+            isIncompatible = relation == PlatformArgumentRelation.Incompatible
             rejectsImportedParameter = relation == PlatformArgumentRelation.IllegalFromPlatform ||
                 relation == PlatformArgumentRelation.IllegalMixed ||
                 relation == PlatformArgumentRelation.Incompatible
@@ -4477,6 +4498,58 @@ class Conversion {
                 out rejectsImportedParameter
             ) &&
                 !nested.IsImplicit
+        }
+
+        // Only a container view uses declaration-site variance. Nested invariant arguments retain all stated contracts.
+        private func RelatePlatformViewArgument(
+            container TypeSymbol?,
+            index int32,
+            source TypeSymbol,
+            target TypeSymbol
+        ) PlatformArgumentRelation {
+            if TryGetConstructedGenericShape(UnwrapPlatformAndNullable(container), out var definition, out _) &&
+                definition != nil {
+                let parameters = definition.GetGenericArguments()
+                if index < parameters.Length {
+                    let variance = parameters[
+                        index
+                    ].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                    if variance != GenericParameterAttributes.None &&
+                        IsReferenceTypeArgument(source) &&
+                        IsReferenceTypeArgument(target) {
+                        let from = if variance == GenericParameterAttributes.Contravariant {
+                            target
+                        } else {
+                            source
+                        }
+                        let to = if variance == GenericParameterAttributes.Contravariant {
+                            source
+                        } else {
+                            target
+                        }
+                        // Symbolic tuple positions can erase a known CLR family. Prove the actual reference view first.
+                        if !ContainsOpenElement(from) &&
+                            !ContainsOpenElement(to) &&
+                            from.ClrType is {} sourceClr &&
+                            to.ClrType is {} targetClr &&
+                            !sourceClr.IsGenericTypeDefinition &&
+                            !targetClr.IsGenericTypeDefinition &&
+                            !ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr) {
+                            return PlatformArgumentRelation.Incompatible
+                        }
+                        if IsVarianceArgumentCompatible(from, to, allowPlatformNilCheck: false) &&
+                            IsRepresentationPreservingImplicit(from, to) {
+                            return if HaveIdenticalTypeArgumentContracts(source, target) {
+                                PlatformArgumentRelation.Same
+                            } else {
+                                PlatformArgumentRelation.Widening
+                            }
+                        }
+                        return PlatformArgumentRelation.Incompatible
+                    }
+                }
+            }
+            return RelatePlatformArguments(source, target)
         }
 
         /// The corresponding <b>argument positions</b> of two types, when the two
