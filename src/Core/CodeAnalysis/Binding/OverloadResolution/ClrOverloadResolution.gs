@@ -1048,6 +1048,38 @@ internal shared class ClrOverloadResolution {
         return 0
     }
 
+    /// Compares nullable numeric targets before conversion mechanism costs.
+    /// @param paramA The first applicable target.
+    /// @param paramB The second applicable target.
+    /// @param source The numeric source type.
+    /// @returns A negative value prefers the first target; zero leaves other ranking rules unchanged.
+    func CompareNullableNumericTargets(paramA Type?, paramB Type?, source Type?) int32 {
+        if !NumericWideningLattice.IsNumericPrimitive(source?.FullName) {
+            return 0
+        }
+        let underlyingA = NullableLifting.GetValueTypeNullableUnderlyingClr(paramA)
+        let underlyingB = NullableLifting.GetValueTypeNullableUnderlyingClr(paramB)
+        let numericA = NumericWideningLattice.IsNumericPrimitive(underlyingA?.FullName)
+        let numericB = NumericWideningLattice.IsNumericPrimitive(underlyingB?.FullName)
+        if numericA && numericB {
+            let exactA = ClrTypeUtilities.AreSame(source, underlyingA)
+            let exactB = ClrTypeUtilities.AreSame(source, underlyingB)
+            if exactA != exactB {
+                return if exactA {
+                    -1
+                } else {
+                    1
+                }
+            }
+            return CompareNumericTargets(underlyingA, underlyingB, source)
+        }
+        return if numericA || numericB {
+            CompareReferenceTargets(paramA, paramB)
+        } else {
+            0
+        }
+    }
+
     /// Compares two candidate conversion targets for the same source type per
     /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
     /// [`t1`](paramref) is the better target, a positive value when
@@ -7157,6 +7189,10 @@ internal shared class ClrOverloadResolution {
             IsSystemObject(paramA) &&
             !IsSystemObject(paramB) {
             return 1
+        }
+        let nullableNumeric = CompareNullableNumericTargets(paramA, paramB, source)
+        if nullableNumeric != 0 {
+            return nullableNumeric
         }
         if ka != kb {
             return (int32(ka)).CompareTo(int32(kb))

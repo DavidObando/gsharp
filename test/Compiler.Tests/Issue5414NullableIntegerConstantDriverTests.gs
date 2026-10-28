@@ -146,12 +146,60 @@ Console.WriteLine(Many(0, 42))
 `, "signed\nsigned\nunsigned\nint32\nint32\nuint32\nuint64\nnonnullable\nsigned-tail\n")
     }
 
+    @Fact
+    func NullableIntegerOverloads_PreservePriorityAgainstOtherTargets() {
+        Check(`import System
+func F(value int64?) string -> "integer"
+func F(value float64?) string -> "float"
+func Reversed(value float64?) string -> "float"
+func Reversed(value int64?) string -> "integer"
+func Box(value int64?) string -> "integer"
+func Box(value object) string -> "object"
+func BoxReversed(value object) string -> "object"
+func BoxReversed(value int64?) string -> "integer"
+Console.WriteLine(F(0))
+Console.WriteLine(Reversed(0))
+Console.WriteLine(Box(0))
+Console.WriteLine(BoxReversed(0))
+let value int32 = 7
+Console.WriteLine(F(value))
+Console.WriteLine(Reversed(value))
+Console.WriteLine(Box(value))
+Console.WriteLine(BoxReversed(value))
+`, "integer\ninteger\ninteger\ninteger\ninteger\ninteger\ninteger\ninteger\n")
+    }
+
+    @Fact
+    func ImportedNullableIntegerOverloads_CompareUnderlyingTargets() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace RankingContract {
+public static class NullableRanks {
+    public static string F(byte? value) => "byte";
+    public static string F(ushort? value) => "ushort";
+    public static string Signed(int? value) => "signed";
+    public static string Signed(uint? value) => "unsigned";
+    public static string Box(uint? value) => "nullable";
+    public static string Box(object value) => "object";
+}}`)
+        Check(`import System
+import RankingContract
+Console.WriteLine(NullableRanks.F(0))
+Console.WriteLine(NullableRanks.F(255))
+Console.WriteLine(NullableRanks.F(256))
+Console.WriteLine(NullableRanks.F(65535))
+Console.WriteLine(NullableRanks.F(uint8(0)))
+Console.WriteLine(NullableRanks.Signed(0))
+Console.WriteLine(NullableRanks.Signed(4294967295))
+Console.WriteLine(NullableRanks.Box(0))
+`, "byte\nbyte\nushort\nushort\nbyte\nsigned\nunsigned\nnullable\n", additionalReference: fixture.AssemblyPath)
+    }
+
     shared {
         private func Check(
             sourceText string,
             expected string,
             diagnosticId string? = nil,
-            diagnosticSpan string? = nil
+            diagnosticSpan string? = nil,
+            additionalReference string? = nil
         ) {
             using let fixture = NativeSliceLanguageTests.Fixture()
             let source = Path.Combine(fixture.Directory, "Constants.gs")
@@ -178,6 +226,10 @@ Console.WriteLine(Many(0, 42))
                 "/refout:" + reference
             }
             arguments.AddRange(references.Select((path string) -> "/r:" + path))
+            if additionalReference != nil {
+                arguments.Add("/r:" + additionalReference)
+                File.Copy(additionalReference, Path.Combine(fixture.Directory, Path.GetFileName(additionalReference)))
+            }
             let result = Run(arguments)
             let diagnostics = Encoding.UTF8.GetString(result.Output)
             if diagnosticId != nil {
@@ -207,6 +259,10 @@ Console.WriteLine(Many(0, 42))
             for path in references {
                 verify.Add("-r")
                 verify.Add(path)
+            }
+            if additionalReference != nil {
+                verify.Add("-r")
+                verify.Add(additionalReference)
             }
             let verified = Run(verify)
             Assert.True(verified.Code == 0, Encoding.UTF8.GetString(verified.Output) + verified.Error)
