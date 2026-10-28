@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Global scopes are no longer chained; `BoundGlobalScope.GetCumulativeImports` is removed** (issue #5312, ADR-0212 slice S8, step 1). No caller passed a non-nil `previous`, and the REPL chains through emitted metadata. `Binder.BindGlobalScope` and the `BoundGlobalScope` constructors keep the `previous` parameter and now throw `ArgumentException` for a non-nil value. `BoundGlobalScope.Imports` is the whole import list of the compilation, so use it where `GetCumulativeImports()` was called. The body-binding passes no longer walk a chain. No change to `gsc` output.
+
 - **Source-interface receivers can subscribe to inherited CLR events** (issue #5391). Qualified `+=` and `-=` operations now call the inherited event accessors, including inside default instance bodies. Generic handlers retain source and type-parameter arguments. Unsupported bare inherited event names still report errors instead of changing enclosing delegates.
 
 - **Generic channel readers retain source element types** (issue #5485). Inferred `out var` locals and method returns now preserve source-defined and generic elements through returned readers with explicit runtime references.

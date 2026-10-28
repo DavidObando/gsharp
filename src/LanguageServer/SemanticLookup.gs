@@ -1061,7 +1061,7 @@ shared class SemanticLookup {
                 )
             }
         }
-        for import_ in compilation.GlobalScope.GetCumulativeImports() {
+        for import_ in compilation.GlobalScope.Imports {
             if import_.Declaration?.AliasIdentifier is {} aliasIdentifier {
                 declarations[aliasIdentifier] = import_
             }

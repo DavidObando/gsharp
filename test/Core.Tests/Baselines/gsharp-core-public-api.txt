@@ -2276,7 +2276,6 @@ type sealed class GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope : System.Obj
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.DelegateTypeSymbol> get_Delegates()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.EnumSymbol> get_Enums()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol> get_Functions()
-  method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ImportSymbol> GetCumulativeImports()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ImportSymbol> get_Imports()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.InterfaceSymbol> get_Interfaces()
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.PackageSymbol> get_Packages()
