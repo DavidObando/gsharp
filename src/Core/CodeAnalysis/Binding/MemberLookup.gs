@@ -1472,6 +1472,29 @@ internal class MemberLookup {
             requireReadable
         ) as PropertyInfo
 
+        /// Finds an imported event while retaining the source hierarchy's symbolic receiver.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The event name.
+        /// @param importedReceiver The imported base carrying the selected event's type arguments.
+        /// @returns The public instance event, or null.
+        internal func GetInterfaceImportedBaseInstanceEvent(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            out importedReceiver TypeSymbol?
+        ) EventInfo? {
+            for sourceInterface in interfaceSymbol.SelfAndAllBaseInterfaces() {
+                for importedBase in sourceInterface.BaseClrInterfaces {
+                    let eventInfo = SafeGetEventIncludingSelfAndInterfaces(importedBase.ClrType, name)
+                    if eventInfo != nil {
+                        importedReceiver = importedBase
+                        return eventInfo
+                    }
+                }
+            }
+            importedReceiver = nil
+            return nil
+        }
+
         /// Finds imported instance data members using the ordinary property and event readers.
         /// @param interfaceSymbol The source interface receiver.
         /// @param name The ordinary member name.
