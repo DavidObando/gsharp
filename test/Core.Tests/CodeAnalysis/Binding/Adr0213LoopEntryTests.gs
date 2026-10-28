@@ -386,6 +386,33 @@ func Run() int32 {
     return t
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0155")
+            Add("header-handler-with-an-enclosing-filter-removes-the-exit-fact (W8)", `package T
+import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = nil
+    try {
+        while s == nil || {
+            try {
+                try {
+                    throw FormatException("f")
+                } finally {
+                    throw InvalidOperationException("g")
+                }
+            } catch (InvalidOperationException) {
+            }
+            false
+        } {
+            s = "ok"
+        }
+        return s.Length
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+}`, "GS0158")
             return rows
         }
     }
