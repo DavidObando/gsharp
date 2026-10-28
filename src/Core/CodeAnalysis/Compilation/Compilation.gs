@@ -348,7 +348,7 @@ open class Compilation {
     /// (cref:SemanticModel.GetMemberGroup) (ADR-0212 slice S4). Set it before the first query. Only a
     /// compilation made for the semantic model or the language server sets it; `gsc` leaves it off so
     /// that recording costs a compile nothing.
-    internal prop RecordMemberGroups bool {
+    prop RecordMemberGroups bool {
         get;
         set;
     }
@@ -409,6 +409,7 @@ open class Compilation {
         // reader that decides what an oblivious byte means is a static
         // leaf with no Compilation in reach.
         using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+        using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups)
         let bound = reused ?? Binder.BindGlobalScope(
             previous: nil,
             EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),

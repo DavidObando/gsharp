@@ -335,6 +335,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public Boolean get_IsLibrary()
   method public Boolean get_Optimize()
   method public Boolean get_PlatformNilChecks()
+  method public Boolean get_RecordMemberGroups()
   method public Boolean get_WarnOnMissingDocumentation()
   method public GSharp.Core.CodeAnalysis.Analyzers.DiagnosticSuppressionMap get_DiagnosticSuppressions()
   method public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope get_GlobalScope()
@@ -378,6 +379,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   method public Void set_Optimize(Boolean value)
   method public Void set_PlatformNilChecks(Boolean value)
   method public Void set_PreprocessorSymbols(System.Collections.Immutable.ImmutableHashSet`1<String> value)
+  method public Void set_RecordMemberGroups(Boolean value)
   method public Void set_Submission(GSharp.Core.CodeAnalysis.Binding.SubmissionBindingOptions value)
   method public Void set_WarnOnMissingDocumentation(Boolean value)
   method public Void set_WorkBudget(GSharp.Core.CodeAnalysis.Compilation.CompilationWorkBudget value)
@@ -386,6 +388,7 @@ type class GSharp.Core.CodeAnalysis.Compilation.Compilation : System.Object
   property public Boolean IsLibrary { get; set; }
   property public Boolean Optimize { get; set; }
   property public Boolean PlatformNilChecks { get; set; }
+  property public Boolean RecordMemberGroups { get; set; }
   property public Boolean WarnOnMissingDocumentation { get; set; }
   property public GSharp.Core.CodeAnalysis.Analyzers.DiagnosticSuppressionMap DiagnosticSuppressions { get; }
   property public GSharp.Core.CodeAnalysis.Binding.BoundGlobalScope GlobalScope { get; }

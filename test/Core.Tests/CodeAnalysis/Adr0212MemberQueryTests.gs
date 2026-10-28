@@ -156,6 +156,16 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func MemberGroup_TopLevelCall_IsRecordedWhenTheGlobalScopeIsQueriedFirst() {
+        let tree = SyntaxTree.Parse(SourceText.From("import System\nConsole.WriteLine(\"x\")\n", "top.gs"))
+        let compilation = Compilation(tree)
+        compilation.RecordMemberGroups = true
+        Assert.NotNull(compilation.GlobalScope)
+        let call = Calls(tree.Root).Single()
+        Assert.True(compilation.GetSemanticModel(tree).GetMemberGroup(call).Length > 5)
+    }
+
+    @Fact
     func MemberGroup_ArgumentProbe_DoesNotReplaceTheCalleesGroup() {
         // The method-group argument is resolved against the Console overloads inside the call.
         let group = Group("PProbe")
