@@ -32,7 +32,10 @@ internal partial class MethodBodyEmitter {
         if conv.Expression.Type == TypeSymbol.Null && this.TryEmitPointerLikeDefault(conv.Type) {
             return
         }
-        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) &&
+        if (
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) ||
+                IsRepresentationPreservingPlatformWidening(conv.Expression.Type, conv.Type)
+        ) &&
             !RequiresChannelConversionEmission(conv.Expression.Type, conv.Type) {
             this.EmitExpression(conv.Expression)
             return
@@ -324,8 +327,7 @@ internal partial class MethodBodyEmitter {
         if to is NullableTypeSymbol toUserVtNullableLift && NullableLifting.RequiresSymbolicNullableGetValue(
             toUserVtNullableLift
         ) &&
-            TypeSymbol
-            .AreRuntimeEquivalentIgnoringReferenceNullability(from, toUserVtNullableLift.UnderlyingType) {
+            HasNullableLiftStorageIdentity(from, toUserVtNullableLift.UnderlyingType) {
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(
                 if toUserVtNullableLift.UnderlyingType is TypeParameterSymbol {
@@ -342,12 +344,11 @@ internal partial class MethodBodyEmitter {
         // misclassify the lift as a no-op (the underlying primitive `T`
         // is trivially "compatible with" itself).
         // Imported symbols and nullable reference arguments can differ while retaining the same runtime value storage.
-        // Use runtime identity, not conversion rank, before constructing Nullable<T> (issue #5413).
+        // Keep semantic identity for equivalent tuple spellings, and runtime identity for annotation-only widening (issue #5413).
         if to is NullableTypeSymbol toValueNullableLift && ReflectionMetadataEmitter.IsValueTypeNullable(
             toValueNullableLift
         ) &&
-            TypeSymbol
-            .AreRuntimeEquivalentIgnoringReferenceNullability(from, toValueNullableLift.UnderlyingType) {
+            HasNullableLiftStorageIdentity(from, toValueNullableLift.UnderlyingType) {
             // Issue #814 / ADR-0084 §L5: open `T → Nullable<T>` where T is an
             // open type parameter constrained to `struct`. The closed ctor
             // is unavailable (T has no CLR type), so we emit a MemberRef
@@ -1505,6 +1506,27 @@ internal partial class MethodBodyEmitter {
     }
 
     shared {
+        private func HasNullableLiftStorageIdentity(from TypeSymbol, to TypeSymbol) bool -> Conversion
+            .ClassifyNonStructural(from, to).IsIdentity || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            from,
+            to
+        ) ||
+            IsRepresentationPreservingPlatformWidening(from, to)
+
+        // Metadata-only widening must not remove a runtime nil check or change Nullable<V> storage.
+        private func IsRepresentationPreservingPlatformWidening(from TypeSymbol, to TypeSymbol) bool -> !(
+            from.ReferenceNullability == ReferenceNullabilityKind.Platform &&
+                to.ReferenceNullability == ReferenceNullabilityKind.NotNull
+        ) &&
+            NullableLifting.IsAnyValueTypeNullable(from as NullableTypeSymbol) ==
+        NullableLifting.IsAnyValueTypeNullable(to as NullableTypeSymbol) && Conversion.TryRelatePlatformContainer(
+            from,
+            to,
+            out var isImplicit,
+            out _
+        ) &&
+            isImplicit
+
         /// ADR-0174 D2: `chan[T]` to `in`/`out chan[T]` is a real
         /// conversion — `get_Reader` / `get_Writer` — even when the two
         /// sides look runtime-equivalent, which they do whenever the element is an

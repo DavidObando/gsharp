@@ -3898,16 +3898,38 @@ class Conversion {
         /// @returns The relation.
         private func RelatePlatformArguments(a TypeSymbol?, b TypeSymbol?) PlatformArgumentRelation {
             if !ContainsPlatformType(a) && !ContainsPlatformType(b) {
-                // Platform-free, so no check is needed here — but that is NOT the
-                // same as the two types agreeing, and this arm may not accept an
-                // aggregate conversion on the strength of a position it never
-                // looked at. Validate it the ordinary way and hand the pair back
-                // when it does not hold.
-                return if a != nil && b != nil && AreTypeArgumentsEquivalent(a, b) {
-                    PlatformArgumentRelation.Same
-                } else {
-                    PlatformArgumentRelation.Unrelated
+                // A widening elsewhere must not change this position's stated contract (issue #5413).
+                if a == nil ||
+                    b == nil ||
+                    a.ReferenceNullability != b.ReferenceNullability ||
+                    NullableLifting.IsAnyValueTypeNullable(a as NullableTypeSymbol) !=
+                NullableLifting.IsAnyValueTypeNullable(b as NullableTypeSymbol) || !AreTypeArgumentsEquivalent(a, b) {
+                    return PlatformArgumentRelation.Unrelated
                 }
+                // Semantic positions cannot replace a known CLR storage contract.
+                if a.ClrType is {} sourceClr &&
+                    b.ClrType is {} targetClr &&
+                    !sourceClr.IsGenericTypeDefinition &&
+                    !targetClr.IsGenericTypeDefinition &&
+                    !TypeSymbol.ContainsTypeParameter(a) && !TypeSymbol.ContainsTypeParameter(b) &&
+                    !TypeSymbol.ContainsSameCompilationUserType(a) && !TypeSymbol.ContainsSameCompilationUserType(b) &&
+                    !ClrTypeUtilities.AreSame(sourceClr, targetClr) {
+                    return PlatformArgumentRelation.Unrelated
+                }
+                let sourcePositions = a.GetElementPositions()
+                let targetPositions = b.GetElementPositions()
+                if sourcePositions.Length != targetPositions.Length {
+                    return PlatformArgumentRelation.Unrelated
+                }
+                for var i = 0; i < sourcePositions.Length; i++ {
+                    if RelatePlatformArguments(
+                        sourcePositions[i],
+                        targetPositions[i]
+                    ) != PlatformArgumentRelation.Same {
+                        return PlatformArgumentRelation.Unrelated
+                    }
+                }
+                return PlatformArgumentRelation.Same
             }
             let sourcePlatform PlatformTypeSymbol? = a as PlatformTypeSymbol
             let targetPlatform PlatformTypeSymbol? = b as PlatformTypeSymbol
@@ -3917,18 +3939,27 @@ class Conversion {
                 // the destination view has type `T?` and must be narrowed before
                 // non-null use, so no view of the object can produce an unchecked
                 // non-null read.
-                if b is NullableTypeSymbol nilableTarget && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    sourcePlatform.UnderlyingType,
-                    nilableTarget.UnderlyingType
+                if b is NullableTypeSymbol nilableTarget &&
+                    (
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        sourcePlatform.UnderlyingType,
+                        nilableTarget.UnderlyingType
+                    ) ||
+                        TryGetPlatformArgumentPairs(
+                        sourcePlatform.UnderlyingType,
+                        nilableTarget.UnderlyingType,
+                        out _,
+                        out _
+                    )
                 ) {
                     let nestedRelation = RelateNestedPlatformArguments(
                         sourcePlatform.UnderlyingType,
                         nilableTarget.UnderlyingType
                     )
-                    return if IsIllegalPlatformArgumentRelation(nestedRelation) {
-                        nestedRelation
-                    } else {
+                    return if nestedRelation is PlatformArgumentRelation.Same or PlatformArgumentRelation.Widening {
                         PlatformArgumentRelation.Widening
+                    } else {
+                        nestedRelation
                     }
                 }
                 // Rule 3's `C[T!] -> C[T]` — but only when the two positions
@@ -3996,7 +4027,7 @@ class Conversion {
         /// @returns The combined relation of the nested arguments.
         private func RelateNestedPlatformArguments(a TypeSymbol?, b TypeSymbol?) PlatformArgumentRelation {
             if !ContainsPlatformType(a) && !ContainsPlatformType(b) {
-                return PlatformArgumentRelation.Same
+                return RelatePlatformArguments(a, b)
             }
             if !TryGetPlatformArgumentPairs(a, b, out var nestedFrom, out var nestedTo) {
                 // One side carries platform-ness at a position the other cannot be

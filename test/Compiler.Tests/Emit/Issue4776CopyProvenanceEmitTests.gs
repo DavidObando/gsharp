@@ -214,6 +214,202 @@ public static class Probe {
         }
     }
 
+    private const ReviewContract5413 string = `#nullable enable
+using System;
+using System.Collections.Generic;
+using RequiredList = System.Collections.Generic.List<string>;
+namespace Review5413;
+public record struct S<T>(T Value);
+public record struct Pair<T, U>(T First, U Second);
+public static class Api {
+#nullable disable
+    public static Pair<string,
+#nullable enable
+        string?> Mixed() => new(null, null);
+#nullable disable
+    public static S<RequiredList> Nested() => new(new() { "required" });
+    public static List<Tuple<int, int>> ReferenceTuples() => new() { Tuple.Create(1, 2) };
+    public static List<ValueTuple<int, int>> ValueTuples() => new() { (3, 4) };
+}`
+
+    @Theory
+    @InlineData(false, "Pair[string?, string]", "Api.Mixed()")
+    @InlineData(true, "Pair[string?, string]", "Api.Mixed()")
+    @InlineData(false, "S[List[string?]?]", "Api.Nested()")
+    @InlineData(true, "S[List[string?]?]", "Api.Nested()")
+    func ImportedPlatformValueContainer_RejectsContractChanges(useReference bool, target string, expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(ReviewContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport Review5413\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ImportedGenericStorage_PreservesClrTupleFamilies(useReference bool, isOut bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(ReviewContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let modifier = if isOut {
+            "out"
+        } else {
+            "ref"
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport Review5413\nfunc Receive(" +
+                modifier +
+                " value List[(int32, int32)]) { value = default }\npublic func Rejected() {\n" +
+                "var value = Api.ReferenceTuples()\nReceive(" +
+                modifier +
+                " value)\n}\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(6,9,6,18): error GS0154:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+        let apiReference = Path.Combine(fixture.Directory, "Storage.ref.dll")
+        let api = fixture.Compile(`package Storage5413
+import System.Collections.Generic
+import Review5413
+public class Exports {
+    shared {
+        private func Keep(ref value List[(int32, int32)]) List[(int32, int32)] -> value
+        private func Reset(out value List[(int32, int32)]) { value = Api.ValueTuples() }
+        public func Mixed() Pair[string?, string?] -> Api.Mixed()
+        public func Nested() S[List[string]?] -> Api.Nested()
+        public func Run() int32 {
+            var value = Api.ValueTuples()
+            let kept = Keep(ref value)
+            Reset(out value)
+            return kept[0].Item1 + value[0].Item2
+        }
+    }
+}`, "Storage", executable: false, []string{"/assemblyname:Storage", "/r:" + selected, "/refout:" + apiReference}
+                .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray())
+        let caller = fixture.CompileCSharp(`using System;
+using Storage5413;
+public static class Probe {
+    public static int Run() {
+        var mixed = Exports.Mixed();
+        var nested = Exports.Nested();
+        if (mixed.First != null || mixed.Second != null || nested.Value == null || nested.Value[0] != "required")
+            throw new Exception("Matching argument contracts or storage changed.");
+        return Exports.Run();
+    }
+}`, "Caller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(7, assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+    }
+
+    @Fact
+    func NullableValueTupleSpelling_LiftsGenericAndClosedValues() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Lifts.ref.dll")
+        let api = fixture.Compile(`package TupleLifts5413
+public class Exports {
+    shared {
+        public func Lift[T](value (int32, T)) System.ValueTuple[int32, T]? -> value
+        public func Closed(value (int32, int32)) System.ValueTuple[int32, int32]? -> value
+    }
+}`, "Lifts", executable: false, []string{"/assemblyname:Lifts", "/refout:" + reference}
+                .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray())
+        let caller = fixture.CompileCSharp(`using System;
+using TupleLifts5413;
+public static class Probe {
+    public static string Run() {
+        var reference = Exports.Lift<string>((17, "open"));
+        var value = Exports.Lift<int>((19, 23));
+        var closed = Exports.Closed((29, 31));
+        if (!reference.HasValue || !value.HasValue || !closed.HasValue)
+            throw new Exception("Nullable construction lost the value.");
+        return $"{reference.Value.Item1}|{reference.Value.Item2}|{value.Value.Item1}|{value.Value.Item2}|{closed.Value.Item1}|{closed.Value.Item2}";
+    }
+}`, "Caller", reference)
+        for image in[]string{api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(api, caller)
+        Assert.Equal("17|open|19|23|29|31", assemblies[1].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;
