@@ -4446,6 +4446,20 @@ class Conversion {
             if a == nil || b == nil {
                 return false
             }
+            // Native and imported ValueTuple spellings share identity, not conversions of their invariant elements.
+            if TupleTypeSymbol.TryGetTupleShape(a, out _) && TupleTypeSymbol.TryGetTupleShape(b, out _) {
+                let aElements = a.GetElementPositions()
+                let bElements = b.GetElementPositions()
+                if aElements.Length != bElements.Length {
+                    return false
+                }
+                for var i = 0; i < aElements.Length; i++ {
+                    if !HaveIdenticalTypeArgumentContracts(aElements[i], bElements[i]) {
+                        return false
+                    }
+                }
+                return true
+            }
             a = a.StripToBareShape()
             b = b.StripToBareShape()
             // Nested generic arguments retain their symbolic shape through aliases
