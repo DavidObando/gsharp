@@ -208,13 +208,17 @@ open class Adr0208NarrowingCorpusTests {
                 "o6_callback_run_through_another_callback",
                 "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias",
-<<<<<<< HEAD
                 "q12_exit_gain",
                 "q13_exit_gain_bang",
                 "q14_enclosing_filter_reenters_loop",
                 "q14b_filter_write_reenters_loop_retested",
+                "q1_5456_closure_own_local_survives_unknown_callable",
+                "q2_5456_nested_closure_assigns_enclosing_closure_local",
+                "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
                 "q3_loop_escaped_closure",
+                "q4_5456_initializer_write_names_the_enclosing_variable",
                 "q4_shadow_let_in_loop",
+                "q5_5456_do_condition_is_outside_the_body_declaration",
                 "q5a_source_getter_in_loop",
                 "q5b_imported_getter_in_loop",
                 "q5c_imported_getter_closure_root",
@@ -222,13 +226,6 @@ open class Adr0208NarrowingCorpusTests {
                 "q7_while_exit_state",
                 "q8_do_while",
                 "q9_loop_in_goto_span"
-=======
-                "q1_5456_closure_own_local_survives_unknown_callable",
-                "q2_5456_nested_closure_assigns_enclosing_closure_local",
-                "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
-                "q4_5456_initializer_write_names_the_enclosing_variable",
-                "q5_5456_do_condition_is_outside_the_body_declaration"
->>>>>>> origin/main
             },
             names
         )
@@ -1647,7 +1644,6 @@ Done:
     return settings
 }
 func Main() { Console.WriteLine(Make[Setup](0).Ready) }`, "", "run", "True", ""}
-<<<<<<< HEAD
             yield[]object{"q3_loop_escaped_closure", `import System
 class C {
     var Value int32 = 1
@@ -1896,7 +1892,6 @@ func Run() int32 {
     return n
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "#5315, ADR-0213 W8 (L1)"}
-=======
             yield[]object{"q1_5456_closure_own_local_survives_unknown_callable", `import System
 
 class Rec {
@@ -1988,7 +1983,6 @@ func Main() {
     f()
     Console.WriteLine(hit.Id)
 }`, "GS0158@16:27", "reject", "", ""}
->>>>>>> origin/main
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
