@@ -101,6 +101,26 @@ open class Adr0212InheritedMemberTests {
     }
 
     @Fact
+    func ImportedBase_ACompilerOwnedOverride_StandsForTheSlotToo() {
+        // A data type's synthesized `Equals(object)` overrides `object.Equals(object)` without naming the slot.
+        for marker in[]string{"PDataStruct", "PDataClass"} {
+            let equals = Query(marker, "Equals")
+            Assert.DoesNotContain(
+                equals,
+                (m Symbol) -> m is ImportedFunctionSymbol imported &&
+                    imported
+                    .Method
+                    .DeclaringType!!.Name == "Object" &&
+                    imported
+                    .Method
+                    .GetParameters()
+                    .Length == 1
+            )
+            Assert.NotEmpty(equals)
+        }
+    }
+
+    @Fact
     func ImportedBase_ArgumentNullability_IsReadAtTheBase() {
         // `class Maybes : List[string?]`: `GetRange` returns the base's `List<T>`, read at `T = string?`.
         let slice = cast[ImportedFunctionSymbol](Assert.Single(Query("PMaybes", "GetRange")))
@@ -282,6 +302,14 @@ class Maybes : List[string?] { }
 
 class Args : EventArgs { }
 
+data struct Pt {
+    let X int32
+}
+
+data class Node {
+    let Id int32
+}
+
 class Shown {
     override func ToString() string { return "shown" }
 }
@@ -332,6 +360,8 @@ func Use(
     maybes Maybes,
     args Args,
     shown Shown,
+    pt Pt,
+    node Node,
     raw Raw,
     faulty Faulty,
     il IList[string],
@@ -358,6 +388,8 @@ func Use(
     let found = maybes.GetRange(0, 1) // PMaybes
     args.ToString() // PArgs
     shown.ToString() // PShown
+    pt.Equals(pt) // PDataStruct
+    node.Equals(node) // PDataClass
     raw.SetLength(1) // PStream
     let text = faulty.Message // PFaulty
     let listed = il.Count // PIList

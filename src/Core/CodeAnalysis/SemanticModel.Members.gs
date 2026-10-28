@@ -94,7 +94,10 @@ partial class SemanticModel {
                     access,
                     result
                 )
-                AddImportedBaseMembers(structure, name, result)
+                // A CLR-backed aggregate (an imported record) already holds the members it inherits.
+                if structure.ClrType == nil {
+                    AddImportedBaseMembers(structure, name, result)
+                }
                 AddDefaultInterfaceMethods(structure, name, access, result)
             }
             case declared is InterfaceSymbol {
@@ -166,47 +169,83 @@ partial class SemanticModel {
         }
     }
 
-    /// Returns the imported virtual accessors and methods that the source members of [`structure`](paramref) and
-    /// of its source bases override. The override stands for the slot: the imported member is not listed again.
-    private func ExternalOverrides(structure StructSymbol) List[MethodInfo] {
-        let overridden = List[MethodInfo]()
+    /// Returns the imported slots that the source members of [`structure`](paramref) and of its source bases
+    /// override. The override stands for the slot: the imported member is not listed again.
+    private func ExternalOverrides(structure StructSymbol) ImportedOverrides {
+        let overridden = ImportedOverrides()
         for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Instance(MemberKinds.All)) {
             switch member {
                 case function is FunctionSymbol {
-                    AddIfSet(overridden, function.ExternalOverriddenMethod)
+                    if function.ExternalOverriddenMethod != nil {
+                        overridden.AddSlot(function.ExternalOverriddenMethod)
+                    } else if function.IsOverride && function.OverriddenMethod == nil {
+                        // A compiler-owned override (the equality methods of a data type) names no slot.
+                        overridden.AddUnrecorded(function)
+                    }
                 }
                 case property is PropertySymbol {
-                    AddIfSet(overridden, property.ExternalOverriddenGetter)
-                    AddIfSet(overridden, property.ExternalOverriddenSetter)
+                    overridden.AddSlot(property.ExternalOverriddenGetter)
+                    overridden.AddSlot(property.ExternalOverriddenSetter)
                 }
                 case clrEvent is EventSymbol {
-                    AddIfSet(overridden, clrEvent.ExternalOverriddenAddMethod)
-                    AddIfSet(overridden, clrEvent.ExternalOverriddenRemoveMethod)
-                    AddIfSet(overridden, clrEvent.ExternalOverriddenRaiseMethod)
+                    overridden.AddSlot(clrEvent.ExternalOverriddenAddMethod)
+                    overridden.AddSlot(clrEvent.ExternalOverriddenRemoveMethod)
+                    overridden.AddSlot(clrEvent.ExternalOverriddenRaiseMethod)
                 }
             }
         }
         return overridden
     }
 
-    private func AddIfSet(list List[MethodInfo], method MethodInfo?) {
-        if method != nil {
-            list.Add(method)
-        }
-    }
+    /// The imported methods that source members override: by the slot the binder recorded, or, for an override
+    /// the compiler synthesized, by name and parameter types.
+    private class ImportedOverrides {
+        private let slots List[MethodInfo] = List[MethodInfo]()
+        private let unrecorded List[FunctionSymbol] = List[FunctionSymbol]()
 
-    // The same slot: a reflected method is a different object per reflected type, its token and module are not.
-    private func IsOverridden(accessor MethodInfo?, overridden List[MethodInfo]?) bool {
-        if accessor == nil || overridden == nil {
-            return false
+        func AddSlot(method MethodInfo?) {
+            if method != nil {
+                slots.Add(method)
+            }
         }
-        return overridden.Any(
-            (o MethodInfo) -> o.MetadataToken == accessor.MetadataToken && string.Equals(
-                o.Module.Name,
-                accessor.Module.Name,
-                StringComparison.Ordinal
-            )
-        )
+
+        func AddUnrecorded(function FunctionSymbol) {
+            unrecorded.Add(function)
+        }
+
+        // The same slot: a reflected method is a different object per reflected type, its token and module are not.
+        func Covers(accessor MethodInfo?) bool {
+            if accessor == nil {
+                return false
+            }
+            return slots.Any(
+                (o MethodInfo) -> o.MetadataToken == accessor.MetadataToken && string.Equals(
+                    o.Module.Name,
+                    accessor.Module.Name,
+                    StringComparison.Ordinal
+                )
+            ) ||
+                unrecorded.Any((f FunctionSymbol) -> Overrides(f, accessor))
+        }
+
+        private func Overrides(function FunctionSymbol, method MethodInfo) bool {
+            if !ClrTypeUtilities.EmittedMemberNameMatches(method, function.Name) {
+                return false
+            }
+            let parameters = method.GetParameters()
+            if parameters.Length != function.Parameters.Length {
+                return false
+            }
+            for var i = 0; i < parameters.Length; i++ {
+                if function.Parameters[i].Type.ClrType is not{} sourceType || !ClrTypeInspector.IsSameAs(
+                    sourceType,
+                    parameters[i].ParameterType
+                ) {
+                    return false
+                }
+            }
+            return true
+        }
     }
 
     /// Adds the default methods of the interfaces that a class or struct implements, the ones it does not
@@ -552,7 +591,7 @@ partial class SemanticModel {
         name string?,
         result ImmutableArray[Symbol].Builder,
         includeStatic bool = true,
-        overridden List[MethodInfo]? = nil
+        overridden ImportedOverrides? = nil
     ) {
         let flags = if includeStatic {
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
@@ -576,14 +615,14 @@ partial class SemanticModel {
         flags BindingFlags,
         name string?,
         result ImmutableArray[Symbol].Builder,
-        overridden List[MethodInfo]? = nil
+        overridden ImportedOverrides? = nil
     ) {
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
             if property.GetIndexParameters()
                 .Length == 0 &&
                 (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) &&
-                !IsOverridden(property.GetMethod, overridden) &&
-                !IsOverridden(property.SetMethod, overridden) {
+                !(overridden?.Covers(property.GetMethod) ?? false) &&
+                !(overridden?.Covers(property.SetMethod) ?? false) {
                 result.Add(ImportedMemberSymbol(receiver, property))
             }
         }
@@ -595,13 +634,13 @@ partial class SemanticModel {
         for method in ClrTypeUtilities.SafeGetMethods(clrType, flags) {
             if !method.IsSpecialName &&
                 (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(method, name)) &&
-                !IsOverridden(method, overridden) {
+                !(overridden?.Covers(method) ?? false) {
                 result.Add(ImportedMemberSymbol(receiver, method))
             }
         }
         for clrEvent in ClrTypeUtilities.SafeGetEvents(clrType, flags) {
             if (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(clrEvent, name)) &&
-                !IsOverridden(clrEvent.AddMethod, overridden) {
+                !(overridden?.Covers(clrEvent.AddMethod) ?? false) {
                 result.Add(ImportedMemberSymbol(receiver, clrEvent))
             }
         }
