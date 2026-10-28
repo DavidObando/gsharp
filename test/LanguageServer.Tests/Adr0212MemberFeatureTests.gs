@@ -80,6 +80,13 @@ open class Adr0212MemberFeatureTests {
     }
 
     @Fact
+    func Completion_OfATupleValue_OffersItsElementsButNotOfItsTypeName() {
+        let value = Complete("// pairValue")
+        Assert.Contains(value, (i CompletionItem) -> i.Label == "left")
+        Assert.DoesNotContain(Complete("// pairType"), (i CompletionItem) -> i.Label == "left")
+    }
+
+    @Fact
     func Hover_OnAnImportedCall_CountsTheOverloadsOfItsGroup() {
         let content = LanguageServerTestHelpers.Content(Source)
         let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(Source, "WriteLine", 0))
@@ -99,7 +106,9 @@ class Box {
     private var Hidden int32
 }
 
-func Use(b Box) {
+type Pair = (left int32, right int32)
+
+func Use(b Box, pair (left int32, right int32)) {
     Console.WriteLine("x")
     let n = Pick(1)
     let m = b.
@@ -109,6 +118,10 @@ func Use(b Box) {
         private func Complete(marker string) IReadOnlyList[CompletionItem] {
             let source = if marker == "// console" {
                 Source.Replace("    let m = b.\n", "    Console.\n", StringComparison.Ordinal)
+            } else if marker == "// pairValue" {
+                Source.Replace("    let m = b.\n", "    pair.\n", StringComparison.Ordinal)
+            } else if marker == "// pairType" {
+                Source.Replace("    let m = b.\n", "    Pair.\n", StringComparison.Ordinal)
             } else {
                 Source
             }
@@ -120,6 +133,10 @@ func Use(b Box) {
             let content = LanguageServerTestHelpers.Content(text)
             let anchor = if marker == "// console" {
                 "Console.\n"
+            } else if marker == "// pairValue" {
+                "pair.\n"
+            } else if marker == "// pairType" {
+                "Pair.\n"
             } else {
                 "let m = b."
             }

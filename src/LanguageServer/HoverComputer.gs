@@ -1453,7 +1453,7 @@ shared class CompletionComputer {
                 if !staticMembers {
                     continue
                 }
-            } else if receiver is not TupleTypeSymbol && MemberTokenResolver.IsStatic(member) != staticMembers {
+            } else if MemberTokenResolver.IsStatic(member) != staticMembers {
                 continue
             }
             if receiver is StructSymbol && member is EventSymbol {

@@ -136,7 +136,10 @@ internal shared class CallCandidateRecorder {
             } else {
                 cast[MethodBase](target)
             }
-            return left.MetadataToken == right.MetadataToken && left.Module == right.Module && left.Name == right.Name
+            return left.MetadataToken == right.MetadataToken &&
+                left.Module == right.Module &&
+                left.DeclaringType == right.DeclaringType &&
+                left.Name == right.Name
         }
         return false
     }
