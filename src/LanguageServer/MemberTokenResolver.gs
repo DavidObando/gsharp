@@ -264,19 +264,10 @@ internal shared class MemberTokenResolver {
         compilation Compilation,
         target ExpressionSyntax
     ) TypeSymbol? {
-        let (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, tree, target.Span.Start)
-        return GSharp
-            .Core
-            .CodeAnalysis
-            .Binding
-            .Binder
-            .TryInferExpressionType(
-            compilation.GlobalScope,
-            compilation.References ?? ReferenceResolver.Default(),
-            function,
-            locals,
-            target
-        )
+        return BoundSemantics
+            .GetPositionModel(compilation, tree)
+            ?.GetSpeculativeTypeInfo(target.Span.Start, target)
+            .Type
     }
 
     private func FindAccessorMemberContexts(tree SyntaxTree, token SyntaxToken?) sequence[
