@@ -6761,11 +6761,7 @@ partial class Binder {
             let defaultPackageName = submission?.DefaultPackageName ?? "Default"
             for tree in syntaxTrees {
                 let packageSyntax PackageSyntax? = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
-                let packageName = if packageSyntax != nil {
-                    string.Concat(packageSyntax.IdentifiersWithDots.Select((t SyntaxToken) -> t.ValueText))
-                } else {
-                    defaultPackageName
-                }
+                let packageName = PackageNameOfTree(tree, defaultPackageName)
                 if !packagesByName.TryGetValue(packageName, out var packageSymbol) {
                     packageSymbol = PackageSymbol(packageName, packageSyntax)
                     packagesByName[packageName] = packageSymbol
@@ -9341,6 +9337,19 @@ partial class Binder {
             }
         }
 
+        /// Gets the name of the package a tree belongs to: its `package` declaration, else the default package.
+        /// @param tree The tree.
+        /// @param defaultPackageName The name of the package of a tree that declares none.
+        /// @returns The package name.
+        internal func PackageNameOfTree(tree SyntaxTree, defaultPackageName string) string {
+            let packageSyntax PackageSyntax? = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
+            return if packageSyntax != nil {
+                string.Concat(packageSyntax.IdentifiersWithDots.Select((t SyntaxToken) -> t.ValueText))
+            } else {
+                defaultPackageName
+            }
+        }
+
         /// Collects the extension functions and extension methods in scope at a file that a member access on
         /// [`receiverType`](paramref) could name (ADR-0212 question 12). Source extensions go through the
         /// scope's own lookup and imported ones through the import-aware holder index and
@@ -9351,6 +9360,7 @@ partial class Binder {
         /// @param receiverType The receiver type, without nullability wrappers.
         /// @param name When given, only extensions of this name.
         /// @param referencingTree The tree (file) whose imports apply.
+        /// @param defaultPackageName The package of a tree that declares none, for a position outside any function.
         /// @returns The source extension functions and the imported extension methods, or empty arrays when the
         /// lookup fails.
         internal func CollectExtensionMembers(
@@ -9359,7 +9369,8 @@ partial class Binder {
             containingFunction FunctionSymbol?,
             receiverType TypeSymbol,
             name string?,
-            referencingTree SyntaxTree
+            referencingTree SyntaxTree,
+            defaultPackageName string
         )(Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo]) {
             if globalScope == nil {
                 return (ImmutableArray[FunctionSymbol].Empty, ImmutableArray[MethodInfo].Empty)
@@ -9372,7 +9383,10 @@ partial class Binder {
                     preserveLatestImportSyntaxTrees: true
                 )
                 let binder = Binder(parentScope, containingFunction)
-                let previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name)
+                // A top-level statement or an initializer has no function; its package is its file's.
+                let previousPackage = parentScope.SetCurrentDeclaringPackage(
+                    containingFunction?.Package?.Name ?? PackageNameOfTree(referencingTree, defaultPackageName)
+                )
                 let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
                 try {
                     let source = if name == nil {
@@ -9413,18 +9427,21 @@ partial class Binder {
             }
         }
 
-        // A receiver without a CLR shape of its own is probed through the shape a call projects it to: a
-        // declared class through its implemented interface, anything else through its erased CLR type.
+        // A receiver without a CLR shape of its own is probed through the shape a call projects it to (see
+        // `ExpressionBinder.TryBindImportedExtensionCall`): its erased CLR type, and for a declared class whose
+        // erasure is absent or `object`, the interface it implements.
         private func ImportedExtensionProbeReceiver(receiverType TypeSymbol) TypeSymbol? {
             if receiverType.ClrType != nil && !TypeSymbol.ContainsSameCompilationUserType(receiverType) {
                 return receiverType
             }
             var projected Type? = nil
+            if !MemberLookup.TryProjectErasedClrType(receiverType, out projected) {
+                projected = nil
+            }
             if receiverType is StructSymbol{IsClass: true} userClass &&
+                (projected == nil || projected.IsSameAs(typeof(object))) &&
                 ExpressionBinder.TryProjectUserClassReceiverInterface(userClass, out var implemented) {
                 projected = implemented
-            } else if !MemberLookup.TryProjectErasedClrType(receiverType, out projected) {
-                return default(TypeSymbol?)
             }
             return if projected == nil {
                 default(TypeSymbol?)

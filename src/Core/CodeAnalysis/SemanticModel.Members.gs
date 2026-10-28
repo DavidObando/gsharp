@@ -143,7 +143,8 @@ partial class SemanticModel {
             function,
             receiver,
             name,
-            syntaxTree
+            syntaxTree,
+            compilation.Submission?.DefaultPackageName ?? "Default"
         )
         // Declared extensions by file path (ordinal), then start, so the order does not depend on the order
         // files were bound in. Imported ones keep holder order, then metadata order.

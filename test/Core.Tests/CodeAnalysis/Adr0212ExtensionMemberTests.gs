@@ -115,11 +115,48 @@ open class Adr0212ExtensionMemberTests {
         Assert.Equal(forward, Names(Compilation(Trees[0], Trees[1])))
     }
 
+    @Fact
+    func SourceExtension_AtATopLevelStatement_PrefersTheExtensionOfTheFilesOwnPackage() {
+        // Both packages declare `Greet` on string with the same signature; the call in Baz binds Baz's.
+        let compilation = Compilation(PackageTrees[0], PackageTrees[1])
+        let tree = PackageTrees[1]
+        let model = compilation.GetSemanticModel(tree)
+        let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
+        let bound = model.GetSymbolInfo(access.RightPart.GetFirstToken()).Symbol
+        Assert.NotNull(bound)
+        let position = access.Span.Start
+        let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
+        let found = model.LookupMembers(position, receiver, "Greet").OfType[FunctionSymbol]().ToList()
+        let only = Assert.Single(found)
+        Assert.Equal("Baz", only.Package!!.Name)
+        Assert.Same(bound, only)
+    }
+
+    @Fact
+    func ImportedExtension_ClassWithAnImportedBaseAndAnInterface_KeepsTheBaseForTheProbe() {
+        // The call binder erases the receiver to its imported base and projects to an interface only when
+        // the erasure is absent or `object`; `GetCustomAttributes` takes a MemberInfo.
+        Assert.NotEmpty(Query("PDerivedMember", "GetCustomAttributes").OfType[ImportedFunctionSymbol]())
+    }
+
     shared {
+        private let PackageTrees[]SyntaxTree = []SyntaxTree{
+            SyntaxTree.Parse(
+                SourceText.From("package Foo\n\nfunc (t string) Greet() string {\n    return t\n}\n", "foo.gs")
+            ),
+            SyntaxTree.Parse(
+                SourceText.From(
+                    "package Baz\n\nfunc (t string) Greet() string {\n    return t\n}\n\nlet q = \"x\".Greet()\n",
+                    "baz.gs"
+                )
+            )
+        }
+
         private const FileA string = `package Ext
 import System
 import System.Collections.Generic
 import System.Linq
+import System.Reflection
 
 class Plain {
     var Id int32
@@ -137,7 +174,12 @@ func (text string) Shout() string {
     return text
 }
 
-func Use(n int32, s string, xs []int32, p Plain, u Numbers) {
+abstract class Derived : System.Reflection.MemberInfo, IDisposable {
+    func Dispose() { }
+}
+
+func Use(n int32, s string, xs []int32, p Plain, u Numbers, d Derived) {
+    d.ToString() // PDerivedMember
     n.Abs() // PInt
     s.Shout() // PString
     xs.Select((x int32) -> x) // PSlice
