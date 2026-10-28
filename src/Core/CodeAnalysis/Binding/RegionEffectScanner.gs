@@ -685,9 +685,16 @@ internal sealed class RegionEffectScanner {
     private func Compose(record RegionEffects) {
         for write in record.Writes {
             // A callable that an enclosing declaration names like the type takes call binding (probe d2).
-            let shadowed = write.Proof == RegionWriteProof.Construction &&
-                write.ConstructedTypeName != nil &&
-                IsDeclared(write.ConstructedTypeName)
+            let shadowed = (
+                write.Proof == RegionWriteProof.Construction &&
+                    write.ConstructedTypeName != nil &&
+                    IsDeclared(write.ConstructedTypeName)
+            ) ||
+                (
+                write.Proof == RegionWriteProof.NullAssertion &&
+                    write.RightSideName != nil &&
+                    IsDeclared(write.RightSideName)
+            )
             PlaceWrite(
                 write.Name,
                 write.Position,
