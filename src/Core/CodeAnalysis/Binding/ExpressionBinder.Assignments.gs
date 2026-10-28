@@ -623,6 +623,17 @@ internal partial class ExpressionBinder {
                 out var property,
                 out var propertyOwner
             ) {
+                let importedWrite = TryBindInterfaceImportedPropertyWrite(
+                    interfaceSymbol,
+                    BoundVariableExpression(anchor, receiverLocal),
+                    memberIdentifier.ValueText,
+                    memberIdentifier.Location,
+                    separator.Location,
+                    valueSyntax
+                )
+                if importedWrite != nil {
+                    return importedWrite
+                }
                 Diagnostics.ReportUnableToFindMember(memberIdentifier.Location, propertyName)
                 let _ = BindExpression(valueSyntax)
                 return nil
@@ -1216,6 +1227,17 @@ internal partial class ExpressionBinder {
                     },
                     effectiveInterface
                 )
+            }
+            let importedWrite = TryBindInterfaceImportedPropertyWrite(
+                ifaceVarType,
+                assignmentReceiver,
+                syntax.FieldIdentifier.ValueText,
+                syntax.FieldIdentifier.Location,
+                syntax.EqualsToken.Location,
+                syntax.Value
+            )
+            if importedWrite != nil {
+                return importedWrite
             }
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText)
             return BoundErrorExpression(nil)
@@ -2230,6 +2252,26 @@ internal partial class ExpressionBinder {
             out var property,
             out var propertyOwner
         ) {
+            let importedProperty = MemberLookup.GetInterfaceImportedBaseInstanceProperty(
+                interfaceType,
+                memberName,
+                out var importedReceiverType
+            )
+            if importedProperty != nil {
+                let importedReceiver = conversions.BindConversion(
+                    memberNameSyntax.Location,
+                    receiver,
+                    importedReceiverType!!
+                )
+                return TryBindChainedClrCompoundAssignment(
+                    importedReceiver,
+                    importedProperty.DeclaringType!!,
+                    memberName,
+                    memberNameSyntax,
+                    syntax,
+                    baseOpSyntaxKind
+                )
+            }
             return nil
         }
         let effectiveInterface = Invariant.Required(
@@ -2345,11 +2387,20 @@ internal partial class ExpressionBinder {
         valueSyntax ExpressionSyntax,
         assignLocation TextLocation
     ) BoundExpression? {
-        if !TryResolveInterfaceInstancePropertyByBareName(name, out var receiver, out var thisInterface) ||
-            !TypeMemberModel.TryGetPropertyWithOwner(thisInterface!!, name, out var property, out var propertyOwner) {
+        if !TryResolveInterfaceInstancePropertyByBareName(name, out var receiver, out var thisInterface) {
             return nil
         }
-        if !property!!.HasSetter {
+        if !TypeMemberModel.TryGetPropertyWithOwner(thisInterface!!, name, out var property, out var propertyOwner) {
+            return TryBindInterfaceImportedPropertyWrite(
+                thisInterface!!,
+                receiver!!,
+                name,
+                nameLocation,
+                assignLocation,
+                valueSyntax
+            )
+        }
+        if !property.HasSetter {
             Diagnostics.ReportCannotAssign(assignLocation, name)
             let _ = BindExpression(valueSyntax)
             return BoundErrorExpression(nil)
@@ -2359,15 +2410,15 @@ internal partial class ExpressionBinder {
             "an interface property has an effective interface owner",
             expression: "propertyOwner as InterfaceSymbol"
         )
-        if !AccessibilityChecker.IsAccessible(property!!.SetterAccessibility, effectiveInterface, this.function) {
+        if !AccessibilityChecker.IsAccessible(property.SetterAccessibility, effectiveInterface, this.function) {
             Diagnostics.ReportMemberInaccessible(
                 nameLocation,
-                property!!.Name,
+                property.Name,
                 effectiveInterface.Name,
-                property!!.SetterAccessibility
+                property.SetterAccessibility
             )
         }
-        let propertyType = effectiveInterface.SubstituteMemberType(property!!.Type)
+        let propertyType = effectiveInterface.SubstituteMemberType(property.Type)
         let value = BindAssignmentRhs(valueSyntax, propertyType)
         let converted = conversions.BindConversion(valueSyntax.Location, value, propertyType)
         EnforceInitOnlyAssignment(property, receiver, assignLocation)
@@ -2375,14 +2426,48 @@ internal partial class ExpressionBinder {
             nil,
             receiver,
             nil,
-            property!!,
+            property,
             converted,
-            if object.ReferenceEquals(propertyType, property!!.Type) {
+            if object.ReferenceEquals(propertyType, property.Type) {
                 default(TypeSymbol?)
             } else {
                 propertyType
             },
             effectiveInterface
+        )
+    }
+
+    private func TryBindInterfaceImportedPropertyWrite(
+        interfaceType InterfaceSymbol,
+        receiver BoundExpression,
+        name string,
+        nameLocation TextLocation,
+        assignLocation TextLocation,
+        valueSyntax ExpressionSyntax
+    ) BoundExpression? {
+        let property = MemberLookup.GetInterfaceImportedBaseInstanceProperty(
+            interfaceType,
+            name,
+            out var importedReceiverType
+        )
+        if property == nil {
+            return nil
+        }
+        if !TryGetWritableClrMember(property, importedReceiverType!!, out _, out var propertyType, out _) {
+            Diagnostics.ReportCannotAssign(assignLocation, name)
+            let _ = BindExpression(valueSyntax)
+            return BoundErrorExpression(nil)
+        }
+        let importedReceiver = conversions.BindConversion(nameLocation, receiver, importedReceiverType!!)
+        let value = BindAssignmentRhs(valueSyntax, propertyType!!)
+        let converted = conversions.BindConversion(valueSyntax.Location, value, propertyType)
+        return BoundClrPropertyAssignmentExpression(
+            nil,
+            importedReceiver,
+            property,
+            converted,
+            propertyType!!,
+            staticContainerType: nil
         )
     }
 
@@ -2731,7 +2816,11 @@ internal partial class ExpressionBinder {
         if instanceMember == nil {
             return nil
         }
-        if !TryGetWritableClrMember(instanceMember, boundReceiver.Type, out _, out var targetSymbol, out _) ||
+        if (
+            instanceMember is PropertyInfo compoundProperty &&
+                GetVisibleGetter(compoundProperty, includeInherited) == nil
+        ) ||
+            !TryGetWritableClrMember(instanceMember, boundReceiver.Type, out _, out var targetSymbol, out _) ||
             RefCapabilities
             .IsReadOnlyValueReference(boundReceiver) {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName)
@@ -4126,6 +4215,17 @@ internal partial class ExpressionBinder {
                     },
                     effectiveInterface
                 )
+            }
+            let importedWrite = TryBindInterfaceImportedPropertyWrite(
+                ifaceSym,
+                receiver,
+                syntax.FieldIdentifier.ValueText,
+                syntax.FieldIdentifier.Location,
+                syntax.EqualsToken.Location,
+                syntax.Value
+            )
+            if importedWrite != nil {
+                return importedWrite
             }
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
             return BoundErrorExpression(nil)
