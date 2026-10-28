@@ -1486,17 +1486,6 @@ class Conversion {
                 // `IEnumerable<T>`).
                 if to != nil && !(to is InterfaceSymbol) && IsInterfaceLikeType(to) {
                     for c in GetStructHierarchy(fromClass) {
-                        // #4731: imported bases supply nominal interface implementations
-                        // too. Classify their substituted symbols, not erased CLR probes;
-                        // neither structural adapters nor unrelated cross-casts are upcasts.
-                        if c.ImportedBaseType is {} importedBase && ClassifyCore(
-                            importedBase,
-                            to,
-                            allowStructuralProjection: false,
-                            allowExplicitReference: false
-                        ).IsImplicit {
-                            return Conversion.Implicit
-                        }
                         for iface in c.ImplementedClrInterfaces {
                             let ifaceClr Type? = iface?.ClrType
                             if ifaceClr == nil {
@@ -1520,28 +1509,16 @@ class Conversion {
                         return Conversion.Implicit
                     }
                 }
-                // Issue #1274: a G# class that (transitively) derives from an
-                // imported/BCL base class (e.g. `MyStream : System.IO.Stream`)
-                // implicitly upcasts to that imported base class — or any base of
-                // it. The user class carries no ClrType during binding, so the
-                // general #521 reference upcast above (which requires
-                // `from.ClrType != null`) cannot fire. Walk the user base chain and
-                // match the first imported base class (`ImportedBaseType`) by name
-                // against the target's CLR type using IsAssignableByName, which
-                // covers the full CLR base chain of the imported base.
-                if to?.ClrType is Type toClrClass &&
-                    !toClrClass.IsInterface &&
-                    !toClrClass.IsValueType &&
-                    !toClrClass.IsPointer &&
-                    !toClrClass
-                    .IsByRef {
-                    for c in GetStructHierarchy(fromClass) {
-                        if c.ImportedBaseType?.ClrType is Type importedBaseClr && ClrTypeUtilities.IsAssignableByName(
-                            toClrClass,
-                            importedBaseClr
-                        ) {
-                            return Conversion.Implicit
-                        }
+                // Preserve symbolic arguments when an imported base has no faithful CLR probe.
+                // Classes and interfaces share this nominal conversion path (#5388, #4731).
+                for c in GetStructHierarchy(fromClass) {
+                    if c.ImportedBaseType is {} importedBase && ClassifyCore(
+                        importedBase,
+                        to,
+                        allowStructuralProjection: false,
+                        allowExplicitReference: false
+                    ).IsImplicit {
+                        return Conversion.Implicit
                     }
                 }
             }
@@ -2228,6 +2205,9 @@ class Conversion {
         /// @param type The candidate type.
         /// @returns `true` when [`type`](paramref) is reference-capable.
         internal func IsReferenceLikeTarget(type TypeSymbol) bool {
+            if type is ImportedTypeSymbol{OpenDefinition: {} importedOpen} {
+                return importedOpen.IsClass || importedOpen.IsInterface
+            }
             if type is InterfaceSymbol {
                 return true
             }

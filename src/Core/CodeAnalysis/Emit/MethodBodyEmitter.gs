@@ -1093,39 +1093,11 @@ internal partial class MethodBodyEmitter {
                     }
                 }
             }
-            // #4731: a user class has no CLR type here. Reuse the binder's
-            // nominal relation, including substituted imported bases, rather
-            // than independently deciding interface assignability from CLR probes.
-            if a is StructSymbol srcClass2 &&
-                srcClass2.IsClass &&
-                b != nil &&
-                !(b is InterfaceSymbol) &&
-                Conversion
-                .IsInterfaceLikeType(b) {
+            // Reuse the nominal classifier for source-class upcasts, including symbolic imported bases (#5388, #4731).
+            if a is StructSymbol srcClass2 && srcClass2.IsClass && b != nil {
                 if Conversion.ClassifyCore(a, b, allowStructuralProjection: false, allowExplicitReference: false)
                     .IsImplicit {
                     return true
-                }
-            }
-            // Issue #1274: class → imported CLR base class upcast. A user class
-            // that (transitively) derives from an imported/BCL base class (e.g.
-            // `MyStream : System.IO.Stream`) has no ClrType during emit, so the
-            // general #521 rule below cannot match. Recognise the relation
-            // structurally through the user base chain's `ImportedBaseType` so the
-            // upcast emits as a no-op reference conversion.
-            if a is StructSymbol srcClass3 &&
-                srcClass3.IsClass &&
-                b?.ClrType is Type bClrClass &&
-                !bClrClass.IsInterface &&
-                !bClrClass
-                .IsValueType {
-                for c in srcClass3.GetHierarchy() {
-                    if c.ImportedBaseType?.ClrType is Type importedBaseClr && ClrTypeUtilities.IsAssignableByName(
-                        bClrClass,
-                        importedBaseClr
-                    ) {
-                        return true
-                    }
                 }
             }
             // Issue #323: any delegate-typed value (named/generic CLR delegate

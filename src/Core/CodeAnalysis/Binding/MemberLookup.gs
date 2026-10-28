@@ -3837,7 +3837,7 @@ internal class MemberLookup {
                     // enough to pass the ClrType gate (mirroring the delegate-
                     // component eraser); the symbolic-argument recovery downstream
                     // re-derives the real element type for inference.
-                    erased = userClass.ImportedBaseType?.ClrType ?? typeof(object)
+                    erased = TypeMemberModel.GetNearestImportedBase(userClass)?.ClrType ?? typeof(object)
                     return true
                 }
                 case InterfaceSymbol {
