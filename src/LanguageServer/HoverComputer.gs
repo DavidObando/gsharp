@@ -35,7 +35,7 @@ shared class HoverComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) Hover? {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token SyntaxToken? = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         if token == nil {
@@ -463,7 +463,7 @@ shared class ReferencesComputer {
         includeDeclaration bool,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[Location] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let target Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -483,7 +483,7 @@ shared class ReferencesComputer {
         includeDeclaration bool,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[SyntaxToken] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let target Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -563,7 +563,7 @@ shared class RenameComputer {
         if !SemanticLookup.IsValidIdentifier(newName) {
             return nil
         }
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let target Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -635,7 +635,7 @@ shared class DefinitionComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[Location] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         let token SyntaxToken? = SemanticLookup.FindTokenAt(content.SyntaxTree, offset)
         let symbol Symbol? = SemanticLookup.ResolveSymbol(compilation, token, ct)
@@ -976,7 +976,7 @@ shared class SignatureHelpComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) SignatureHelp? {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         // Walk backwards from cursor to find the function name token before the opening paren
         let source = content.SyntaxTree.Text.ToString()
@@ -1089,7 +1089,7 @@ shared class CompletionComputer {
         position Position,
         ct CancellationToken = default(CancellationToken)
     ) IReadOnlyList[CompletionItem] {
-        let compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+        let compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         let offset = SemanticLookup.ToOffset(content, position)
         // Issue #917: completion-as-you-type. When the caret sits in (or immediately
         // after) a partial identifier — e.g. `prin<caret>` or `x.To<caret>` — compute

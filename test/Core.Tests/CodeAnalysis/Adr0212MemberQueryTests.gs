@@ -146,6 +146,16 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func MemberGroup_WithoutRecording_AnswersNothing() {
+        let tree = Trees[0]
+        let plain = Compilation(Trees[1], Trees[0])
+        Assert.False(plain.RecordMemberGroups)
+        let call = CallAt("PFree")
+        Assert.True(plain.GetSemanticModel(tree).GetMemberGroup(call).IsEmpty)
+        Assert.False(ModelOf(call).GetMemberGroup(call).IsEmpty)
+    }
+
+    @Fact
     func MemberGroup_ArgumentProbe_DoesNotReplaceTheCalleesGroup() {
         // The method-group argument is resolved against the Console overloads inside the call.
         let group = Group("PProbe")
@@ -199,6 +209,8 @@ open class Adr0212MemberQueryTests {
     func MemberGroup_IsDeterministic_WhateverTheOrderOfTheTrees() {
         let forward = Compilation(Trees[0], Trees[1])
         let backward = Compilation(Trees[1], Trees[0])
+        forward.RecordMemberGroups = true
+        backward.RecordMemberGroups = true
         let call = CallAt("PFree")
         let names = (model SemanticModel, c CallExpressionSyntax) -> model
             .GetMemberGroup(c)
@@ -457,6 +469,7 @@ partial class Parts {
 
         private func CreateCompilation() Compilation {
             let compilation = Compilation(Trees[1], Trees[0])
+            compilation.RecordMemberGroups = true
             Assert.Empty(compilation.GlobalScope.Diagnostics)
             Assert.Empty(compilation.BoundProgram.Diagnostics)
             return compilation

@@ -34,7 +34,7 @@ open class Adr0212MemberConformanceTests {
             StringComparer.Ordinal
         ) {
             let tree = SyntaxTree.Parse(SourceText.From(File.ReadAllText(file), file))
-            compared += CompareCompilation(Compilation(tree), mismatches)
+            compared += CompareCompilation(Recording(Compilation(tree)), mismatches)
         }
         Assert.True(compared > 500, "compared ${compared} members")
         AssertNoMismatches(mismatches)
@@ -49,12 +49,17 @@ open class Adr0212MemberConformanceTests {
             .OrderBy((f string) -> f, StringComparer.Ordinal)
             .Select((f string) -> SyntaxTree.Parse(SourceText.From(File.ReadAllText(f), f)))
             .ToArray()
-        let compared = CompareCompilation(Compilation(trees), mismatches)
+        let compared = CompareCompilation(Recording(Compilation(trees)), mismatches)
         Assert.True(compared > 1000, "compared ${compared} members")
         AssertNoMismatches(mismatches)
     }
 
     shared {
+        private func Recording(compilation Compilation) Compilation {
+            compilation.RecordMemberGroups = true
+            return compilation
+        }
+
         private func RepositoryRoot() string {
             var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
             while directory != nil && !RepositoryRootMarker.IsRoot(directory.FullName) {

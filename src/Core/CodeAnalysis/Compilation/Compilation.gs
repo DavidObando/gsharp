@@ -344,6 +344,15 @@ open class Compilation {
         }
     }
 
+    /// Gets or sets whether the body bind records the candidates of each call, for
+    /// (cref:SemanticModel.GetMemberGroup) (ADR-0212 slice S4). Set it before the first query. Only a
+    /// compilation made for the semantic model or the language server sets it; `gsc` leaves it off so
+    /// that recording costs a compile nothing.
+    internal prop RecordMemberGroups bool {
+        get;
+        set;
+    }
+
     /// Returns the bound program, binding it first when no caller has.
     /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build itself.
     internal func GetBoundProgram(cancellationToken CancellationToken) BoundProgram {
@@ -361,6 +370,7 @@ open class Compilation {
             using let measurement = CompilationMeasurements.BeginPhase("bodies")
             // ADR-0186: body binding reads imported member signatures too.
             using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
+            using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups)
             ThrowIfCannotBuild_Locked()
             BodyBindProbe?.Invoke()
             let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
@@ -717,6 +727,7 @@ open class Compilation {
         successor.WarnOnMissingDocumentation = WarnOnMissingDocumentation
         successor.Logger = Logger
         successor.Submission = Submission
+        successor.RecordMemberGroups = RecordMemberGroups
         successor.EmbeddedResources = EmbeddedResources
         if assemblyName != nil {
             successor.AssemblyName = assemblyName

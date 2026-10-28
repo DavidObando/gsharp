@@ -20,11 +20,25 @@ import System.Threading
 /// inference, a conversion operator search) names other methods or holds fewer candidates. A thread owns its frames, so parallel body binding needs no lock.
 internal shared class CallCandidateRecorder {
     private let current ThreadLocal[Frame?] = ThreadLocal[Frame?]()
+    internal let enabled AsyncLocal[bool] = AsyncLocal[bool]()
+
+    /// Turns recording on for the binding that runs in the returned scope, workers included. Only a
+    /// compilation made for the semantic model asks for it, so `gsc` allocates nothing here.
+    /// @param record Whether to record.
+    /// @returns The scope to dispose when the binding ends.
+    func Enter(record bool) RecordingScope {
+        let previous = enabled.Value
+        enabled.Value = record
+        return RecordingScope(previous)
+    }
 
     /// Starts collecting for [`syntax`](paramref).
     /// @param syntax The call being bound.
-    /// @returns The frame that (cref:End) closes.
-    func Begin(syntax SyntaxNode) Frame {
+    /// @returns The frame that (cref:End) closes, or null when recording is off.
+    func Begin(syntax SyntaxNode) Frame? {
+        if !enabled.Value {
+            return nil
+        }
         let frame = Frame(syntax, current.Value)
         current.Value = frame
         return frame
@@ -32,8 +46,23 @@ internal shared class CallCandidateRecorder {
 
     /// Stops collecting for [`frame`](paramref).
     /// @param frame The frame (cref:Begin) returned.
-    func End(frame Frame) {
-        current.Value = frame.Parent
+    func End(frame Frame?) {
+        if frame != nil {
+            current.Value = frame.Parent
+        }
+    }
+
+    /// Restores the recording state that (cref:Enter) replaced.
+    internal struct RecordingScope : IDisposable {
+        private let previous bool
+
+        internal init(previous bool) {
+            this.previous = previous
+        }
+
+        func Dispose() {
+            CallCandidateRecorder.enabled.Value = this.previous
+        }
     }
 
     /// Records the declared overloads a source selection considers.
@@ -67,8 +96,8 @@ internal shared class CallCandidateRecorder {
     /// Gives [`call`](paramref), or the call it wraps, the group [`frame`](paramref) recorded.
     /// @param frame The frame of the call.
     /// @param bound The expression the binder built for the call.
-    func Stamp(frame Frame, bound BoundExpression) {
-        if frame.Sets.Count == 0 {
+    func Stamp(frame Frame?, bound BoundExpression) {
+        if frame == nil || frame.Sets.Count == 0 {
             return
         }
         var node BoundExpression? = bound

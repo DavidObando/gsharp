@@ -126,6 +126,8 @@ partial class SemanticModel {
     /// <item>Partial type: the methods of every part, by file path (ordinal), then by start position.</item>
     /// </list>
     /// Constructor calls and extension methods dispatched as instance calls are not in the contract.
+    /// The compilation must have (cref:Compilation.RecordMemberGroups) set before its first query; a
+    /// compilation without it answers an empty array for every node.
     /// @param node A call expression, the name of a call or member access, or its identifier token.
     /// @param cancellationToken Cancels index construction on first use.
     /// @returns The candidates, empty when the node names no call or member.
@@ -135,6 +137,11 @@ partial class SemanticModel {
     ) ImmutableArray[Symbol] {
         cancellationToken.ThrowIfCancellationRequested()
         index.Get(cancellationToken)
+        // Without recording the candidates are unknown, and a group of the selected callee alone would
+        // look complete. The query answers nothing instead.
+        if !compilation.RecordMemberGroups {
+            return ImmutableArray[Symbol].Empty
+        }
         let token = MemberGroupToken(node)
         if token == nil || token.Kind != SyntaxKind.IdentifierToken || token.IsMissing || !object.ReferenceEquals(
             token.SyntaxTree,
