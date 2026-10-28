@@ -13,7 +13,8 @@ import System.Xml.Linq
 /// removed from scope. The repository-mirror completeness contract (orphan
 /// translation and (cref:RepositoryMirror.ValidateCompleted)) applies
 /// only to in-scope files — out-of-scope sources are not orphans and have no
-/// mirrors to validate. The scope is each excluded project's own directory
+/// mirrors to validate. Project files require explicit membership.
+/// The source scope is each excluded project's own directory
 /// plus any explicit non-wildcard `<Compile Include>` item
 /// resolving inside the repository (shared linked sources such as
 /// `test/Shared/*` live outside every project directory).
@@ -33,6 +34,10 @@ internal class RepositoryExcludedScope {
     internal func IsExcluded(relativePath string?) bool {
         if this.compileFiles.Contains(relativePath!!) {
             return true
+        }
+        // Sibling projects own their project files independently of source-directory ownership.
+        if string.Equals(Path.GetExtension(relativePath), ".csproj", StringComparison.OrdinalIgnoreCase) {
+            return false
         }
         for directory in this.directories {
             if relativePath!!.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase) {
