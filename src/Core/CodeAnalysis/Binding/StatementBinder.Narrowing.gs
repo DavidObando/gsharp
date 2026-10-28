@@ -590,6 +590,10 @@ internal partial class StatementBinder {
         } else {
             RemoveAssignedAliases(aliases, collector)
         }
+        // ADR-0208 R15: a call can run an escaped closure that replaces a callable alias which a closure assigns.
+        if collector.MayRunEscapedClosure {
+            aliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
+        }
         if assignsExternalCallable {
             aliases.Add(
                 Invariant.Required(
@@ -1658,12 +1662,16 @@ internal partial class StatementBinder {
     MayBeMutatedByUnknownWrite(mutations.MayMutateAnyRoot, mutations.MayMutateAnyRootViaPointer, path) ||
         (mutations.MayRunEscapedClosure && MayBeMutatedByEscapedClosure(path.Root))
 
-    // ADR-0208 R15 (#5237): a node that runs user code can run a closure that escaped and assigns [`root`](paramref).
-    // A by-reference parameter keeps its fact (amendment A3).
-    private func MayBeMutatedByEscapedClosure(root VariableSymbol) bool -> NarrowingState.OwnsClosureWritableStorage(
-        root
-    ) &&
-        binderCtx.MayBeAssignedByClosure(root)
+    // ADR-0208 R15 (#5237): a node that runs source code can run a closure that escaped and assigns [`root`](paramref),
+    // or the plain variable that a `ref` local names. A by-reference parameter keeps its fact (amendment A3).
+    private func MayBeMutatedByEscapedClosure(root VariableSymbol) bool {
+        for member in AliasChain(root) {
+            if NarrowingState.OwnsClosureWritableStorage(member) && binderCtx.MayBeAssignedByClosure(member) {
+                return true
+            }
+        }
+        return false
+    }
 
     // The same decision from the two flags, for the region walker of ADR-0213 (slice L0).
     private func MayBeMutatedByUnknownWrite(mayMutateAnyRoot bool, viaPointer bool, path AccessPath) bool -> (
@@ -1688,7 +1696,7 @@ internal partial class StatementBinder {
             externalCallableAliases.Clear()
         }
         RemoveAssignedAliases(externalCallableAliases, collector)
-        if collector.MayMutateAnyRoot {
+        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
         }
         before.ExceptWith(externalCallableAliases)
@@ -1997,6 +2005,9 @@ internal partial class StatementBinder {
             // with user code may assign a mutable global.
             if sourcePropertyRunsUserCode || sourceConstructionRunsUserCode {
                 MarkMayMutateGlobalRoots()
+            }
+            // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped.
+            if node is BoundCallOperationExpression {
                 MayRunEscapedClosure = true
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
@@ -2005,7 +2016,6 @@ internal partial class StatementBinder {
                 MarkMayMutateGlobalRoots(
                     writesReferenceStorage: function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet
                 )
-                MayRunEscapedClosure = true
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -2340,7 +2350,7 @@ internal partial class StatementBinder {
                 }
                 let isExternal = IsExternalCallable(argument)
                 if isExternal {
-                    MarkMayMutateGlobalRoots()
+                    MarkMayMutateGlobalRoots(runsSourceCode: false)
                 }
                 if IsUnknownCallable(argument) || (!hasKnownTargets && !isExternal) {
                     MayMutateAnyRoot = true
@@ -2660,7 +2670,7 @@ internal partial class StatementBinder {
                     !functionLiterals.ContainsKey(variable)
             )
             if variable is ParameterSymbol && variable.IsReadOnly == true || externalFunctionValues.Contains(variable) {
-                MarkMayMutateGlobalRoots()
+                MarkMayMutateGlobalRoots(runsSourceCode: false)
                 MayMutateWritableReferenceRoots = true
                 MayMutateReferenceStorage = true
             }
@@ -2671,7 +2681,12 @@ internal partial class StatementBinder {
             MarkMayMutateGlobalRoots()
         }
 
-        private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true) {
+        // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
+        // (ADR-0208 row R15).
+        private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true, runsSourceCode bool = true) {
+            if runsSourceCode {
+                MayRunEscapedClosure = true
+            }
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
             if writesReferenceStorage {

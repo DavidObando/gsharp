@@ -118,10 +118,16 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
     /// code also removes the facts on a root that a closure can assign
     /// (row R15).
     /// @param effects The effects of the node.
+    /// @param mayBeWrittenByEscapedClosure Tells whether a node that runs source code can write a root through a
+    /// closure that escaped, or through the variable a `ref` local names. `nil` means no root (row R15).
     /// @param mayBeIndirectlyWritten Tells whether a call can write a root
     /// without naming it (a local that a closure assigns, or an alias
     /// class member). The caller owns this set. `nil` means no root.
-    func Kill(effects StatementEffects, mayBeIndirectlyWritten((VariableSymbol) -> bool)? = nil) NarrowingState {
+    func Kill(
+        effects StatementEffects,
+        mayBeIndirectlyWritten((VariableSymbol) -> bool)? = nil,
+        mayBeWrittenByEscapedClosure((VariableSymbol) -> bool)? = nil
+    ) NarrowingState {
         if unreachable {
             return this
         }
@@ -131,9 +137,8 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
                 (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol) ||
                 (
                 effects.MayRunEscapedClosure &&
-                    mayBeIndirectlyWritten != nil &&
-                    OwnsClosureWritableStorage(path.Root) &&
-                    mayBeIndirectlyWritten(path.Root)
+                    mayBeWrittenByEscapedClosure != nil &&
+                    mayBeWrittenByEscapedClosure(path.Root)
             ) ||
                 (effects.MayMutateWritableReferenceRoots && IsByReferenceParameter(path.Root)) ||
                 (effects.MayMutateAnyRootViaPointer && (path.HasMembers || !path.Root.IsReadOnly)) ||
@@ -142,9 +147,8 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
                 (effects.MayMutateGlobalRoots && variable is GlobalVariableSymbol) ||
                 (
                 effects.MayRunEscapedClosure &&
-                    mayBeIndirectlyWritten != nil &&
-                    OwnsClosureWritableStorage(variable) &&
-                    mayBeIndirectlyWritten(variable)
+                    mayBeWrittenByEscapedClosure != nil &&
+                    mayBeWrittenByEscapedClosure(variable)
             ) ||
                 (effects.MayMutateWritableReferenceRoots && IsByReferenceParameter(variable)) ||
                 effects.MayMutateAnyRootViaPointer ||

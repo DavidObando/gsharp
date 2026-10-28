@@ -211,6 +211,11 @@ open class Adr0208NarrowingCorpusTests {
                 "p1_5237_escaped_closure_run_by_declared_function",
                 "p2_5237_loop_form_escaped_closure",
                 "p3_5237_root_no_closure_assigns_keeps_the_fact",
+                "p4_5237_base_class_call",
+                "p5_5237_imported_call_runs_registered_callback",
+                "p6_5237_ref_local_alias_of_closure_assigned_local",
+                "p7_5237_iterator_runs_escaped_closure",
+                "p8_5237_call_replaces_a_closure_assigned_callable",
                 "q1_5456_closure_own_local_survives_unknown_callable",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
@@ -1787,6 +1792,109 @@ func Run() int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "R15"}
+            yield[]object{"p4_5237_base_class_call", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+open class Base {
+    func Wrapper(h Holder) {
+        h.Callback()
+    }
+}
+class Derived : Base {
+    func Run() int32 {
+        var x C? = C{}
+        let h = Holder{}
+        h.Callback = func() { x = nil }
+        if x == nil { return 0 }
+        base.Wrapper(h)
+        return x.Value
+    }
+}
+func Main() { Console.WriteLine(Derived().Run()) }`, "GS0158@21:18", "reject", "", "R15"}
+            yield[]object{"p5_5237_imported_call_runs_registered_callback", `import System
+import System.Threading
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    let cts = CancellationTokenSource()
+    cts.Token.Register(func() { x = nil })
+    if x == nil { return 0 }
+    cts.Cancel()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@13:14", "reject", "", "R15"}
+            yield[]object{"p6_5237_ref_local_alias_of_closure_assigned_local", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    let ref a C? = x
+    if a == nil { return 0 }
+    Wrapper(h)
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@19:14", "reject", "", "R15"}
+            yield[]object{"p7_5237_iterator_runs_escaped_closure", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Items(h () -> void) sequence[int32] {
+    yield 1
+    h()
+    yield 2
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    for v in Items(clear) {
+        Console.WriteLine(v)
+    }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@19:14", "reject", "", "R15"}
+            yield[]object{"p8_5237_call_replaces_a_closure_assigned_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    Wrapper(h)
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@20:14", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

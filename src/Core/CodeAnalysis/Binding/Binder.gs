@@ -6953,9 +6953,11 @@ partial class Binder {
                         }
                     }
                 )
-                if structSymbol != nil {
-                    declaredStructs.Add((structSyntax, structSymbol))
-                    syntheticDeclToSymbol[structSyntax] = structSymbol
+                // ADR-0208 R15 (#5237): a closure assigns `structSymbol`, so a call kills its fact; a `let` keeps it.
+                let declaredStruct = structSymbol
+                if declaredStruct != nil {
+                    declaredStructs.Add((structSyntax, declaredStruct))
+                    syntheticDeclToSymbol[structSyntax] = declaredStruct
                 }
             }
             for (delegateSyntax, delegateSymbol) in declaredDelegates {
