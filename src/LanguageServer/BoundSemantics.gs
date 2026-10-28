@@ -4,7 +4,6 @@
 
 package GSharp.LanguageServer
 
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -227,7 +226,7 @@ shared class BoundSemantics {
         let fileName = tree.Text?.FileName
         if !string.IsNullOrEmpty(fileName) {
             for candidate in compilation.SyntaxTrees {
-                if SourcePathIdentity.AreSame(candidate.Text?.FileName, fileName) &&
+                if ServerPathIdentity.AreSame(candidate.Text?.FileName, fileName) &&
                     candidate
                     .Text
                     .Length == tree
