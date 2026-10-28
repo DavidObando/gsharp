@@ -6015,10 +6015,19 @@ internal class MemberLookup {
                 imp
                 .TypeArguments
                 .IsDefaultOrEmpty ||
-                closedMethod == nil {
+                closedMethod == nil ||
+                !TryGetSymbolicDeclaringContext(
+                imp,
+                closedMethod.DeclaringType,
+                out var openDefinition,
+                out var typeArguments
+            ) ||
+                openDefinition == nil ||
+                typeArguments.IsDefaultOrEmpty {
                 return nil
             }
-            let openMethod MethodInfo? = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod)
+            // Symbolic channel views and reflected methods can belong to different reflection contexts.
+            let openMethod MethodInfo? = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
             if openMethod == nil {
                 return nil
             }
@@ -6035,8 +6044,8 @@ internal class MemberLookup {
             // the call's bound type and every use of it reported GS0156.
             return GetClrOpenMethodReturnTypeSymbol(
                 openMethod,
-                imp.OpenDefinition,
-                imp.TypeArguments,
+                openDefinition,
+                typeArguments,
                 BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
             )
         }
@@ -6071,10 +6080,18 @@ internal class MemberLookup {
                 .TypeArguments
                 .IsDefaultOrEmpty ||
                 closedMethod == nil ||
-                paramIndex < 0 {
+                paramIndex < 0 ||
+                !TryGetSymbolicDeclaringContext(
+                imp,
+                closedMethod.DeclaringType,
+                out var openDefinition,
+                out var typeArguments
+            ) ||
+                openDefinition == nil ||
+                typeArguments.IsDefaultOrEmpty {
                 return nil
             }
-            let openMethod MethodInfo? = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod)
+            let openMethod MethodInfo? = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
             if openMethod == nil {
                 return nil
             }
@@ -6089,8 +6106,8 @@ internal class MemberLookup {
             // project to the open method type parameter.
             return GetClrOpenParameterPointeeTypeSymbol(
                 openParameters[paramIndex],
-                imp.OpenDefinition,
-                imp.TypeArguments,
+                openDefinition,
+                typeArguments,
                 openMethod,
                 BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
             )
@@ -9776,31 +9793,6 @@ internal class MemberLookup {
                 )
             }
             return builder.MoveToImmutable()
-        }
-
-        /// Locates the open-generic-definition counterpart of [`closedMethod`](paramref)
-        /// on [`openDefinition`](paramref). Match is by metadata token + module,
-        /// which is stable for methods on a constructed generic type (the
-        /// reflection layer reports the open token regardless of the closing).
-        /// @param openDefinition The open generic type definition.
-        /// @param closedMethod The closed method to project.
-        /// @returns The open method, or `null` when no match.
-        private func TryGetOpenInstanceMethod(openDefinition Type?, closedMethod MethodInfo?) MethodInfo? {
-            if openDefinition == nil || closedMethod == nil {
-                return nil
-            }
-            if ClrTypeUtilities.AreSame(closedMethod.DeclaringType, openDefinition) {
-                return closedMethod
-            }
-            let token = closedMethod.MetadataToken
-            let module = closedMethod.Module
-            let bindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
-            for candidate in openDefinition.GetMethods(bindingFlags) {
-                if candidate.MetadataToken == token && object.ReferenceEquals(candidate.Module, module) {
-                    return candidate
-                }
-            }
-            return nil
         }
     }
 }
