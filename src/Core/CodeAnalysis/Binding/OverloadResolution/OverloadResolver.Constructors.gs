@@ -17,6 +17,33 @@ import System.Linq
 import System.Reflection
 
 internal partial class OverloadResolver {
+    func SelectBestConstructor(
+        constructors ImmutableArray[ConstructorSymbol],
+        constructedType StructSymbol,
+        arguments ImmutableArray[BoundExpression]
+    ) ConstructorSymbol? {
+        let functions = ImmutableArray.CreateBuilder[FunctionSymbol](constructors.Length)
+        let constructorByFunction = Dictionary[FunctionSymbol, ConstructorSymbol]()
+        for constructor in constructors {
+            let candidate = CreateConstructedConstructorCandidate(constructor, constructedType)
+            functions.Add(candidate)
+            constructorByFunction.Add(candidate, constructor)
+        }
+        let selected = SelectBestInstanceOverload(
+            functions.MoveToImmutable(),
+            arguments.Length,
+            default(ImmutableArray[string]),
+            arguments,
+            out _,
+            out _
+        )
+        return if selected != nil {
+            constructorByFunction[selected]
+        } else {
+            nil
+        }
+    }
+
     func BindConstructorCallExpression(syntax CallExpressionSyntax, classType StructSymbol) BoundExpression {
         let bound = BindConstructorCallExpressionCore(syntax, classType)
         // Issue #2263: an imported `data class` is a reference type whose CLR
