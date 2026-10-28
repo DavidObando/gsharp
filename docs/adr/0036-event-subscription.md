@@ -49,4 +49,5 @@ Key shape decisions:
 
 - Multi-segment LHS works as a side benefit: `xs.First().Event += h` is accepted as long as the trailing member is an `EventInfo`.
 - Events whose handlers are not function literals (e.g., a CLR variable already typed as a delegate) still work — the binder falls back to `BindConversion`, which handles identity and null conversions.
+- Qualified source-interface receivers include inherited public CLR-interface events (issue #5391), including subscriptions inside default instance bodies. Lookup retains the imported base's symbolic arguments for handler conversion and accessor owners. Bare inherited event names remain unsupported and cannot select enclosing delegate storage.
 - `op_True` / `op_False` short-circuit and other operator-on-imports follow-ups remain deferred as documented in ADR-0034.
