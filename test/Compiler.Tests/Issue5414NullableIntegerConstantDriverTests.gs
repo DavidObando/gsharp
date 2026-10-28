@@ -284,6 +284,83 @@ Console.WriteLine(second.Selected)
 `, "signed\nsigned\n", additionalReference: fixture.AssemblyPath)
     }
 
+    @Fact
+    func BaseConstructors_CompareConstantNumericTargetsBeforeOptionalArity() {
+        Check(`import System
+open class B {
+    init(value uint8) { Console.WriteLine("byte") }
+    init(value int64, extra int32 = 0) { Console.WriteLine("wide") }
+}
+open class Reverse {
+    init(value int64, extra int32 = 0) { Console.WriteLine("wide") }
+    init(value uint8) { Console.WriteLine("byte") }
+}
+open class Identity {
+    init(value uint8, extra int32 = 0) { Console.WriteLine("byte") }
+    init(value int32) { Console.WriteLine("int") }
+}
+func Mark() int32 {
+    Console.WriteLine("marker")
+    return 0
+}
+class D : B { init() : base(0) {} }
+class Reversed : Reverse { init() : base(0) {} }
+class Upper : B { init() : base(255) {} }
+class Outside : B { init() : base(256) {} }
+class Explicit : B { init() : base(0, 9) {} }
+class Nonconstant : B { init() : base(Mark()) {} }
+class Exact : Identity { init() : base(0) {} }
+let direct = D()
+let reversed = Reversed()
+let upper = Upper()
+let outside = Outside()
+let withExtra = Explicit()
+let nonconstant = Nonconstant()
+let exact = Exact()
+`, "byte\nbyte\nbyte\nwide\nwide\nmarker\nwide\nint\n")
+    }
+
+    @Fact
+    func IntegerConstantOverloads_CompareNumericTargetsAndPreserveTrueIdentity() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace ConstantRankingContract {
+public static class Choices {
+    public static string F(byte value) => "byte";
+    public static string F(long value, int extra = 0) => "wide";
+    public static string Reversed(long value, int extra = 0) => "wide";
+    public static string Reversed(byte value) => "byte";
+    public static string Exact(byte value) => "byte";
+    public static string Exact(int value) => "int";
+    public static string Control() => F(0);
+}}`)
+        Check(`import System
+import ConstantRankingContract
+func F(value uint8) string -> "byte"
+func F(value int64, extra int32 = 0) string -> "wide"
+func Reversed(value int64, extra int32 = 0) string -> "wide"
+func Reversed(value uint8) string -> "byte"
+func Exact(value uint8) string -> "byte"
+func Exact(value int32) string -> "int"
+Console.WriteLine(F(0))
+Console.WriteLine(Reversed(0))
+Console.WriteLine(F(255))
+Console.WriteLine(F(256))
+Console.WriteLine(F(0, 9))
+let value int32 = 0
+Console.WriteLine(F(value))
+Console.WriteLine(Exact(0))
+Console.WriteLine(Exact(uint8(0)))
+Console.WriteLine(Choices.F(0))
+Console.WriteLine(Choices.Reversed(0))
+Console.WriteLine(Choices.F(255))
+Console.WriteLine(Choices.F(256))
+Console.WriteLine(Choices.F(0, 9))
+Console.WriteLine(Choices.F(value))
+Console.WriteLine(Choices.Exact(0))
+Console.WriteLine(Choices.Exact(uint8(0)))
+Console.WriteLine(Choices.Control())
+`, "byte\nbyte\nbyte\nwide\nwide\nwide\nint\nbyte\nbyte\nbyte\nbyte\nwide\nwide\nwide\nint\nbyte\nbyte\n", additionalReference: fixture.AssemblyPath)
+    }
+
     shared {
         private func Check(
             sourceText string,

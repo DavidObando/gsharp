@@ -6970,13 +6970,13 @@ internal class MemberLookup {
         ) bool {
             var hasBetterConversion = false
             for var i = 0; i < arguments.Length; i++ {
-                let nullableNumeric = ClrOverloadResolution.CompareNullableNumericTargets(
+                let numericTarget = ClrOverloadResolution.CompareNumericConversionTargets(
                     NullableLifting.GetEffectiveClrType(candidate[i]),
                     NullableLifting.GetEffectiveClrType(other[i]),
                     arguments[i].Type?.ClrType
                 )
-                if nullableNumeric != 0 {
-                    if nullableNumeric > 0 {
+                if numericTarget != 0 {
+                    if numericTarget > 0 {
                         return false
                     }
                     hasBetterConversion = true

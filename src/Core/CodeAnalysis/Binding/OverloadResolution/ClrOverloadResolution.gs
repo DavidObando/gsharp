@@ -1048,12 +1048,12 @@ internal shared class ClrOverloadResolution {
         return 0
     }
 
-    /// Compares nullable numeric targets before conversion mechanism costs.
+    /// Compares numeric targets before conversion mechanism costs.
     /// @param paramA The first applicable target.
     /// @param paramB The second applicable target.
     /// @param source The numeric source type.
     /// @returns A negative value prefers the first target; zero leaves other ranking rules unchanged.
-    func CompareNullableNumericTargets(paramA Type?, paramB Type?, source Type?) int32 {
+    func CompareNumericConversionTargets(paramA Type?, paramB Type?, source Type?) int32 {
         if !NumericWideningLattice.IsNumericPrimitive(source?.FullName) {
             return 0
         }
@@ -1066,6 +1066,15 @@ internal shared class ClrOverloadResolution {
             byRefB.GetElementType()
         } else {
             paramB
+        }
+        // Preserve actual identity conversions, not matches against a nullable target's underlying type.
+        if ClrTypeUtilities.AreSame(targetA, source) || ClrTypeUtilities.AreSame(targetB, source) {
+            return 0
+        }
+        if NumericWideningLattice.IsNumericPrimitive(targetA?.FullName) && NumericWideningLattice.IsNumericPrimitive(
+            targetB?.FullName
+        ) {
+            return CompareNumericTargets(targetA, targetB, source)
         }
         let underlyingA = NullableLifting.GetValueTypeNullableUnderlyingClr(targetA)
         let underlyingB = NullableLifting.GetValueTypeNullableUnderlyingClr(targetB)
@@ -7194,9 +7203,9 @@ internal shared class ClrOverloadResolution {
             !IsSystemObject(paramB) {
             return 1
         }
-        let nullableNumeric = CompareNullableNumericTargets(paramA, paramB, source)
-        if nullableNumeric != 0 {
-            return nullableNumeric
+        let numericTarget = CompareNumericConversionTargets(paramA, paramB, source)
+        if numericTarget != 0 {
+            return numericTarget
         }
         if ka != kb {
             return (int32(ka)).CompareTo(int32(kb))

@@ -1619,13 +1619,13 @@ internal partial class OverloadResolver {
             // variadic tail slot legitimately beats a widening conversion on a
             // normal-form slot). Phase 2c (prefer non-variadic) applies the
             // actual tie-break once all per-arg comparisons agree.
-            let nullableNumeric = ClrOverloadResolution.CompareNullableNumericTargets(
+            let numericTarget = ClrOverloadResolution.CompareNumericConversionTargets(
                 NullableLifting.GetEffectiveClrType(paramA),
                 NullableLifting.GetEffectiveClrType(paramB),
                 source?.ClrType
             )
-            if nullableNumeric != 0 {
-                return nullableNumeric
+            if numericTarget != 0 {
+                return numericTarget
             }
             if ka != kb {
                 return (int32(ka)).CompareTo(int32(kb))
