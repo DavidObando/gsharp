@@ -11,7 +11,6 @@ import System.Linq
 import System.Reflection
 import System.Text
 import System.Threading
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols.Display
