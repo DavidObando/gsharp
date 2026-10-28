@@ -1937,7 +1937,6 @@ func Main() { Console.WriteLine(Run()) }`, "GS0158@18:14", "reject", "", "R15"}
 class C {
     var Value int32 = 1
 }
-var cleaner () -> void = func() { }
 class Maker {
     init() {
         cleaner()
@@ -1950,13 +1949,13 @@ func Run[T class init()]() int32 {
     let fresh = T{}
     return x.Value
 }
-func Main() { Console.WriteLine(Run[Maker]()) }`, "GS0158@17:14", "reject", "", "R15"}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run[Maker]())`, "GS0158@16:14", "reject", "", "R15"}
             yield[]object{"p12_5237_function_pointer_call_runs_an_escaped_closure", `import System
 
 class C {
     var Value int32 = 1
 }
-var cleaner () -> void = func() { }
 func Wrapper() {
     cleaner()
 }
@@ -1968,7 +1967,8 @@ unsafe func Run() int32 {
     fp()
     return x.Value
 }
-unsafe func Main() { Console.WriteLine(Run()) }`, "GS0158@16:14", "reject", "", "R15"}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@15:14", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
