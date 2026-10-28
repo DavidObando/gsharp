@@ -2205,9 +2205,6 @@ class Conversion {
         /// @param type The candidate type.
         /// @returns `true` when [`type`](paramref) is reference-capable.
         internal func IsReferenceLikeTarget(type TypeSymbol) bool {
-            if type is ImportedTypeSymbol{OpenDefinition: {} importedOpen} {
-                return importedOpen.IsClass || importedOpen.IsInterface
-            }
             if type is InterfaceSymbol {
                 return true
             }
