@@ -14,7 +14,13 @@ import Xunit.Abstractions
 
 /// Checks dependency references through the real SDK build and compiler.
 class Issue5493CompilerReferenceClosureTests : IDisposable {
-    private let directory string = Path.Combine(RepoRoot.Path, "out", "5493", "tests", Guid.NewGuid().ToString("N"))
+    private let directory string = Path.Combine(
+        RepoRoot.Path,
+        "out",
+        "5493",
+        "tests with spaces",
+        Guid.NewGuid().ToString("N")
+    )
     private let log ITestOutputHelper
 
     init(log ITestOutputHelper) {
@@ -139,7 +145,10 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
         Assert.DoesNotContain("GS9100", result)
         let responsePath = Path.Combine(consumer, "obj", "Release", "net10.0", "Consumer.rsp")
         log.WriteLine("response:\n" + File.ReadAllText(responsePath))
-        let response = File.ReadAllLines(responsePath).Select((line string) -> line.TrimEnd('"')).ToArray()
+        let response = File
+            .ReadAllLines(responsePath)
+            .SelectMany((line string) -> GSharp.Compiler.Program.TokenizeResponseFileLine(line))
+            .ToArray()
         let rootReferences = response.Where(
             (line string) -> line.StartsWith("/r:", StringComparison.Ordinal) && line.EndsWith(
                 "Root.dll",
@@ -171,7 +180,7 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
         for argument in arguments {
             start.ArgumentList.Add(argument)
         }
-        log.WriteLine("argv: dotnet " + string.Join(" ", arguments))
+        log.WriteLine("argv: dotnet " + System.Text.Json.JsonSerializer.Serialize(arguments))
         start.Environment["TMPDIR"] = directory
         start.Environment["TMP"] = directory
         start.Environment["TEMP"] = directory
