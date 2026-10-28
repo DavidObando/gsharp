@@ -959,7 +959,15 @@ Details per row:
   local (A3, R12). `StatementBinder.MayBeMutatedByEscapedClosure` is the
   one definition, and the loop collector and `NarrowingState.Kill` read it,
   so the loop form of the probe (ADR-0213 q3) closes with it. The syntactic
-  exemption of open question 7 stays deferred to #5196. Tests: the probe
+  exemption of open question 7 stays deferred to #5196. Issue #5483 completes the
+  construction classification: `StatementBinder.ConstructionRunsUserCode` is
+  the one definition that R11 and R15 read. A class whose declaration has a
+  `shared { init { ... } }` block, or whose base class has one, runs user code
+  at its first construction (the `.cctor` is not `beforefieldinit`). A value
+  type literal is `initobj` and does not run it, and a type with only `shared`
+  field initializers is `beforefieldinit`, so neither counts. The check reads
+  the declaration, not the bound block, so the answer does not depend on
+  which body binds first. Corpus rows r1 to r10 (issue #5483). Tests: the probe
   q3 with a mutant witness (the predicate returns false), and a root that
   no closure assigns keeps its fact.
 - **Join of strengthened facts (no row).** Probe d5 is accepted today and

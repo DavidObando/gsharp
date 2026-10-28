@@ -229,7 +229,17 @@ open class Adr0208NarrowingCorpusTests {
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
                 "q4_5456_initializer_write_names_the_enclosing_variable",
-                "q5_5456_do_condition_is_outside_the_body_declaration"
+                "q5_5456_do_condition_is_outside_the_body_declaration",
+                "r10_5483_static_block_declared_after_the_use",
+                "r1_5483_static_block_only_construction",
+                "r2_5483_static_block_call_syntax",
+                "r3_5483_static_block_in_base_class",
+                "r4_5483_static_block_of_generic_definition",
+                "r5_5483_static_block_of_value_type_literal_is_initobj",
+                "r6_5483_static_block_runs_a_mutable_global_writer",
+                "r7_5483_shared_field_initializer_only_keeps_the_fact",
+                "r8_5483_type_without_initializers_keeps_the_fact",
+                "r9_5483_static_block_type_not_constructed_keeps_the_fact"
             },
             names
         )
@@ -2082,6 +2092,190 @@ func Run() int32 {
     return x.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "3", "R15"}
+            yield[]object{"r1_5483_static_block_only_construction", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"r2_5483_static_block_call_syntax", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger()
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"r3_5483_static_block_in_base_class", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        init { cleaner() }
+    }
+}
+class Trigger : Base {
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"r4_5483_static_block_of_generic_definition", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger[T] {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger[int32]{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"r5_5483_static_block_of_value_type_literal_is_initobj", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r6_5483_static_block_runs_a_mutable_global_writer", `import System
+
+var text string? = nil
+class Trigger {
+    shared {
+        init { text = nil }
+    }
+}
+func Run() int32 {
+    text = "safe"
+    let t = Trigger{}
+    return text.Length
+}
+Console.WriteLine(Run())`, "GS0158@12:17 GS0286@14:1", "reject", "", "R11"}
+            yield[]object{"r7_5483_shared_field_initializer_only_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r8_5483_type_without_initializers_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r9_5483_static_block_type_not_constructed_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t Trigger? = nil
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r10_5483_static_block_declared_after_the_use", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@11:14", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

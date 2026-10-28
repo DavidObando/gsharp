@@ -646,6 +646,11 @@ class StructSymbol : TypeSymbol {
     /// (ADR-0140 / issue #2131). Such a type must not be marked `beforefieldinit`.
     prop HasStaticInitializerBlock bool -> !StaticInitializerStatements.IsDefaultOrEmpty
 
+    /// Gets a value indicating whether the declaration has a `shared { init { … } }` block (#5483). Unlike
+    /// (cref:HasStaticInitializerBlock), this is known from the declaration pass on, before any body is bound,
+    /// so a body that is bound earlier reads the same answer as one bound later.
+    internal prop DeclaresStaticInitializerBlock bool -> StaticInitializerFunction != nil
+
     /// Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for
     /// non-generic types and for constructed instances.
     private var _typeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
