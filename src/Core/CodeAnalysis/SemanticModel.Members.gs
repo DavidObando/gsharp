@@ -25,6 +25,14 @@ partial class SemanticModel {
     /// <item>Struct or class, declared or imported record: fields, properties, events and methods of the type
     /// and of its base classes, base classes last (instance members), then the static members of the type
     /// itself. A static member of a base class is not a member of the derived type.</item>
+    /// <item>Struct or class, then (issue #5441): the public instance members of the nearest imported base class
+    /// (reached through source base classes), or of `object` when there is none, read at that base, in
+    /// metadata order. A static or non-public member of the base is not listed. A member that the type
+    /// overrides is listed with its source override.</item>
+    /// <item>Struct or class, then (issue #5441): each default method of an interface the type or one of its
+    /// base classes implements, interfaces in declaration order and their base interfaces after them, when
+    /// neither the type nor a base class declares a method of that name (the rule of the call binder). A
+    /// private helper is listed only where the enclosing declaration may access it.</item>
     /// <item>Interface: the properties, events and methods of the interface and of its base interfaces
     /// (instance), the static members of the interface itself, then the members of each CLR interface the
     /// declared interfaces extend, nearest first.</item>
@@ -32,7 +40,13 @@ partial class SemanticModel {
     /// <item>Any other type that has a CLR type (imported types, arrays, maps, primitives): the public
     /// properties without index parameters, fields, methods that are not special names, then events, each in
     /// metadata order; instance and static members; types read through the ADR-0193 readers at the
-    /// receiver.</item>
+    /// receiver. For an interface, the members of the CLR interfaces it extends follow its own (issue #5441),
+    /// each in the same order, in the order of the interface list of the type.</item>
+    /// <item>A slice, array, map, channel or sequence with no CLR type, because its element is a source type
+    /// or a type parameter (issue #5441): the members of the type the call binder uses for the receiver
+    /// (`System.Array`, `Dictionary`, `Channel`, `ChannelReader`, `ChannelWriter`, `IEnumerable`), with member
+    /// types read at the receiver's type arguments. The list is the one the same collection of a primitive
+    /// has, extensions aside.</item>
     /// </list>
     /// A member that is private or protected is returned only when the enclosing declaration of
     /// [`position`](paramref) may access it. Imported members are public ones. With [`name`](paramref), only
@@ -80,6 +94,8 @@ partial class SemanticModel {
                     access,
                     result
                 )
+                AddImportedBaseMembers(structure, name, result)
+                AddDefaultInterfaceMethods(structure, name, access, result)
             }
             case declared is InterfaceSymbol {
                 AddSourceMembers(
@@ -91,9 +107,11 @@ partial class SemanticModel {
                     result
                 )
                 for clrInterface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared) {
-                    AddClrMembers(
+                    // The walk is already transitive, so each interface contributes only its own members.
+                    AddClrMembersOf(
                         ImportedTypeSymbol.GetWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure),
                         clrInterface,
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static,
                         name,
                         result
                     )
@@ -112,11 +130,79 @@ partial class SemanticModel {
             default {
                 if receiver.ClrType is {} clrType {
                     AddClrMembers(receiver, clrType, name, result)
+                } else if BuiltInView(receiver) is {} view && view.ClrType is {} viewClrType {
+                    AddClrMembers(view, viewClrType, name, result)
                 }
             }
         }
         AddExtensionMembers(position, receiver, name, cancellationToken, result)
         return result.ToImmutable()
+    }
+
+    /// Adds the public instance members that a source class or struct inherits from its imported base class,
+    /// and from `object` when it has none, read at that base. A class reaches metadata through its nearest
+    /// imported base (cref:ExpressionBinder.GetInheritedClrBaseType), the rule the binder uses to bind an
+    /// inherited member.
+    private func AddImportedBaseMembers(structure StructSymbol, name string?, result ImmutableArray[Symbol].Builder) {
+        var baseType TypeSymbol? = nil
+        for current in structure.GetHierarchy() {
+            if current.ImportedBaseType is {} imported {
+                baseType = imported
+                break
+            }
+        }
+        if baseType == nil {
+            AddClrMembers(
+                ImportedTypeSymbol.GetWithoutNullability(typeof(object), NullabilityFreeReason.TypeStructure),
+                typeof(object),
+                name,
+                result,
+                includeStatic: false
+            )
+        } else if baseType.ClrType is {} baseClr {
+            AddClrMembers(baseType, baseClr, name, result, includeStatic: false)
+        }
+    }
+
+    /// Adds the default methods of the interfaces that a class or struct implements, the ones it does not
+    /// declare a method of the same name for. The binder routes a call on the class to such a method
+    /// (`TryFindDefaultInterfaceMethod`); only the order is set here: classes of the hierarchy from the
+    /// receiver up, interfaces in declaration order.
+    private func AddDefaultInterfaceMethods(
+        structure StructSymbol,
+        name string?,
+        access MemberAccessContext,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        let seen = List[Symbol]()
+        for current in structure.GetHierarchy() {
+            for declared in current.Interfaces {
+                if declared == nil {
+                    continue
+                }
+                for member in TypeMemberModel.EnumerateMembers(declared, MemberQuery.Instance(MemberKinds.Method)) {
+                    if member is FunctionSymbol method && InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(
+                        method
+                    ) &&
+                        MemberLookup
+                        .CollectSourceInstanceMethods(structure, method.Name).IsEmpty {
+                        seen.Add(method)
+                        AddSourceMember(structure, method, name, access, result)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns the type whose CLR members a receiver without a loadable CLR type has: the view that the call
+    /// binder gives it (cref:ExpressionBinder.TryNormalizeSymbolicEnumerableReceiver), so the query and the
+    /// binder agree on `.Length` of a slice of a source class, `.Count` of a map of one, a channel and a
+    /// sequence.
+    private func BuiltInView(receiver TypeSymbol) ImportedTypeSymbol? {
+        if receiver.ClrType == nil && ExpressionBinder.TryNormalizeSymbolicEnumerableReceiver(receiver, out var view) {
+            return view as ImportedTypeSymbol
+        }
+        return nil
     }
 
     /// Adds the extension functions and extension methods in scope at [`position`](paramref) whose receiver
@@ -415,8 +501,34 @@ partial class SemanticModel {
         result.Add(member)
     }
 
-    private func AddClrMembers(receiver TypeSymbol, clrType Type, name string?, result ImmutableArray[Symbol].Builder) {
-        const flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+    private func AddClrMembers(
+        receiver TypeSymbol,
+        clrType Type,
+        name string?,
+        result ImmutableArray[Symbol].Builder,
+        includeStatic bool = true
+    ) {
+        let flags = if includeStatic {
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+        } else {
+            BindingFlags.Public | BindingFlags.Instance
+        }
+        AddClrMembersOf(receiver, clrType, flags, name, result)
+        // An interface does not report the members of the interfaces it extends; they are its members too.
+        if clrType.IsInterface {
+            for baseInterface in MemberLookup.EnumerateSelfAndInterfaces(clrType).Skip(1) {
+                AddClrMembersOf(receiver, baseInterface, flags, name, result)
+            }
+        }
+    }
+
+    private func AddClrMembersOf(
+        receiver TypeSymbol,
+        clrType Type,
+        flags BindingFlags,
+        name string?,
+        result ImmutableArray[Symbol].Builder
+    ) {
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
             if property.GetIndexParameters()
                 .Length == 0 &&
