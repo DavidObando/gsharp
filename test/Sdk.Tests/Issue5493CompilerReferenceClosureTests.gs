@@ -44,7 +44,7 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func Build_SuppliesLooseAndRuntimeOnlyDependencies_WithoutReplacingCompileAssets(runtimePackage bool) {
+    func Build_TracksLooseAndRuntimeOnlyDependencies_WithoutReplacingCompileAssets(runtimePackage bool) {
         let leaf = Path.Combine(directory, "Leaf")
         let root = Path.Combine(directory, "Root")
         let consumer = Path.Combine(directory, "Consumer")
@@ -67,7 +67,8 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
             Path.Combine(root, "Root.cs"),
             "namespace ClosureFixture; public static class Root { public static string Value => Leaf.Value; public static Leaf Related => new Leaf(); }"
         )
-        Run("build", Path.Combine(root, "Root.csproj"), "-c", "Release", "-nr:false", "-v:q")
+        let producer = Run("build", Path.Combine(root, "Root.csproj"), "-c", "Release", "-nr:false", "-v:q")
+        Assert.True(producer.ExitCode == 0, producer.Output)
         let output = Path.Combine(root, "bin", "Release", "net10.0")
         var reference = `<Reference Include="Root"><HintPath>../Root/bin/Release/net10.0/Root.dll</HintPath></Reference>`
         if runtimePackage {
@@ -99,7 +100,8 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
             Path.Combine(consumer, "Control.cs"),
             "public static class Control { public static string Read() => ClosureFixture.Root.Value; }"
         )
-        Run("build", Path.Combine(consumer, "Control.csproj"), "-c", "Release", "-nr:false", "-v:q")
+        let control = Run("build", Path.Combine(consumer, "Control.csproj"), "-c", "Release", "-nr:false", "-v:q")
+        Assert.True(control.ExitCode == 0, control.Output)
         File.WriteAllText(Path.Combine(consumer, "Consumer.gsproj"), `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -116,6 +118,12 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
     <RestorePackagesPath>../packages</RestorePackagesPath>
   </PropertyGroup>
   <ItemGroup><Compile Include="Consumer.gs" />__REFERENCE__</ItemGroup>
+  <Target Name="RemoveFixtureDependency" BeforeTargets="_GsharpCreateCoreCompileInputsCache" Condition="'$(OmitFixtureDependency)' == 'true'">
+    <ItemGroup>
+      <ReferenceDependencyPaths Remove="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'Leaf'" />
+      <RuntimeCopyLocalItems Remove="@(RuntimeCopyLocalItems)" Condition="'%(Filename)' == 'Leaf'" />
+    </ItemGroup>
+  </Target>
 </Project>`.Replace(
                 "__TARGETS__",
                 targets
@@ -142,7 +150,8 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
             )
         }
         let result = Run("build", Path.Combine(consumer, "Consumer.gsproj"), "-c", "Release", "-nr:false", "-v:q")
-        Assert.DoesNotContain("GS9100", result)
+        Assert.True(result.ExitCode == 0, result.Output)
+        Assert.DoesNotContain("GS9100", result.Output)
         let responsePath = Path.Combine(consumer, "obj", "Release", "net10.0", "Consumer.rsp")
         log.WriteLine("response:\n" + File.ReadAllText(responsePath))
         let response = File
@@ -167,10 +176,72 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
                 StringComparison.Ordinal
             )
         )
-        Assert.True(File.Exists(Path.Combine(consumer, "bin", "Release", "net10.0", "Consumer.dll")))
+        let image = Path.Combine(consumer, "bin", "Release", "net10.0", "Consumer.dll")
+        Assert.True(File.Exists(image))
+        let imageTime = File.GetLastWriteTimeUtc(image)
+        let cache = Path.Combine(consumer, "obj", "Release", "net10.0", "Consumer.CoreCompileInputs.cache")
+        let cacheBefore = File.ReadAllText(cache)
+        let cacheTime = File.GetLastWriteTimeUtc(cache)
+        let inputs = response
+            .Where((argument string) -> argument.StartsWith("/r:", StringComparison.Ordinal))
+            .Select((argument string) -> argument.Substring(3))
+            .Concat(
+            []string{
+                Path.Combine(consumer, "Consumer.gs"),
+                Path.Combine(consumer, "Consumer.gsproj"),
+                Path.Combine(directory, "Directory.Build.props"),
+                Path.Combine(directory, "Directory.Build.targets"),
+                Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Current.Sdk.targets"),
+                Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets")
+            }
+        )
+            .ToArray()
+        let inputTimes = inputs.Select((path string) -> File.GetLastWriteTimeUtc(path)).ToArray()
+        let inputHashes = inputs.Select((path string) -> Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))))
+            .ToArray()
+        let unchanged = Run(
+            "build",
+            Path.Combine(consumer, "Consumer.gsproj"),
+            "--no-restore",
+            "-c",
+            "Release",
+            "-nr:false",
+            "-v:n"
+        )
+        Assert.True(unchanged.ExitCode == 0, unchanged.Output)
+        Assert.Equal(imageTime, File.GetLastWriteTimeUtc(image))
+        Assert.Equal(cacheBefore, File.ReadAllText(cache))
+        Assert.Equal(cacheTime, File.GetLastWriteTimeUtc(cache))
+
+        let removed = Run(
+            "build",
+            Path.Combine(consumer, "Consumer.gsproj"),
+            "--no-restore",
+            "-p:OmitFixtureDependency=true",
+            "-c",
+            "Release",
+            "-nr:false",
+            "-v:n"
+        )
+        log.WriteLine("cache before removal: " + cacheBefore)
+        log.WriteLine("cache after removal: " + File.ReadAllText(cache))
+        log.WriteLine("output before removal: " + imageTime.ToString("O"))
+        log.WriteLine("output after removal: " + File.GetLastWriteTimeUtc(image).ToString("O"))
+        for var index = 0; index < inputs.Length; index++ {
+            let time = File.GetLastWriteTimeUtc(inputs[index])
+            let hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(inputs[index])))
+            log.WriteLine("unchanged input: " + time.ToString("O") + " " + hash + " " + inputs[index])
+            Assert.Equal(inputTimes[index], time)
+            Assert.Equal(inputHashes[index], hash)
+            Assert.True(time <= imageTime)
+        }
+        Assert.True(removed.ExitCode == 1, removed.Output)
+        Assert.Contains("error GS9100:", removed.Output)
+        Assert.Contains("not supplied via /r: (Leaf)", removed.Output)
+        Assert.NotEqual(cacheBefore, File.ReadAllText(cache))
     }
 
-    private func Run(arguments ...string) string {
+    private func Run(arguments ...string)(ExitCode int32, Output string) {
         let start = ProcessStartInfo("dotnet"){
             WorkingDirectory = directory,
             RedirectStandardOutput = true,
@@ -193,10 +264,9 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
             throw TimeoutException("The SDK fixture did not finish.")
         }
         Task.WaitAll(stdout, stderr)
+        log.WriteLine("exit: " + process.ExitCode.ToString())
         log.WriteLine("stdout:\n" + stdout.Result)
         log.WriteLine("stderr:\n" + stderr.Result)
-        let output = stdout.Result + stderr.Result
-        Assert.True(process.ExitCode == 0, output)
-        return output
+        return (process.ExitCode, stdout.Result + stderr.Result)
     }
 }

@@ -224,8 +224,8 @@
        stale assembly (e.g. with the previous build's version stamp). csc
        avoids this via the .NET SDK's CoreCompileInputs.cache idiom (see
        Microsoft.Managed.Core.targets / _GenerateCompileDependencyCache):
-       hash every
-       compilation-affecting property BuildTask consumes into a cache file
+       hash compilation-affecting properties and metadata dependency membership
+       consumed by BuildTask into a cache file
        whose timestamp — via WriteOnlyWhenDifferent — only advances when the
        hash actually changes, then list that file as a CoreCompile input. -->
   <Target Name="_GsharpCreateCoreCompileInputsCache"
@@ -249,6 +249,8 @@
       <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />
       <_GsharpCoreCompileInputsToHash Include="$(ProduceReferenceAssembly)" />
       <_GsharpCoreCompileInputsToHash Include="$(GenerateDocumentationFile)" />
+      <_GsharpCoreCompileInputsToHash Include="@(ReferenceDependencyPaths)" />
+      <_GsharpCoreCompileInputsToHash Include="@(RuntimeCopyLocalItems)" />
     </ItemGroup>
 
     <Hash ItemsToHash="@(_GsharpCoreCompileInputsToHash)">

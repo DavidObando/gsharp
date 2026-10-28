@@ -113,6 +113,8 @@ The compiler itself is hosted on .NET 10, but it loads the project's reference a
 
 Use normal MSBuild references and package references. The SDK forwards `ReferencePathWithRefAssemblies` to `gsc` as repeated `/r:<path>` arguments. It then supplies `ReferenceDependencyPaths` and `RuntimeCopyLocalItems` as additional metadata dependency references. Selected compile references retain precedence over runtime copies of the same assembly.
 
+Dependency file timestamps and item membership participate in incremental compilation. Removing or replacing resolved metadata dependencies does not reuse stale output just because the remaining files are older.
+
 ```xml
 <ItemGroup>
   <PackageReference Include="Example.Package" Version="1.2.3" />
