@@ -48,6 +48,10 @@ open class Adr0212InheritedMemberTests {
     func ImportedBase_DoesNotListStaticOrNonPublicMembersOfTheBase() {
         // `Stream.Null` is static; `Stream.Dispose(bool)` is protected.
         Assert.Empty(Query("PBuffer", "Null"))
+        // `EventArgs.Empty` is a static of the base itself, and `object.ReferenceEquals` one of `object`.
+        Assert.Empty(Query("PArgs", "Empty"))
+        Assert.Empty(Query("PPlain", "ReferenceEquals"))
+        Assert.NotEmpty(Query("PArgs", "ToString"))
         Assert.DoesNotContain(
             Query("PBuffer", "Dispose").OfType[ImportedFunctionSymbol](),
             (m ImportedFunctionSymbol) -> m.Method.GetParameters().Length == 1
@@ -78,6 +82,13 @@ open class Adr0212InheritedMemberTests {
         Assert.Equal("List`1", add.Method.DeclaringType!!.Name)
         let item = Assert.Single(Query("PNames", "Count"))
         Assert.Equal(TypeSymbol.Int32, cast[PropertySymbol](item).Type)
+    }
+
+    @Fact
+    func ImportedBase_ArgumentNullability_IsReadAtTheBase() {
+        // `class Maybes : List[string?]`: `Find` returns the base's `T`, which is `string?` there.
+        let find = cast[ImportedFunctionSymbol](Assert.Single(Query("PMaybes", "Find")))
+        Assert.IsType[NullableTypeSymbol](find.Type)
     }
 
     // ---- Row: base interfaces of an imported interface ----
@@ -251,6 +262,10 @@ class Plain { }
 
 class Names : List[string] { }
 
+class Maybes : List[string?] { }
+
+class Args : EventArgs { }
+
 interface ICounted : IList[string] { }
 
 interface IShape {
@@ -286,6 +301,8 @@ func Use(
     g GrandChild,
     p Plain,
     n Names,
+    maybes Maybes,
+    args Args,
     il IList[string],
     c ICounted,
     sq Square,
@@ -307,6 +324,8 @@ func Use(
     let message = g.Message // PGrandChild
     p.ToString() // PPlain
     n.Add("a") // PNames
+    let found = maybes.Find((x string?) -> true) // PMaybes
+    args.ToString() // PArgs
     let listed = il.Count // PIList
     let counted = c.Count // PCounted
     sq.Area() // PSquare
