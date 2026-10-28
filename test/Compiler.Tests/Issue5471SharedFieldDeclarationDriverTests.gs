@@ -142,4 +142,92 @@ System.Console.Write(Trace.Calls)
 `
         Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "7|10|41|RD|1", "5471")
     }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func DefaultBody_PreservesInheritedFieldBackedClrProperty(derivedFirst bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "InheritedContract.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`namespace InheritedContract {
+public interface IValue { int Value { get; set; } }
+public static class Probe {
+    public static int Add(IValue item, int amount) {
+        item.Value += amount;
+        return item.Value;
+    }
+}
+}`, "InheritedContract", reference)
+        const baseType = `open class Base {
+    var Before int32 = 41
+    var Value int32 = 7
+    var After int32 = 43
+}
+`
+        const derivedType = `class Derived : Base, InheritedContract.IValue {
+    var Own int32 = 97
+}
+`
+        let source = `interface IEditor {
+    func Edit(value Base) int32 {
+        let before = value.Value
+        value.Value += Trace.Delta()
+        return before
+    }
+}
+` + (
+            if derivedFirst {
+                derivedType + baseType
+            } else {
+                baseType + derivedType
+            }
+        ) + `
+class Tail { var Canary int32 = 89 }
+class Trace {
+    shared {
+        var Item Derived = Derived()
+        var Events string = ""
+        var Calls int32 = 0
+        func Receiver() Derived {
+            Events += "R"
+            return Item
+        }
+        func Delta() int32 {
+            Events += "D"
+            Calls++
+            return 3
+        }
+    }
+}
+class Default : IEditor { }
+let editor IEditor = Default()
+System.Console.Write(editor.Edit(Trace.Receiver()))
+let inherited Base = Trace.Item
+System.Console.Write("|")
+System.Console.Write(inherited.Value)
+System.Console.Write("|")
+System.Console.Write(inherited.Before)
+System.Console.Write("|")
+System.Console.Write(inherited.After)
+System.Console.Write("|")
+System.Console.Write(Trace.Item.Own)
+System.Console.Write("|")
+System.Console.Write(Tail().Canary)
+System.Console.Write("|")
+System.Console.Write(InheritedContract.Probe.Add(Trace.Item, 5))
+System.Console.Write("|")
+System.Console.Write(inherited.Value)
+System.Console.Write("|")
+System.Console.Write(Trace.Events)
+System.Console.Write("|")
+System.Console.Write(Trace.Calls)
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
+            source,
+            "7|10|41|43|97|89|15|15|RD|1",
+            "5471",
+            reference,
+            implementation
+        )
+    }
 }

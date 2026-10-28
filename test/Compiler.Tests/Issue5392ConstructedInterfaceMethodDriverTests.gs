@@ -3,6 +3,7 @@ package GSharp.Compiler.Tests
 import GSharp.Compiler
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Text
@@ -143,7 +144,13 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
     }
 
     shared {
-        internal func CompileVerifyAndRun(source string, expected string, issue string = "5392") {
+        internal func CompileVerifyAndRun(
+            source string,
+            expected string,
+            issue string = "5392",
+            reference string? = nil,
+            runtimeReference string? = nil
+        ) {
             var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
             while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
                 root = root.Parent
@@ -155,6 +162,20 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
                 let sourcePath = Path.Combine(directory, "Program.gs")
                 let assemblyPath = Path.Combine(directory, "Program.dll")
                 File.WriteAllText(sourcePath, source)
+                let arguments = List[string]{
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    "/deterministic+",
+                    "/debug:none",
+                    "/out:" + assemblyPath,
+                    sourcePath
+                }
+                if reference != nil {
+                    arguments.Add("/reference:" + reference)
+                }
+                if runtimeReference != nil {
+                    File.Copy(runtimeReference, Path.Combine(directory, Path.GetFileName(runtimeReference)))
+                }
                 using let stdout = StringWriter()
                 using let stderr = StringWriter()
                 let originalOut = Console.Out
@@ -163,23 +184,21 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
                 try {
                     Console.SetOut(stdout)
                     Console.SetError(stderr)
-                    code = Program.Main(
-                        []string{
-                            "/target:exe",
-                            "/targetframework:net10.0",
-                            "/deterministic+",
-                            "/debug:none",
-                            "/out:" + assemblyPath,
-                            sourcePath
-                        }
-                    )
+                    code = Program.Main(arguments.ToArray())
                 } finally {
                     Console.SetOut(originalOut)
                     Console.SetError(originalError)
                 }
                 Assert.True(code == 0, stdout.ToString() + stderr.ToString())
                 Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
-                IlVerifier.Verify(assemblyPath)
+                IlVerifier.Verify(
+                    assemblyPath,
+                    additionalReferences: if runtimeReference != nil {
+                        []string{runtimeReference}
+                    } else {
+                        []string{}
+                    }
+                )
                 let start = ProcessStartInfo("dotnet"){
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
