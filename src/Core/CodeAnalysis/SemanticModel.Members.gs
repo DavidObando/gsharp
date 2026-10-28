@@ -213,15 +213,35 @@ partial class SemanticModel {
             unrecorded.Add(function)
         }
 
-        // The same slot, by the rule the override resolver uses: a reflected method is a different object per
-        // reflected type, its token and declaring type are not.
+        // The same slot: a reflected method is a different object per reflected type, its token is not. The
+        // override resolver records the slot on the open generic definition; the base is enumerated closed, or
+        // erased when an argument is a source type. Both name the slot of one definition, in one module.
         func Covers(accessor MethodInfo?) bool {
             if accessor == nil {
                 return false
             }
-            return slots.Any((o MethodInfo) -> ExternalClrOverrideResolver.SameMethod(o, accessor)) || unrecorded.Any(
+            return slots.Any((o MethodInfo) -> SameSlot(o, accessor)) || unrecorded.Any(
                 (f FunctionSymbol) -> Overrides(f, accessor)
             )
+        }
+
+        private func SameSlot(left MethodInfo, right MethodInfo) bool {
+            try {
+                return left.MetadataToken == right.MetadataToken && ClrTypeUtilities.AreSame(
+                    DefinitionOf(left.DeclaringType),
+                    DefinitionOf(right.DeclaringType)
+                )
+            } catch (Exception) {
+                return false
+            }
+        }
+
+        private func DefinitionOf(type Type?) Type? {
+            return if type != nil && type.IsGenericType && !type.IsGenericTypeDefinition {
+                type.GetGenericTypeDefinition()
+            } else {
+                type
+            }
         }
 
         private func Overrides(function FunctionSymbol, method MethodInfo) bool {

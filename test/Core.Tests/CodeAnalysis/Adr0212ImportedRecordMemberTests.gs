@@ -100,6 +100,29 @@ open class Adr0212ImportedRecordMemberTests {
         )
     }
 
+    @Fact
+    func ImportedOverride_OfAGenericBaseWithASourceTypeArgument_StandsForTheSlot() {
+        // The override resolver records the slot on the open `Converter<>`; the base is enumerated as the erased
+        // `Converter<object>`. Both are one slot.
+        let library = EmitCSharpLibrary(
+            "namespace Gen { public abstract class Converter<T> { public abstract void Read(T item); public virtual T Write() { return default(T); } } }",
+            "AsmConverter",
+            "converter"
+        )
+        using let resolver = ReferenceResolver.WithReferences([]string{library})
+        resolver.CurrentAssemblyName = "Consumer"
+        let source = "package Consumer\nimport Gen\n\nclass Payload { var Value int32 = 0 }\n\nclass PayloadConverter : Converter[Payload] {\n    override func Read(item Payload) { }\n    override func Write() Payload { return Payload{} }\n}\n\nfunc Run(c PayloadConverter) {\n    c.Write() // PConverter\n}\n"
+        let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
+        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
+        let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
+        let position = source.IndexOf("// PConverter", StringComparison.Ordinal)
+        for name in[]string{"Read", "Write"} {
+            let only = Assert.Single(model.LookupMembers(position, receiver, name))
+            Assert.IsType[FunctionSymbol](only)
+        }
+    }
+
     shared {
         private func EmitCSharpLibrary(
             recordSource string,
