@@ -213,23 +213,32 @@ partial class SemanticModel {
             unrecorded.Add(function)
         }
 
-        // The same slot: a reflected method is a different object per reflected type, its token and module are not.
+        // The same slot, by the rule the override resolver uses: a reflected method is a different object per
+        // reflected type, its token and declaring type are not.
         func Covers(accessor MethodInfo?) bool {
             if accessor == nil {
                 return false
             }
-            return slots.Any(
-                (o MethodInfo) -> o.MetadataToken == accessor.MetadataToken && string.Equals(
-                    o.Module.Name,
-                    accessor.Module.Name,
-                    StringComparison.Ordinal
-                )
-            ) ||
-                unrecorded.Any((f FunctionSymbol) -> Overrides(f, accessor))
+            return slots.Any((o MethodInfo) -> ExternalClrOverrideResolver.SameMethod(o, accessor)) || unrecorded.Any(
+                (f FunctionSymbol) -> Overrides(f, accessor)
+            )
         }
 
         private func Overrides(function FunctionSymbol, method MethodInfo) bool {
             if !ClrTypeUtilities.EmittedMemberNameMatches(method, function.Name) {
+                return false
+            }
+            let arity = if method.IsGenericMethod {
+                method.GetGenericArguments().Length
+            } else {
+                0
+            }
+            let sourceArity = if function.TypeParameters.IsDefaultOrEmpty {
+                0
+            } else {
+                function.TypeParameters.Length
+            }
+            if arity != sourceArity {
                 return false
             }
             let parameters = method.GetParameters()

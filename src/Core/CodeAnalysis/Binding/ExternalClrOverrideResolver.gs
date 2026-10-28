@@ -575,7 +575,7 @@ internal shared class ExternalClrOverrideResolver {
         default: false
     }
 
-    private func SameMethod(left MethodInfo?, right MethodInfo) bool {
+    internal func SameMethod(left MethodInfo?, right MethodInfo) bool {
         if left == nil {
             return false
         }

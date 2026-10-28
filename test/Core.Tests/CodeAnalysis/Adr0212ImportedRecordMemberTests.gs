@@ -40,11 +40,76 @@ open class Adr0212ImportedRecordMemberTests {
         )
     }
 
+    @Fact
+    func ImportedOverride_AnotherAssemblyWithTheSameModuleNameAndToken_DoesNotHideAnInheritedMember() {
+        // Both modules are named `Lib.dll`; `Q.Bar` and `R.Foo` have the same metadata token.
+        let first = EmitCSharpLibrary(
+            "namespace Chain { public class R { public virtual void Foo() { } } }",
+            "AsmFirst",
+            "first"
+        )
+        let second = EmitCSharpLibrary(
+            "namespace Chain { public class Q : R { public virtual void Bar() { } } }",
+            "AsmSecond",
+            "second",
+            first
+        )
+        using let resolver = ReferenceResolver.WithReferences([]string{first, second})
+        resolver.CurrentAssemblyName = "Consumer"
+        let source = "package Consumer\nimport Chain\n\nclass S : Q {\n    override func Bar() { }\n}\n\nfunc Run(s S) {\n    s.Foo() // PChain\n}\n"
+        let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
+        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
+        let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
+        let position = source.IndexOf("// PChain", StringComparison.Ordinal)
+        Assert.Single(model.LookupMembers(position, receiver, "Foo"))
+        Assert.Single(model.LookupMembers(position, receiver, "Bar"))
+    }
+
+    @Fact
+    func ImportedOverride_AGenericMethodOfTheSameShape_IsNotTakenForTheSynthesizedEquals() {
+        let library = EmitCSharpLibrary(
+            "namespace Generic { public class Base { public bool Equals<T>(object other) { return false; } } }",
+            "AsmGeneric",
+            "generic"
+        )
+        using let resolver = ReferenceResolver.WithReferences([]string{library})
+        resolver.CurrentAssemblyName = "Consumer"
+        let source = "package Consumer\nimport Generic\n\ndata class D : Base {\n    let X int32\n}\n\nfunc Run(d D) {\n    d.ToString() // PGeneric\n}\n"
+        let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
+        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
+        let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
+        let position = source.IndexOf("// PGeneric", StringComparison.Ordinal)
+        let equals = model.LookupMembers(position, receiver, "Equals")
+        Assert.Contains(equals, (m Symbol) -> m is ImportedFunctionSymbol imported && imported.Method.IsGenericMethod)
+        // The synthesized override of `object.Equals(object)` still stands for the non-generic slot.
+        Assert.DoesNotContain(
+            equals,
+            (m Symbol) -> m is ImportedFunctionSymbol imported &&
+                !imported
+                .Method
+                .IsGenericMethod &&
+                imported
+                .Method
+                .DeclaringType!!.Name == "Object" &&
+                imported
+                .Method
+                .GetParameters()
+                .Length == 1
+        )
+    }
+
     shared {
-        private func EmitCSharpLibrary(recordSource string) string {
-            let outputDir = Path.Combine(AppContext.BaseDirectory, "Adr0212ImportedRecord")
+        private func EmitCSharpLibrary(
+            recordSource string,
+            assemblyName string = "CSharpLib5441",
+            directory string = "record",
+            reference string? = nil
+        ) string {
+            let outputDir = Path.Combine(AppContext.BaseDirectory, "Adr0212ImportedRecord", directory)
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "CSharpLib5441.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib.dll")
             let syntaxTree = CSharpSyntaxTree.ParseText(recordSource, CSharpParseOptions(LanguageVersion.Latest))
             let referencePaths = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(
                 Path.PathSeparator
@@ -54,11 +119,14 @@ open class Adr0212ImportedRecordMemberTests {
                 .Where(File.Exists)
                 .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
                 .ToList()
+            if reference != nil {
+                references.Add(MetadataReference.CreateFromFile(reference))
+            }
             let compilation = CSharpCompilation.Create(
-                "CSharpLib5441",
+                assemblyName,
                 []Microsoft.CodeAnalysis.SyntaxTree{syntaxTree},
                 references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithModuleName("Lib.dll")
             )
             using let peStream = File.Create(libraryPath)
             let emitResult = compilation.Emit(peStream)
