@@ -86,6 +86,14 @@ shared class SymbolDisplay {
         return FormatClrTypeName(type, qualifyNames: true)
     }
 
+    /// Renders an imported CLR [`type`](paramref) without a declaration descriptor, qualified or not.
+    /// @param type The reflected CLR type.
+    /// @param qualifyNames Whether to write the namespace of each type.
+    /// @returns The source-compatible G# type name.
+    func ToTypeDisplayString(type Type, qualifyNames bool) string {
+        return FormatClrTypeName(type, qualifyNames)
+    }
+
     /// Renders [`symbol`](paramref) to classified display parts under [`format`](paramref).
     /// @param symbol The symbol to render.
     /// @param format The display options.
@@ -520,7 +528,8 @@ shared class SymbolDisplay {
         }
         builder.Add(SymbolDisplayPartKind.MethodName, method.Name)
         builder.Punctuation("(")
-        let parameters = method.GetParameters()
+        // The hidden context parameter of a suspending G# method is not a parameter a caller supplies.
+        let parameters = ImportedFunctionSymbol.GetLogicalParameters(method)
         for var i = 0; i < parameters.Length; i++ {
             if i > 0 {
                 builder.Punctuation(",")

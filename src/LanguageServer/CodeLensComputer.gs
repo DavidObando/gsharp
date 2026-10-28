@@ -32,7 +32,7 @@ shared class CodeLensComputer {
         let lenses = List[ReferenceCodeLens]()
         var compilation Compilation
         try {
-            compilation = content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+            compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
         } catch {
             return lenses
         }
