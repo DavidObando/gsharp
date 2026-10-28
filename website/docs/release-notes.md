@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Global scopes are no longer chained; `BoundGlobalScope.GetCumulativeImports` is removed** (issue #5312, ADR-0212 slice S8, step 1). No caller passed a non-nil `previous`, and the REPL chains through emitted metadata. `Binder.BindGlobalScope` and the `BoundGlobalScope` constructors keep the `previous` parameter and now throw `ArgumentException` for a non-nil value. `BoundGlobalScope.Imports` is the whole import list of the compilation, so use it where `GetCumulativeImports()` was called. The body-binding passes no longer walk a chain. No change to `gsc` output.
 
+- **cs2gs preserves included sibling projects** (issue #5495). Excluding one project no longer hides an included sibling's generated project from repository inventory validation. Missing included projects and unexpected output still fail validation.
+
 - **Source-interface receivers can subscribe to inherited CLR events** (issue #5391). Qualified `+=` and `-=` operations now call the inherited event accessors, including inside default instance bodies. Generic handlers retain source and type-parameter arguments. Unsupported bare inherited event names still report errors instead of changing enclosing delegates.
 
 - **SDK builds supply metadata dependencies** (issue #5493). The compiler now receives resolved loose dependencies and NuGet runtime assemblies after selected compile references. Dependency-set changes invalidate incremental compilation even without newer input files. Reference-assembly precedence and `GS9100` warning policy remain unchanged.
