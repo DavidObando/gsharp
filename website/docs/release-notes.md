@@ -16,9 +16,13 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **A call removes the narrowing of a local that a closure assigns** (issue #5237, ADR-0208 row R15). A declared function can run a closure that escaped, for example one stored in a field. After any call that can run user code, a plain local or parameter that a closure of the same function assigns is no longer narrowed. A program that read such a local after the call now reports `GS0158` or `GS0154` instead of throwing `NullReferenceException`. A by-reference parameter and a local that no other closure assigns keep their narrowing. The loop form of the same shape is rejected too. No diagnostic changes in `src/Core`, Core.Tests, gsc or the pinned Oahu inputs.
 
+- **Generic channel readers retain source element types** (issue #5485). Inferred `out var` locals and method returns now preserve source-defined and generic elements through returned readers with explicit runtime references.
+
 - **`SemanticModel.LookupMembers` lists extension members** ([#5440](https://github.com/DavidObando/gsharp/issues/5440), ADR-0212 question 12). After the members of the type, the query answers the extension functions declared in source and the extension methods of the imported namespaces whose receiver can take the type, by the rules a call uses. Member completion now offers them on a value receiver and never on a type name, and the hover overload count of a member counts extensions with extensions only. A call through an extension is still outside `GetMemberGroup`. No change to `gsc` output.
 
 - **Channel member references retain symbolic elements** (issue #5481). `Reader` and `Writer` getters now preserve source-defined and generic element types in their inherited CLR owner. Shared member-owner recovery also retains reordered generic base arguments.
+
+- **Generic interface bodies retain their type-parameter scope** (issue #5477). Default methods can access source generic shared fields such as `Storage[T].Events`. Method type parameters still shadow interface type parameters.
 
 - **`GSharp.Core` no longer grants `InternalsVisibleTo` to the language server** (issue #5311, ADR-0212 slice S7a). The server reaches the compiler through public queries only for everything except `Compilation.GlobalScope` and `Compilation.BoundProgram`, which remain on the binding reference gate's allowance list. The server keeps its own path-identity rule and its own check for the parser's synthesized tokens. No change to `gsc` output or to the public API.
 
