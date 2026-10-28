@@ -2181,10 +2181,6 @@ class Conversion {
                 !IsReferenceLikeTarget(target) {
                 return false
             }
-            // Symbolic imported owners must prove nominal inheritance, not a conversion that constructs a different reference.
-            if source is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
-                return TryClassifyConstructedImportedReferenceConversion(source, target)
-            }
             return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {
                 ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
             } else {
@@ -2206,9 +2202,6 @@ class Conversion {
         /// @param type The candidate type.
         /// @returns `true` when [`type`](paramref) is reference-capable.
         internal func IsReferenceLikeTarget(type TypeSymbol) bool {
-            if type is ImportedTypeSymbol{OpenDefinition: {IsValueType: false}} {
-                return true
-            }
             if type is InterfaceSymbol {
                 return true
             }
