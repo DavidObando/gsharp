@@ -271,6 +271,23 @@ internal partial class ExpressionBinder {
         if prop == nil || !prop.IsInitOnly {
             return
         }
+        if !IsInitOnlyAssignmentContext(receiver) {
+            Diagnostics.ReportInitOnlyPropertyAssignment(location, prop.Name)
+        }
+    }
+
+    private func EnforceImportedInitOnlyAssignment(
+        property PropertyInfo,
+        receiver BoundExpression,
+        location TextLocation
+    ) {
+        if property.GetSetMethod(nonPublic: true) is {} setter && ImportedTypeSymbol.IsInitOnlySetter(setter) &&
+            !IsInitOnlyAssignmentContext(receiver) {
+            Diagnostics.ReportInitOnlyPropertyAssignment(location, property.Name)
+        }
+    }
+
+    private func IsInitOnlyAssignmentContext(receiver BoundExpression?) bool {
         let fn FunctionSymbol? = this.function
         let inInitContext = fn != nil && (fn.Name == ".ctor" || fn.IsInitOnlySetter)
         let receiverIsThis = receiver == nil ||
@@ -280,10 +297,7 @@ internal partial class ExpressionBinder {
                 fn!!.ThisParameter
             )
         )
-        if inInitContext && receiverIsThis {
-            return
-        }
-        Diagnostics.ReportInitOnlyPropertyAssignment(location, prop.Name)
+        return inInitContext && receiverIsThis
     }
 
     /// Issue #947: determines whether an assignment to a read-only (`let`)
@@ -629,7 +643,8 @@ internal partial class ExpressionBinder {
                     memberIdentifier.ValueText,
                     memberIdentifier.Location,
                     separator.Location,
-                    valueSyntax
+                    valueSyntax,
+                    isObjectInitializer: true
                 )
                 if importedWrite != nil {
                     return importedWrite
@@ -2258,6 +2273,7 @@ internal partial class ExpressionBinder {
                 out var importedReceiverType
             )
             if importedProperty != nil {
+                EnforceImportedInitOnlyAssignment(importedProperty, receiver, syntax.OperatorToken.Location)
                 let importedReceiver = conversions.BindConversion(
                     memberNameSyntax.Location,
                     receiver,
@@ -2443,7 +2459,8 @@ internal partial class ExpressionBinder {
         name string,
         nameLocation TextLocation,
         assignLocation TextLocation,
-        valueSyntax ExpressionSyntax
+        valueSyntax ExpressionSyntax,
+        isObjectInitializer bool = false
     ) BoundExpression? {
         let property = MemberLookup.GetInterfaceImportedBaseInstanceProperty(
             interfaceType,
@@ -2457,6 +2474,9 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportCannotAssign(assignLocation, name)
             let _ = BindExpression(valueSyntax)
             return BoundErrorExpression(nil)
+        }
+        if !isObjectInitializer {
+            EnforceImportedInitOnlyAssignment(property, receiver, assignLocation)
         }
         let importedReceiver = conversions.BindConversion(nameLocation, receiver, importedReceiverType!!)
         let value = BindAssignmentRhs(valueSyntax, propertyType!!)

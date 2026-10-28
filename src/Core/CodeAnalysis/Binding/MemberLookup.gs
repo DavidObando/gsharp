@@ -1485,20 +1485,22 @@ internal class MemberLookup {
             requireReadable bool = false
         ) PropertyInfo? {
             importedReceiver = nil
-            let property = GetInterfaceImportedBaseInstanceProperty(interfaceSymbol, name, requireReadable)
+            if !TypeMemberModel.GetMethods(interfaceSymbol, name, MemberQuery.Instance(MemberKinds.Method))
+                .IsDefaultOrEmpty {
+                return nil
+            }
+            let property = GetInterfaceImportedBaseInstanceDataMember(
+                interfaceSymbol,
+                name,
+                MemberKinds.Property,
+                out var declaringContext,
+                requireReadable
+            ) as PropertyInfo
             if property == nil {
                 return nil
             }
-            for sourceInterface in interfaceSymbol.SelfAndAllBaseInterfaces() {
-                for importedBase in sourceInterface.BaseClrInterfaces {
-                    if GetProjectionReceiverImportedType(importedBase) is {} imported &&
-                        TryGetSymbolicDeclaringContext(imported, property.DeclaringType, out _, out _) {
-                        importedReceiver = GetClrMemberDeclaringTypeSymbol(importedBase, property)
-                        return property
-                    }
-                }
-            }
-            return nil
+            importedReceiver = GetClrMemberDeclaringTypeSymbol(declaringContext!!, property)
+            return property
         }
 
         /// Finds an imported event while retaining the source hierarchy's symbolic receiver.
@@ -1535,8 +1537,25 @@ internal class MemberLookup {
             name string,
             kinds MemberKinds,
             requireReadableProperty bool = false
+        ) MemberInfo? -> GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol,
+            name,
+            kinds,
+            out _,
+            requireReadableProperty
+        )
+
+        private func GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            kinds MemberKinds,
+            out declaringContext TypeSymbol?,
+            requireReadableProperty bool
         ) MemberInfo? {
-            for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
+            declaringContext = nil
+            let clrBases = ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceSymbol, out var contexts)
+            for var i = 0; i < clrBases.Count; i++ {
+                let clrBase = clrBases[i]
                 if (kinds & MemberKinds.Property) != 0 {
                     let property = ClrTypeUtilities.SafeGetProperty(
                         clrBase,
@@ -1546,12 +1565,14 @@ internal class MemberLookup {
                     if property != nil && property.GetIndexParameters()
                         .Length == 0 &&
                         (!requireReadableProperty || property.CanRead) {
+                        declaringContext = contexts[i]
                         return property
                     }
                 }
                 if (kinds & MemberKinds.Event) != 0 {
                     let eventInfo = SafeGetEventIncludingSelfAndInterfaces(clrBase, name)
                     if eventInfo != nil {
+                        declaringContext = contexts[i]
                         return eventInfo
                     }
                 }

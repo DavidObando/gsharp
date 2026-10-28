@@ -262,10 +262,194 @@ class Program {
         )
     }
 
+    @Theory
+    @InlineData("=")
+    @InlineData("+=")
+    func ImportedInitOnlyProperties_RejectMutationAndPreserveInitialization(op string) {
+        Reject(
+            "interface Rejected : IInitValue {\n    func Fail() { this.Value " + op + " 4 }\n}\n",
+            "GS0372",
+            if op == "=" {
+                "2,30,2,31"
+            } else {
+                "2,30,2,32"
+            }
+        )
+        Reject(
+            "interface Rejected : IInitValue {\n    func Fail() { Value " + op + " 4 }\n}\n",
+            "GS0372",
+            if op == "=" {
+                "2,25,2,26"
+            } else {
+                "2,25,2,27"
+            }
+        )
+        Reject(
+            "interface View : IInitValue {}\nclass Rejected {\n    init(value View) { value.Value " + op + " 4 }\n}\n",
+            "GS0372",
+            if op == "=" {
+                "3,36,3,37"
+            } else {
+                "3,36,3,38"
+            }
+        )
+        Reject(
+            "interface View : IInitValue {\n    func Self() View { return this }\n    func Fail() { Self().Value " +
+                op +
+                " 4 }\n}\n",
+            "GS0372",
+            if op == "=" {
+                "3,32,3,33"
+            } else {
+                "3,32,3,34"
+            }
+        )
+        Check(`interface IView : IInitValue {}
+class Factory {
+    shared {
+        func Make() IView { return Item() { Value = 4 } }
+    }
+}
+class Item : IView {
+    prop Value int32 { get; init; }
+}
+class ImportedFactory {
+    shared {
+        func Make() IInitValue { return InitStore() { Value = 7 } }
+    }
+}
+`, `public interface IView : IInitValue {}
+public class Factory {
+    public static IView Make() { return new Item { Value = 4 }; }
+}
+public class Item : IView { public int Value { get; init; } }
+public class ImportedFactory {
+    public static IInitValue Make() { return new InitStore { Value = 7 }; }
+}
+`, `class Program {
+    static void Main() {
+        Console.Write(Factory.Make().Value);
+        Console.Write("|");
+        var item = ImportedFactory.Make();
+        Console.Write(item.Value);
+        var store = (InitStore)item;
+        Console.Write($"|{store.Reads}:{store.Writes}");
+    }
+}`, "4|S7G7|1:1")
+    }
+
+    @Theory
+    @InlineData("=")
+    @InlineData("+=")
+    func SourceMethods_HideImportedPropertiesWithoutChangingBaseAccess(op string) {
+        Reject(
+            "interface Rejected : IValue {\n    func Value() {}\n    func Fail() { this.Value " + op + " 4 }\n}\n",
+            "GS0158",
+            "3,24,3,29"
+        )
+        Reject(
+            "interface Rejected : IValue {\n    func Value() {}\n    func Fail() { Value " + op + " 4 }\n}\n",
+            "GS0125",
+            "3,19,3,24"
+        )
+        Check(`interface IView : IValue {
+    func Value() { System.Console.Write("M") }
+}
+class Trace {
+    shared {
+        func Call(value IView) {
+            let method System.Action = value.Value
+            method()
+            let parent IValue = value
+            parent.Value = 3
+            System.Console.Write(parent.Value)
+        }
+    }
+}
+`, `public interface IView : IValue {
+    new void Value() { Console.Write("M"); }
+}
+public class Trace {
+    public static void Call(IView value) {
+        Action method = value.Value;
+        method();
+        IValue parent = value;
+        parent.Value = 3;
+        Console.Write(parent.Value);
+    }
+}
+`, `class Item : ValueStore, IView {}
+class Program {
+    static void Main() {
+        var item = new Item();
+        Trace.Call(item);
+        Console.Write($"|{item.Raw}:{item.Reads}:{item.Writes}");
+    }
+}`, "MS3G3|3:1:1")
+    }
+
+    @Fact
+    func UnrelatedImportedBaseFirst_RetainsSelectedPropertyArgumentsAndDispatch() {
+        Check(`interface Forward[T] : IEmpty, IForward[T] {}
+interface IView[T] : Forward[T] {
+    func Write(value T) { this.Value = value }
+    func Read() T { return this.Value }
+}
+interface Closed : IEmpty, IValue[int32] {
+    func Add() { this.Value += 4 }
+}
+class Payload { func Mark() { System.Console.Write("P") } }
+interface Source : IEmpty, IForward[Payload] {
+    func Write(value Payload) { this.Value = value }
+    func Read() Payload { return this.Value }
+}
+`, `public interface Forward<T> : IEmpty, IForward<T> {}
+public interface IView<T> : Forward<T> {
+    void Write(T value) { this.Value = value; }
+    T Read() { return this.Value; }
+}
+public interface Closed : IEmpty, IValue<int> {
+    void Add() { this.Value += 4; }
+}
+public class Payload { public void Mark() { Console.Write("P"); } }
+public interface Source : IEmpty, IForward<Payload> {
+    void Write(Payload value) { this.Value = value; }
+    Payload Read() { return this.Value; }
+}
+`, `class Text : ValueStore<string>, IView<string> {}
+class Number : ValueStore<int>, Closed {}
+class Local : ValueStore<Payload>, Source {}
+class Program {
+    static void Main() {
+        var text = new Text();
+        IView<string> open = text;
+        open.Write("hello"); Console.Write(open.Read());
+        Console.Write($"|{text.Reads}:{text.Writes}|");
+        var number = new Number();
+        ((Closed)number).Add();
+        Console.Write($"{number.Raw}:{number.Reads}:{number.Writes}|");
+        var local = new Local();
+        Source source = local;
+        source.Write(new Payload()); source.Read().Mark();
+        Console.Write($"|{local.Reads}:{local.Writes}");
+    }
+}`, "SGhello|1:1|GS4:1:1|SGP|1:1")
+    }
+
     shared {
         private const Contract string = `#nullable enable
 using System;
 namespace Admission5262 {
+    public interface IEmpty {}
+    public interface IInitValue { int Value { get; init; } }
+    public class InitStore : IInitValue {
+        int raw;
+        public int Reads, Writes;
+        public int Value {
+            get { Reads++; Console.Write("G"); return raw; }
+            init { Writes++; raw = value; Console.Write("S" + value); }
+        }
+    }
     public interface IValue { int Value { get; set; } }
     public interface IValue<T> { T Value { get; set; } }
     public interface IForward<T> : IValue<T> {}
@@ -496,7 +680,7 @@ namespace Admission5262 {
                             Assert.Equal("Admission5262", reader.GetString(declaring.Namespace))
                             Assert.Contains(
                                 reader.GetString(declaring.Name),
-                                []string{"IValue", "IValue`1", "IOptional`1", "IOblivious", "IRestricted"}
+                                []string{"IValue", "IValue`1", "IOptional`1", "IOblivious", "IRestricted", "InitStore"}
                             )
                             metadata.Add(
                                 reader.GetString(declaring.Name) + ":" + Convert.ToHexString(
