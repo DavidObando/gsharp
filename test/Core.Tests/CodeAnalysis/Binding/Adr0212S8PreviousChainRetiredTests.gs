@@ -97,6 +97,7 @@ open class Adr0212S8PreviousChainRetiredTests {
         let scope_ = BindSource(
             "package P\nfunc f() int32 -> 1\nfunc g() int32 -> f() + 1\nfunc h() int32 -> g() + 1\n"
         )
+        Assert.Equal(3, scope_.Functions.Length)
         let program = Binder.BindProgram(scope_)
         Assert.Empty(program.Diagnostics)
         for function in scope_.Functions {
