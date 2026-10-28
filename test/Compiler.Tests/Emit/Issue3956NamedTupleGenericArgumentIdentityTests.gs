@@ -465,6 +465,110 @@ return view
         CompileTupleDriver(fixture.Directory, "DifferentRestFamily", rejected, selected, references, "8,8,8,12")
     }
 
+    @Theory
+    @InlineData("List[in chan[C]]", "List[out chan[C]]")
+    @InlineData("List[chan[C]]", "List[in chan[C]]")
+    @InlineData("List[List[in chan[C]]]", "List[List[out chan[C]]]")
+    @InlineData("List[[3]in chan[C]]", "List[[3]out chan[C]]")
+    @InlineData("(in chan[C], int32)", "(out chan[C], int32)")
+    @InlineData("System.ValueTuple[in chan[C], int32]", "(out chan[C], int32)")
+    @InlineData("IView[string, System.ValueTuple[in chan[C], int32]]", "IView[string?, (out chan[C], int32)]")
+    func CompositeChannelArguments_DifferentDirectionsAreNotIdentity(sourceType string, targetType string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        using let producer = GSharp.Core.Tests.CSharpFixture(TupleProducer, assemblyName: "TupleAssessment")
+        let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
+        File.Copy(producer.AssemblyPath, contract)
+        let source = `package CompositeChannelIdentity
+import System
+import System.Collections.Generic
+import TupleAssessment5413
+public class C {}
+public func Reject(view ` + sourceType + `) ` + targetType + ` {
+return view
+}
+`
+        CompileTupleDriver(
+            fixture.Directory,
+            "DifferentDirection",
+            source,
+            contract,
+            TupleDriverReferences(),
+            "7,8,7,12"
+        )
+    }
+
+    @Theory
+    @InlineData("in", "Reader")
+    @InlineData("out", "Writer")
+    func TupleChannelViews_MaterializeDirectionalStorageOnce(direction string, member string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        using let producer = GSharp.Core.Tests.CSharpFixture(`#nullable enable
+using System;
+using System.Threading.Channels;
+namespace ChannelViewAssessment;
+public static class Api {
+    public static Channel<T> Create<T>() => Channel.CreateBounded<T>(1);
+    public static bool IsReader<T>(Channel<T> channel, ChannelReader<T> view)
+        => ReferenceEquals(channel.Reader, view);
+    public static bool IsWriter<T>(Channel<T> channel, ChannelWriter<T> view)
+        => ReferenceEquals(channel.Writer, view);
+    public static bool RoundTripReader<T>(Channel<T> channel, ChannelReader<T> view, T value)
+        => channel.Writer.TryWrite(value) && view.TryRead(out var received) && ReferenceEquals(value, received);
+    public static bool RoundTripWriter<T>(Channel<T> channel, ChannelWriter<T> view, T value)
+        => view.TryWrite(value) && channel.Reader.TryRead(out var received) && ReferenceEquals(value, received);
+}
+`, assemblyName: "ChannelViewAssessment")
+        let contract = Path.Combine(fixture.Directory, "ChannelViewAssessment.dll")
+        File.Copy(producer.AssemblyPath, contract)
+        let source = `package TupleChannelViews
+import System
+import ChannelViewAssessment
+public class C {}
+public class Exports { shared {
+public func Adapt(value (chan[C], int32)) (` + direction + ` chan[C], int32) {
+return value
+}
+public func Direct(value chan[C]) ` + direction + ` chan[C] -> value
+} }
+let channel = Api.Create[C]()
+var calls = 0
+let next = func () (chan[C], int32) {
+calls++
+return (channel, 42)
+}
+let converted = Exports.Adapt(next())
+let direct = Exports.Direct(channel)
+Console.WriteLine(Api.Is` + member + `[C](channel, converted.Item1))
+Console.WriteLine(Api.Is` + member + `[C](channel, direct))
+Console.WriteLine(converted.Item2)
+Console.WriteLine(calls)
+let value = C()
+Console.WriteLine(Api.RoundTrip` + member + `[C](channel, converted.Item1, value))
+`
+        let references = TupleDriverReferences()
+        let image = CompileTupleDriver(fixture.Directory, "DirectionalView", source, contract, references, nil)
+        VerifyTupleDriver(image, contract, references)
+        let assembly = EmittedFixture.LoadTogether(contract, image)[1]
+        let exports = assembly.GetType("TupleChannelViews.Exports", throwOnError: true)!!
+        let element = assembly.GetType("TupleChannelViews.C", throwOnError: true)!!
+        let expected = (
+            if direction == "in" {
+                typeof(System.Threading.Channels.ChannelReader[_])
+            } else {
+                typeof(System.Threading.Channels.ChannelWriter[_])
+            }
+        ).MakeGenericType(element)
+        Assert.Equal(expected, exports.GetMethod("Adapt")!!.ReturnType.GetGenericArguments()[0])
+        Assert.Equal(expected, exports.GetMethod("Direct")!!.ReturnType)
+        let executed = RunTupleDriver([]string{image})
+        Assert.Equal(0, executed.Code)
+        Assert.Empty(executed.Error)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("True\nTrue\n42\n1\nTrue\n".ReplaceLineEndings(Environment.NewLine)),
+            executed.Output
+        )
+    }
+
     /// The shape from the issue, verbatim: a LINQ call over a dictionary whose
     /// value type is a named tuple carrying a `List` of named tuples. The
     /// return type comes back from the CLR signature unnamed, and flows into a
