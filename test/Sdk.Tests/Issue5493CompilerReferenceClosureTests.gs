@@ -114,6 +114,7 @@ class Issue5493CompilerReferenceClosureTests : IDisposable {
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors>GS9100</WarningsAsErrors>
     <NuGetAudit>false</NuGetAudit>
     <RestorePackagesPath>../packages</RestorePackagesPath>
   </PropertyGroup>
