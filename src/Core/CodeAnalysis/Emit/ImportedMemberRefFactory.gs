@@ -786,42 +786,13 @@ internal class ImportedMemberRefFactory {
         if methodDecl != nil && !methodDecl.IsGenericType && methodDecl != openDefinition {
             return false
         }
-        // Issue #774: when the method is declared on a generic interface or
-        // base type that the receiver's openDefinition implements (e.g.
-        // `IEnumerable<object>.GetEnumerator()` called on a
-        // `Dictionary[K, V]`), the parent TypeSpec must be the substituted
-        // interface — not the receiver's own openDefinition. Otherwise
-        // ResolveMethodOnOpenDefinition would pick the receiver's hiding
-        // method (e.g. Dictionary's struct-returning GetEnumerator) and the
-        // verifier would see a struct value where an interface reference is
-        // expected.
+        // Recover the declaring owner through the shared hierarchy projection, including generic base classes.
         if methodDecl != nil && methodDecl.IsGenericType && openDefinition != nil {
-            let methodDeclOpen = if methodDecl.IsGenericTypeDefinition {
-                methodDecl
-            } else {
-                methodDecl.GetGenericTypeDefinition()
-            }
-            if !SameOpenTypeDefinition(methodDeclOpen, openDefinition) {
-                if TryFindImplementedInterfaceInstantiation(
-                    openDefinition,
-                    methodDeclOpen,
-                    out var ifaceInstantiation
-                ) {
-                    let ifaceArgs = ifaceInstantiation.GetGenericArguments()
-                    let symbolicIfaceArgs = ImmutableArray.CreateBuilder[TypeSymbol](ifaceArgs.Length)
-                    for ifa in ifaceArgs {
-                        symbolicIfaceArgs.Add(
-                            MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
-                                ifa,
-                                openDefinition,
-                                typeArguments,
-                                NullabilityFreeReason.TypeStructure
-                            )
-                        )
-                    }
-                    openDefinition = methodDeclOpen
-                    typeArguments = symbolicIfaceArgs.MoveToImmutable()
-                }
+            let receiver = ImportedTypeSymbol.GetConstructed(openDefinition, openDefinition, typeArguments)
+            let owner = MemberLookup.GetClrMemberDeclaringTypeSymbol(receiver, method)
+            if TryNormalizeToSymbolicContainer(owner, out var declaringDefinition, out var declaringArguments) {
+                openDefinition = declaringDefinition
+                typeArguments = declaringArguments
             }
         }
         // Synthesize an ImportedTypeSymbol view of the receiver so the
@@ -832,7 +803,7 @@ internal class ImportedMemberRefFactory {
         // null ClrType.
         let openContainer = Invariant.Required(
             openDefinition,
-            "TryNormalizeToSymbolicContainer only reports success with an open definition, and the interface re-targeting above keeps one",
+            "symbolic container normalization and declaring-owner projection retain an open definition",
             expression: "openDefinition"
         )
         // The encoder uses the open definition and symbolic arguments, not a placeholder CLR construction.
@@ -2228,33 +2199,6 @@ internal class ImportedMemberRefFactory {
             }
         }
 
-        /// Walks [`openDefinition`](paramref)'s implemented interfaces and
-        /// returns the constructed instance that uses
-        /// [`targetOpenInterface`](paramref) as its open definition. The
-        /// returned (cref:Type)'s generic arguments are still in terms of
-        /// [`openDefinition`](paramref)'s generic parameters so they can be
-        /// substituted via (cref:MemberLookup.MapOpenClrTypeToSymbolic(Type, Type,
-        /// ImmutableArray{TypeSymbol})).
-        private func TryFindImplementedInterfaceInstantiation(
-            openDefinition Type,
-            targetOpenInterface Type,
-            @NotNullWhen(true) out instantiation Type?
-        ) bool {
-            for iface in openDefinition.GetInterfaces() {
-                if iface.IsGenericType &&
-                    SameOpenTypeDefinition(iface.GetGenericTypeDefinition(), targetOpenInterface) {
-                    instantiation = iface
-                    return true
-                }
-                if !iface.IsGenericType && SameOpenTypeDefinition(iface, targetOpenInterface) {
-                    instantiation = iface
-                    return true
-                }
-            }
-            instantiation = nil
-            return false
-        }
-
         /// Issue #1462: compares two generic type definitions (or non-generic
         /// types) for metadata identity rather than CLR reference identity. The
         /// receiver's `OpenDefinition` and the interfaces it implements are
@@ -2291,6 +2235,9 @@ internal class ImportedMemberRefFactory {
             @NotNullWhen(true) out openDefinition Type?,
             out typeArguments ImmutableArray[TypeSymbol]
         ) bool {
+            if MemberLookup.TryGetSymbolicOpenReceiverView(containingTypeSymbol, out var collectionView) {
+                return TryNormalizeToSymbolicContainer(collectionView, out openDefinition, out typeArguments)
+            }
             switch containingTypeSymbol {
                 case userType is StructSymbol {
                     for current in userType.GetHierarchy() {
@@ -2351,21 +2298,6 @@ internal class ImportedMemberRefFactory {
                 }
                 case annotated is NullabilityAnnotatedTypeSymbol {
                     return TryNormalizeToSymbolicContainer(annotated.BaseType, out openDefinition, out typeArguments)
-                }
-                case map_ is MapTypeSymbol when map_.ClrType == nil {
-                    // Issue #3311: a `map[K, V]` receiver over type-parameter (or
-                    // other not-yet-loadable) arguments has no closed CLR
-                    // Dictionary here — parent its interop member refs at the
-                    // symbolic `Dictionary<!K, !V>` TypeSpec. This is the
-                    // general-member counterpart of the dedicated #1481/#3306 map
-                    // helpers (GetMapCtorReference / GetMapTryGetValueReference /
-                    // …), covering the whole reflected member surface
-                    // (ContainsKey, Keys, Count, GetEnumerator, …) that binding
-                    // now resolves through the symbolic Dictionary view
-                    // (MemberLookup.TryGetSymbolicOpenMapReceiverView).
-                    openDefinition = typeof(System.Collections.Generic.Dictionary[_, _])
-                    typeArguments = ImmutableArray.Create(map_.KeyType, map_.ValueType)
-                    return true
                 }
                 default {
                     openDefinition = nil
