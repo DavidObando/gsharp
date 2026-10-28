@@ -144,7 +144,7 @@ partial class SemanticModel {
         }
         let referenced = Unwrap(FindReferencedNode(token))
         if referenced is BoundCallOperationExpression call && !call.MemberGroup.IsDefaultOrEmpty {
-            if call.CalledFunction.Name != token.ValueText {
+            if !SpellsName(call.CalledFunction, token.ValueText) {
                 return ImmutableArray[Symbol].Empty
             }
             let receiverType TypeSymbol? = switch call {
@@ -183,6 +183,22 @@ partial class SemanticModel {
             ImmutableArray[Symbol].Empty
         } else {
             ImmutableArray.Create(single)
+        }
+    }
+
+    // An imported member can differ from its G# spelling (`@return` in metadata is `return_`).
+    private func SpellsName(symbol Symbol, name string) bool {
+        let member MemberInfo? = switch symbol {
+            case function is ImportedFunctionSymbol: function.Method
+            case property is PropertySymbol: property.ImportedMember
+            case field is FieldSymbol: field.ImportedMember
+            case clrEvent is EventSymbol: clrEvent.ImportedMember
+            default: default(MemberInfo?)
+        }
+        return if member != nil {
+            ClrTypeUtilities.EmittedMemberNameMatches(member, name)
+        } else {
+            symbol.Name == name
         }
     }
 
@@ -332,22 +348,24 @@ partial class SemanticModel {
     private func AddClrMembers(receiver TypeSymbol, clrType Type, name string?, result ImmutableArray[Symbol].Builder) {
         const flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
-            if property.GetIndexParameters().Length == 0 && (name == nil || property.Name == name) {
+            if property.GetIndexParameters()
+                .Length == 0 &&
+                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) {
                 result.Add(ImportedMemberSymbol(receiver, property))
             }
         }
         for field in ClrTypeUtilities.SafeGetFields(clrType, flags) {
-            if name == nil || field.Name == name {
+            if name == nil || ClrTypeUtilities.EmittedMemberNameMatches(field, name) {
                 result.Add(ImportedMemberSymbol(receiver, field))
             }
         }
         for method in ClrTypeUtilities.SafeGetMethods(clrType, flags) {
-            if !method.IsSpecialName && (name == nil || method.Name == name) {
+            if !method.IsSpecialName && (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(method, name)) {
                 result.Add(ImportedMemberSymbol(receiver, method))
             }
         }
         for clrEvent in ClrTypeUtilities.SafeGetEvents(clrType, flags) {
-            if name == nil || clrEvent.Name == name {
+            if name == nil || ClrTypeUtilities.EmittedMemberNameMatches(clrEvent, name) {
                 result.Add(ImportedMemberSymbol(receiver, clrEvent))
             }
         }
@@ -597,6 +615,10 @@ partial class SemanticModel {
                 return false
             }
             if declaring is InterfaceSymbol {
+                return AccessibilityChecker.IsAccessible(accessibility, declaring, enclosingFunction)
+            }
+            // The function knows its lexical enclosing types, a nested interface's among them.
+            if enclosingFunction != nil {
                 return AccessibilityChecker.IsAccessible(accessibility, declaring, enclosingFunction)
             }
             return AccessibilityChecker.IsAccessibleFromType(accessibility, declaring as StructSymbol, enclosingType)

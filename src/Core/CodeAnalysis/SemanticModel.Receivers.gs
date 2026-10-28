@@ -882,7 +882,7 @@ partial class SemanticModel {
         if symbol is FieldSymbol{IsEventBackingField: true} {
             return nil
         }
-        return if symbol != nil && symbol.Name == token.ValueText {
+        return if symbol != nil && SpellsName(symbol, token.ValueText) {
             symbol
         } else {
             default(Symbol?)
