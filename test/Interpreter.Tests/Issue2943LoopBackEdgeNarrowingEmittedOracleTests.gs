@@ -94,11 +94,17 @@ if c != nil {
 run()`)
         }
         let result = EmittedOracle.Evaluate(source)
-        Assert.True(
-            result.Diagnostics.IsEmpty,
-            "$shape/$$scope: ${string.Join(Environment.NewLine, result.Diagnostics)}"
-        )
-        Assert.Equal(66, result.Value)
+        // ADR-0213: a variable or a call is no proof across the back edge (R7 b), and a member read in a loop
+        // removes the fact of a mutable top-level variable (R7 e). Only a construction in a function keeps it.
+        if shape == "constructor" && $scope == "function" {
+            Assert.True(
+                result.Diagnostics.IsEmpty,
+                "$shape/$$scope: ${string.Join(Environment.NewLine, result.Diagnostics)}"
+            )
+            Assert.Equal(66, result.Value)
+        } else {
+            Assert.False(result.Diagnostics.IsEmpty, "$shape/$$scope must be rejected")
+        }
     }
 
     @Fact
