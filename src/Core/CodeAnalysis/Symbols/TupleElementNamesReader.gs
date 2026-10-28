@@ -92,8 +92,12 @@ shared class TupleElementNamesReader {
                         position++
                     }
                     let elements = ImmutableArray.CreateBuilder[TypeSymbol](tuple.Arity)
-                    for element in tuple.ElementTypes {
-                        elements.Add(Apply(element, names, &position))
+                    for var i = 0; i < tuple.Arity; i++ {
+                        if i > 0 && i % 7 == 0 {
+                            // Skip the unnamed positions of the synthesized Rest node.
+                            position = Math.Min(names.Length, position + tuple.Arity - i)
+                        }
+                        elements.Add(Apply(tuple.ElementTypes[i], names, &position))
                     }
                     return TupleTypeSymbol.Get(elements.MoveToImmutable(), elementNames.MoveToImmutable())
                 }
