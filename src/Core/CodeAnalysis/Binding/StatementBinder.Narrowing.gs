@@ -333,6 +333,7 @@ internal partial class StatementBinder {
         var anyRootAssigned = false
         var dropAllRoots = false
         var dropGlobalRoots = false
+        var runsEscapedClosure = false
         var statementCollector AssignedRootsCollector? = nil
         if boundStatement != nil {
             let collector = GetStatementEffects(boundStatement, externalCallableAliases)
@@ -341,6 +342,7 @@ internal partial class StatementBinder {
             dropAllMemberPaths = dropAllMemberPaths || collector.MayMutateMemberPaths
             dropAllRoots = collector.MayMutateAnyRoot
             dropGlobalRoots = collector.MayMutateGlobalRoots
+            runsEscapedClosure = collector.MayRunEscapedClosure
             // The summary is shared, so read it without adding roots to it.
             anyRootAssigned = collector.Roots.Count > 0
             for frame in binderCtx.NarrowedVariables {
@@ -366,7 +368,12 @@ internal partial class StatementBinder {
         } else {
             default(HashSet[string]?)
         }
-        if !anyRootAssigned && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots && filterNames == nil {
+        if !anyRootAssigned &&
+            !dropAllMemberPaths &&
+            !dropAllRoots &&
+            !dropGlobalRoots &&
+            !runsEscapedClosure &&
+            filterNames == nil {
             return
         }
         // Issue #208: iterate ALL frames (not just the top) because the
@@ -2010,6 +2017,9 @@ internal partial class StatementBinder {
             // callable value, which keeps its own classification (AnalyzeCallableInvocation).
             if node is BoundClrConstructorCallExpression or
                 BoundClrConversionCallExpression or
+                BoundClrBinaryOperatorExpression or
+                BoundClrUnaryOperatorExpression or
+                BoundFunctionPointerInvocationExpression or
                 BoundTypeParameterConstructionExpression {
                 MayRunEscapedClosure = true
             }

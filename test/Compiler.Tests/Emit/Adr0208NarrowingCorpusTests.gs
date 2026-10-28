@@ -209,6 +209,8 @@ open class Adr0208NarrowingCorpusTests {
                 "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias",
                 "p10_5237_clr_constructor_enumerates_an_escaped_closure",
+                "p11_5237_type_parameter_construction_runs_a_constructor",
+                "p12_5237_function_pointer_call_runs_an_escaped_closure",
                 "p1_5237_escaped_closure_run_by_declared_function",
                 "p2_5237_loop_form_escaped_closure",
                 "p3_5237_root_no_closure_assigns_keeps_the_fact",
@@ -1930,6 +1932,43 @@ func Run() int32 {
     return x.Value + list.Count
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"p11_5237_type_parameter_construction_runs_a_constructor", `import System
+
+class C {
+    var Value int32 = 1
+}
+var cleaner () -> void = func() { }
+class Maker {
+    init() {
+        cleaner()
+    }
+}
+func Run[T class init()]() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let fresh = T{}
+    return x.Value
+}
+func Main() { Console.WriteLine(Run[Maker]()) }`, "GS0158@17:14", "reject", "", "R15"}
+            yield[]object{"p12_5237_function_pointer_call_runs_an_escaped_closure", `import System
+
+class C {
+    var Value int32 = 1
+}
+var cleaner () -> void = func() { }
+func Wrapper() {
+    cleaner()
+}
+unsafe func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let fp *func() = &Wrapper
+    fp()
+    return x.Value
+}
+unsafe func Main() { Console.WriteLine(Run()) }`, "GS0158@16:14", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
