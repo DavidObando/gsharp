@@ -35,19 +35,18 @@ partial class SemanticModel {
     ) TypeInfo {
         cancellationToken.ThrowIfCancellationRequested()
         ArgumentNullException.ThrowIfNull(expression)
-        // Only a declared function (or method) is a context; constructors and accessors have no
-        // declaring function syntax. The locals in scope come from LookupSymbols either way, so the
-        // locals of top-level statements are visible too. The globals are reachable through the parent scope.
+        // The enclosing function, constructors and accessors included, is the context. The locals in scope come
+        // from LookupSymbols either way, so the locals of top-level statements are visible too. The globals are
+        // reachable through the parent scope.
         var function FunctionSymbol? = nil
+        var inConstructorInitializer = false
         let locals = List[VariableSymbol](LookupSymbols(position, nil, cancellationToken).OfType[VariableSymbol]())
         if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol enclosing {
             function = enclosing
             // The scope query leaves `this` out where the receiver does not exist yet, as in the
-            // arguments of a constructor's `: base(...)`. There the binder gets no function, so it
-            // seeds neither the receiver nor the instance members, as normal binding does not.
-            if enclosing.ThisParameter != nil && !locals.Contains(enclosing.ThisParameter) {
-                function = nil
-            }
+            // arguments of a constructor's `: base(...)`. The binder then applies the restrictions of
+            // that context: instance access is rejected, the static members stay reachable.
+            inConstructorInitializer = enclosing.ThisParameter != nil && !locals.Contains(enclosing.ThisParameter)
         }
         using let nullabilityScope = NullabilityOptions.Enter(compilation.Nullability, compilation.PlatformNilChecks)
         let type = Binder.BindSpeculativeExpressionType(
@@ -56,7 +55,8 @@ partial class SemanticModel {
             function,
             locals,
             expression,
-            syntaxTree
+            syntaxTree,
+            inConstructorInitializer
         )
         return TypeInfo(type)
     }

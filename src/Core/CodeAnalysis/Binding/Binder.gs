@@ -9278,6 +9278,9 @@ partial class Binder {
         /// @param expression The expression to read a type for.
         /// @param referencingTree The tree (file) the expression stands in; its imports apply. An expression
         /// parsed on its own would otherwise look up names through its own, import-less tree.
+        /// @param inConstructorInitializer Whether the expression stands in the arguments of a constructor's
+        /// `: base(...)` or `: this(...)`; the binder then applies the restrictions of that context (no receiver,
+        /// so instance access is rejected and the static members stay reachable).
         /// @returns The non-error, non-void type, or `null` when binding fails.
         internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
@@ -9285,7 +9288,8 @@ partial class Binder {
             containingFunction FunctionSymbol?,
             additionalLocals IEnumerable[VariableSymbol]?,
             expression ExpressionSyntax?,
-            referencingTree SyntaxTree
+            referencingTree SyntaxTree,
+            inConstructorInitializer bool = false
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9311,6 +9315,9 @@ partial class Binder {
                             }
                         }
                     }
+                    if inConstructorInitializer {
+                        binder.binderCtx.PushConstructorInitializerContext()
+                    }
                     let bound = binder.expressions.BindExpression(expression)
                     let type TypeSymbol? = bound?.Type
                     return if type == nil || object.ReferenceEquals(type, TypeSymbol.Error) || object.ReferenceEquals(
@@ -9322,6 +9329,9 @@ partial class Binder {
                         type
                     }
                 } finally {
+                    if inConstructorInitializer {
+                        binder.binderCtx.LeaveConstructorInitializerContext()
+                    }
                     parentScope.SetCurrentDeclaringPackage(previousPackage)
                     parentScope.SetCurrentReferencingSyntaxTree(previousTree)
                 }

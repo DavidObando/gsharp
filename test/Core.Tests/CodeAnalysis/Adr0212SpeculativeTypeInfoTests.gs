@@ -28,7 +28,7 @@ import Xunit
 /// | local declared after `position` | not in scope: no type | `LocalDeclaredAfterPosition_IsNotInScope` |
 /// | receiver inside a method | `this` and the members resolve | `MethodBody_SeesThisAndMembers` |
 /// | no enclosing declared function | the globals resolve | `TopLevel_SeesGlobals` |
-/// | arguments of a constructor's `: base(...)` | no instance access, as in normal binding | `ConstructorBaseArguments_RejectInstanceAccess_BodyAcceptsIt` |
+/// | arguments of a constructor's `: base(...)` | no instance access, as in normal binding | `ConstructorBaseArguments_RejectInstanceAccess_BodyAcceptsIt` (static members stay reachable) |
 /// | expression parsed on its own | the model's tree supplies the imports | `DetachedExpression_UsesTheModelsImports` |
 /// | narrowing in force at `position` (Q15) | excluded: the declared type | `FlowNarrowing_IsExcluded_FromTheContract` |
 /// | bind fails, `void` or error type | `TypeInfo.None` | `FailedBind_AnswersNone`, `VoidCall_AnswersNone` |
@@ -127,6 +127,9 @@ open class Adr0212SpeculativeTypeInfoTests {
         let (model, tree) = Create(Program)
         let inArguments = Expression(tree, "Field2", "BaseArg")
         Assert.Null(model.GetSpeculativeTypeInfo(inArguments.Span.Start, inArguments).Type)
+        // The static members of the type stay reachable there.
+        let inConst = Expression(tree, "Poly", "BaseConst")
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(inConst.Span.Start, inConst).Type)
         let inBody = Expression(tree, "Field2 + 1", "CtorBody")
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(inBody.Span.Start, inBody).Type)
     }
@@ -287,6 +290,13 @@ class Derived2 : Base2 {
         // CtorBody
         Field2 + 1
     }
+}
+class Derived3 : Base2 {
+    init() : base(
+        // BaseConst
+        Poly
+    ) { }
+    shared { const Poly int32 = 5 }
 }
 // TopLevel
 Global + 1
