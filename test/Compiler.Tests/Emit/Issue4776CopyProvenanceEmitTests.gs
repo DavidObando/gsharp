@@ -1012,6 +1012,214 @@ return $"{lifted.HasValue}|{lifted.Value.Item1 == null}|{ReferenceEquals(lifted.
         Assert.False(File.Exists(pdb))
     }
 
+    private const PlatformArrayContract5413 string = `#nullable enable
+namespace ContextArrays5413;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public interface ISink<out T, in U> { T First { get; } void Put(U value); }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public class SinkImpl<T, U>(T first) : ISink<T, U> {
+    public T First => first;
+    public void Put(U value) { Api.Puts++; Api.Last = value; }
+}
+public static class Producer<U> where U : class {
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        U> View(U value) { Api.Calls++; return new ViewImpl<string, U>(null!, value); }
+    public static ISink<
+#nullable disable
+        string,
+#nullable enable
+        U> Sink() { Api.Calls++; return new SinkImpl<string, U>(null!); }
+    public static IView<string, U> OrdinaryView(U value) {
+        Api.Calls++; return new ViewImpl<string, U>("ordinary", value);
+    }
+    public static ISink<string, U> OrdinarySink() {
+        Api.Calls++; return new SinkImpl<string, U>("ordinary");
+    }
+}
+public static class Api {
+    public static int Calls, Puts;
+    public static object? Last;
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        int[]> MetadataView() {
+        Api.Calls++; return new ViewImpl<string, int[]>(null!, new[] { 10, 20, 30 });
+    }
+    public static ISink<
+#nullable disable
+        string,
+#nullable enable
+        int[]> MetadataSink() {
+        Api.Calls++; return new SinkImpl<string, int[]>(null!);
+    }
+}`
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ImportedPlatformVariance_PreservesKnownArrayShapes(useReference bool, contravariant bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Arrays.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(PlatformArrayContract5413, "Arrays", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let shape = if contravariant {
+            "ISink"
+        } else {
+            "IView"
+        }
+        for element in[]string{"int32", "C"} {
+            let sourceArgument = if contravariant {
+                "[]$element"
+            } else {
+                "[3]$element"
+            }
+            let targetArgument = if contravariant {
+                "[3]$element"
+            } else {
+                "[]$element"
+            }
+            let values = if element == "C" {
+                "C(), C(), C()"
+            } else {
+                "10, 20, 30"
+            }
+            let make = if contravariant {
+                "Sink()"
+            } else {
+                "View($sourceArgument{$values})"
+            }
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "package ArrayReject5413\nimport ContextArrays5413\npublic class C {}\n" +
+                    "public func Rejected() $shape[string?, $targetArgument] {\n" +
+                    "let value = Producer[$sourceArgument].$make\nreturn value\n}\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(6,8,6,13): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Contains("$shape[string!, $sourceArgument]", output, StringComparison.Ordinal)
+            Assert.Contains("$shape[string?, $targetArgument]", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+        let body = if contravariant {
+            `public func Match(value [3]int32) ISink[string?, [3]int32] -> Producer[[3]int32].Sink()
+public func Slice(value []int32) ISink[string?, []int32] -> Producer[[]int32].Sink()
+public func Metadata() ISink[string?, [3]int32] -> Api.MetadataSink()
+public func Ordinary(value [3]int32) ISink[string?, [3]int32] -> Producer[[3]int32].OrdinarySink()
+public func Symbolic(value C) ISink[string?, [3]C] -> Producer[[3]C].Sink()`
+        } else {
+            `public func Match(value [3]int32) IView[string?, [3]int32] -> Producer[[3]int32].View(value)
+public func Slice(value []int32) IView[string?, []int32] -> Producer[[]int32].View(value)
+public func Metadata() IView[string?, [3]int32] -> Api.MetadataView()
+public func Ordinary(value [3]int32) IView[string?, [3]int32] -> Producer[[3]int32].OrdinaryView(value)
+public func Symbolic(value C) IView[string?, [3]C] -> Producer[[3]C].View([3]C{value, value, value})`
+        }
+        let source = "package ArrayViews5413\nimport ContextArrays5413\npublic class C {}\n" +
+            "public class Exports { shared {\n" +
+            body +
+            "\npublic func Bare(value [3]int32) []int32 -> value\n} }\n"
+        let apiReference = Path.Combine(fixture.Directory, "ArrayViews.ref.dll")
+        let apiPdb = Path.Combine(fixture.Directory, "ArrayViews.pdb")
+        let arguments = []string{
+            "/assemblyname:ArrayViews",
+            "/r:" + selected,
+            "/refout:" + apiReference,
+            "/pdb:" + apiPdb
+        }
+            .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray()
+        let api = fixture.Compile(source, "ArrayViews", executable: false, arguments)
+        let first = []string{api, apiReference, apiPdb}.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        fixture.Compile(source, "ArrayViews", executable: false, arguments)
+        for var i = 0; i < first.Length; i++ {
+            Assert.Equal(first[i], File.ReadAllBytes(([]string{api, apiReference, apiPdb})[i]))
+        }
+        let assertion = if contravariant {
+            `foreach (var sink in new[] { matched, sliced, metadata, ordinary }) {
+    sink.Put(values);
+    if (!ReferenceEquals(Api.Last, values)) throw new Exception("Array storage changed.");
+}
+var objects = new[] { item, item, item };
+symbolic.Put(objects);
+if (!ReferenceEquals(Api.Last, objects) || Api.Puts != 5)
+    throw new Exception("Symbolic storage or write count changed.");`
+        } else {
+            `if (!ReferenceEquals(matched.Second, values) || !ReferenceEquals(sliced.Second, values) ||
+    !ReferenceEquals(ordinary.Second, values) || metadata.Second.Length != 3 || metadata.Second[1] != 20 ||
+    symbolic.Second.Length != 3 || !ReferenceEquals(symbolic.Second[2], item) || Api.Puts != 0)
+    throw new Exception("Array storage, metadata leniency, or symbolic identity changed.");`
+        }
+        let caller = fixture.CompileCSharp(
+            "using System;\nusing ContextArrays5413;\nusing ArrayViews5413;\npublic static class Probe {\n" +
+                "public static string Run() {\n" +
+                `var values = new[] { 10, 20, 30 };
+var item = new C();
+var matched = Exports.Match(values);
+var sliced = Exports.Slice(values);
+var metadata = Exports.Metadata();
+var ordinary = Exports.Ordinary(values);
+var symbolic = Exports.Symbolic(item);
+if (matched.First != null || sliced.First != null || metadata.First != null || symbolic.First != null ||
+    ordinary.First != "ordinary" || Api.Calls != 5 || !ReferenceEquals(Exports.Bare(values), values))
+    throw new Exception("Null payload, producer evaluation, ordinary variance, or bare widening changed.");
+` +
+                assertion +
+                "\nreturn $\"True|{Api.Calls}|{Api.Puts}\";\n} }",
+            "ArrayCaller",
+            contract,
+            apiReference
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        let actual = cast[string](assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)!!)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if contravariant {
+                    "True|5|5"
+                } else {
+                    "True|5|0"
+                }
+            ),
+            Encoding.UTF8.GetBytes(actual)
+        )
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;

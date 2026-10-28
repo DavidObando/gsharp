@@ -3688,12 +3688,9 @@ class Conversion {
             // below declines it, and the ordinary upcast rules strip the nested
             // annotation and admit it. Project the source's own positions onto
             // the destination's definition through its bases and interfaces and
-            // apply rule 3 there. It runs before the platform-presence gate
-            // because that gate does not look inside a flags-annotated array
-            // (`[]!string!`); the projection reads positions itself. Only the
-            // illegal direction is decided here; a legal pair falls through to
-            // the rules below, unchanged. This projection does not apply to
-            // function shapes or value-type containers.
+            // apply rule 3 there. Only the illegal direction is decided here;
+            // a legal pair falls through to the rules below, unchanged.
+            // This projection does not apply to function shapes or value-type containers.
             if !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) &&
                 TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
                 (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) {
@@ -4487,6 +4484,9 @@ class Conversion {
                     if variance != GenericParameterAttributes.None &&
                         IsReferenceTypeArgument(source) &&
                         IsReferenceTypeArgument(target) {
+                        if IsRejectedFixedArrayShapeMismatch(source, target) {
+                            return PlatformArgumentRelation.Incompatible
+                        }
                         let from = if variance == GenericParameterAttributes.Contravariant {
                             target
                         } else {
@@ -4817,13 +4817,8 @@ class Conversion {
                     return true
                 }
                 if current is NullabilityAnnotatedTypeSymbol annotated {
-                    if annotated.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} annotatedClr {
-                        let count = annotatedClr.GetGenericArguments().Length
-                        for var i = 0; i < count; i++ {
-                            if annotated.GetTypeArgumentSymbol(i) is {} argument {
-                                pending.Push(argument)
-                            }
-                        }
+                    for argument in annotated.GetElementPositions() {
+                        pending.Push(argument)
                     }
                     if annotated.BaseType is {} annotatedBase {
                         pending.Push(annotatedBase)
