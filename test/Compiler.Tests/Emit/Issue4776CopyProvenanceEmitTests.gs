@@ -1355,6 +1355,141 @@ public static class Probe {
         }
     }
 
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ImportedPlatformMap_PreservesStatedArgumentContracts(useReference bool, platformKey bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "MapContract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable disable
+namespace MapContract5413;
+public record Box<T>(T Value);
+public static class Api {
+    public static int Calls, Captures;
+    public static object Last;
+    public static Box<string> Key() { Calls++; return new("key"); }
+    public static Box<string> Value() { Calls++; return new(null); }
+    public static void Remember(object value) { Captures++; Last = value; }
+}`, "MapContract", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let helper = if platformKey {
+            "public func Build[K](box Box[K]) map[K, string?] -> map[K, string?]{box.Value:nil}\n" +
+                "public func Objects[K](box Box[K], item C?) map[K, C?] -> map[K, C?]{box.Value:item}\n"
+        } else {
+            "public func Build[V](box Box[V]) map[string?, V] -> map[string?, V]{\"key\":box.Value}\n" +
+                "public func Objects[V](box Box[V], item C?) map[C?, V] -> map[C?, V]{item:box.Value}\n"
+        }
+        let producer = if platformKey {
+            "Api.Key()"
+        } else {
+            "Api.Value()"
+        }
+        let symbolicArguments = if platformKey {
+            "string?, C?"
+        } else {
+            "C?, string?"
+        }
+        let prefix = "package MapViews5413\nimport MapContract5413\nimport System.Collections.Generic\npublic class C {}\n" +
+            helper
+        let source = prefix +
+            "public class Exports { shared {\n" +
+            "public func Direct() Dictionary[string?, string?] {\nlet value = Build($producer)\nApi.Remember(value)\nreturn value\n}\n" +
+            "public func Projected() IDictionary[string?, string?] {\nlet value = Build($producer)\nApi.Remember(value)\nreturn value\n}\n" +
+            "public func Symbolic(item C?) Dictionary[$symbolicArguments] {\nlet value = Objects($producer, item)\nApi.Remember(value)\nreturn value\n}\n" +
+            "public func Ordinary(item C) Dictionary[string, C?] -> map[string, C?]{\"key\":item}\n" +
+            "public func Optional() Dictionary[string, int32?] -> map[string, int32?]{\"key\":nil}\n} }\n"
+        let apiReference = Path.Combine(fixture.Directory, "MapViews.ref.dll")
+        let apiPdb = Path.Combine(fixture.Directory, "MapViews.pdb")
+        let arguments = []string{
+            "/assemblyname:MapViews",
+            "/r:" + selected,
+            "/refout:" + apiReference,
+            "/pdb:" + apiPdb
+        }
+            .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray()
+        let api = fixture.Compile(source, "MapViews", executable: false, arguments)
+        let first = []string{api, apiReference, apiPdb}.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        fixture.Compile(source, "MapViews", executable: false, arguments)
+        for var i = 0; i < first.Length; i++ {
+            Assert.Equal(first[i], File.ReadAllBytes(([]string{api, apiReference, apiPdb})[i]))
+        }
+        let symbolicCheck = if platformKey {
+            "symbolic[\"key\"] != item"
+        } else {
+            "symbolic[item] != null"
+        }
+        let caller = fixture.CompileCSharp(`using System;
+using System.Reflection;
+using MapContract5413;
+using MapViews5413;
+public static class Probe {
+    public static string Run() {
+        var direct = Exports.Direct();
+        if (!ReferenceEquals(direct, Api.Last) || direct.Count != 1 || direct["key"] != null)
+            throw new Exception("Direct map conversion changed storage or null.");
+        var projected = Exports.Projected();
+        if (!ReferenceEquals(projected, Api.Last) || projected.Count != 1 || projected["key"] != null)
+            throw new Exception("Projected map conversion changed storage or null.");
+        var item = new C();
+        var symbolic = Exports.Symbolic(item);
+        if (!ReferenceEquals(symbolic, Api.Last) || symbolic.Count != 1 || ` + symbolicCheck + `)
+            throw new Exception("Symbolic map conversion changed storage or identity.");
+        if (!ReferenceEquals(Exports.Ordinary(item)["key"], item) || Exports.Optional()["key"].HasValue ||
+            Api.Calls != 3 || Api.Captures != 3)
+            throw new Exception("Ordinary contracts, value optionality or evaluation changed.");
+        var info = new NullabilityInfoContext().Create(typeof(Exports).GetMethod("Direct")!.ReturnParameter);
+        if (info.GenericTypeArguments[0].ReadState != NullabilityState.Nullable ||
+            info.GenericTypeArguments[1].ReadState != NullabilityState.Nullable)
+            throw new Exception("Exported map argument contracts changed.");
+        return $"True|{Api.Calls}|{Api.Captures}";
+    }
+}`, "MapCaller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal("True|3|3", assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        for target in[]string{"string?, string", "string, string?"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                prefix +
+                    "public func Rejected() Dictionary[$target] {\nlet value = Build($producer)\nreturn value\n}\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(9,8,9,13): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;

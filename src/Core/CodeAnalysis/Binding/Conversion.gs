@@ -4774,6 +4774,16 @@ class Conversion {
                 arguments = imported.TypeArguments
                 return true
             }
+            // Tuple and Nullable<V> positions do not represent their CLR generic slots.
+            let positions = type.GetElementPositions()
+            if !positions.IsDefaultOrEmpty &&
+                !type.IsTupleType &&
+                definition is {IsGenericType: true} constructed &&
+                positions.Length == constructed
+                .GetGenericArguments().Length && !NullableLifting.IsAnyValueTypeNullable(type as NullableTypeSymbol) {
+                arguments = positions
+                return true
+            }
             if type.ConstructedTypeArguments.IsDefaultOrEmpty {
                 return false
             }
