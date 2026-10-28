@@ -2853,13 +2853,17 @@ class Conversion {
             return false
         }
 
+        private func IsTupleTypeArgumentPair(from TypeSymbol, to TypeSymbol) bool ->
+        TupleTypeSymbol.TryGetTupleShape(from, out _) && TupleTypeSymbol.TryGetTupleShape(to, out _)
+
         private func HaveIdenticalTypeArgumentContracts(from TypeSymbol, to TypeSymbol) bool {
+            // Tuple identity uses this contract walk; a separate equivalence walk would visit every child twice.
             // Value optionality changes storage even when the symbol relays its underlying CLR type.
             if from.ReferenceNullability != to.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
                 from.StripToBareShape() as NullableTypeSymbol
             ) !=
             NullableLifting.IsAnyValueTypeNullable(to.StripToBareShape() as NullableTypeSymbol) ||
-                !AreTypeArgumentsEquivalent(from, to) {
+                (!IsTupleTypeArgumentPair(from, to) && !AreTypeArgumentsEquivalent(from, to)) {
                 return false
             }
             let fromPositions = from.GetElementPositions()
@@ -4447,18 +4451,8 @@ class Conversion {
                 return false
             }
             // Native and imported ValueTuple spellings share identity, not conversions of their invariant elements.
-            if TupleTypeSymbol.TryGetTupleShape(a, out _) && TupleTypeSymbol.TryGetTupleShape(b, out _) {
-                let aElements = a.GetElementPositions()
-                let bElements = b.GetElementPositions()
-                if aElements.Length != bElements.Length {
-                    return false
-                }
-                for var i = 0; i < aElements.Length; i++ {
-                    if !HaveIdenticalTypeArgumentContracts(aElements[i], bElements[i]) {
-                        return false
-                    }
-                }
-                return true
+            if IsTupleTypeArgumentPair(a, b) {
+                return HaveIdenticalTypeArgumentContracts(a, b)
             }
             a = a.StripToBareShape()
             b = b.StripToBareShape()

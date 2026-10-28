@@ -162,6 +162,79 @@ return view
         }
     }
 
+    @Fact
+    func DeepImportedSymbolicValueTuple_MatchingAndInnermostContractsFinishWithinDriverBound() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        using let producer = GSharp.Core.Tests.CSharpFixture(TupleProducer, assemblyName: "TupleAssessment")
+        let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
+        File.Copy(producer.AssemblyPath, contract)
+        let references = ReferenceResolver
+            .HostTrustedPlatformAssemblyPaths()
+            .Where(
+            (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
+        )
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        Assert.NotEmpty(references)
+        var imported = "System.ValueTuple[C, int32]"
+        var native = "(C, int32)"
+        var nullable = "(C?, int32)"
+        var optional = "(C, int32?)"
+        // One nested child keeps source size linear while exposing repeated traversal at every level.
+        for var depth = 0; depth < 36; depth++ {
+            imported = "System.ValueTuple[" + imported + ", int32]"
+            native = "(" + native + ", int32)"
+            nullable = "(" + nullable + ", int32)"
+            optional = "(" + optional + ", int32)"
+        }
+        let source = `package DeepTupleIdentity
+import System
+import TupleAssessment5413
+public class C {}
+public class Exports { shared {
+public func Adapt(view IView[string, ` + imported + `]) IView[string?, ` + native + `] {
+return view
+}
+} }
+`
+        let image = CompileTupleDriver(fixture.Directory, "Deep", source, contract, references, nil)
+        let verification = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}
+        for path in references.Concat([]string{contract}) {
+            verification.Add("-r")
+            verification.Add(path)
+        }
+        let verified = RunTupleDriver(verification)
+        Assert.True(verified.Code == 0, Encoding.UTF8.GetString(verified.Output) + verified.Error)
+        Assert.Empty(verified.Error)
+        let assembly = EmittedFixture.LoadTogether(contract, image)[1]
+        let method = assembly.GetType("DeepTupleIdentity.Exports", throwOnError: true)!!.GetMethod("Adapt")!!
+        var tuple = method.ReturnType.GetGenericArguments()[1]
+        Assert.Equal(tuple, Assert.Single(method.GetParameters()).ParameterType.GetGenericArguments()[1])
+        let returnMetadata = NullabilityInfoContext().Create(method.ReturnParameter)
+        Assert.Equal(NullabilityState.Nullable, returnMetadata.GenericTypeArguments[0].ReadState)
+        var metadata = returnMetadata.GenericTypeArguments[1]
+        for var depth = 0; depth < 37; depth++ {
+            Assert.Equal(typeof(ValueTuple[_, _]), tuple.GetGenericTypeDefinition())
+            let arguments = tuple.GetGenericArguments()
+            Assert.Equal(typeof(int32), arguments[1])
+            tuple = arguments[0]
+            metadata = metadata.GenericTypeArguments[0]
+        }
+        Assert.Equal(assembly.GetType("DeepTupleIdentity.C", throwOnError: true), tuple)
+        Assert.Equal(NullabilityState.NotNull, metadata.ReadState)
+        for rejectedType in[]string{nullable, optional} {
+            let rejected = `package DeepTupleIdentity
+import System
+import TupleAssessment5413
+public class C {}
+public func Reject(view IView[string, ` + imported + `]) IView[string?, ` + rejectedType + `] {
+return view
+}
+`
+            CompileTupleDriver(fixture.Directory, "DeepRejected", rejected, contract, references, "6,8,6,12")
+        }
+    }
+
     /// The shape from the issue, verbatim: a LINQ call over a dictionary whose
     /// value type is a named tuple carrying a `List` of named tuples. The
     /// return type comes back from the CLR signature unnamed, and flows into a
