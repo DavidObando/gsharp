@@ -1677,6 +1677,14 @@ internal partial class StatementBinder {
     // ADR-0208 R15 (#5237): a node that runs source code can run a closure that escaped and assigns [`root`](paramref),
     // or the plain variable that a `ref` local names. A by-reference parameter keeps its fact (amendment A3).
     private func MayBeMutatedByEscapedClosure(root VariableSymbol) bool {
+        // The common case: no closure of the function assigns anything.
+        if binderCtx.HasNoClosureAssignedNames() {
+            return false
+        }
+        // A plain variable is its own chain; only a `ref` local needs the alias walk.
+        if root is not LocalVariableSymbol{RefKind: not RefKind.None} {
+            return NarrowingState.OwnsClosureWritableStorage(root) && binderCtx.MayBeAssignedByClosure(root)
+        }
         for member in AliasChain(root) {
             if NarrowingState.OwnsClosureWritableStorage(member) && binderCtx.MayBeAssignedByClosure(member) {
                 return true
@@ -1770,15 +1778,15 @@ internal partial class StatementBinder {
     // #5456: lookup indexes for one closure-name collection. Each run owns one, so no state is shared between
     // compilations. One pass for each container keeps the collection linear in the number of writes.
     private sealed class ClosureScopeIndex {
-        private let declarations Dictionary[
-            SyntaxNode,
-            Dictionary[string, List[VariableDeclarationSyntax]]
-        ] = Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]()
-        private let parameters Dictionary[SyntaxNode, HashSet[string]] = Dictionary[SyntaxNode, HashSet[string]]()
+        // Created on first use: most functions have no closure.
+        private var declarations Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]?
+        private var parameters Dictionary[SyntaxNode, HashSet[string]]?
 
         /// The variable declarations that are children of [`container`](paramref), by name and in source order.
         func DeclarationsOf(container SyntaxNode) Dictionary[string, List[VariableDeclarationSyntax]] {
-            if declarations.TryGetValue(container, out var known) {
+            let index = declarations ?? Dictionary[SyntaxNode, Dictionary[string, List[VariableDeclarationSyntax]]]()
+            declarations = index
+            if index.TryGetValue(container, out var known) {
                 return known
             }
             let built = Dictionary[string, List[VariableDeclarationSyntax]](StringComparer.Ordinal)
@@ -1792,18 +1800,20 @@ internal partial class StatementBinder {
                     list.Add(variable)
                 }
             }
-            declarations[container] = built
+            index[container] = built
             return built
         }
 
         /// The names of the parameters that [`owner`](paramref) declares, without those of the closures nested in it.
         func ParametersOf(owner SyntaxNode) HashSet[string] {
-            if parameters.TryGetValue(owner, out var known) {
+            let index = parameters ?? Dictionary[SyntaxNode, HashSet[string]]()
+            parameters = index
+            if index.TryGetValue(owner, out var known) {
                 return known
             }
             let built = HashSet[string](StringComparer.Ordinal)
             CollectParameters(owner, built)
-            parameters[owner] = built
+            index[owner] = built
             return built
         }
 
@@ -2031,12 +2041,15 @@ internal partial class StatementBinder {
                 MayRunEscapedClosure = true
             }
             // A hole of a type other than a built-in value or a string calls its `ToString`.
-            if node is BoundInterpolatedStringExpression interpolation && interpolation.Parts.Any(
-                (part BoundInterpolatedStringPart) -> part.Value is {} hole &&
-                    hole.Type != TypeSymbol.String &&
-                    !TypeSymbol.IsLegalPointeeType(hole.Type)
-            ) {
-                MayRunEscapedClosure = true
+            if node is BoundInterpolatedStringExpression interpolation && !MayRunEscapedClosure {
+                for part in interpolation.Parts {
+                    if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
+                        hole.Type
+                    ) {
+                        MayRunEscapedClosure = true
+                        break
+                    }
+                }
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
                 MayRunEscapedClosure = true

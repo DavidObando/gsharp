@@ -788,6 +788,12 @@ internal class BinderContext {
         closureAssignedNames == nil ||
         closureAssignedNames!!.Contains(variable.Name)
 
+    /// Whether the set of closure-assigned names is computed and empty. No root can be assigned by a closure then,
+    /// so the per-call kill of ADR-0208 row R15 needs no further lookup.
+    func HasNoClosureAssignedNames() bool -> closureAssignedNamesComputed &&
+        closureAssignedNames != nil &&
+        closureAssignedNames!!.Count == 0
+
     /// Records the names assigned inside any function literal or local function
     /// of the enclosing function, once, from [`computeNames`](paramref).
     /// @param computeNames Computes the assigned-name set.
