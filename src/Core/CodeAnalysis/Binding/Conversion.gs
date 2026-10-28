@@ -56,8 +56,7 @@ class Conversion {
         Tuple
     }
 
-    /// The three ways a single pair of corresponding type arguments can relate
-    /// under ADR-0186 §3 rule 3.
+    /// Describes corresponding type arguments under ADR-0186 §3.
     private enum PlatformArgumentRelation {
         Same,
         Widening,
@@ -65,6 +64,7 @@ class Conversion {
         IllegalToPlatform,
         IllegalUnknown,
         IllegalMixed,
+        Incompatible,
         Unrelated
     }
 
@@ -188,10 +188,10 @@ class Conversion {
         /// @param source The source argument position.
         /// @param target The target argument position.
         /// @returns `true` for a relation rule 3 forbids.
-        internal func IsPlatformArgumentIllegal(
-            source TypeSymbol?,
-            target TypeSymbol?
-        ) bool -> IsIllegalPlatformArgumentRelation(RelatePlatformArguments(source, target))
+        internal func IsPlatformArgumentIllegal(source TypeSymbol?, target TypeSymbol?) bool -> (
+            ContainsPlatformType(source) || ContainsPlatformType(target)
+        ) &&
+            IsIllegalPlatformArgumentRelation(RelatePlatformArguments(source, target))
 
         /// ADR-0186 §3 rule 2, asked about a single ARGUMENT position: is
         /// [`source`](paramref) to [`target`](paramref) the one
@@ -257,7 +257,7 @@ class Conversion {
         /// @param source The source type.
         /// @param target The target type.
         /// @param isImplicit Whether the relation is the legal widening.
-        /// @param rejectsImportedParameter Whether a platform source position is exposed as stated non-null.
+        /// @param rejectsImportedParameter Whether a source position violates the imported parameter's stated contract.
         /// @returns `true` when rule 3 owns the relation.
         internal func TryRelatePlatformContainer(
             source TypeSymbol?,
@@ -3721,7 +3721,8 @@ class Conversion {
             // the rules below, unchanged. This projection does not apply to
             // function shapes or value-type containers.
             if !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) &&
-                TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) {
+                TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
+                (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) {
                 var hasIllegalProjection = false
                 var hasUnrelatedProjection = false
                 for var i = 0; i < projected.Length; i++ {
@@ -3739,12 +3740,12 @@ class Conversion {
                         hasUnrelatedProjection |= projectedIsUnrelated
                     }
                 }
+                if hasIllegalProjection {
+                    return true
+                }
                 if hasUnrelatedProjection {
                     rejectsImportedParameter = false
                     return false
-                }
-                if hasIllegalProjection {
-                    return true
                 }
             }
             if !ContainsPlatformType(from) && !ContainsPlatformType(to) {
@@ -3804,6 +3805,7 @@ class Conversion {
             }
             var widens = false
             var hasIllegal = false
+            var hasIncompatible = false
             var hasUnrelated = false
             for var i = 0; i < fromArguments.Length; i++ {
                 // #4420: a same-definition variant view is decided here too. A
@@ -3851,14 +3853,17 @@ class Conversion {
                         conversion = Conversion.None
                         hasIllegal = true
                     }
+                    case PlatformArgumentRelation.Incompatible {
+                        hasIncompatible = true
+                    }
                     default {
                         throw InvalidOperationException("Unknown platform argument relation.")
                     }
                 }
             }
-            if hasUnrelated {
-                rejectsImportedParameter = false
-                return false
+            if hasIncompatible {
+                rejectsImportedParameter = true
+                return true
             }
             if hasIllegal {
                 if valueContainer {
@@ -3866,6 +3871,10 @@ class Conversion {
                     return false
                 }
                 return true
+            }
+            if hasUnrelated {
+                rejectsImportedParameter = false
+                return false
             }
             if !widens {
                 // Platform-ness present but identical on both sides: not this
@@ -3899,37 +3908,47 @@ class Conversion {
         private func RelatePlatformArguments(a TypeSymbol?, b TypeSymbol?) PlatformArgumentRelation {
             if !ContainsPlatformType(a) && !ContainsPlatformType(b) {
                 // A widening elsewhere must not change this position's stated contract (issue #5413).
-                if a == nil ||
-                    b == nil ||
-                    a.ReferenceNullability != b.ReferenceNullability ||
-                    NullableLifting.IsAnyValueTypeNullable(a as NullableTypeSymbol) !=
-                NullableLifting.IsAnyValueTypeNullable(b as NullableTypeSymbol) || !AreTypeArgumentsEquivalent(a, b) {
+                if a == nil || b == nil {
+                    return PlatformArgumentRelation.Unrelated
+                }
+                let equivalent = AreTypeArgumentsEquivalent(a, b)
+                let sameShape = TryGetPlatformArgumentPairs(a, b, out _, out _)
+                if a.ReferenceNullability != b.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
+                    a as NullableTypeSymbol
+                ) !=
+                NullableLifting.IsAnyValueTypeNullable(b as NullableTypeSymbol) {
+                    return if sameShape ||
+                        AreTypeArgumentsEquivalent(UnwrapPlatformAndNullable(a), UnwrapPlatformAndNullable(b)) {
+                        PlatformArgumentRelation.Incompatible
+                    } else {
+                        PlatformArgumentRelation.Unrelated
+                    }
+                }
+                if !equivalent && !sameShape {
                     return PlatformArgumentRelation.Unrelated
                 }
                 // Semantic positions cannot replace a known CLR storage contract.
-                if a.ClrType is {} sourceClr &&
+                if equivalent &&
+                    a.ClrType is {} sourceClr &&
                     b.ClrType is {} targetClr &&
                     !sourceClr.IsGenericTypeDefinition &&
                     !targetClr.IsGenericTypeDefinition &&
                     !TypeSymbol.ContainsTypeParameter(a) && !TypeSymbol.ContainsTypeParameter(b) &&
                     !TypeSymbol.ContainsSameCompilationUserType(a) && !TypeSymbol.ContainsSameCompilationUserType(b) &&
                     !ClrTypeUtilities.AreSame(sourceClr, targetClr) {
-                    return PlatformArgumentRelation.Unrelated
+                    return PlatformArgumentRelation.Incompatible
                 }
                 let sourcePositions = a.GetElementPositions()
                 let targetPositions = b.GetElementPositions()
                 if sourcePositions.Length != targetPositions.Length {
-                    return PlatformArgumentRelation.Unrelated
+                    return PlatformArgumentRelation.Incompatible
                 }
-                for var i = 0; i < sourcePositions.Length; i++ {
-                    if RelatePlatformArguments(
-                        sourcePositions[i],
-                        targetPositions[i]
-                    ) != PlatformArgumentRelation.Same {
-                        return PlatformArgumentRelation.Unrelated
-                    }
+                let relation = RelatePlatformArgumentLists(sourcePositions, targetPositions)
+                return if relation == PlatformArgumentRelation.Same && !equivalent {
+                    PlatformArgumentRelation.Unrelated
+                } else {
+                    relation
                 }
-                return PlatformArgumentRelation.Same
             }
             let sourcePlatform PlatformTypeSymbol? = a as PlatformTypeSymbol
             let targetPlatform PlatformTypeSymbol? = b as PlatformTypeSymbol
@@ -4040,15 +4059,24 @@ class Conversion {
                 // `[]string! -> IEnumerable[string]` legal.
                 return PlatformArgumentRelation.IllegalUnknown
             }
+            return RelatePlatformArgumentLists(nestedFrom, nestedTo)
+        }
+
+        private func RelatePlatformArgumentLists(
+            from ImmutableArray[TypeSymbol],
+            to ImmutableArray[TypeSymbol]
+        ) PlatformArgumentRelation {
             var widens = false
             var hasIllegalFromPlatform = false
             var hasIllegalToPlatform = false
             var hasIllegalUnknown = false
-            for var i = 0; i < nestedFrom.Length; i++ {
-                switch RelatePlatformArguments(nestedFrom[i], nestedTo[i]) {
+            var hasIncompatible = false
+            var hasUnrelated = false
+            for var i = 0; i < from.Length; i++ {
+                switch RelatePlatformArguments(from[i], to[i]) {
                     case PlatformArgumentRelation.Same { }
                     case PlatformArgumentRelation.Unrelated {
-                        return PlatformArgumentRelation.Unrelated
+                        hasUnrelated = true
                     }
                     case PlatformArgumentRelation.Widening {
                         widens = true
@@ -4066,10 +4094,16 @@ class Conversion {
                         hasIllegalFromPlatform = true
                         hasIllegalToPlatform = true
                     }
+                    case PlatformArgumentRelation.Incompatible {
+                        hasIncompatible = true
+                    }
                     default {
                         throw InvalidOperationException("Unknown platform argument relation.")
                     }
                 }
+            }
+            if hasIncompatible {
+                return PlatformArgumentRelation.Incompatible
             }
             if hasIllegalFromPlatform && (hasIllegalToPlatform || hasIllegalUnknown) {
                 return PlatformArgumentRelation.IllegalMixed
@@ -4083,6 +4117,9 @@ class Conversion {
             if hasIllegalToPlatform {
                 return PlatformArgumentRelation.IllegalToPlatform
             }
+            if hasUnrelated {
+                return PlatformArgumentRelation.Unrelated
+            }
             return if widens {
                 PlatformArgumentRelation.Widening
             } else {
@@ -4095,7 +4132,8 @@ class Conversion {
         ) bool -> relation == PlatformArgumentRelation.IllegalFromPlatform ||
             relation == PlatformArgumentRelation.IllegalToPlatform ||
             relation == PlatformArgumentRelation.IllegalUnknown ||
-            relation == PlatformArgumentRelation.IllegalMixed
+            relation == PlatformArgumentRelation.IllegalMixed ||
+            relation == PlatformArgumentRelation.Incompatible
 
         /// #4420: whether a supertype view reads a platform element as a
         /// DIFFERENT non-null reference type through CLR variance
@@ -4416,9 +4454,13 @@ class Conversion {
             let relation = RelatePlatformArguments(projected, target)
             isUnrelated = relation == PlatformArgumentRelation.Unrelated
             rejectsImportedParameter = relation == PlatformArgumentRelation.IllegalFromPlatform ||
-                relation == PlatformArgumentRelation.IllegalMixed
+                relation == PlatformArgumentRelation.IllegalMixed ||
+                relation == PlatformArgumentRelation.Incompatible
             if !IsIllegalPlatformArgumentRelation(relation) {
                 return false
+            }
+            if relation == PlatformArgumentRelation.Incompatible {
+                return true
             }
             // Same-shape arguments are rule 3's direct aliasing case. Different
             // shapes need their own supertype projection: `List<string!>` to

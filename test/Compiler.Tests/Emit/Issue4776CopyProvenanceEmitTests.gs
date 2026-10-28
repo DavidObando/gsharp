@@ -410,6 +410,164 @@ public static class Probe {
         Assert.Equal("17|open|19|23|29|31", assemblies[1].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
     }
 
+    private const MixedReferenceContract5413 string = `#nullable enable
+using System;
+using System.Collections.Generic;
+namespace ReviewMixed5413;
+public class C<T, U> {
+    public T First;
+    public U Second;
+    public C(T first, U second) { First = first; Second = second; }
+}
+public static class Api {
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        string?> Mixed() => new(null, null);
+    public static C<string?,
+#nullable disable
+        string
+#nullable enable
+        > Reversed() => new(null, null);
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        List<string?>> Nested() => new(null, new() { null });
+    public static C<C<
+#nullable disable
+        string,
+#nullable enable
+        string?>, int> Recursive() => new(Mixed(), 42);
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        int?> Optional() => new(null, null);
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        C<int?, string?>> Deep() => new(null, new(null, null));
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        C<int?, int>> DeepOptional() => new(null, new(null, 42));
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        C<List<Tuple<int, int>>, int>> DeepStorage() => new(null, new(new() { Tuple.Create(1, 2) }, 42));
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        List<Tuple<int, int>>> Storage() => new(null, new() { Tuple.Create(1, 2) });
+    public static int Consume(C<string, string> value) => value.First.Length + value.Second.Length;
+}`
+
+    @Theory
+    @InlineData(false, "C[string, string]", "Api.Mixed()")
+    @InlineData(true, "C[string, string]", "Api.Mixed()")
+    @InlineData(false, "C[string?, string]", "Api.Mixed()")
+    @InlineData(true, "C[string?, string]", "Api.Mixed()")
+    @InlineData(false, "C[string, string]", "Api.Reversed()")
+    @InlineData(true, "C[string, string]", "Api.Reversed()")
+    @InlineData(false, "C[string, List[string]]", "Api.Nested()")
+    @InlineData(true, "C[string, List[string]]", "Api.Nested()")
+    @InlineData(false, "C[string?, List[string]]", "Api.Nested()")
+    @InlineData(true, "C[string?, List[string]]", "Api.Nested()")
+    @InlineData(false, "C[C[string, string], int32]", "Api.Recursive()")
+    @InlineData(true, "C[C[string, string], int32]", "Api.Recursive()")
+    @InlineData(false, "C[string, int32]", "Api.Optional()")
+    @InlineData(true, "C[string, int32]", "Api.Optional()")
+    @InlineData(false, "C[string?, int32]", "Api.Optional()")
+    @InlineData(true, "C[string?, int32]", "Api.Optional()")
+    @InlineData(false, "C[string?, C[int32, string]]", "Api.Deep()")
+    @InlineData(true, "C[string?, C[int32, string]]", "Api.Deep()")
+    @InlineData(false, "C[string?, C[int32, int32]]", "Api.DeepOptional()")
+    @InlineData(true, "C[string?, C[int32, int32]]", "Api.DeepOptional()")
+    @InlineData(false, "C[string?, C[List[(int32, int32)], int32]]", "Api.DeepStorage()")
+    @InlineData(true, "C[string?, C[List[(int32, int32)], int32]]", "Api.DeepStorage()")
+    @InlineData(false, "C[string, List[(int32, int32)]]", "Api.Storage()")
+    @InlineData(true, "C[string, List[(int32, int32)]]", "Api.Storage()")
+    @InlineData(false, "C[string?, List[(int32, int32)]]", "Api.Storage()")
+    @InlineData(true, "C[string?, List[(int32, int32)]]", "Api.Storage()")
+    func ImportedPlatformReferenceContainer_RejectsMixedContracts(useReference bool, target string, expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(MixedReferenceContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport ReviewMixed5413\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedPlatformReferenceContainer_RejectsMixedClrArguments(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(MixedReferenceContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import ReviewMixed5413\npublic func Rejected() int32 -> Api.Consume(Api.Mixed())\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(2,45,2,56): error GS0154:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;
