@@ -237,8 +237,7 @@ class H {
         if g != nil {
             for var i = 0; i < 2; i++ {
                 let c string = g
-                if c == "x" { t = t + 100 }
-                t = t + P
+                t = P
             }
         }
         return t
@@ -275,6 +274,48 @@ func Run() int32 {
     for ; s == nil; i = 1 + { break 0 } {
     }
     return s.Length
+}`, "GS0158")
+            Add("value-type-construction-keeps-no-struct-fact (P7)", `package T
+import System
+struct S { var N int32 }
+func Get() S? { return nil }
+func Run(n int32) int32 {
+    var s S? = Get()
+    if s == nil { return 0 }
+    var t = 0
+    for var i = 0; i < n; i++ {
+        t = s.N
+        s = S{N: 1}
+    }
+    return t
+}`, "GS0158")
+            Add("enclosing-filter-removes-an-exit-fact (W8)", `package T
+import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run(i int32) int32 {
+    var s string? = nil
+    try {
+        while s == nil || Replace() {
+            s = "ok"
+        }
+        return s.Length
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+}
+func Replace() bool {
+    try {
+        try {
+            throw FormatException("f")
+        } finally {
+            throw InvalidOperationException("g")
+        }
+    } catch (InvalidOperationException) {
+    }
+    return false
 }`, "GS0158")
             return rows
         }
