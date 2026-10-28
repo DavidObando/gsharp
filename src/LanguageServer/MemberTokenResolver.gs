@@ -89,12 +89,18 @@ internal shared class MemberTokenResolver {
                 receiver.Type,
                 context.MemberName
             )
-            let chosen = Choose(candidates, receiver.StaticMembers)
+            let receiverType = receiver.Type
+            let chosen = Choose(candidates, receiver.StaticMembers, receiverType)
             if chosen != nil {
                 member = chosen
                 overloadCount = if chosen is FunctionSymbol or ImportedFunctionSymbol {
+                    // The extensions of the same name are other methods, counted with an extension only.
                     candidates.Count(
-                        (c Symbol) -> c is FunctionSymbol or ImportedFunctionSymbol && IsStatic(c) == IsStatic(chosen)
+                        (c Symbol) -> c is FunctionSymbol or
+                            ImportedFunctionSymbol &&
+                            IsStatic(c, receiverType) == IsStatic(chosen, receiverType) &&
+                            BoundSemantics.IsReceiverExtension(c, receiverType) ==
+                        BoundSemantics.IsReceiverExtension(chosen, receiverType)
                     )
                 } else {
                     1
@@ -125,20 +131,24 @@ internal shared class MemberTokenResolver {
         return member != nil
     }
 
-    /// Tells whether [`member`](paramref) is a static member of its type.
-    func IsStatic(member Symbol) bool -> switch member {
+    /// Tells whether [`member`](paramref), listed for [`receiver`](paramref), is a static member of its type.
+    /// An extension appended for the receiver is called on a value, so it is an instance member.
+    func IsStatic(member Symbol, receiver TypeSymbol) bool -> switch member {
         case field is FieldSymbol: field.IsStatic
         case property is PropertySymbol: property.IsStatic
         case clrEvent is EventSymbol: clrEvent.IsStatic
-        case function is ImportedFunctionSymbol: function.Method.IsStatic
-        case function is FunctionSymbol: function.IsStatic || function.StaticOwnerType != nil
+        case function is ImportedFunctionSymbol: function.Method.IsStatic && !BoundSemantics.IsReceiverExtension(
+            function,
+            receiver
+        )
+        case function is FunctionSymbol: !function.IsExtension && (function.IsStatic || function.StaticOwnerType != nil)
         case EnumMemberSymbol _: true
         default: false
     }
 
     // A property, then a field, then an event, then the first method: the order of the former
     // reflection walk. Members of an imported type must match the receiver kind; a source member need not.
-    private func Choose(candidates ImmutableArray[Symbol], staticMembers bool) Symbol? {
+    private func Choose(candidates ImmutableArray[Symbol], staticMembers bool, receiver TypeSymbol) Symbol? {
         // The nearest declaring type wins before the kind does: a derived field hides a base property.
         let nearest = candidates.FirstOrDefault()?.ContainingType
         let ofNearest = if nearest == nil {
@@ -147,9 +157,13 @@ internal shared class MemberTokenResolver {
             candidates.Where((c Symbol) -> c.ContainingType == nil || object.ReferenceEquals(c.ContainingType, nearest))
                 .ToImmutableArray()
         }
-        let usable = ofNearest.Where((c Symbol) -> !BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers)
+        // An extension is called on a value, never on the type name.
+        let usable = ofNearest.Where(
+            (c Symbol) -> (!BoundSemantics.IsImportedMember(c) || IsStatic(c, receiver) == staticMembers) &&
+                !(staticMembers && BoundSemantics.IsReceiverExtension(c, receiver))
+        )
             .ToList()
-        let preferred = usable.Where((c Symbol) -> IsStatic(c) == staticMembers).ToList()
+        let preferred = usable.Where((c Symbol) -> IsStatic(c, receiver) == staticMembers).ToList()
         let pool = if preferred.Count > 0 {
             preferred
         } else {
@@ -221,7 +235,7 @@ internal shared class MemberTokenResolver {
                     outer.Type,
                     memberName
                 )
-                if Choose(members, outer.StaticMembers) is {} intermediate &&
+                if Choose(members, outer.StaticMembers, outer.Type) is {} intermediate &&
                     TypeOfValue(intermediate) is {} memberType {
                     return ResolvedReceiver(memberType, StaticMembers: false)
                 }

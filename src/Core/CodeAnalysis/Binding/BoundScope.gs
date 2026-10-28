@@ -510,6 +510,38 @@ class BoundScope {
         return CollectExtensionFunctionMatchesFromOtherPackages(name, ownKey, receiverType)
     }
 
+    /// Returns every extension function visible from this scope whose receiver can take
+    /// [`receiverType`](paramref), for the semantic model's member query (ADR-0212 question 12). Each
+    /// distinct name goes through (cref:TryLookupExtensionFunctions), so the answer is what a call by that name
+    /// would consider.
+    /// @param receiverType The static type of the receiver.
+    /// @returns The applicable extension functions, in scope-chain then declaration order.
+    internal func TryLookupAllExtensionFunctions(receiverType TypeSymbol) ImmutableArray[FunctionSymbol] {
+        let names = List[string]()
+        let seen = HashSet[string](StringComparer.Ordinal)
+        var scope_ BoundScope? = this
+        while scope_ != nil {
+            if scope_.extensionFunctions != nil {
+                for ext in scope_.extensionFunctions!! {
+                    if seen.Add(ext.Name) {
+                        names.Add(ext.Name)
+                    }
+                }
+            }
+            scope_ = scope_.Parent
+        }
+        let result = ImmutableArray.CreateBuilder[FunctionSymbol]()
+        let included = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
+        for name in names {
+            for ext in TryLookupExtensionFunctions(receiverType, name) {
+                if included.Add(ext) {
+                    result.Add(ext)
+                }
+            }
+        }
+        return result.ToImmutable()
+    }
+
     /// Gets the extension functions declared in this scope (Phase 3.B.6).
     /// @returns An immutable array of extension functions.
     func GetDeclaredExtensionFunctions() ImmutableArray[FunctionSymbol] -> extensionFunctions?.ToImmutableArray() ??
