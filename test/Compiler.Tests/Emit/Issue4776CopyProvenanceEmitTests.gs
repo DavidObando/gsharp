@@ -1220,6 +1220,141 @@ if (matched.First != null || sliced.First != null || metadata.First != null || s
         )
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedPlatformVariance_PreservesUnchangedSymbolicValueArguments(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "TupleContract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+namespace TupleContract5413;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public static class Api { public static int Calls; }
+public static class Maker<U> {
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        U> Create(U value) {
+        Api.Calls++; return new ViewImpl<string, U>(null!, value);
+    }
+    public static IView<string, U> Ordinary(U value) {
+        Api.Calls++; return new ViewImpl<string, U>("ordinary", value);
+    }
+}`, "TupleContract", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        const source = `package TupleViews5413
+import TupleContract5413
+public class C {}
+public class Exports { shared {
+public func Lift(value C) IView[string?, (C, int32)] {
+    let pair = (value, 42)
+    let view = Maker[(C, int32)].Create(pair)
+    return view
+}
+public func Ordinary(value C) IView[string?, (C, int32)] -> Maker[(C, int32)].Ordinary((value, 42))
+public func Present(value C) IView[string?, (C, int32)?] -> Maker[(C, int32)?].Create((value, 42))
+public func Absent() IView[string?, (C, int32)?] -> Maker[(C, int32)?].Create(nil)
+public func Closed() IView[string?, (string, int32)] -> Maker[(string, int32)].Create(("closed", 42))
+} }`
+        let apiReference = Path.Combine(fixture.Directory, "TupleViews.ref.dll")
+        let apiPdb = Path.Combine(fixture.Directory, "TupleViews.pdb")
+        let arguments = []string{
+            "/assemblyname:TupleViews",
+            "/r:" + selected,
+            "/refout:" + apiReference,
+            "/pdb:" + apiPdb
+        }
+            .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray()
+        let api = fixture.Compile(source, "TupleViews", executable: false, arguments)
+        let first = []string{api, apiReference, apiPdb}.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        fixture.Compile(source, "TupleViews", executable: false, arguments)
+        for var i = 0; i < first.Length; i++ {
+            Assert.Equal(first[i], File.ReadAllBytes(([]string{api, apiReference, apiPdb})[i]))
+        }
+        let caller = fixture.CompileCSharp(`using System;
+using System.Reflection;
+using TupleContract5413;
+using TupleViews5413;
+public static class Probe {
+    public static string Run() {
+        var item = new C();
+        var lifted = Exports.Lift(item);
+        var ordinary = Exports.Ordinary(item);
+        var present = Exports.Present(item);
+        var absent = Exports.Absent();
+        var closed = Exports.Closed();
+        if (lifted.First != null || ordinary.First != "ordinary" || present.First != null ||
+            absent.First != null || closed.First != null || Api.Calls != 5 ||
+            !ReferenceEquals(lifted.Second.Item1, item) || lifted.Second.Item2 != 42 ||
+            !ReferenceEquals(ordinary.Second.Item1, item) || ordinary.Second.Item2 != 42 ||
+            !present.Second.HasValue || !ReferenceEquals(present.Second.Value.Item1, item) ||
+            present.Second.Value.Item2 != 42 || absent.Second.HasValue ||
+            closed.Second.Item1 != "closed" || closed.Second.Item2 != 42)
+            throw new Exception("Unchanged tuple storage, nulls, optionality, or evaluation changed.");
+        var copy = lifted.Second;
+        copy.Item1 = new C();
+        if (!ReferenceEquals(lifted.Second.Item1, item))
+            throw new Exception("A tuple read did not return a value copy.");
+        var result = typeof(Exports).GetMethod("Lift")!.ReturnParameter;
+        var info = new NullabilityInfoContext().Create(result);
+        if (result.ParameterType.GenericTypeArguments[1] != typeof(ValueTuple<C, int>) ||
+            typeof(Exports).GetMethod("Present")!.ReturnType.GenericTypeArguments[1] != typeof(ValueTuple<C, int>?) ||
+            info.GenericTypeArguments[0].ReadState != NullabilityState.Nullable ||
+            info.GenericTypeArguments[1].GenericTypeArguments[0].ReadState != NullabilityState.NotNull)
+            throw new Exception("Tuple family or exported contracts changed.");
+        return $"True|{Api.Calls}|{lifted.Second.Item2}";
+    }
+}`, "TupleCaller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal("True|5|42", assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        for target in[]string{"(D, int32)", "(C, int64)", "(C, int32)?"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "package TupleReject5413\nimport TupleContract5413\npublic class C {}\npublic class D {}\n" +
+                    "public func Rejected(value C) IView[string?, $target] {\n" +
+                    "let view = Maker[(C, int32)].Create((value, 42))\nreturn view\n}\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(7,8,7,12): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;

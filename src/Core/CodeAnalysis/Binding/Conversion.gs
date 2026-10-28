@@ -4474,6 +4474,10 @@ class Conversion {
             source TypeSymbol,
             target TypeSymbol
         ) PlatformArgumentRelation {
+            // Unchanged arguments use identity, not reference variance, even without a CLR backing.
+            if RelatePlatformArguments(source, target) == PlatformArgumentRelation.Same {
+                return PlatformArgumentRelation.Same
+            }
             if TryGetConstructedGenericShape(UnwrapPlatformAndNullable(container), out var definition, out _) &&
                 definition != nil {
                 let parameters = definition.GetGenericArguments()
@@ -4509,11 +4513,7 @@ class Conversion {
                         }
                         if IsVarianceArgumentCompatible(from, to, allowPlatformNilCheck: false) &&
                             IsImplicitReferenceVariantSlot(from, to) {
-                            return if HaveIdenticalTypeArgumentContracts(source, target) {
-                                PlatformArgumentRelation.Same
-                            } else {
-                                PlatformArgumentRelation.Widening
-                            }
+                            return PlatformArgumentRelation.Widening
                         }
                         return PlatformArgumentRelation.Incompatible
                     }
