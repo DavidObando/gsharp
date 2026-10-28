@@ -345,13 +345,23 @@ open class Compilation {
     }
 
     /// Gets or sets whether the body bind records the candidates of each call, for
-    /// (cref:SemanticModel.GetMemberGroup) (ADR-0212 slice S4). Set it before the first query. Only a
+    /// (cref:SemanticModel.GetMemberGroup) (ADR-0212 slice S4). Set it before the compilation binds; changing it afterwards throws, because bound bodies are reused. Only a
     /// compilation made for the semantic model or the language server sets it; `gsc` leaves it off so
     /// that recording costs a compile nothing.
     prop RecordMemberGroups bool {
-        get;
-        set;
+        get {
+            return recordMemberGroups
+        }
+        set {
+            // Bodies and scopes bound without recording would stay without groups, and successors reuse them.
+            if value != recordMemberGroups && (globalScope != nil || boundProgram != nil) {
+                throw InvalidOperationException("RecordMemberGroups must be set before the compilation binds.")
+            }
+            recordMemberGroups = value
+        }
     }
+
+    private var recordMemberGroups bool
 
     /// Returns the bound program, binding it first when no caller has.
     /// @param cancellationToken Cancels this caller's wait for a build in flight, never the build itself.

@@ -139,7 +139,15 @@ internal shared class MemberTokenResolver {
     // A property, then a field, then an event, then the first method: the order of the former
     // reflection walk. Members of an imported type must match the receiver kind; a source member need not.
     private func Choose(candidates ImmutableArray[Symbol], staticMembers bool) Symbol? {
-        let usable = candidates.Where((c Symbol) -> !BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers)
+        // The nearest declaring type wins before the kind does: a derived field hides a base property.
+        let nearest = candidates.FirstOrDefault()?.ContainingType
+        let ofNearest = if nearest == nil {
+            candidates
+        } else {
+            candidates.Where((c Symbol) -> c.ContainingType == nil || object.ReferenceEquals(c.ContainingType, nearest))
+                .ToImmutableArray()
+        }
+        let usable = ofNearest.Where((c Symbol) -> !BoundSemantics.IsImportedMember(c) || IsStatic(c) == staticMembers)
             .ToList()
         let preferred = usable.Where((c Symbol) -> IsStatic(c) == staticMembers).ToList()
         let pool = if preferred.Count > 0 {
@@ -180,7 +188,12 @@ internal shared class MemberTokenResolver {
                 return ImportedTypeByName(tree, compilation, name.IdentifierToken.Text, StaticMembers: true)
             }
             case call is CallExpressionSyntax {
-                if TypeOfValue(SemanticLookup.ResolveSymbol(compilation, call.Identifier)) is {} callType {
+                let callee = SemanticLookup.ResolveSymbol(compilation, call.Identifier)
+                // A constructor call of a source type constructs an instance.
+                if callee is StructSymbol constructed {
+                    return ResolvedReceiver(constructed, StaticMembers: false)
+                }
+                if TypeOfValue(callee) is {} callType {
                     return ResolvedReceiver(callType, StaticMembers: false)
                 }
                 // A constructor call on an imported CLR type whose identifier does not resolve to a

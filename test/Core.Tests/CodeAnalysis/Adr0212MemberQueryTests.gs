@@ -166,6 +166,16 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func RecordMemberGroups_CannotChangeAfterTheCompilationBinds() {
+        let tree = SyntaxTree.Parse(SourceText.From("func F() int32 { return 1 }\n", "bound.gs"))
+        let compilation = Compilation(tree)
+        compilation.RecordMemberGroups = true
+        Assert.NotNull(compilation.GlobalScope)
+        compilation.RecordMemberGroups = true
+        Assert.Throws[InvalidOperationException](() -> compilation.RecordMemberGroups = false)
+    }
+
+    @Fact
     func MemberGroup_ArgumentProbe_DoesNotReplaceTheCalleesGroup() {
         // The method-group argument is resolved against the Console overloads inside the call.
         let group = Group("PProbe")

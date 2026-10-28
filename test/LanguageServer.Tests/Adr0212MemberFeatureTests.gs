@@ -87,6 +87,15 @@ open class Adr0212MemberFeatureTests {
     }
 
     @Fact
+    func Hover_OnAnInitializerName_DescribesTheNearestDeclaringType() {
+        let source = "open class Base {\n    prop Value string {\n        get {\n            return \"\"\n        }\n    }\n}\nclass Derived : Base {\n    var Value int32\n}\nfunc Build() Derived {\n    return Derived() { Value = 1 }\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Value", 2))
+        Assert.NotNull(hover)
+        Assert.Contains("int32", hover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
     func Hover_OnAnImportedCall_CountsTheOverloadsOfItsGroup() {
         let content = LanguageServerTestHelpers.Content(Source)
         let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(Source, "WriteLine", 0))
