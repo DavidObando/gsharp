@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Global scopes are no longer chained; `BoundGlobalScope.GetCumulativeImports` is removed** (issue #5312, ADR-0212 slice S8, step 1). No caller passed a non-nil `previous`, and the REPL chains through emitted metadata. `Binder.BindGlobalScope` and the `BoundGlobalScope` constructors keep the `previous` parameter and now throw `ArgumentException` for a non-nil value. `BoundGlobalScope.Imports` is the whole import list of the compilation, so use it where `GetCumulativeImports()` was called. The body-binding passes no longer walk a chain. No change to `gsc` output.
+
 - **`SemanticModel.LookupMembers` lists extension members** ([#5440](https://github.com/DavidObando/gsharp/issues/5440), ADR-0212 question 12). After the members of the type, the query answers the extension functions declared in source and the extension methods of the imported namespaces whose receiver can take the type, by the rules a call uses. Member completion now offers them on a value receiver and never on a type name, and the hover overload count of a member counts extensions with extensions only. A call through an extension is still outside `GetMemberGroup`. No change to `gsc` output.
 
 - **`GSharp.Core` no longer grants `InternalsVisibleTo` to the language server** (issue #5311, ADR-0212 slice S7a). The server reaches the compiler through public queries only for everything except `Compilation.GlobalScope` and `Compilation.BoundProgram`, which remain on the binding reference gate's allowance list. The server keeps its own path-identity rule and its own check for the parser's synthesized tokens. No change to `gsc` output or to the public API.
