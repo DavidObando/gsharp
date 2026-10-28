@@ -121,30 +121,28 @@ func Run(n int32) int32 {
             Add("indexed-iteration-keeps-a-global (R11, #5170)", `package T
 import System
 var g string? = nil
-func Run() int32 {
+func Run(flag bool) string {
     g = "safe"
-    var total int32 = 0
+    if g == nil { return "" }
     for item in []int32{1, 2} {
-        let copy string = g
-        total = item
+        if flag { return g }
     }
-    return total
+    return g
 }
-func Main() { Console.WriteLine(Run()) }`, "")
+func Main() { Console.WriteLine(Run(false)) }`, "")
             Add("iteration-with-user-code-removes-a-global (R11, #5170)", `package T
 import System
 import System.Collections.Generic
 var g string? = nil
-func Run(items List[int32]) int32 {
+func Run(items List[int32], flag bool) string {
     g = "safe"
-    var total int32 = 0
+    if g == nil { return "" }
     for item in items {
-        let copy string = g
-        total = item
+        if flag { return g }
     }
-    return total
+    return ""
 }
-func Main() { Console.WriteLine(Run(List[int32]())) }`, "GS0155")
+func Main() { Console.WriteLine(Run(List[int32](), false)) }`, "GS0155")
             Add("literal-false-header-has-no-back-edge", `package T
 class C { func M() { } }
 func Run() {
@@ -412,6 +410,51 @@ func Run() int32 {
     } catch (FormatException) when Clear(ref s) {
         return -1
     }
+}`, "GS0158")
+            Add("nameof-reads-no-getter", `package T
+import System
+var g string? = "safe"
+class H {
+    prop P int32 { get { return 1 } }
+    func Run(flag bool) string {
+        if g == nil { return "" }
+        for {
+            if flag { return nameof(P) }
+            if flag { return g }
+        }
+    }
+}
+func Main() { Console.WriteLine(H{}.Run(true)) }`, "")
+            Add("literal-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Meters { var V int32 = 0 }
+func operator implicit (n int32) Meters {
+    g = nil
+    return Meters{}
+}
+func Run(flag bool) string {
+    if g == nil { return "" }
+    var m Meters = Meters{}
+    for {
+        m = 5
+        if flag { return g }
+    }
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
+            Add("null-assertion-converting-to-the-root-is-no-proof (P7)", `package T
+import System
+class V { var N int32 = 1 }
+func operator implicit (v V) string? { return nil }
+func Run(v V) int32 {
+    var s string? = "a"
+    if s == nil { return 0 }
+    var t = 0
+    for var i = 0; i < 2; i++ {
+        t = s.Length
+        s = v!!
+    }
+    return t
 }`, "GS0158")
             return rows
         }

@@ -135,7 +135,7 @@ internal partial class StatementBinder {
 
     private func ResolveRegionWrites(effects RegionEffects) ResolvedRegionWrites {
         let resolved = ResolvedRegionWrites()
-        if effects.ContainsConversionCandidate && PackageDeclaresConversions() {
+        if effects.ContainsConversionCandidate {
             resolved.RunsUserCodeOnWrite = true
         }
         if effects.ContainsOperatorCandidate {
@@ -152,6 +152,18 @@ internal partial class StatementBinder {
                         resolved.RunsUserOperator = true
                     }
                 } else {
+                    resolved.RunsUserOperator = true
+                }
+            }
+        }
+        for name in effects.NilCompareOperandNames {
+            if name.StartsWith("?", StringComparison.Ordinal) {
+                continue
+            }
+            if $scope.TryLookupSymbol(name) is VariableSymbol compared {
+                let comparedType = compared.Type
+                // A non-nullable value type compared with `nil` may select a user-defined `==`.
+                if comparedType != nil && comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType) {
                     resolved.RunsUserOperator = true
                 }
             }
@@ -327,7 +339,25 @@ internal partial class StatementBinder {
                     why = "null-assertion-proves-nullability-only"
                     return false
                 }
-                return true
+                // The asserted value must convert to the root without a conversion operator: a name whose type
+                // keeps its representation.
+                if write.RightSideName == nil || write.RightSideDeclaration != nil {
+                    why = "null-assertion-of-an-unknown-value"
+                    return false
+                }
+                if $scope.TryLookupSymbol(write.RightSideName) is VariableSymbol asserted {
+                    let assertedType = StripAllNullability(asserted.Type)
+                    if assertedType == nil || declared == nil || !Conversion.IsRepresentationPreservingImplicit(
+                        assertedType,
+                        declared
+                    ) {
+                        why = "null-assertion-converts"
+                        return false
+                    }
+                    return true
+                }
+                why = "null-assertion-of-an-unknown-value"
+                return false
             }
             case RegionWriteProof.Construction {
                 if write.ConstructedTypeName == nil {

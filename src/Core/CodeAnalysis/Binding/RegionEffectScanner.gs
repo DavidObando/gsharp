@@ -258,6 +258,7 @@ internal sealed class RegionEffectScanner {
             default { }
         }
         switch kind {
+            case SyntaxKind.NameOfExpression { }
             case SyntaxKind.NameExpression {
                 let read = cast[NameExpressionSyntax](node).IdentifierToken.ValueText
                 if Active() && !IsDeclared(read) && !current.BareReads.Contains(read) {
@@ -496,6 +497,33 @@ internal sealed class RegionEffectScanner {
                     current.ContainsOperatorCandidate = true
                     RecordOperatorOperand(binary.Left)
                     RecordOperatorOperand(binary.Right)
+                } else if Active() &&
+                    (
+                    binary
+                        .OperatorToken
+                        .Kind == SyntaxKind.EqualsEqualsToken ||
+                        binary
+                        .OperatorToken
+                        .Kind == SyntaxKind.BangEqualsToken
+                ) {
+                    // A comparison with `nil` is a null test unless the other operand is a non-nullable value type.
+                    let other = if IsNilLiteral(binary.Left) {
+                        binary.Right
+                    } else {
+                        binary.Left
+                    }
+                    var inner ExpressionSyntax = other
+                    while inner is ParenthesizedExpressionSyntax parenthesized {
+                        inner = parenthesized.Expression
+                    }
+                    if inner is NameExpressionSyntax nilOperand {
+                        let text = nilOperand.IdentifierToken.ValueText
+                        if IsDeclared(text) {
+                            current.NilCompareOperandNames.Add("?" + text)
+                        } else if !current.NilCompareOperandNames.Contains(text) {
+                            current.NilCompareOperandNames.Add(text)
+                        }
+                    }
                 }
                 VisitChildren(node)
             }
@@ -593,7 +621,7 @@ internal sealed class RegionEffectScanner {
 
     private func VisitVariableDeclaration(declaration VariableDeclarationSyntax) {
         Visit(declaration.Initializer)
-        if Active() && declaration.Initializer != nil && declaration.Initializer.Kind != SyntaxKind.LiteralExpression {
+        if Active() && declaration.Initializer != nil {
             current.ContainsConversionCandidate = true
         }
         let name = declaration.Identifier.ValueText
@@ -694,16 +722,26 @@ internal sealed class RegionEffectScanner {
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
     // `for` clause and the collection of a range loop are outside it (table T3, T5).
+    // The condition of a loop is converted to `bool`; a plain name or a member read may select a user conversion.
+    private func VisitCondition(condition ExpressionSyntax?) {
+        if condition != nil &&
+            Active() &&
+            (condition.Kind == SyntaxKind.NameExpression || condition.Kind == SyntaxKind.AccessorExpression) {
+            current.ContainsConversionCandidate = true
+        }
+        Visit(condition)
+    }
+
     private func VisitLoop(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) {
         switch node.Kind {
             case SyntaxKind.WhileStatement {
                 let loop = cast[WhileStatementSyntax](node)
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
                 Visit(loop.Body)
             }
             case SyntaxKind.ForConditionStatement {
                 let loop = cast[ForConditionStatementSyntax](node)
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
                 Visit(loop.Body)
             }
             case SyntaxKind.ForClauseStatement {
@@ -712,7 +750,7 @@ internal sealed class RegionEffectScanner {
                 if !topLevel {
                     Visit(loop.Initializer)
                 }
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
                 Visit(loop.Post)
                 Visit(loop.Body)
                 Pop()
@@ -782,7 +820,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.DoWhileStatement {
                 let loop = cast[DoWhileStatementSyntax](node)
                 Visit(loop.Body)
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
             }
             default {
                 current.ContainsUnknownKind = true
@@ -916,7 +954,7 @@ internal sealed class RegionEffectScanner {
         var proof = RegionWriteProof.None
         var typeName string? = nil
         var rightName string? = nil
-        if Active() && value != nil && value.Kind != SyntaxKind.LiteralExpression {
+        if Active() && value != nil {
             current.ContainsConversionCandidate = true
         }
         if value != nil {
@@ -1026,6 +1064,13 @@ internal sealed class RegionEffectScanner {
             case unary is UnaryExpressionSyntax {
                 if unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
                     proof = RegionWriteProof.NullAssertion
+                    var operand ExpressionSyntax = unary.Operand
+                    while operand is ParenthesizedExpressionSyntax parenthesized {
+                        operand = parenthesized.Expression
+                    }
+                    if operand is NameExpressionSyntax asserted {
+                        rightName = asserted.IdentifierToken.ValueText
+                    }
                 }
             }
             case name is NameExpressionSyntax {

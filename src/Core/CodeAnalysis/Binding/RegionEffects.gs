@@ -162,6 +162,7 @@ internal sealed class RegionEffects {
         Declared = List[string]()
         BareReads = List[string]()
         OperatorOperandNames = List[string]()
+        NilCompareOperandNames = List[string]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -251,6 +252,11 @@ internal sealed class RegionEffects {
         set;
     }
 
+    /// Gets the plain names compared with `nil` (a leading `?` marks a name that the region declares).
+    prop NilCompareOperandNames List[string] {
+        get;
+    }
+
     /// Whether a declaration with a type or an assignment takes a value that is not a literal. A user-defined
     /// conversion may run code there (rule W4); the consumer asks whether the package declares any.
     prop ContainsConversionCandidate bool {
@@ -324,6 +330,11 @@ internal sealed class RegionEffects {
         MemberReadCount = MemberReadCount + other.MemberReadCount
         ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
         OperatorHasUnresolvedOperand = OperatorHasUnresolvedOperand || other.OperatorHasUnresolvedOperand
+        for name in other.NilCompareOperandNames {
+            if !NilCompareOperandNames.Contains(name) {
+                NilCompareOperandNames.Add(name)
+            }
+        }
         for name in other.OperatorOperandNames {
             if !OperatorOperandNames.Contains(name) {
                 OperatorOperandNames.Add(name)

@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Linq
 import Xunit
 
 /// Issue #2943: Emitted-oracle coverage for loop back edge narrowing.
@@ -103,7 +104,7 @@ run()`)
             )
             Assert.Equal(66, result.Value)
         } else {
-            Assert.False(result.Diagnostics.IsEmpty, "$shape/$$scope must be rejected")
+            Assert.True(result.Diagnostics.Any((d Diagnostic) -> d.IsError), "$shape/$$scope must be rejected")
         }
     }
 
