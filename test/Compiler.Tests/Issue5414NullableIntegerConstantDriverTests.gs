@@ -232,6 +232,58 @@ public static class Choices {
         Check(source, expected, additionalReference: fixture.AssemblyPath)
     }
 
+    @Fact
+    func BaseConstructors_UseSharedNullableNumericRankingWithoutRepeatingArguments() {
+        Check(`import System
+open class B {
+    init(value int32?) { Console.WriteLine("signed") }
+    init(value uint32?) { Console.WriteLine("unsigned") }
+}
+class D : B { init() : base(0) {} }
+open class Reverse {
+    init(value uint32?) { Console.WriteLine("unsigned") }
+    init(value int32?) { Console.WriteLine("signed") }
+}
+class Reversed : Reverse { init() : base(0) {} }
+open class Generic[T] {
+    init(marker T, value int32?, extra int32 = 9) { Console.WriteLine("generic-signed") }
+    init(marker T, value uint32?, extra int32 = 9) { Console.WriteLine("generic-unsigned") }
+}
+func Mark() string {
+    Console.WriteLine("marker")
+    return "tag"
+}
+class Closed : Generic[string] { init() : base(Mark(), 0) {} }
+let direct = D()
+let reversed = Reversed()
+let closed = Closed()
+`, "signed\nsigned\nmarker\ngeneric-signed\n")
+    }
+
+    @Fact
+    func ImportedSetterOnlyIndexers_UseSharedNullableNumericRanking() {
+        using let fixture = GSharp.Core.Tests.CSharpFixture(`namespace SetterRankingContract {
+public sealed class Forward {
+    public string Selected = "";
+    public int this[long? key] { set { Selected = "signed"; } }
+    public int this[ulong? key] { set { Selected = "unsigned"; } }
+}
+public sealed class Reversed {
+    public string Selected = "";
+    public int this[ulong? key] { set { Selected = "unsigned"; } }
+    public int this[long? key] { set { Selected = "signed"; } }
+}}`)
+        Check(`import System
+import SetterRankingContract
+let first = Forward()
+first[0] = 9
+Console.WriteLine(first.Selected)
+let second = Reversed()
+second[0] = 9
+Console.WriteLine(second.Selected)
+`, "signed\nsigned\n", additionalReference: fixture.AssemblyPath)
+    }
+
     shared {
         private func Check(
             sourceText string,

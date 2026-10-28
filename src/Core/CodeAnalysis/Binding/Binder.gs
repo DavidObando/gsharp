@@ -490,6 +490,11 @@ partial class Binder {
             setCurrentFunction: (fn FunctionSymbol?) -> {
                 this.function = fn
             },
+            selectBestConstructor: (
+                candidates ImmutableArray[ConstructorSymbol],
+                constructedType StructSymbol,
+                arguments ImmutableArray[BoundExpression]
+            ) -> overloads.SelectBestConstructor(candidates, constructedType, arguments),
             bindInterpolatedStringAsFormattable: (
                 syntax InterpolatedStringExpressionSyntax,
                 targetType TypeSymbol?
