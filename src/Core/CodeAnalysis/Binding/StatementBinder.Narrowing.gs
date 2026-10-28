@@ -263,6 +263,11 @@ internal partial class StatementBinder {
         let plainTargets = PlainAssignmentTargetCollector()
         plainTargets.VisitExpression(ifStatement.Condition)
         for (path, narrowedType) in lastEarlyExitLifts {
+            // ADR-0208 R15: a condition that runs source code can run a closure that clears a closure-assigned
+            // root after the guard, so the lift stays removed.
+            if condition.MayRunEscapedClosure && MayBeMutatedByEscapedClosure(path.Root) {
+                continue
+            }
             if !path.HasMembers && condition.WritableReferenceRoots.Contains(path.Root) &&
                 !plainTargets
                 .Targets
