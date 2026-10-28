@@ -9265,24 +9265,31 @@ partial class Binder {
         }
 
         /// Speculatively binds [`expression`](paramref) against the program's
-        /// scope to infer its (cref:TypeSymbol), discarding any diagnostics.
-        /// Used by the language server to offer member completions on arbitrary
-        /// receiver expressions (e.g. `(a + b).`, `foo().`, `arr[0].`,
-        /// `a.b.`). Top-level variables are reachable through the reconstructed
-        /// parent scope; locals/parameters of an enclosing function must be supplied
-        /// via [`additionalLocals`](paramref).
+        /// scope to read its (cref:TypeSymbol), discarding any diagnostics. The
+        /// one engine of (cref:SemanticModel.GetSpeculativeTypeInfo) (ADR-0212).
+        /// Top-level variables are reachable through the reconstructed parent
+        /// scope; locals/parameters of an enclosing function must be supplied
+        /// via [`additionalLocals`](paramref). The binder starts with empty
+        /// narrowing state (ADR-0212 Q15).
         /// @param globalScope The bound global scope of the compilation.
         /// @param references The reference resolver supplying imported types.
         /// @param containingFunction The function enclosing the expression, or `null` for top-level statements.
         /// @param additionalLocals In-scope locals/parameters to declare before binding, or `null`.
-        /// @param expression The receiver expression to infer a type for.
-        /// @returns The inferred non-error, non-void type, or `null` when inference fails.
-        func TryInferExpressionType(
+        /// @param expression The expression to read a type for.
+        /// @param referencingTree The tree (file) the expression stands in; its imports apply. An expression
+        /// parsed on its own would otherwise look up names through its own, import-less tree.
+        /// @param inConstructorInitializer Whether the expression stands in the arguments of a constructor's
+        /// `: base(...)` or `: this(...)`; the binder then applies the restrictions of that context (no receiver,
+        /// so instance access is rejected and the static members stay reachable).
+        /// @returns The non-error, non-void type, or `null` when binding fails.
+        internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
             references ReferenceResolver,
             containingFunction FunctionSymbol?,
             additionalLocals IEnumerable[VariableSymbol]?,
-            expression ExpressionSyntax?
+            expression ExpressionSyntax?,
+            referencingTree SyntaxTree,
+            inConstructorInitializer bool = false
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9296,14 +9303,20 @@ partial class Binder {
                 )
                 let binder = Binder(parentScope, containingFunction)
                 let previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name)
-                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(expression.SyntaxTree)
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
                 try {
                     if additionalLocals != nil {
+                        // The locals go in a child scope, as a body's block scope is a child of the
+                        // function scope that holds the implicit members, so a local shadows a field.
+                        binder.$scope = BoundScope(binder.$scope)
                         for local in additionalLocals {
                             if local != nil {
                                 binder.$scope.TryDeclareVariable(local)
                             }
                         }
+                    }
+                    if inConstructorInitializer {
+                        binder.binderCtx.PushConstructorInitializerContext()
                     }
                     let bound = binder.expressions.BindExpression(expression)
                     let type TypeSymbol? = bound?.Type
@@ -9316,11 +9329,14 @@ partial class Binder {
                         type
                     }
                 } finally {
+                    if inConstructorInitializer {
+                        binder.binderCtx.LeaveConstructorInitializerContext()
+                    }
                     parentScope.SetCurrentDeclaringPackage(previousPackage)
                     parentScope.SetCurrentReferencingSyntaxTree(previousTree)
                 }
             } catch (Exception) {
-                // Inference must never throw into the editor pipeline.
+                // Speculation must never throw into the editor pipeline.
                 return nil
             }
         }

@@ -191,6 +191,25 @@ open class ObjectInitializerHoverCompletionTests {
     }
 
     @Fact
+    func ComputeCompletions_OnChainedReceiverRootedInAnEnclosingLocal_BindsTheLocal() {
+        // ADR-0212 S5: the speculative bind of the incomplete chain `d.Next.` needs the local `d`
+        // of the enclosing body; ignoring the in-scope locals leaves the receiver unbound.
+        const source = "class Derived {\n" +
+            "    prop Next Derived?\n" +
+            "    prop Width int32\n" +
+            "}\n" +
+            "func main() {\n" +
+            "    let d = Derived()\n" +
+            "    d.Next!!.\n" +
+            "}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let dot = LanguageServerTestHelpers.PositionOf(source, "Next!!.")
+        let caret = Position(dot.Line, dot.Character + 7)
+        let items = CompletionComputer.ComputeCompletions(content, caret)
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "Width" && i.Kind == CompletionItemKind.Property)
+    }
+
+    @Fact
     func ComputeCompletions_InValuePositionOfInitializer_FallsBackToGlobalList() {
         const source = "import System.Diagnostics\n" +
             "func main() {\n" +
