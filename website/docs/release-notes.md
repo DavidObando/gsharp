@@ -18,6 +18,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 - **Channel member references retain symbolic elements** (issue #5481). `Reader` and `Writer` getters now preserve source-defined and generic element types in their inherited CLR owner. Shared member-owner recovery also retains reordered generic base arguments.
 
+- **Generic interface bodies retain their type-parameter scope** (issue #5477). Default methods can access source generic shared fields such as `Storage[T].Events`. Method type parameters still shadow interface type parameters.
+
 - **`GSharp.Core` no longer grants `InternalsVisibleTo` to the language server** (issue #5311, ADR-0212 slice S7a). The server reaches the compiler through public queries only for everything except `Compilation.GlobalScope` and `Compilation.BoundProgram`, which remain on the binding reference gate's allowance list. The server keeps its own path-identity rule and its own check for the parser's synthesized tokens. No change to `gsc` output or to the public API.
 
 - **`SemanticModel.GetSpeculativeTypeInfo` replaces `Binder.TryInferExpressionType`** (issue #5308). `GetSpeculativeTypeInfo(position, expression)` binds an expression as if it stood at `position`, with the locals of the scope query, the file's imports, and the compilation's nullability mode, and answers its type (`TypeInfo.None` on failure, `void` or error). Flow narrowing in force at `position` is excluded from the contract (ADR-0212 Q15). `Binder.TryInferExpressionType` is removed from the public surface. A local now shadows a same-named field in the speculative bind, and the locals of top-level statements, constructors, accessors and `deinit` bodies are in scope. No change to `gsc` output.
