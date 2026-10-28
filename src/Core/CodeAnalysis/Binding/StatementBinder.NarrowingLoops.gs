@@ -157,13 +157,14 @@ internal partial class StatementBinder {
             }
         }
         for name in effects.NilCompareOperandNames {
-            if name.StartsWith("?", StringComparison.Ordinal) {
-                continue
-            }
             if $scope.TryLookupSymbol(name) is VariableSymbol compared {
                 let comparedType = compared.Type
                 // A non-nullable value type compared with `nil` may select a user-defined `==`.
-                if comparedType != nil && comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType) {
+                if comparedType != nil &&
+                    (
+                    object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
+                        (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType))
+                ) {
                     resolved.RunsUserOperator = true
                 }
             }

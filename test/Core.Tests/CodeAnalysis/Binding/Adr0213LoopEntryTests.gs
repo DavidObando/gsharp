@@ -125,7 +125,7 @@ func Run(flag bool) string {
     g = "safe"
     if g == nil { return "" }
     for item in []int32{1, 2} {
-        if flag { return g }
+        if flag == true { return g }
     }
     return g
 }
@@ -138,7 +138,7 @@ func Run(items List[int32], flag bool) string {
     g = "safe"
     if g == nil { return "" }
     for item in items {
-        if flag { return g }
+        if flag == true { return g }
     }
     return ""
 }
@@ -419,8 +419,8 @@ class H {
     func Run(flag bool) string {
         if g == nil { return "" }
         for {
-            if flag { return nameof(P) }
-            if flag { return g }
+            if flag == true { return nameof(P) }
+            if flag == true { return g }
         }
     }
 }
@@ -438,7 +438,7 @@ func Run(flag bool) string {
     var m Meters = Meters{}
     for {
         m = 5
-        if flag { return g }
+        if flag == true { return g }
     }
 }
 func Main() { Console.WriteLine(Run(true)) }`, "GS0155")

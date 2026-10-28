@@ -290,7 +290,7 @@ internal sealed class RegionEffectScanner {
                 Push()
                 Visit(ifStatement.Initializer)
                 Push()
-                Visit(ifStatement.Condition)
+                VisitCondition(ifStatement.Condition)
                 Visit(ifStatement.ThenStatement)
                 Pop()
                 Visit(ifStatement.ElseClause)
@@ -519,10 +519,16 @@ internal sealed class RegionEffectScanner {
                     if inner is NameExpressionSyntax nilOperand {
                         let text = nilOperand.IdentifierToken.ValueText
                         if IsDeclared(text) {
-                            current.NilCompareOperandNames.Add("?" + text)
+                            // A name of the region may have any type.
+                            current.ContainsOperatorCandidate = true
+                            current.OperatorHasUnresolvedOperand = true
                         } else if !current.NilCompareOperandNames.Contains(text) {
                             current.NilCompareOperandNames.Add(text)
                         }
+                    } else if inner.Kind != SyntaxKind.AccessorExpression && inner.Kind != SyntaxKind.IndexExpression {
+                        // A construction or a call may produce a value type: `default(Token) == nil`.
+                        current.ContainsOperatorCandidate = true
+                        current.OperatorHasUnresolvedOperand = true
                     }
                 }
                 VisitChildren(node)
@@ -711,6 +717,12 @@ internal sealed class RegionEffectScanner {
             )
         }
         if Active() {
+            for name in record.NilCompareOperandNames {
+                if IsDeclared(name) {
+                    current.ContainsOperatorCandidate = true
+                    current.OperatorHasUnresolvedOperand = true
+                }
+            }
             for name in record.OperatorOperandNames {
                 if IsDeclared(name) {
                     current.OperatorHasUnresolvedOperand = true
@@ -932,6 +944,9 @@ internal sealed class RegionEffectScanner {
     }
 
     private func VisitMultiAssignment(statement MultiAssignmentStatementSyntax) {
+        if Active() {
+            current.ContainsConversionCandidate = true
+        }
         for value in statement.Values {
             Visit(value)
         }

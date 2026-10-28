@@ -443,7 +443,7 @@ func Run(flag bool) int32 {
     let clear = func() { x = nil }
     if x == nil { return 0 }
     for {
-        if flag { return x.Value }
+        if flag == true { return x.Value }
     }
     clear()
     return 0

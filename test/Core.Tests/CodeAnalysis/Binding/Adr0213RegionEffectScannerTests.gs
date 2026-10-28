@@ -392,7 +392,12 @@ open class Adr0213RegionEffectScannerTests {
             }
             // W1: scope-aware names.
             Add("W1", "e16", "while c {\nvar s = \"a\"\ns = \"b\"\n}", "flags=[] writes=[]")
-            Add("W1", "q4", "while c {\nlet s string? = Get()\nif s == nil { continue }\n}", "flags=[call] writes=[]")
+            Add(
+                "W1",
+                "q4",
+                "while c {\nlet s string? = Get()\nif s == nil { continue }\n}",
+                "flags=[call,operator] writes=[]"
+            )
             Add("W1", "unrecognised", "while c {\n{ var s = 1 }\ns = nil\n}", "flags=[] writes=[s]")
             Add(
                 "W1",

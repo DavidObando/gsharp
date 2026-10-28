@@ -375,7 +375,7 @@ func Run(flag bool) string {
     text = "safe"
     for item in []int32{1, 2} {
         // A member read or a conversion would remove the fact at the loop entry (ADR-0213 W4, W5).
-        if flag {
+        if flag == true {
             return text
         }
     }
