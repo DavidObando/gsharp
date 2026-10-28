@@ -394,7 +394,12 @@ open class Adr0213RegionEffectScannerTests {
             Add("W1", "e16", "while c {\nvar s = \"a\"\ns = \"b\"\n}", "flags=[] writes=[]")
             Add("W1", "q4", "while c {\nlet s string? = Get()\nif s == nil { continue }\n}", "flags=[call] writes=[]")
             Add("W1", "unrecognised", "while c {\n{ var s = 1 }\ns = nil\n}", "flags=[] writes=[s]")
-            Add("W1", "nested-for-variable", "while c { for var j = 0; j < 3; j++ { j = 1 } }", "flags=[] writes=[]")
+            Add(
+                "W1",
+                "nested-for-variable",
+                "while c { for var j = 0; j < 3; j++ { j = 1 } }",
+                "flags=[operator] writes=[]"
+            )
             Add("W1", "if-let", "while c { if let t = s { t = \"x\" } }", "flags=[] writes=[]")
             Add(
                 "W1",
@@ -412,7 +417,7 @@ open class Adr0213RegionEffectScannerTests {
             Add("W1", "pattern-variable", "while c { if v is Dog d { d = nil } }", "flags=[] writes=[]")
             Add("W1", "out-var", "while c {\nTryGet(out var t)\nt = nil\n}", "flags=[call] writes=[]")
             Add("W1", "plain-write", "while c { s = nil }", "flags=[] writes=[s]")
-            Add("W1", "increment", "while c { n++ }", "flags=[] writes=[n]")
+            Add("W1", "increment", "while c { n++ }", "flags=[operator] writes=[n]")
             Add("W1", "compound", "while c { s += \"a\" }", "flags=[operator] writes=[s]")
             Add("W1", "coalescing", "while c { s ??= \"a\" }", "flags=[] writes=[s]")
             Add("W1", "multi-assign", "while c { a, b = b, a }", "flags=[] writes=[a,b]")
@@ -442,7 +447,12 @@ open class Adr0213RegionEffectScannerTests {
             Add("W4", "go", "while c { go Work() }", "flags=[call,suspension] writes=[]")
             Add("W4", "using", "while c { using let r = Open() }", "flags=[call] writes=[]")
             Add("W4", "operator", "while c { let t = a + b }", "flags=[operator] writes=[]")
-            Add("W4", "operator-with-literal", "while c { let t = a + 1 }", "flags=[] writes=[]")
+            Add(
+                "W4",
+                "operator-with-literal-operand-is-a-candidate",
+                "while c { let t = a + 1 }",
+                "flags=[operator] writes=[]"
+            )
             // W5: member and index reads.
             Add(
                 "W5",

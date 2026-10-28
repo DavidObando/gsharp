@@ -377,15 +377,12 @@ func Run() int32 {
     for item in []int32{1, 2} {
         // A member read would remove the fact at the loop entry (ADR-0213 W5); a conversion does not.
         let copy string = text
-        if copy == "other" {
-            total = total + 100
-        }
-        total = total + item
+        total = item
     }
     return total + text.Length
 }
 Console.WriteLine(Run())
-`, []string{"7"}}
+`, []string{"6"}}
             yield[]object{"read-only-global-survives-call", `
 import System
 

@@ -126,8 +126,7 @@ func Run() int32 {
     var total int32 = 0
     for item in []int32{1, 2} {
         let copy string = g
-        if copy == "other" { total = total + 100 }
-        total = total + item
+        total = item
     }
     return total
 }
@@ -141,8 +140,7 @@ func Run(items List[int32]) int32 {
     var total int32 = 0
     for item in items {
         let copy string = g
-        if copy == "other" { total = total + 100 }
-        total = total + item
+        total = item
     }
     return total
 }

@@ -670,6 +670,11 @@ internal sealed class RegionEffectScanner {
                 write.FollowedByExit
             )
         }
+        for name in record.OperatorOperandNames {
+            if IsDeclared(name) {
+                current.OperatorHasUnresolvedOperand = true
+            }
+        }
         current.AbsorbFlags(record, Active())
     }
 
@@ -839,7 +844,7 @@ internal sealed class RegionEffectScanner {
         if target is NameExpressionSyntax name {
             // `x += v` and `x++` read and write the variable. A user-defined operator can also run code.
             RecordWrite(name.IdentifierToken.ValueText, name.IdentifierToken.Span.Start, nil)
-            if Active() && !subscription.IsIncrementDecrement {
+            if Active() {
                 current.ContainsOperatorCandidate = true
                 RecordOperatorOperand(name)
                 RecordOperatorOperand(subscription.Value)
@@ -1093,6 +1098,9 @@ internal sealed class RegionEffectScanner {
     // An operand of an operator candidate: a name is resolved by the consumer, a literal is ruled out, anything
     // else may have a user-defined type.
     private func RecordOperatorOperand(operand ExpressionSyntax?) {
+        if operand == nil {
+            return
+        }
         var expression ExpressionSyntax? = operand
         while expression is ParenthesizedExpressionSyntax parenthesized {
             expression = parenthesized.Expression
@@ -1102,6 +1110,11 @@ internal sealed class RegionEffectScanner {
         }
         if expression is NameExpressionSyntax name {
             let text = name.IdentifierToken.ValueText
+            if IsDeclared(text) {
+                // A name of the region may be a variable of any type, and shadow one of the entry scope.
+                current.OperatorHasUnresolvedOperand = true
+                return
+            }
             if !current.OperatorOperandNames.Contains(text) {
                 current.OperatorOperandNames.Add(text)
             }
@@ -1110,18 +1123,30 @@ internal sealed class RegionEffectScanner {
         current.OperatorHasUnresolvedOperand = true
     }
 
+    private func IsNilLiteral(expression ExpressionSyntax) bool {
+        var inner ExpressionSyntax = expression
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        return inner is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.NilKeyword
+    }
+
     private func IsOperatorCandidate(binary BinaryExpressionSyntax) bool {
         switch binary.OperatorToken.Kind {
             case SyntaxKind.AmpersandAmpersandToken, SyntaxKind.PipePipeToken, SyntaxKind.QuestionQuestionToken {
                 return false
             }
             default {
-                return binary
-                    .Left
-                    .Kind != SyntaxKind.LiteralExpression &&
+                // Equality with `nil` is a null test, not a call of a user operator.
+                if binary
+                    .OperatorToken
+                    .Kind == SyntaxKind.EqualsEqualsToken ||
                     binary
-                    .Right
-                    .Kind != SyntaxKind.LiteralExpression
+                    .OperatorToken
+                    .Kind == SyntaxKind.BangEqualsToken {
+                    return !IsNilLiteral(binary.Left) && !IsNilLiteral(binary.Right)
+                }
+                return true
             }
         }
     }
@@ -1130,10 +1155,11 @@ internal sealed class RegionEffectScanner {
         switch unary.OperatorToken.Kind {
             case SyntaxKind.PlusToken,
             SyntaxKind.MinusToken,
+            SyntaxKind.BangToken,
             SyntaxKind.TildeToken,
             SyntaxKind.PlusPlusToken,
             SyntaxKind.MinusMinusToken {
-                return unary.Operand.Kind != SyntaxKind.LiteralExpression
+                return true
             }
             default {
                 return false

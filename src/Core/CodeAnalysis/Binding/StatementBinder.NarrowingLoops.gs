@@ -116,7 +116,11 @@ internal partial class StatementBinder {
                 // A declaration of the region is not found here, and its type is unknown: it counts.
                 if $scope.TryLookupSymbol(name) is VariableSymbol operand {
                     let operandType = StripAllNullability(operand.Type)
-                    if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) {
+                    // `object` can hold a value of a type with operators.
+                    if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) || object.Equals(
+                        operandType,
+                        TypeSymbol.Object
+                    ) {
                         resolved.RunsUserOperator = true
                     }
                 } else {
@@ -750,7 +754,12 @@ internal partial class StatementBinder {
             var removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, nil).Killed
             if !removed &&
                 filterNames != nil &&
-                (headerEffects.ContainsCall || headerEffects.ContainsMemberRead || resolved.ReadsProperty) &&
+                (
+                headerEffects.ContainsCall ||
+                    headerEffects.ContainsMemberRead ||
+                    resolved.ReadsProperty ||
+                    resolved.RunsUserOperator
+            ) &&
                 (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path)) {
                 removed = true
             }
