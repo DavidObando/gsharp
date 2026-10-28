@@ -86,9 +86,9 @@ open class Adr0212InheritedMemberTests {
 
     @Fact
     func ImportedBase_ArgumentNullability_IsReadAtTheBase() {
-        // `class Maybes : List[string?]`: `Find` returns the base's `T`, which is `string?` there.
-        let find = cast[ImportedFunctionSymbol](Assert.Single(Query("PMaybes", "Find")))
-        Assert.IsType[NullableTypeSymbol](find.Type)
+        // `class Maybes : List[string?]`: `GetRange` returns the base's `List<T>`, read at `T = string?`.
+        let slice = cast[ImportedFunctionSymbol](Assert.Single(Query("PMaybes", "GetRange")))
+        Assert.Contains("string?", SymbolDisplay.ToTypeDisplayString(slice.Type), StringComparison.Ordinal)
     }
 
     // ---- Row: base interfaces of an imported interface ----
@@ -324,7 +324,7 @@ func Use(
     let message = g.Message // PGrandChild
     p.ToString() // PPlain
     n.Add("a") // PNames
-    let found = maybes.Find((x string?) -> true) // PMaybes
+    let found = maybes.GetRange(0, 1) // PMaybes
     args.ToString() // PArgs
     let listed = il.Count // PIList
     let counted = c.Count // PCounted
