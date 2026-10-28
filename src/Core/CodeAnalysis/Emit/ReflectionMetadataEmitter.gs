@@ -1574,6 +1574,10 @@ internal class ReflectionMetadataEmitter {
         // Where M = total non-SM fields. <Program> owns 0 fields so its
         // fieldList equals the first SM type's fieldList.
         var nextFieldRow = 1
+        let PlanField = func (field FieldSymbol) {
+            this.cache.DeclaredFieldDefs[field] = MetadataTokens.FieldDefinitionHandle(nextFieldRow)
+            nextFieldRow++
+        }
         // ADR-0089 / issue #1030: interface static fields occupy the FIRST
         // FieldDef rows. Interface TypeDefs are emitted immediately after
         // <Module> and before every class/struct/enum TypeDef, so their field
@@ -1592,22 +1596,24 @@ internal class ReflectionMetadataEmitter {
         // its TypeDef row is emitted, preserving the monotone fieldList column.
         let PlanAggregateFields = func (s StructSymbol) {
             structFirstFieldRow[s] = nextFieldRow
-            nextFieldRow += s.Fields.Length
+            for field in s.Fields {
+                PlanField(field)
+            }
             // ADR-0051 Phase 6: backing fields for auto-properties.
             for p in s.Properties {
                 if p.IsAutoProperty && p.BackingField != nil && !s.Fields.Contains(p.BackingField!!) {
-                    nextFieldRow++
+                    PlanField(p.BackingField!!)
                 }
             }
             // ADR-0052: backing fields for field-like events.
             for ev in s.Events {
                 if ev.IsFieldLike && ev.BackingField != nil {
-                    nextFieldRow++
+                    PlanField(ev.BackingField!!)
                 }
             }
             // ADR-0053: static fields from shared block.
-            if !s.StaticFields.IsDefaultOrEmpty {
-                nextFieldRow += s.StaticFields.Length
+            for field in s.StaticFields {
+                PlanField(field)
             }
             // Issue #948 / issue #1070: const fields are emitted as CLR literal
             // field rows (see TypeDefEmitter.EmitStructTypeDef), so they must be
@@ -1616,19 +1622,19 @@ internal class ReflectionMetadataEmitter {
             // count, leaking the last field of a const-bearing type onto the next
             // TypeDef (producing invalid IL such as `stsfld` of another type's
             // initonly field in a `.cctor`).
-            if !s.ConstFields.IsDefaultOrEmpty {
-                nextFieldRow += s.ConstFields.Length
+            for field in s.ConstFields {
+                PlanField(field)
             }
             // Issue #263: backing fields for static auto-properties.
             for p in s.StaticProperties {
                 if p.IsAutoProperty && p.BackingField != nil {
-                    nextFieldRow++
+                    PlanField(p.BackingField!!)
                 }
             }
             // Issue #263: backing fields for static field-like events.
             for ev in s.StaticEvents {
                 if ev.IsFieldLike && ev.BackingField != nil {
-                    nextFieldRow++
+                    PlanField(ev.BackingField!!)
                 }
             }
         }
@@ -1704,11 +1710,15 @@ internal class ReflectionMetadataEmitter {
         // SM types get field rows after <Program>'s fieldList pointer.
         for s in smClasses {
             structFirstFieldRow[s] = nextFieldRow
-            nextFieldRow += s.Fields.Length
+            for field in s.Fields {
+                PlanField(field)
+            }
         }
         for s in smStructsOrdered {
             structFirstFieldRow[s] = nextFieldRow
-            nextFieldRow += s.Fields.Length
+            for field in s.Fields {
+                PlanField(field)
+            }
         }
         let moduleFirstFieldRow = 1
         this.utf8Data.PlanFields(nextFieldRow)

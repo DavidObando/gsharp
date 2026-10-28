@@ -875,20 +875,10 @@ internal class UserTokenResolver {
         if this.cache.StructFieldDefs.TryGetValue(field, out fieldHandle) {
             return fieldHandle
         }
-        // Interface initializers are emitted before later aggregate FieldDefs.
-        // Their source-declared fields can be referenced through the reserved
-        // TypeDef without changing field-row order or visibility.
-        if containingType.ClrType == nil && containingType.Fields.Contains(field) {
-            let signature = BlobBuilder()
-            this.signatures.EncodeTypeSymbol(BlobEncoder(signature).FieldSignature(), field.Type)
-            return this
-                .emitCtx
-                .MetadataRows
-                .AddMemberReference(
-                this.ResolveUserTypeToken(containingType),
-                this.emitCtx.Metadata.GetOrAddString(field.Name),
-                this.emitCtx.Metadata.GetOrAddBlob(signature)
-            )
+        // Interface bodies precede aggregate fields. Use their reserved rows
+        // without changing declaration order or creating body-dependent MemberRefs.
+        if this.cache.DeclaredFieldDefs.TryGetValue(field, out var declaredFieldHandle) {
+            return declaredFieldHandle
         }
         throw InvalidOperationException(
             "Field '${containingType.Name}.${field.Name}' has no declared or emitted field token."

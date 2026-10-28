@@ -121,6 +121,8 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 - **Inherited generic interface methods retain their constructed owner** (issue #5392). Default bodies and calls through non-generic derived interfaces now resolve the source method's emitted handle on its declaring interface. Nested interfaces retain generic arguments and virtual dispatch.
 
+- **Interface default bodies can mutate later shared fields** (issue #5471). Field planning now reserves aggregate field tokens before emitting bodies. Later class fields retain their declaring storage, initialization order, and constructed generic owners.
+
 - **Inherited interface reads skip write-only property candidates** (issue #5262). Bare and qualified reads retain the first readable inherited instance property. Write-only properties still hide enclosing shared storage, so unsupported reads and writes cannot select unrelated fields.
 
 - **Primitive type receivers keep their member lookup when unrelated nested types share the member name** (issue #5267). Calls such as `string.Format("{0}", 1)` no longer select an unrelated nested `Format` constructor. Namespace-prefix classification checks namespace aliases before normal type lookup, so crossed aliases do not cause recursive type resolution. Canonical lookup recognizes predefined aliases and type parameters only at the leading segment. Later package components retain their source/import checks, even when a primitive alias or type parameter has the same name. An independent CLR receiver check preserves existing member lookup when imported source types are ambiguous. Actual nested constructors, imported CLR calls, and qualified source constructions retain their existing resolution.

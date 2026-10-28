@@ -78,6 +78,7 @@ internal class MetadataTokenCache {
         LibraryImportInnerHandles = Dictionary[FunctionSymbol, MethodDefinitionHandle]()
         StructTypeDefs = Dictionary[StructSymbol, TypeDefinitionHandle]()
         StructFieldDefs = Dictionary[FieldSymbol, FieldDefinitionHandle]()
+        DeclaredFieldDefs = Dictionary[FieldSymbol, FieldDefinitionHandle]()
         ClassCtorHandles = Dictionary[StructSymbol, MethodDefinitionHandle]()
         ClassPrimaryCtorHandles = Dictionary[StructSymbol, MethodDefinitionHandle]()
         ExplicitCtorHandles = Dictionary[ConstructorSymbol, MethodDefinitionHandle]()
@@ -285,6 +286,11 @@ internal class MetadataTokenCache {
     /// (cref:FieldSymbol) to its emitted
     /// (cref:FieldDefinitionHandle).
     prop StructFieldDefs Dictionary[FieldSymbol, FieldDefinitionHandle] {
+        get;
+    }
+
+    /// Gets field rows reserved before any method body is emitted.
+    prop DeclaredFieldDefs Dictionary[FieldSymbol, FieldDefinitionHandle] {
         get;
     }
 

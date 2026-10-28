@@ -143,13 +143,13 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
     }
 
     shared {
-        private func CompileVerifyAndRun(source string, expected string) {
+        internal func CompileVerifyAndRun(source string, expected string, issue string = "5392") {
             var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
             while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
                 root = root.Parent
             }
             Assert.NotNull(root)
-            let directory = Path.Combine(root!!.FullName, "out", "5392", "tests", Guid.NewGuid().ToString("N"))
+            let directory = Path.Combine(root!!.FullName, "out", issue, "tests", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {
                 let sourcePath = Path.Combine(directory, "Program.gs")
@@ -191,12 +191,21 @@ System.Console.Write(inherited.Echo(2, ` + argument + `))
                 let error = process.StandardError.ReadToEndAsync()
                 using let output = MemoryStream()
                 let read = process.StandardOutput.BaseStream.CopyToAsync(output)
-                if !process.WaitForExit(30_000) {
-                    process.Kill(entireProcessTree: true)
+                var exited bool
+                try {
+                    exited = process.WaitForExit(30_000)
+                } finally {
+                    if !process.HasExited {
+                        process.Kill(entireProcessTree: true)
+                    }
                     process.WaitForExit()
-                    Assert.Fail("constructed interface consumer timed out")
+                    try {
+                        read.GetAwaiter().GetResult()
+                    } finally {
+                        error.GetAwaiter().GetResult()
+                    }
                 }
-                read.GetAwaiter().GetResult()
+                Assert.True(exited, "interface consumer timed out")
                 let errorText = error.GetAwaiter().GetResult()
                 Assert.True(process.ExitCode == 0, errorText)
                 Assert.Equal("", errorText)
