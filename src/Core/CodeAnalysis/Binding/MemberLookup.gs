@@ -6970,6 +6970,18 @@ internal class MemberLookup {
         ) bool {
             var hasBetterConversion = false
             for var i = 0; i < arguments.Length; i++ {
+                let numericTarget = ClrOverloadResolution.CompareNumericConversionTargets(
+                    NullableLifting.GetEffectiveClrType(candidate[i]),
+                    NullableLifting.GetEffectiveClrType(other[i]),
+                    arguments[i].Type?.ClrType
+                )
+                if numericTarget != 0 {
+                    if numericTarget > 0 {
+                        return false
+                    }
+                    hasBetterConversion = true
+                    continue
+                }
                 let candidateConversion = ClassifySymbolicIndexerConversion(arguments[i], candidate[i])
                 let otherConversion = ClassifySymbolicIndexerConversion(arguments[i], other[i])
                 if candidateConversion.IsIdentity != otherConversion.IsIdentity {

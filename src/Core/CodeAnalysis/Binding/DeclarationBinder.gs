@@ -45,6 +45,11 @@ internal partial class DeclarationBinder {
     private let refKindToString(RefKind) -> string
     private let getCurrentFunction() -> FunctionSymbol?
     private let setCurrentFunction(FunctionSymbol?) -> void
+    private let selectBestConstructor(
+        ImmutableArray[ConstructorSymbol],
+        StructSymbol,
+        ImmutableArray[BoundExpression]
+    ) -> ConstructorSymbol?
     private let pendingInterfaceImplementationChecks List[(Syntax StructDeclarationSyntax, Symbol StructSymbol)] = List[
         (StructDeclarationSyntax, StructSymbol)
     ]()
@@ -149,6 +154,11 @@ internal partial class DeclarationBinder {
         refKindToString(RefKind) -> string,
         getCurrentFunction() -> FunctionSymbol?,
         setCurrentFunction(FunctionSymbol?) -> void,
+        selectBestConstructor(
+            ImmutableArray[ConstructorSymbol],
+            StructSymbol,
+            ImmutableArray[BoundExpression]
+        ) -> ConstructorSymbol?,
         bindInterpolatedStringAsFormattable DeclarationBinder_BindInterpolatedStringAsFormattableDelegate? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
@@ -182,6 +192,7 @@ internal partial class DeclarationBinder {
         this.refKindToString = refKindToString ?? throw ArgumentNullException("refKindToString")
         this.getCurrentFunction = getCurrentFunction ?? throw ArgumentNullException("getCurrentFunction")
         this.setCurrentFunction = setCurrentFunction ?? throw ArgumentNullException("setCurrentFunction")
+        this.selectBestConstructor = selectBestConstructor ?? throw ArgumentNullException("selectBestConstructor")
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

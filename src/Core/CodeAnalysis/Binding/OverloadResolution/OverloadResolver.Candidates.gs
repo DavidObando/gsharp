@@ -871,12 +871,6 @@ internal partial class OverloadResolver {
             }
             return ClrOverloadResolution.ImplicitConversionKind.Reference
         }
-        // ponytail: widening-then-wrap (e.g. int32 -> int64?) is not caught by
-        // the identity-underlying check above (argType != nullableParam.UnderlyingType)
-        // and falls through to the Reference bucket below instead of a rank
-        // between NumericWidening and Reference. No ImplicitConversionKind slot
-        // exists for it today; add one (and a matching CompareNumericTargets
-        // path against nullableParam.UnderlyingType) if a real ambiguity shows up.
         let argClr = argType.ClrType
         let paramClr = paramType.ClrType
         if argClr?.FullName is string argFullName &&
@@ -1625,6 +1619,14 @@ internal partial class OverloadResolver {
             // variadic tail slot legitimately beats a widening conversion on a
             // normal-form slot). Phase 2c (prefer non-variadic) applies the
             // actual tie-break once all per-arg comparisons agree.
+            let numericTarget = ClrOverloadResolution.CompareNumericConversionTargets(
+                NullableLifting.GetEffectiveClrType(paramA),
+                NullableLifting.GetEffectiveClrType(paramB),
+                source?.ClrType
+            )
+            if numericTarget != 0 {
+                return numericTarget
+            }
             if ka != kb {
                 return (int32(ka)).CompareTo(int32(kb))
             }
