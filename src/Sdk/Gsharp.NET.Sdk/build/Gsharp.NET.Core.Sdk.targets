@@ -653,6 +653,8 @@
                   @(Compile);
                   @(GsharpCodeAnalyzer);
                   @(ReferencePathWithRefAssemblies);
+                  @(ReferenceDependencyPaths);
+                  @(RuntimeCopyLocalItems);
                   @(_CoreCompileResourceInputs);
                   @(CompiledLicenseFile);
                   @(_GsharpGeneratedManifest);
@@ -677,16 +679,9 @@
       <_GsharpCoreCompileResource Include="@(CompiledLicenseFile)" />
     </ItemGroup>
 
-    <!-- Reference set forwarded to gsc via /r:. We pass
-         @(ReferencePathWithRefAssemblies) — the same complete, transitively
-         closed item csc consumes — rather than @(ReferencePath). MSBuild's
-         ResolveAssemblyReference populates this with the full transitive
-         closure of reference assemblies (direct references plus their
-         dependencies, substituting ref-assemblies where available). Passing
-         the closure guarantees gsc's MetadataLoadContext can resolve every
-         transitive dependency a referenced member touches; an incomplete set
-         otherwise surfaces as a FileNotFoundException/TypeLoadException deep in
-         member enumeration (issue #340). -->
+    <!-- MetadataLoadContext needs dependencies that csc does not require as direct references (issues #340 and #5493).
+         RAR reports loose dependencies separately, and NuGet can supply dependencies only as runtime assets.
+         Put compile references first so the compiler preserves their metadata-identity precedence. -->
     <BuildTask
         UseSharedCompilation="$(GSharpUseSharedCompilation)"
         WorkerGrant="$(GSharpWorkerGrant)"
@@ -714,7 +709,7 @@
         WarningsAsErrors="$(WarningsAsErrors)"
         WarningsNotAsErrors="$(WarningsNotAsErrors)"
         Compile="@(Compile)"
-        References="@(ReferencePathWithRefAssemblies)"
+        References="@(ReferencePathWithRefAssemblies);@(ReferenceDependencyPaths);@(RuntimeCopyLocalItems)"
         GsAnalyzers="@(GsharpCodeAnalyzer)"
         Resources="@(_GsharpCoreCompileResource)"
         SkipCompilerExecution="$(SkipCompilerExecution)"
