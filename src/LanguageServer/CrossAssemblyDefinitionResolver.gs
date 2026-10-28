@@ -604,7 +604,7 @@ internal shared class CrossAssemblyDefinitionResolver {
         }
         let fileName = originalTree.Text?.FileName
         for tree in compilation.SyntaxTrees {
-            if object.ReferenceEquals(tree, originalTree) || SourcePathIdentity.AreSame(tree.Text?.FileName, fileName) {
+            if object.ReferenceEquals(tree, originalTree) || ServerPathIdentity.AreSame(tree.Text?.FileName, fileName) {
                 let currents = List[DelegateDeclarationSyntax]()
                 CollectDelegateDeclarations(tree.Root, currents)
                 return if index < currents.Count {

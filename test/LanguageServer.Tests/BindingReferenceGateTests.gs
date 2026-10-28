@@ -4,6 +4,7 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.LanguageServer
 import System
 import System.Collections.Generic
@@ -11,6 +12,7 @@ import System.IO
 import System.Linq
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
+import System.Runtime.CompilerServices
 import Xunit
 
 /// ADR-0212 section 11, gate 2: the language server asks semantic questions of
@@ -44,6 +46,21 @@ open class BindingReferenceGateTests {
                 ", ",
                 stale
             )
+        )
+    }
+
+    @Fact
+    func Core_GrantsNoInternalsAccess_ToTheServer() {
+        let grants = typeof(Compilation)
+            .Assembly
+            .GetCustomAttributes(typeof(InternalsVisibleToAttribute), false)
+            .Cast[InternalsVisibleToAttribute]()
+            .Select((a InternalsVisibleToAttribute) -> a.AssemblyName)
+            .Where((n string) -> n.StartsWith("GSharp.LanguageServer", StringComparison.Ordinal))
+            .ToArray()
+        Assert.True(
+            grants.Length == 0,
+            "GSharp.Core.dll must not grant InternalsVisibleTo to the language server: " + string.Join(", ", grants)
         )
     }
 
