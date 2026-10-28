@@ -95,6 +95,11 @@ partial class CSharpToGSharpTranslator {
     // source-generator host enables it; see GeneratedImplementingPartDefinition.
     private let emitGeneratedImplementingParts bool
 
+    // Issues #5252/#5253 (gsgen): the types the stub rendered abstract only
+    // semantically, keyed by (cref:SemanticAbstractTypeKey), each with
+    // whether the user declared it `open`. Null or empty for none.
+    private let semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]?
+
     // The translated project's directory, when known, so the translator applies
     // the loader's full generated-source rule (the obj/bin path half of
     // GeneratedSourceDetection) to a partial method's other part.
@@ -188,6 +193,13 @@ partial class CSharpToGSharpTranslator {
     /// @param projectDirectory The translated project's directory, or `null` when
     /// unknown (in-memory sources). Used only to recognize a partial method
     /// part in a build-generated file ((cref:Loading.GeneratedSourceDetection)).
+    /// @param semanticOnlyAbstractTypes Issues #5252/#5253: the types the gsgen stub rendered
+    /// `abstract` only because they inherit unimplemented abstract members, keyed by
+    /// (cref:SemanticAbstractTypeKey) and mapped to whether the user declared
+    /// them `open`. A generated part of such a type states neither `abstract` nor
+    /// `open` (the user's part states the shape, gsc unions the parts) and its
+    /// members are `open` only when the user declared the type `open`. `null`
+    /// (default) for none.
     init(
         preservePartialParts bool = true,
         markMergedTypePartial bool = false,
@@ -201,12 +213,14 @@ partial class CSharpToGSharpTranslator {
         emitPartialMethodPairs bool = false,
         translatedFilePaths IReadOnlyCollection[string]? = nil,
         emitGeneratedImplementingParts bool = false,
-        includeGlobalNamespace bool = false
+        includeGlobalNamespace bool = false,
+        semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? = nil
     ) {
         // Arms the telemetry's exit dump (when requested) for every run that
         // translates, including one in which no forgiveness rule ever fires.
         NullForgivenessTelemetry.EnsureInitialized()
         this.emitGeneratedImplementingParts = emitGeneratedImplementingParts
+        this.semanticOnlyAbstractTypes = semanticOnlyAbstractTypes
         this.includeGlobalNamespace = includeGlobalNamespace
         this.translatedFilePaths = if translatedFilePaths == nil {
             default(HashSet[string]?)
@@ -402,7 +416,8 @@ partial class CSharpToGSharpTranslator {
             this.emitPartialMethodPairs,
             suppressedPartialPairKeys,
             this.translatedFilePaths,
-            this.emitGeneratedImplementingParts
+            this.emitGeneratedImplementingParts,
+            this.semanticOnlyAbstractTypes
         )
         let fileAttributes = if this.includeFileAttributes {
             visitor.MapFileAttributes(
@@ -825,6 +840,9 @@ partial class CSharpToGSharpTranslator {
         // See `CSharpToGSharpTranslator.emitGeneratedImplementingParts`.
         private let emitGeneratedImplementingParts bool
 
+        // See `CSharpToGSharpTranslator.semanticOnlyAbstractTypes`.
+        private let semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]?
+
         // Pair keys the reconciliation loop demoted: those partial methods
         // translate as if emitPartialMethodPairs were off.
         private let suppressedPartialPairKeys IReadOnlyCollection[string]?
@@ -887,9 +905,11 @@ partial class CSharpToGSharpTranslator {
             emitPartialMethodPairs bool = false,
             suppressedPartialPairKeys IReadOnlyCollection[string]? = nil,
             translatedFilePaths HashSet[string]? = nil,
-            emitGeneratedImplementingParts bool = false
+            emitGeneratedImplementingParts bool = false,
+            semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? = nil
         ) {
             this.emitGeneratedImplementingParts = emitGeneratedImplementingParts
+            this.semanticOnlyAbstractTypes = semanticOnlyAbstractTypes
             this.suppressedPartialPairKeys = suppressedPartialPairKeys
             this.translatedFilePaths = translatedFilePaths
             this.retainedFilePaths = retainedFilePaths

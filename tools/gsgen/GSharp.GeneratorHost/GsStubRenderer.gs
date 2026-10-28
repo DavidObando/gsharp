@@ -15,6 +15,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Syntax
+import Cs2Gs.Translator
 import Microsoft.CodeAnalysis.CSharp
 
 /// ADR-0145 §B: renders a bound G# global scope into a single declaration-only
@@ -32,6 +33,13 @@ class GsStubRenderer {
     private let notes List[string] = List[string]()
     private let partialDefinitions List[StubPartialDefinition] = List[StubPartialDefinition]()
     private let dataTypes List[StubDataType] = List[StubDataType]()
+
+    // Issues #5252/#5253: the types the last render made `abstract` only
+    // semantically, keyed by SemanticAbstractTypeKey, with whether the user
+    // declared each `open`. Sorted, so the dictionary order is stable.
+    private let semanticOnlyAbstractTypes SortedDictionary[string, bool] = SortedDictionary[string, bool](
+        StringComparer.Ordinal
+    )
 
     // The data types the last render projects as C# records: see PlanRecords.
     private var recordTypes HashSet[StructSymbol] = HashSet[StructSymbol]()
@@ -86,6 +94,15 @@ class GsStubRenderer {
     /// (ADR-0192 amendment, partial data types).
     prop DataTypes IReadOnlyList[StubDataType] -> dataTypes
 
+    /// Gets the top-level G# classes the last render made `abstract` in the stub only
+    /// because they inherit unimplemented abstract members (the user never wrote
+    /// `abstract`), keyed by (cref:SemanticAbstractTypeKey) and mapped to whether
+    /// the user declared the class `open`. Generators see these types as abstract
+    /// (ADR-0195), but the user's declared shape does not include it, so a
+    /// generated part must not state `abstract` (issue #5252) and its members'
+    /// `open` follows the declared openness (issue #5253).
+    prop SemanticOnlyAbstractTypes IReadOnlyDictionary[string, bool] -> semanticOnlyAbstractTypes
+
     /// Renders the C# stub for every user-declared type in [`scope`](paramref).
     /// @param scope The bound global scope to project.
     /// @returns A single C# compilation-unit string, prefixed with `#nullable enable`.
@@ -100,6 +117,7 @@ class GsStubRenderer {
             .ToHashSet()
         this.partialDefinitions.Clear()
         this.dataTypes.Clear()
+        this.semanticOnlyAbstractTypes.Clear()
         this.recordTypes = PlanRecords($scope.Structs)
         let builder = StringBuilder()
         builder.AppendLine("#nullable enable")
@@ -198,6 +216,21 @@ class GsStubRenderer {
         // members. Shared classes already use C#'s static modifier above.
         if structSymbol.IsAbstract && !structSymbol.IsSharedClass {
             sb.Append("abstract ")
+            // Issues #5252/#5253: abstract only by inheritance, not by the user's
+            // declaration; recorded so the back-translation can keep it out of the
+            // generated parts. The stub is rendered top-level only (nested types are
+            // not projected), so the key is the package and the type's own name.
+            if !structSymbol.IsDeclaredAbstract {
+                let metadataName = if structSymbol.TypeParameters.Length > 0 {
+                    structSymbol.Name + "`" + structSymbol.TypeParameters.Length.ToString(CultureInfo.InvariantCulture)
+                } else {
+                    structSymbol.Name
+                }
+                semanticOnlyAbstractTypes[
+                    SemanticAbstractTypeKey.Format(structSymbol.PackageName, []string{metadataName})
+                ] =
+                structSymbol.IsOpen
+            }
         }
         if structSymbol.Declaration?.IsPartial ?? false {
             sb.Append("partial ")

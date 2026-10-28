@@ -52,6 +52,11 @@ shared class GeneratedDocTranslator {
     /// are spelled as `data` parts ((cref:SpellDataTypeParts));
     /// `null` or empty for none.
     /// @param inputStubTree The immutable generator input tree, or none for standalone translation.
+    /// @param semanticOnlyAbstractTypes The types the stub rendered `abstract` only because they inherit
+    /// unimplemented abstract members, keyed by `SemanticAbstractTypeKey` and mapped to
+    /// whether the user declared them `open` (issues #5252/#5253). The generated parts of
+    /// these types state neither `abstract` nor `open`, whatever the generator
+    /// mirrored from the stub; `null` or empty for none.
     /// @returns The back-translated G# parts: one per namespace of each generated document with members or
     /// file-level attributes.
     func Translate(
@@ -60,7 +65,8 @@ shared class GeneratedDocTranslator {
         references IReadOnlyList[MetadataReference],
         declaringParts IReadOnlyList[StubPartialDefinition]? = nil,
         dataTypes IReadOnlyList[StubDataType]? = nil,
-        inputStubTree SyntaxTree? = nil
+        inputStubTree SyntaxTree? = nil,
+        semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? = nil
     ) IReadOnlyList[TranslatedGsDocument] {
         using let phase = CompilationMeasurements.BeginPhase("generator.translation")
         ArgumentNullException.ThrowIfNull(stubCSharp, paramName: "stubCSharp")
@@ -156,7 +162,8 @@ shared class GeneratedDocTranslator {
                     includeGlobalNamespace: unitIndex == 0,
                     widenObliviousReferenceFields: true,
                     translatedFilePaths: translatedFilePaths,
-                    emitGeneratedImplementingParts: true
+                    emitGeneratedImplementingParts: true,
+                    semanticOnlyAbstractTypes: semanticOnlyAbstractTypes
                 ).TranslateDocument(loaded)
                 let hostDiagnostics = List[GeneratorHostDiagnostic]()
                 unit = SpellDataTypeParts(unit, dataTypes ?? Array.Empty[StubDataType](), hostDiagnostics)
@@ -193,7 +200,9 @@ shared class GeneratedDocTranslator {
     /// which contradicts a user part that says `sealed` (GS0478).
     /// Openness and sealedness are the user's to state (gsc unions them across
     /// parts, ADR-0144 §C), so a generated part states neither.
-    /// An explicitly generator-authored abstract modifier is preserved.
+    /// An explicitly generator-authored abstract modifier is preserved, except on a
+    /// type the stub made abstract only semantically (issue #5252), whose parts the
+    /// translator already printed without it.
     ///
     /// A positional parameter list a generator supplies is kept when no user
     /// part states one. Only one part may (GS0482), so when both do, the
