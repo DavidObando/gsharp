@@ -821,11 +821,7 @@ internal partial class DeclarationBinder {
         boundArguments ImmutableArray[BoundExpression].Builder,
         location TextLocation
     ) BaseConstructorInitializer? {
-        var best ConstructorSymbol? = nil
-        var bestParamTypes = default(ImmutableArray[TypeSymbol])
-        var bestExactMatches = -1
-        var bestOmittedCount = int32.MaxValue
-        var ambiguous = false
+        let candidates = ImmutableArray.CreateBuilder[ConstructorSymbol]()
         var anyArgIsError = false
         for arg in boundArguments {
             if arg.Type == TypeSymbol.Error {
@@ -847,7 +843,6 @@ internal partial class DeclarationBinder {
                 continue
             }
             var applicable = true
-            var exactMatches = 0
             for var i = 0; i < boundArguments.Count; i++ {
                 let argType = boundArguments[i].Type
                 let paramType = paramTypes[i]
@@ -861,7 +856,6 @@ internal partial class DeclarationBinder {
                         applicable = false
                         break
                     }
-                    exactMatches++
                     continue
                 }
                 if (
@@ -873,7 +867,6 @@ internal partial class DeclarationBinder {
                     break
                 }
                 if argType == paramType {
-                    exactMatches++
                     continue
                 }
                 // Error-typed arguments don't disqualify a candidate: a prior
@@ -904,19 +897,10 @@ internal partial class DeclarationBinder {
             if !applicable {
                 continue
             }
-            let omittedCount = paramTypes.Length - boundArguments.Count
-            if exactMatches > bestExactMatches ||
-                (exactMatches == bestExactMatches && omittedCount < bestOmittedCount) {
-                best = candidate
-                bestParamTypes = paramTypes
-                bestExactMatches = exactMatches
-                bestOmittedCount = omittedCount
-                ambiguous = false
-            } else if exactMatches == bestExactMatches && omittedCount == bestOmittedCount {
-                ambiguous = true
-            }
+            candidates.Add(candidate)
         }
-        if best == nil || ambiguous {
+        let best = selectBestConstructor(candidates.ToImmutable(), baseClassSymbol, boundArguments.ToImmutable())
+        if best == nil {
             // Suppress the GS0214 cascade when an argument already failed to
             // bind (an error type was produced upstream).
             if !anyArgIsError {
@@ -924,6 +908,7 @@ internal partial class DeclarationBinder {
             }
             return nil
         }
+        let bestParamTypes = baseClassSymbol.GetConstructorParameterTypesForConstruction(best)
         let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](best.Parameters.Length)
         for var i = 0; i < best.Parameters.Length; i++ {
             if i >= boundArguments.Count {

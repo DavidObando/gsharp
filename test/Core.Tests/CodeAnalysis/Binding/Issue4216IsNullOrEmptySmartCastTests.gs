@@ -232,11 +232,10 @@ Count([]int32{1})`)
     }
 
     @Fact
-    func MemberPathNarrowing_IsNotLiftedPastAnEarlyReturn() {
-        // ADR-0069: the issue #2159 join pass lifts plain variables only, so a
-        // member path narrowed by an early-exit guard is NOT non-null at the
-        // join. Failing to narrow is sound; this pins the boundary so a future
-        // change to the join pass is a deliberate decision, not a surprise.
+    func MemberPathNarrowing_IsLiftedPastAnEarlyReturn() {
+        // ADR-0208 row R5 (the decision this test asked for): the join lifts a
+        // member path whatever its source, so the predicate form lifts past an
+        // early return like the nil-guard form does.
         let result = Evaluate(SequenceExtension + `
 class Box { let Values IEnumerable[int32]? }
 
@@ -253,10 +252,7 @@ func Count(box Box) int32 {
 }
 
 Count(Box{Values: []int32{1, 2}})`)
-        Assert.Contains(
-            result.Diagnostics,
-            (diagnostic Diagnostic) -> diagnostic.Message.Contains("IEnumerable[int32]?", StringComparison.Ordinal)
-        )
+        Assert.Empty(result.Diagnostics)
     }
 
     shared {

@@ -1145,6 +1145,82 @@ The order is L0, L1, L2, L3. L1 and L2 may be developed in parallel
 branches after L0 (they share the walker only), but L2's ordering
 constraint with #5130 is the binding one.
 
+### 20a. Findings of slice L0
+
+Slice L0 (PR [#5342](https://github.com/DavidObando/gsharp/pull/5342)) measured
+the walker against today's back-edge analysis with `GSHARP_NARROWING_COMPARE`
+(`.loops` report) on every project of the repository and on the pinned Oahu
+inputs. No disagreement falls outside the rows of section 16, and the walker
+never keeps a fact that today's analysis removes except the construction forms
+of row R7 (d) (none in any measured code).
+
+**Divergences from the text above.**
+
+- *A3.* The slice implements the merged amendment (#5298), a simple rule, not
+  the operand-type reachability test that section 7 describes. A call to a
+  named function or a method keeps the fact of a by-reference parameter; user
+  code that the table lists (an indirect or construction call, a loop header
+  that iterates, `await`, and every member read under W5) keeps the full
+  alias-class kill. The `Calls` entries therefore carry the callee shape and
+  the `ref`/`out` and by-value names of each call (to find a variable that one
+  call passes twice), and no operand types. A member call is treated as a plain
+  call, because the walker cannot tell a method from a function-typed field.
+- *Operators.* A user-defined operator or conversion is not a call here: the
+  walker only sets `ContainsOperatorCandidate`, as the effective straight-line
+  predicate does not treat them as calls either. The decision is open for L1.
+- *W8.* The consumer uses the `when` filters of the enclosing `try` statements
+  (the helper that ADR-0208 R10 already has), not a function-wide set.
+- *Cache.* A loop's record is cached per loop, shared between the nested and
+  the top-level form when no part of the loop runs once.
+
+**Measurements** (facts of the loops that inherit a fact; "killed" and "kept"
+are by both analyses):
+
+| Input | Loops with live facts | Facts | Both kill | Both keep | old keeps, walker kills | old kills, walker keeps | Spans |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Core | 1466 | 2037 | 48 | 1973 | 16 (R7 a 1, b 2, c 12, e 1) | 0 | 0 |
+| Core.Tests | 28 | 30 | 0 | 30 | 0 | 0 | 0 |
+| gsc (Compiler) | 3 | 3 | 0 | 3 | 0 | 0 | 0 |
+| Oahu, 12 cells that compile | 55 | 68 | 7 | 61 | 0 | 0 | 0 |
+| Cs2Gs.Translator | 336 | 432 | 5 | 422 | 5 (R7 b 1, c 3, e 1) | 0 | 0 |
+| All other repository projects | 447 | 515 | 5 | 510 | 0 | 0 | 0 |
+
+The Oahu cells `Oahu` (App) and `Oahu.UI` need generated sources that the
+pinned inputs lack, and `Oahu.Cli.Tests` has stale inputs, so they were not
+measured. The 7 loops that both analyses kill on Oahu are the 7 second binds
+of section 2.
+
+**Sites.** R7 (a): `ConversionClassifier.gs:2049`. R7 (b): `Binder.gs:5300`
+(`current = next`), `ExpressionBinder.Assignments.gs:5440` (`access = inner`,
+a pattern variable) and `CSharpToGSharpTranslator.Deconstruction.gs:111`.
+R7 (c), re-measured under the merged A3: twelve facts in seven loops of
+`MemberLookup.gs` (1096, 1111, 3100, 3115, 3144, 3165) and
+`ClrTypeUtilities.gs:1346`, all closure-assigned locals that a call can reach
+(no by-reference parameter is killed by a plain call; `BinderContext.gs:906-923`
+of the unamended measurement is kept), and three in
+`CSharpToGSharpTranslator.Invocations.gs` (4543, 4554, 4562). R7 (e): one
+member path in `CustomAttributeEncoder.gs:1477` and one in
+`CSharpToGSharpTranslator.Expressions.gs:6481`. These are facts killed at loop
+entry, not errors; the errors are L1's measurement.
+
+**Question 4.** Pattern-bound names on the right of a loop write: one site in
+Core (`access = inner`), none in Oahu. Under the provisional rule, L1 does not
+add the clause for Oahu's sake.
+
+**Question 7.** Under the strict W5 rule the walker kills one fact at loop entry
+that today's analysis keeps because of a member read (`CustomAttributeEncoder.gs:1477`,
+a member path) in Core, one in Cs2Gs.Translator and none in Oahu. Core has 7017
+member reads in loops, 2420 of them in regions entered with a live fact on an
+indirect-write root. These numbers do not call for an exemption.
+
+**R7 (f) and `!!`.** The header of a `while`, `for` or `do` loop proves a new
+fact on exit at 3 loops in Core, 2 in Oahu and 2 elsewhere. No `!!` on that
+root follows any of them in its function, so the pin-move PR has no `!!` to
+remove for R7 (f) on the measured code.
+
+**Spans.** Core, Core.Tests, gsc and the Oahu cells that compile have no
+backward `goto`, so no span.
+
 ### 21. Mutation-evidence plan (ADR-0154)
 
 Each rule has a named, hand-applied mutant that is run red and then

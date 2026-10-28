@@ -709,11 +709,20 @@ internal class ConversionClassifier {
         // through the explicit-only path below and remain an error unless an
         // explicit cast is requested. Identity/already-implicit (widening)
         // conversions are left untouched so existing behaviour is preserved.
-        if !conversion.IsImplicit && ExpressionBinder.IsIntegerType(type) &&
-            ExpressionBinder.TryGetConstantIntegerValue(expression, out var constantIntegerValue) &&
-            ExpressionBinder
-            .TryAdaptIntegerLiteral(constantIntegerValue, type, out var adaptedConstant) {
-            return BoundLiteralExpression(expression.Syntax, adaptedConstant, type!!)
+        if !conversion.IsImplicit && ExpressionBinder.TryAdaptConstantInteger(
+            expression,
+            type,
+            out var adaptedConstant,
+            out var integerType
+        ) {
+            // Adapt the constant before the ordinary value-nullable lift (#5414).
+            return BindConversion(
+                diagnosticLocation,
+                BoundLiteralExpression(expression.Syntax, adaptedConstant, integerType),
+                type,
+                allowExplicit,
+                callParameter
+            )
         }
         // Issue #4350: a tuple literal can be contextually convertible even
         // when its natural tuple TYPE is not. Preserve the literal elements so

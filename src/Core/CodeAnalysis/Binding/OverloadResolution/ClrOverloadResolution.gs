@@ -1049,6 +1049,51 @@ internal shared class ClrOverloadResolution {
         return 0
     }
 
+    /// Compares numeric targets before conversion mechanism costs.
+    /// @param paramA The first applicable target.
+    /// @param paramB The second applicable target.
+    /// @param source The numeric source type.
+    /// @returns A negative value prefers the first target; zero leaves other ranking rules unchanged.
+    func CompareNumericConversionTargets(paramA Type?, paramB Type?, source Type?) int32 {
+        if !NumericWideningLattice.IsNumericPrimitive(source?.FullName) {
+            return 0
+        }
+        let targetA = if paramA is {IsByRef: true} byRefA {
+            byRefA.GetElementType()
+        } else {
+            paramA
+        }
+        let targetB = if paramB is {IsByRef: true} byRefB {
+            byRefB.GetElementType()
+        } else {
+            paramB
+        }
+        // Preserve actual identity conversions, not matches against a nullable target's underlying type.
+        if ClrTypeUtilities.AreSame(targetA, source) || ClrTypeUtilities.AreSame(targetB, source) {
+            return 0
+        }
+        if NumericWideningLattice.IsNumericPrimitive(targetA?.FullName) && NumericWideningLattice.IsNumericPrimitive(
+            targetB?.FullName
+        ) {
+            return CompareNumericTargets(targetA, targetB, source)
+        }
+        let underlyingA = NullableLifting.GetValueTypeNullableUnderlyingClr(targetA)
+        let underlyingB = NullableLifting.GetValueTypeNullableUnderlyingClr(targetB)
+        let numericA = NumericWideningLattice.IsNumericPrimitive(underlyingA?.FullName)
+        let numericB = NumericWideningLattice.IsNumericPrimitive(underlyingB?.FullName)
+        if numericA && numericB {
+            return CompareNumericTargets(underlyingA, underlyingB, source)
+        }
+        // A nullable value boxes as its underlying value or null, including conversions to implemented interfaces.
+        if numericA && targetB?.IsValueType == false {
+            return CompareReferenceTargets(underlyingA, targetB)
+        }
+        if numericB && targetA?.IsValueType == false {
+            return CompareReferenceTargets(targetA, underlyingB)
+        }
+        return 0
+    }
+
     /// Compares two candidate conversion targets for the same source type per
     /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
     /// [`t1`](paramref) is the better target, a positive value when
@@ -7158,6 +7203,10 @@ internal shared class ClrOverloadResolution {
             IsSystemObject(paramA) &&
             !IsSystemObject(paramB) {
             return 1
+        }
+        let numericTarget = CompareNumericConversionTargets(paramA, paramB, source)
+        if numericTarget != 0 {
+            return numericTarget
         }
         if ka != kb {
             return (int32(ka)).CompareTo(int32(kb))

@@ -19,9 +19,12 @@ import Xunit
 /// binder computes the section 9 join beside the current passes and reports
 /// each disagreement with its row of section 16. Each test compiles a probe
 /// of the ADR table as a library and checks the report.
+/// @remarks PR 2, slice 2a consumes the joins of rows R1, R3 and R5, so the
+/// frames hold those facts and the report is empty for them. Rows R2, R4 and
+/// R6 are still reported.
 open class Adr0208NarrowingShadowJoinTests {
     @Fact
-    func ElseExit_IsRow1() {
+    func ElseExit_IsConsumedByTheFrames_Row1() {
         let report = Join(`package T
 func Get() string? { return nil }
 func Run() int32 {
@@ -29,7 +32,7 @@ func Run() int32 {
     if s != nil { Console.WriteLine("y") } else { return 0 }
     return s.Length
 }`)
-        Assert.Equal([]string{"5|s|nil|string|R1"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -49,7 +52,7 @@ func Run(c bool) int32 {
     }
 
     @Fact
-    func NestedBareBlock_IsRow3() {
+    func NestedBareBlock_IsConsumedByTheFrames_Row3() {
         let report = Join(`package T
 func Get() string? { return nil }
 func Run() int32 {
@@ -59,7 +62,7 @@ func Run() int32 {
     }
     return s.Length
 }`)
-        Assert.Equal([]string{"5|s|nil|string|R3"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -78,7 +81,7 @@ func Run(k int32) int32 {
     }
 
     @Fact
-    func MemberPathFact_IsRow5() {
+    func MemberPathFact_IsConsumedByTheFrames_Row5() {
         let report = Join(`package T
 open class Animal { var Name string = "" }
 class Dog : Animal { func Bark() string { return "woof" } }
@@ -90,7 +93,7 @@ func Run2(b Box) string {
     if b.Pet is Dog { } else { return "" }
     return b.Pet.Bark()
 }`)
-        Assert.Equal([]string{"9|b.Pet|nil|Dog|R5"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -109,7 +112,7 @@ func Run(c bool) int32 {
     }
 
     @Fact
-    func SiblingRefinementsJoinToTheDeclaredNonNullType_Row1() {
+    func SiblingRefinementsJoinToTheDeclaredNonNullType_IsConsumedByTheFrames_Row1() {
         // Probe f1: Dog on one side and Cat on the other join to Animal.
         let report = Join(`package T
 open class Animal {
@@ -125,13 +128,14 @@ func Run(x Animal?, c bool) string {
     }
     return x.Name
 }`)
-        Assert.Equal([]string{"8|x|nil|Animal|R1"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
     func AReadThatChangesMemberSelection_IsReportedAtTheRead() {
-        // Probe f6: after the join the read selects `Dog.Name`, not `Animal.Name`.
-        // The report names the read, not the join.
+        // Like probe f6, but the exiting branch assigns `x`, so the legacy passes
+        // still kill the fact (row R2) and the shadow join keeps it: the read
+        // selects `Dog.Name`, not `Animal.Name`. The report names the read.
         let lines = Capture(`package T
 open class Animal {
     prop Name string -> "animal"
@@ -139,31 +143,39 @@ open class Animal {
 class Dog : Animal {
     prop Name string -> "dog"
 }
-func Run(x Animal) string {
-    if x is Dog { } else { return "" }
+func Run(a Animal) string {
+    var x = a
+    if x !is Dog {
+        x = Animal()
+        return ""
+    }
     return x.Name
 }`)
-        Assert.Equal([]string{"10|x|Animal|Dog|type-test"}, Rows(lines, "R"))
+        Assert.Equal([]string{"14|x|Animal|Dog|type-test"}, Rows(lines, "R"))
     }
 
     @Fact
     func AReadThatOnlyGainsANilCheck_IsReportedAsNullability() {
+        // The exiting branch assigns `s`, so the legacy passes kill the fact (row R2).
         let lines = Capture(`package T
 func Get() string? { return nil }
-func Run() int32 {
-    let s string? = Get()
-    if s != nil { Console.WriteLine("y") } else { return 0 }
+func Run(c bool) int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    if c {
+        s = nil
+        return -1
+    }
     return s.Length
 }`)
-        Assert.Equal([]string{"6|s|string?|string|nullability"}, Rows(lines, "R"))
+        Assert.Equal([]string{"10|s|string?|string|nullability"}, Rows(lines, "R"))
     }
 
     @Fact
-    func AReadIsReportedWhenTheFrameFactIsOlderThanTheShadowFact() {
-        // The nil guard leaves `x -> Animal` in the frames. The type test then
-        // proves `Dog` in the shadow flow only. The read is reported although a
-        // frame fact exists, and the empty block and the empty `if` that follow
-        // do not erase the newer `Dog` fact.
+    func AStrengthenedFactIsLiftedIntoTheFrames() {
+        // The nil guard leaves `x -> Animal` in the frames. The type test proves
+        // `Dog`, and the join lifts it, so the frames and the shadow agree. The
+        // empty block and the empty `if` that follow do not erase it.
         let lines = Capture(`package T
 open class Animal { prop Name string -> "animal" }
 class Dog : Animal { prop Name string -> "dog" }
@@ -174,9 +186,8 @@ func Run(x Animal?, c bool) string {
     if c { } else { }
     return x.Name
 }`)
-        Assert.Equal([]string{"9|x|Animal?|Dog|type-test"}, Rows(lines, "R"))
-        // The later merge points carry the refinement; only the `is` test reports it.
-        Assert.Equal([]string{"6|x|Animal|Dog|R1"}, Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
+        Assert.Empty(Rows(lines, "J"))
     }
 
     @Fact
@@ -199,6 +210,26 @@ func Run() int32 {
 }`)
         Assert.Empty(Rows(lines, "J"))
         Assert.Empty(Rows(lines, "R"))
+    }
+
+    @Fact
+    func ATypeTestAgainstAnUnrelatedInterface_KeepsTheDeclaredFact_A1() {
+        // Probe i1 (#5206, amendment A1): `IInit` does not convert to `T`, and
+        // the fallback keeps `settings -> T`. The old fallback dropped the path,
+        // which the report names as UNCLASSIFIED(old-only).
+        let report = Join(`package T
+interface IInit {
+    func Init();
+}
+func Make[T class init()]() T {
+    var settings T? = nil
+    settings = T()
+    if settings is IInit init {
+        init.Init()
+    }
+    return settings
+}`)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -322,9 +353,9 @@ func Run() int32 {
     }
     return 0
 }`)
-        Assert.Equal([]string{"9|s|nil|string|R1"}, Rows(lines, "J"))
-        // Only the argument `ref s` is read before the header takes effect.
-        Assert.Equal([]string{"10|s|string?|string|nullability"}, Rows(lines, "R"))
+        Assert.Empty(Rows(lines, "J"))
+        // The frames hold the fact of the first `if`, so the argument `ref s` agrees.
+        Assert.Empty(Rows(lines, "R"))
     }
 
     @Fact
@@ -458,10 +489,9 @@ func Run(c bool) int32 {
     @Fact
     func ANestedJoinFeedsTheOuterJoin() {
         // The inner `if` proves `t` and `o` on its own (row R1, the else-branch
-        // exits). The current passes do not lift those facts, but the outer
-        // join must still see them: its then-branch ends with `t` non-nil, so
-        // the outer join agrees with the passes and reports nothing for the
-        // outer `if`.
+        // exits). The frames hold `o`. They do not hold `t`, because the
+        // statement assigns `t` and the legacy passes still own that kill (row
+        // R2, slice 2b), so the report names `t` only.
         let report = Join(`package T
 func Run(a int32, o object?) int32 {
     var t string? = nil
@@ -476,7 +506,7 @@ func Run(a int32, o object?) int32 {
     }
     return t.Length
 }`)
-        Assert.Equal([]string{"5|o|nil|string|R1", "5|t|nil|string|R1"}, report)
+        Assert.Equal([]string{"5|t|nil|string|R1"}, report)
     }
 
     @Fact
@@ -578,9 +608,13 @@ func Run(c bool, k int32) int32 {
     func ComparisonMode_DoesNotChangeTheDiagnostics() {
         let source = `package T
 func Get() string? { return nil }
-func Run() int32 {
-    let s string? = Get()
-    if s != nil { Console.WriteLine("y") } else { return 0 }
+func Run(c bool) int32 {
+    var s string? = Get()
+    if s == nil { return 0 }
+    if c {
+        s = nil
+        return -1
+    }
     return s.Length
 }`
         let plain = Evaluate(source)
