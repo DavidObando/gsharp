@@ -1045,8 +1045,10 @@ open class CompilerWorkerTests : IDisposable {
         }
     }
 
-    @Fact
-    func SdkTaskReferenceClosure_CompilesWithWarningsAsErrors_AndRejectsOmittedDependencies() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func SdkTaskReferenceClosure_OnlyExplicitPromotionRejectsOmittedDependencies(promoteClosure bool) {
         let resolve = ProcessStartInfo("dotnet"){
             WorkingDirectory = RepoRoot.Path,
             UseShellExecute = false,
@@ -1112,6 +1114,9 @@ open class CompilerWorkerTests : IDisposable {
             for path in references.Where((path string) -> Path.GetFileNameWithoutExtension(path) != missing) {
                 start.ArgumentList.Add("/r:" + path)
             }
+            if promoteClosure {
+                start.ArgumentList.Add("/warnaserror:GS9100")
+            }
             let (exit, diagnostics, errors, _) = RunProcess(start)
             if missing.Length == 0 {
                 Assert.True(exit == 0, diagnostics + errors)
@@ -1119,13 +1124,20 @@ open class CompilerWorkerTests : IDisposable {
                 Assert.True(File.Exists(output))
                 Assert.True(File.Exists(reference))
                 Assert.True(File.Exists(pdb))
-            } else {
+            } else if promoteClosure {
                 Assert.NotEqual(0, exit)
                 Assert.Contains("$source(1,1,1,1): error GS9100:", diagnostics)
                 Assert.Contains("($missing)", diagnostics)
                 Assert.False(File.Exists(output))
                 Assert.False(File.Exists(reference))
                 Assert.False(File.Exists(pdb))
+            } else {
+                Assert.True(exit == 0, diagnostics + errors)
+                Assert.Contains("$source(1,1,1,1): warning GS9100:", diagnostics)
+                Assert.Contains("($missing)", diagnostics)
+                Assert.True(File.Exists(output))
+                Assert.True(File.Exists(reference))
+                Assert.True(File.Exists(pdb))
             }
         }
     }

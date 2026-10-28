@@ -849,9 +849,10 @@ open class Program {
                 if severity == DiagnosticSeverity.Warning && args.WarnAsErrorIds.Contains(id) {
                     severity = DiagnosticSeverity.Error
                 }
-                // /warnaserror (global) promotes all warnings to errors, unless /warnaserror-:<id> opts out.
+                // GS9100 is advisory under global promotion. Explicit diagnostic promotion still applies.
                 if severity == DiagnosticSeverity.Warning &&
                     args.TreatAllWarningsAsErrors &&
+                    id != "GS9100" &&
                     !args
                     .WarnNotAsErrorIds
                     .Contains(id) {
