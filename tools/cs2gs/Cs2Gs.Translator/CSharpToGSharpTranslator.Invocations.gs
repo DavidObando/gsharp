@@ -3191,6 +3191,9 @@ partial class CSharpToGSharpTranslator {
                     targetSymbolForPromotionCheck,
                     targetType
                 )
+            } else if this.IsClosureAssignedVariable(this.context.GetSymbolInfo(valueExpression).Symbol) &&
+                this.IsFlowNarrowedInCSharpOnly(valueExpression, translatedValue) {
+                EnsureNonNullAssertion(translatedValue)
             } else {
                 translatedValue
             }
