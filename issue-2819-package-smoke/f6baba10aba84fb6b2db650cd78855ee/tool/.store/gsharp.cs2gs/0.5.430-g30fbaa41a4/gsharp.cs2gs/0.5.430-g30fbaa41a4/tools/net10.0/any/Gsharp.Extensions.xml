@@ -1,0 +1,413 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>Gsharp.Extensions</name>
+    </assembly>
+    <members>
+        <member name="M:Gsharp.Concurrency.after(System.TimeSpan)">
+            <summary>A timer that fires once, after <c>due</c> — G#'s <c>time.After</c>.<para>Select on it for a timeout arm. The timer holds a CLR <c>Timer</c> until it fires, so a one-shot needs no cleanup; a repeating <see cref="Gsharp.Concurrency.tick">tick</see> does.</para><code language="gs">select {
+            case let v = &lt;-work {
+                handle(v)
+            }
+            case &lt;-after(TimeSpan.FromSeconds(2)) {
+                Console.WriteLine("timed out")
+            }
+            }</code></summary>
+            <param name="due">How long to wait before firing.</param>
+            <returns>A selectable that yields the firing time, once.</returns>
+        </member>
+        <member name="M:Gsharp.Concurrency.chunks``1(chan[T],System.Int32)">
+            <summary>Reads a channel in batches — G#'s data-processing shape (ADR-0174 D10).<para>The returned channel hands over whole buffers instead of single elements, so one lock acquisition and one park are amortized across a batch. Nothing runs concurrently: a chunk is produced when the loop asks for it, on the loop's own goroutine, so there is no extra child for a <c>scope</c> to join.</para><para>Each batch owns its array — "share *buffers* by communicating" only holds if the receiver may keep what it was handed — so a stage is free to store or forward the batch it received.</para><code language="gs">for batch in chunks(input, 1024) {
+                process(batch)
+            }</code></summary>
+            <param name="source">The channel to read.</param>
+            <param name="size">The maximum number of elements per batch.</param>
+            <returns>A receive-only channel of batches.</returns>
+        </member>
+        <member name="M:Gsharp.Concurrency.merge``1(chan[T][])">
+            <summary>Fans several channels into one — G#'s <c>merge</c>.<para>Every input is drained concurrently into the returned channel, which is closed once every input has closed. The result is receive-only: the caller consumes it, and only <c>merge</c> writes to it.</para><code language="gs">for v in merge(left, right) {
+                Console.WriteLine(v)
+            }</code></summary>
+            <param name="inputs">The channels to drain.</param>
+            <returns>A receive-only channel carrying every input's values.</returns>
+        </member>
+        <member name="M:Gsharp.Concurrency.tick(System.TimeSpan)">
+            <summary>A timer that fires repeatedly, every <c>period</c> — G#'s <c>time.Tick</c>.<para>Unlike <c>after</c>, this one keeps firing until it is disposed, so it leaks a CLR timer if it is dropped: hold it in a <c>using let</c>, or dispose it when the loop that selects on it ends. At most one tick is pending at a time — a consumer that falls behind sees ticks dropped rather than queued.</para></summary>
+            <param name="period">The interval between firings.</param>
+            <returns>A selectable that yields each firing time.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetArrayOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON array property as a <c>JsonElement</c>.<para>A non-object receiver, missing property, JSON <c>null</c>, or different value kind returns <c>nil</c>. The returned element remains backed by the receiver's parent <c>JsonDocument</c> and must not outlive it.</para><code language="gs">let items = root.GetArrayOrNil("items")</code><para>See also <see cref="Gsharp.Extensions.Json.GetObjectOrNil">GetObjectOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the array element, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetBoolOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON Boolean property.<para>Both JSON <c>true</c> and JSON <c>false</c> are valid results. A non-object receiver, missing property, JSON <c>null</c>, or different value kind returns <c>nil</c>.</para><code language="gs">let enabled = root.GetBoolOrNil("enabled")</code><para>See also <see cref="Gsharp.Extensions.Json.GetStringOrNil">GetStringOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the Boolean value, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetBytesFromBase64OrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON string property decoded from Base64.<para>The receiver must be an object and <c>name</c> must identify a completely valid Base64 string. Missing, non-string, and malformed values return <c>nil</c>.</para><code language="gs">let payload = root.GetBytesFromBase64OrNil("payload")</code><para>See also <see cref="Gsharp.Extensions.Json.GetStringOrNil">GetStringOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the decoded byte slice, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetDateTimeOffsetOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON string property parsed as a <c>DateTimeOffset</c>.<para>The receiver must be an object and <c>name</c> must identify a timestamp string accepted by <c>JsonElement.TryGetDateTimeOffset</c>. Missing, non-string, and malformed values return <c>nil</c>.</para><code language="gs">let createdAt = root.GetDateTimeOffsetOrNil("createdAt")</code><para>See also <see cref="Gsharp.Extensions.Json.GetStringOrNil">GetStringOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the parsed timestamp with its offset, or <c>nil</c> when unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetDecimalOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON number property as a <c>decimal</c>.<para>Use this helper when base-10 precision matters. Missing, non-number, and values outside the <c>decimal</c> range return <c>nil</c>.</para><code language="gs">let price = root.GetDecimalOrNil("price")</code><para>See also <see cref="Gsharp.Extensions.Json.GetFloat64OrNil">GetFloat64OrNil</see>, <see cref="Gsharp.Extensions.Json.GetInt64OrNil">GetInt64OrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the <c>decimal</c> value, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetFloat64OrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON number property as a finite <c>float64</c>.<para>Missing and non-number values return <c>nil</c>. Values that fail conversion or produce <c>NaN</c> or positive or negative infinity are also rejected.</para><code language="gs">let ratio = root.GetFloat64OrNil("ratio")</code><para>See also <see cref="Gsharp.Extensions.Json.GetDecimalOrNil">GetDecimalOrNil</see>, <see cref="Gsharp.Extensions.Json.GetInt64OrNil">GetInt64OrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the finite <c>float64</c> value, or <c>nil</c> when unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetGuidOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON string property parsed as a <c>Guid</c>.<para>The receiver must be an object and <c>name</c> must identify a string accepted by <c>JsonElement.TryGetGuid</c>. Missing, non-string, and malformed values return <c>nil</c>.</para><code language="gs">let id = root.GetGuidOrNil("id")</code><para>See also <see cref="Gsharp.Extensions.Json.GetStringOrNil">GetStringOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the parsed <c>Guid</c>, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetInt32OrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON number property as an <c>int32</c>.<para>The value must be an integer within the signed 32-bit range. Missing, non-number, fractional, and out-of-range values return <c>nil</c>.</para><code language="gs">let count = root.GetInt32OrNil("count")</code><para>See also <see cref="Gsharp.Extensions.Json.GetInt64OrNil">GetInt64OrNil</see>, <see cref="Gsharp.Extensions.Json.GetFloat64OrNil">GetFloat64OrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the <c>int32</c> value, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetInt64OrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON number property as an <c>int64</c>.<para>The value must be an integer within the signed 64-bit range. Missing, non-number, fractional, and out-of-range values return <c>nil</c>.</para><code language="gs">let total = root.GetInt64OrNil("total")</code><para>See also <see cref="Gsharp.Extensions.Json.GetInt32OrNil">GetInt32OrNil</see>, <see cref="Gsharp.Extensions.Json.GetDecimalOrNil">GetDecimalOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the <c>int64</c> value, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetObjectOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named nested JSON object property as a <c>JsonElement</c>.<para>A non-object receiver, missing property, JSON <c>null</c>, or different value kind returns <c>nil</c>. The returned element remains backed by the receiver's parent <c>JsonDocument</c> and must not outlive it.</para><code language="gs">let config = root.GetObjectOrNil("config")</code><para>See also <see cref="Gsharp.Extensions.Json.GetArrayOrNil">GetArrayOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the nested object, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Json.GetStringOrNil(System.Text.Json.JsonElement,System.String)">
+            <summary>Returns the named JSON string property when it is present and valid.<para>The receiver must be an object and <c>name</c> must identify a string value. A non-object receiver, missing property, JSON <c>null</c>, or different value kind returns <c>nil</c>.</para><code language="gs">let name = root.GetStringOrNil("name")</code><para>See also <see cref="Gsharp.Extensions.Json.GetGuidOrNil">GetGuidOrNil</see>, <see cref="Gsharp.Extensions.Json.GetDateTimeOffsetOrNil">GetDateTimeOffsetOrNil</see>.</para></summary>
+            <param name="name">the case-sensitive property name to read.</param>
+            <returns>the decoded string value, or <c>nil</c> when the property is unavailable or invalid.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.Filter``1(System.Nullable{``0},System.Func{``0,System.Boolean})">
+            <summary>Returns the receiver unchanged when present and <c>predicate</c> accepts the value, otherwise <c>nil</c>.<para>Combines a presence check with a value-level predicate: an absent receiver is passed through, a present receiver is kept only when <c>predicate</c> returns <c>true</c>.</para><code language="gs">let port int32? = parsePort(arg)
+            let valid = port.Filter(p =&gt; p &gt; 0 &amp;&amp; p &lt; 65536)</code><para>See also <see cref="Gsharp.Extensions.Optional.Map">Map</see>, <see cref="Gsharp.Extensions.Optional.FlatMap">FlatMap</see>.</para></summary>
+            <param name="predicate">the test applied to the present value; must not be <c>nil</c>.</param>
+            <returns>the receiver when present and accepted by <c>predicate</c>, otherwise <c>nil</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>predicate</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.Filter``1(``0,System.Func{``0,System.Boolean})">
+            <summary>Returns the receiver unchanged when present and <c>predicate</c> accepts the value, otherwise <c>nil</c>.<para>Combines a presence check with a value-level predicate: an absent receiver is passed through, a present receiver is kept only when <c>predicate</c> returns <c>true</c>.</para><code language="gs">let name string? = readName()
+            let nonEmpty = name.Filter(s =&gt; s.Length &gt; 0)</code><para>See also <see cref="Gsharp.Extensions.Optional.Map">Map</see>, <see cref="Gsharp.Extensions.Optional.FlatMap">FlatMap</see>.</para></summary>
+            <param name="predicate">the test applied to the present value; must not be <c>nil</c>.</param>
+            <returns>the receiver when present and accepted by <c>predicate</c>, otherwise <c>nil</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>predicate</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.FlatMap``2(System.Nullable{``0},System.Func{``0,System.Nullable{``1}})">
+            <summary>Projects the value of a present value-typed optional through an optional-returning <c>f</c> and flattens the nested optional.<para>Equivalent to <c>Map</c> followed by an unwrap of the inner optional: <c>f</c> itself returns <c>U?</c>, so the result is <c>nil</c> when either the receiver is absent or <c>f</c> produces <c>nil</c>.</para><code language="gs">func safeDivide(numerator int32, denominator int32) int32? {
+                return denominator == 0 ? nil : numerator / denominator
+            }
+
+            let x int32? = 10
+            let halved = x.FlatMap(n =&gt; safeDivide(n, 2))   // halved == 5
+            let zero   = x.FlatMap(n =&gt; safeDivide(n, 0))   // zero == nil</code><para>See also <see cref="Gsharp.Extensions.Optional.Map">Map</see>, <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>.</para></summary>
+            <param name="f">the optional-returning projection; must not be <c>nil</c>.</param>
+            <returns>
+                <c>f(self.Value)</c> when the receiver has a value, otherwise <c>nil</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>f</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.FlatMap``2(``0,System.Func{``0,``1})">
+            <summary>Projects the value of a present reference-typed optional through an optional-returning <c>f</c> and flattens the nested optional.<para>Equivalent to <c>Map</c> followed by an unwrap of the inner optional: <c>f</c> itself returns <c>U?</c>, so the result is <c>nil</c> when either the receiver is absent or <c>f</c> produces <c>nil</c>.</para><code language="gs">func parse(s string) int32? {
+                var n int32 = 0
+                return int32.TryParse(s, out n) ? n : nil
+            }
+
+            let raw string? = "42"
+            let parsed = raw.FlatMap(parse)        // parsed == 42
+            let bad   string? = "hello"
+            let none  = bad.FlatMap(parse)         // none == nil</code><para>See also <see cref="Gsharp.Extensions.Optional.Map">Map</see>, <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>.</para></summary>
+            <param name="f">the optional-returning projection; must not be <c>nil</c>.</param>
+            <returns>
+                <c>f(self)</c> when the receiver carries a value, otherwise <c>nil</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>f</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.IfPresent``1(System.Nullable{``0},System.Action{``0})">
+            <summary>Invokes <c>action</c> with the present value-typed value, or does nothing when the receiver has no value.<para>Useful for side-effecting callbacks (logging, notifications) where the absent path should be a silent no-op.</para><code language="gs">let port int32? = parsePort(arg)
+            port.IfPresent(p =&gt; log.Info($"listening on {p}"))</code><para>See also <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>, <see cref="Gsharp.Extensions.Optional.Map">Map</see>.</para></summary>
+            <param name="action">the callback to invoke on the present value; must not be <c>nil</c>.</param>
+            <exception cref="ArgumentNullException">
+                <c>action</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.IfPresent``1(``0,System.Action{``0})">
+            <summary>Invokes <c>action</c> with the present reference-typed value, or does nothing when the receiver is <c>nil</c>.<para>Useful for side-effecting callbacks (logging, notifications) where the absent path should be a silent no-op.</para><code language="gs">let user User? = currentUser()
+            user.IfPresent(u =&gt; log.Info($"signed in as {u.Name}"))</code><para>See also <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>, <see cref="Gsharp.Extensions.Optional.Map">Map</see>.</para></summary>
+            <param name="action">the callback to invoke on the present value; must not be <c>nil</c>.</param>
+            <exception cref="ArgumentNullException">
+                <c>action</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.Map``2(System.Nullable{``0},System.Func{``0,``1})">
+            <summary>Projects the value of a present value-typed optional through <c>f</c>.<para>When the receiver has no value, the projection is skipped and <c>nil</c> is returned; otherwise <c>f</c> is invoked on the unwrapped value and its result is returned wrapped as a <c>U?</c> optional.</para><code language="gs">let age int32? = 42
+            let doubled = age.Map(n =&gt; n * 2)      // doubled == 84
+            let absent int32? = nil
+            let none = absent.Map(n =&gt; n * 2)      // none == nil</code><para>See also <see cref="Gsharp.Extensions.Optional.FlatMap">FlatMap</see>, <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>, <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>.</para></summary>
+            <param name="f">the projection applied to the present value; must not be <c>nil</c>.</param>
+            <returns>
+                <c>f(self.Value)</c> when the receiver has a value, otherwise <c>nil</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>f</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.Map``2(``0,System.Func{``0,``1})">
+            <summary>Projects the value of a present reference-typed optional through <c>f</c>.<para>When the receiver is <c>nil</c>, the projection is skipped and <c>nil</c> is returned; otherwise <c>f</c> is invoked on the present value and its result is returned wrapped as a <c>U?</c> optional.</para><code language="gs">let name U? = "Ada"
+            let length = name.Map(s =&gt; s.Length)   // length == 3
+            let absent U? = nil
+            let none = absent.Map(s =&gt; s.Length)   // none == nil</code><para>See also <see cref="Gsharp.Extensions.Optional.FlatMap">FlatMap</see>, <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>, <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>.</para></summary>
+            <param name="f">the projection applied to the present value; must not be <c>nil</c>.</param>
+            <returns>
+                <c>f(self)</c> when the receiver carries a value, otherwise <c>nil</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>f</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.OrCompute``1(System.Nullable{``0},System.Func{``0})">
+            <summary>Returns the present value-typed value, or the result of invoking <c>defaultFactory</c> when the receiver has no value.<para>Unlike <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>, the fallback is computed lazily — <c>defaultFactory</c> is only invoked on the absent path. Use this when constructing the default is expensive or has observable side effects.</para><code language="gs">let cachedAge int32? = lookupAge(id)
+            let age = cachedAge.OrCompute(() =&gt; computeAgeFromBirthdate(id))</code><para>See also <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>, <see cref="Gsharp.Extensions.Optional.OrThrow">OrThrow</see>.</para></summary>
+            <param name="defaultFactory">invoked when the receiver has no value; must not be <c>nil</c>.</param>
+            <returns>the receiver's value when present, otherwise <c>defaultFactory()</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>defaultFactory</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.OrCompute``1(``0,System.Func{``0})">
+            <summary>Returns the present reference-typed value, or the result of invoking <c>defaultFactory</c> when the receiver is <c>nil</c>.<para>Unlike <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>, the fallback is computed lazily — <c>defaultFactory</c> is only invoked on the absent path. Use this when constructing the default is expensive or has observable side effects.</para><code language="gs">let cached string? = lookupFromCache(key)
+            let value = cached.OrCompute(() =&gt; fetchFromDisk(key))</code><para>See also <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>, <see cref="Gsharp.Extensions.Optional.OrThrow">OrThrow</see>.</para></summary>
+            <param name="defaultFactory">invoked when the receiver is <c>nil</c>; must not be <c>nil</c>.</param>
+            <returns>the receiver's value when present, otherwise <c>defaultFactory()</c>.</returns>
+            <exception cref="ArgumentNullException">
+                <c>defaultFactory</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.OrElse``1(System.Nullable{``0},``0)">
+            <summary>Returns the present value-typed value, or <c>defaultValue</c> if the receiver has no value.<para><c>defaultValue</c> is evaluated unconditionally at the call site. For a lazily-computed fallback, prefer <see cref="Gsharp.Extensions.Optional.OrCompute">OrCompute</see>; to surface an exception instead, use <see cref="Gsharp.Extensions.Optional.OrThrow">OrThrow</see>.</para><code language="gs">let port int32? = parsePort(arg)
+            let bound = port.OrElse(8080)</code><para>See also <see cref="Gsharp.Extensions.Optional.OrCompute">OrCompute</see>, <see cref="Gsharp.Extensions.Optional.OrThrow">OrThrow</see>.</para></summary>
+            <param name="defaultValue">the value returned when the receiver has no value.</param>
+            <returns>the receiver's value when present, otherwise <c>defaultValue</c>.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.OrElse``1(``0,``0)">
+            <summary>Returns the present reference-typed value, or <c>defaultValue</c> if the receiver is <c>nil</c>.<para><c>defaultValue</c> is evaluated unconditionally at the call site. For a lazily-computed fallback, prefer <see cref="Gsharp.Extensions.Optional.OrCompute">OrCompute</see>; to surface an exception instead, use <see cref="Gsharp.Extensions.Optional.OrThrow">OrThrow</see>.</para><code language="gs">let configured string? = lookup("theme")
+            let theme = configured.OrElse("light")</code><para>See also <see cref="Gsharp.Extensions.Optional.OrCompute">OrCompute</see>, <see cref="Gsharp.Extensions.Optional.OrThrow">OrThrow</see>.</para></summary>
+            <param name="defaultValue">the value returned when the receiver is <c>nil</c>.</param>
+            <returns>the receiver's value when present, otherwise <c>defaultValue</c>.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.OrThrow``1(System.Nullable{``0},System.String)">
+            <summary>Unwraps a present value-typed optional, or throws an <c>InvalidOperationException</c> with <c>message</c> when the receiver has no value.<para>Intentionally not inlined so the throw site remains in the caller's stack trace (matches ADR-0084's documented inlining policy).</para><code language="gs">let port int32? = parsePort(arg)
+            let bound = port.OrThrow("--port must be an integer")</code><para>See also <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>, <see cref="Gsharp.Extensions.Optional.OrCompute">OrCompute</see>.</para></summary>
+            <param name="message">the exception message used when the receiver has no value.</param>
+            <returns>the receiver's value when present.</returns>
+            <exception cref="InvalidOperationException">the receiver has no value.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Optional.OrThrow``1(``0,System.String)">
+            <summary>Unwraps a present reference-typed optional, or throws an <c>InvalidOperationException</c> with <c>message</c> when the receiver is <c>nil</c>.<para>Intentionally not inlined so the throw site remains in the caller's stack trace (matches ADR-0084's documented inlining policy).</para><code language="gs">let user User? = currentUser()
+            let u = user.OrThrow("no user is signed in")</code><para>See also <see cref="Gsharp.Extensions.Optional.OrElse">OrElse</see>, <see cref="Gsharp.Extensions.Optional.OrCompute">OrCompute</see>.</para></summary>
+            <param name="message">the exception message used when the receiver is <c>nil</c>.</param>
+            <returns>the receiver's value when present.</returns>
+            <exception cref="InvalidOperationException">the receiver is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Chunked``1(System.Collections.Generic.IEnumerable{``0},System.Int32)">
+            <summary>Yields successive non-overlapping chunks of length <c>size</c> from <c>source</c>.<para>Chunks are returned as fresh <c>IList[T]</c> snapshots in source order. The final chunk may be shorter than <c>size</c> when the source length is not an exact multiple. The transformer is intentionally not inlined per ADR-0084.</para><code language="gs">for c in Sequences.Of(1, 2, 3, 4, 5).Chunked(2) {
+                Console.WriteLine(string.Join(",", c))   // "1,2", "3,4", "5"
+            }</code><para>See also <see cref="Gsharp.Extensions.Sequences.Windowed">Windowed</see>, <see cref="Gsharp.Extensions.Sequences.Interleave">Interleave</see>.</para></summary>
+            <param name="size">the chunk length; must be positive.</param>
+            <returns>an <c>IEnumerable[IList[T]]</c> of non-overlapping chunks.</returns>
+            <exception cref="ArgumentOutOfRangeException">
+                <c>size &lt;= 0</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.FirstOrNil``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Returns the first element of <c>source</c> as a present optional, or <c>nil</c> when the sequence is empty (reference-typed overload).<para>The overload is selected automatically by the binder when <c>T</c> is a reference type. Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">let firstName = names.FirstOrNil()
+            let upper = firstName.Map(s =&gt; s.ToUpper())</code><para>See also <see cref="Gsharp.Extensions.Sequences.LastOrNil">LastOrNil</see>, <see cref="Gsharp.Extensions.Sequences.SingleOrNil">SingleOrNil</see>, <see cref="Gsharp.Extensions.Optional.Map">Map</see>.</para></summary>
+            <returns>the first element wrapped as <c>T?</c>, or <c>nil</c> when empty.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.FirstOrNil``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Returns the first element of <c>source</c> as a present optional, or <c>nil</c> when the sequence is empty (value-typed overload).<para>The overload is selected automatically by the binder when <c>T</c> is a value type. Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">let firstAge = ages.FirstOrNil()
+            let adult = firstAge.Filter(n =&gt; n &gt;= 18)</code><para>See also <see cref="Gsharp.Extensions.Sequences.LastOrNil">LastOrNil</see>, <see cref="Gsharp.Extensions.Sequences.SingleOrNil">SingleOrNil</see>, <see cref="Gsharp.Extensions.Optional.Filter">Filter</see>.</para></summary>
+            <returns>the first element wrapped as <c>T?</c>, or <c>nil</c> when empty.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Indexed``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Yields <c>(index, value)</c> pairs for each element of <c>source</c>, with a zero-based <c>int32</c> index.<para>Lazily iterates the source exactly once; the iterator disposes the underlying enumerator on early termination (issue #836). Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">for (i, name) in names.Indexed() {
+                Console.WriteLine($"{i}: {name}")
+            }</code><para>See also <see cref="Gsharp.Extensions.Sequences.Pairwise">Pairwise</see>, <see cref="Gsharp.Extensions.Sequences.Windowed">Windowed</see>.</para></summary>
+            <returns>an <c>IEnumerable[(int32, T)]</c> of indexed pairs.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Interleave``1(System.Collections.Generic.IEnumerable{``0},System.Collections.Generic.IEnumerable{``0})">
+            <summary>Interleaves <c>source</c> and <c>other</c>, yielding elements alternately until one side is exhausted, then drains the remaining side.<para>Both enumerators are advanced lazily; <c>using let</c> (per ADR-0084 inlining policy / issue #836) ensures both are disposed when the iterator's state machine tears down.</para><code language="gs">let merged = Sequences.Of(1, 3, 5).Interleave(Sequences.Of(2, 4))
+            // merged: 1, 2, 3, 4, 5</code><para>See also <see cref="Gsharp.Extensions.Sequences.Chunked">Chunked</see>, <see cref="Gsharp.Extensions.Sequences.Pairwise">Pairwise</see>.</para></summary>
+            <param name="other">the secondary sequence whose elements interleave with <c>source</c>.</param>
+            <returns>an <c>IEnumerable[T]</c> that alternates between <c>source</c> and <c>other</c>, then drains the longer side.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.LastOrNil``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Returns the last element of <c>source</c> as a present optional, or <c>nil</c> when the sequence is empty (value-typed overload).<para>Drains the entire sequence. Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">let lastScore = scores.LastOrNil()
+            lastScore.IfPresent(s =&gt; Console.WriteLine($"final: {s}"))</code><para>See also <see cref="Gsharp.Extensions.Sequences.FirstOrNil">FirstOrNil</see>, <see cref="Gsharp.Extensions.Sequences.SingleOrNil">SingleOrNil</see>.</para></summary>
+            <returns>the last element wrapped as <c>T?</c>, or <c>nil</c> when empty.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.LastOrNil``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Returns the last element of <c>source</c> as a present optional, or <c>nil</c> when the sequence is empty (reference-typed overload).<para>Drains the entire sequence; for large inputs prefer <c>source.Reverse().FirstOrNil()</c> only when reversal is cheap (e.g. an <c>IList[T]</c>). Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">let lastError = errors.LastOrNil()
+            lastError.IfPresent(e =&gt; log.Warn(e.Message))</code><para>See also <see cref="Gsharp.Extensions.Sequences.FirstOrNil">FirstOrNil</see>, <see cref="Gsharp.Extensions.Sequences.SingleOrNil">SingleOrNil</see>.</para></summary>
+            <returns>the last element wrapped as <c>T?</c>, or <c>nil</c> when empty.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Pairwise``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Yields each consecutive pair of elements from <c>source</c> as a tuple.<para>For an input of length <c>n</c>, the result contains <c>max(0, n - 1)</c> pairs: <c>(s[0], s[1]), (s[1], s[2]), …</c>. Useful for delta computations (e.g. successive timestamps).</para><code language="gs">let deltas = ticks.Pairwise().Select(p =&gt; p.Item2 - p.Item1)</code><para>See also <see cref="Gsharp.Extensions.Sequences.Windowed">Windowed</see>, <see cref="Gsharp.Extensions.Sequences.Indexed">Indexed</see>.</para></summary>
+            <returns>an <c>IEnumerable[(T, T)]</c> of consecutive pairs.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Sequences.Empty``1">
+            <summary>Returns the shared empty sequence for element type <c>T</c>.<para>Forwards to <c>Enumerable.Empty[T]()</c> so every call returns the same cached singleton; no allocation happens at the call site.</para><code language="gs">let none IEnumerable[string] = Sequences.Empty[string]()</code><para>See also <see cref="Gsharp.Extensions.Sequences.Sequences.Of">Of</see>.</para></summary>
+            <returns>the shared empty <c>IEnumerable[T]</c> for <c>T</c>.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Sequences.Iterate``1(``0,System.Func{``0,``0})">
+            <summary>Produces the infinite sequence <c>seed, next(seed), next(next(seed)), …</c>.<para>The iterator is open-ended; bound it with <c>.Take(n)</c> or <c>.TakeWhile(...)</c> from <c>System.Linq</c> at the call site.</para><code language="gs">let powers = Sequences.Iterate(1, n =&gt; n * 2).Take(5)   // 1, 2, 4, 8, 16</code><para>See also <see cref="Gsharp.Extensions.Sequences.Sequences.Repeat">Repeat</see>, <see cref="Gsharp.Extensions.Sequences.Sequences.Range">Range</see>.</para></summary>
+            <param name="seed">the first value yielded.</param>
+            <param name="next">the successor function applied to the previous value; must not be <c>nil</c>.</param>
+            <returns>an infinite <c>IEnumerable[T]</c> of repeated <c>next</c> applications.</returns>
+            <exception cref="ArgumentNullException">
+                <c>next</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Sequences.Of``1(``0[])">
+            <summary>Builds an inline literal sequence from the supplied values.<para>Variadic per ADR-0101 / ADR-0102: pass N positional arguments, a pre-built <c>[]T</c>, or zero arguments for an empty pack. The returned array is itself an <c>IEnumerable[T]</c> via CLR covariance, so it composes with any LINQ operator.</para><code language="gs">let small = Sequences.Of(1, 2, 3)              // [1, 2, 3]
+            let empty = Sequences.Of[int32]()              // []
+            let prebuilt = Sequences.Of([] int32 {4, 5})   // pass-through</code><para>See also <see cref="Gsharp.Extensions.Sequences.Sequences.Empty">Empty</see>, <see cref="Gsharp.Extensions.Sequences.Sequences.Range">Range</see>, <see cref="Gsharp.Extensions.Sequences.Sequences.Repeat">Repeat</see>.</para></summary>
+            <param name="values">the elements to materialize as the sequence.</param>
+            <returns>an array view of <c>values</c>, typed as <c>[]T</c>.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Sequences.Range(System.Int32,System.Int32)">
+            <summary>Produces the half-open <c>int32</c> range <c>[start, start + count)</c>.<para>Validation runs eagerly: a negative <c>count</c> throws at call time, not at first <c>MoveNext</c>, matching the BCL <c>Enumerable.Range</c> contract.</para><code language="gs">for i in Sequences.Range(0, 5) {
+                Console.WriteLine(i)                  // 0, 1, 2, 3, 4
+            }</code><para>See also <see cref="Gsharp.Extensions.Sequences.Sequences.RangeStep">RangeStep</see>, <see cref="Gsharp.Extensions.Sequences.Sequences.Iterate">Iterate</see>.</para></summary>
+            <param name="start">the first value in the range (inclusive).</param>
+            <param name="count">the number of values to produce; must be non-negative.</param>
+            <returns>an <c>IEnumerable[int32]</c> yielding <c>start, start+1, …, start+count-1</c>.</returns>
+            <exception cref="ArgumentOutOfRangeException">
+                <c>count</c> is negative.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Sequences.RangeStep(System.Int32,System.Int32,System.Int32)">
+            <summary>Produces a strided <c>int32</c> range from <c>start</c> toward <c>end</c>, advancing by <c>step</c> each iteration.<para>The range is half-open with respect to <c>end</c>: ascending when <c>step &gt; 0</c> (yielding while <c>i &lt; end</c>), descending when <c>step &lt; 0</c> (yielding while <c>i &gt; end</c>). A zero <c>step</c> is rejected eagerly.</para><code language="gs">for i in Sequences.RangeStep(0, 10, 2) {
+                Console.WriteLine(i)                  // 0, 2, 4, 6, 8
+            }
+            for i in Sequences.RangeStep(10, 0, -3) {
+                Console.WriteLine(i)                  // 10, 7, 4, 1
+            }</code><para>See also <see cref="Gsharp.Extensions.Sequences.Sequences.Range">Range</see>.</para></summary>
+            <param name="start">the first value in the range (inclusive).</param>
+            <param name="end">the exclusive bound (upper when <c>step &gt; 0</c>, lower when <c>step &lt; 0</c>).</param>
+            <param name="step">the stride between successive values; must be non-zero.</param>
+            <returns>an <c>IEnumerable[int32]</c> yielding the strided range.</returns>
+            <exception cref="ArgumentException">
+                <c>step</c> is zero.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Sequences.Repeat``1(``0)">
+            <summary>Produces the infinite sequence <c>value, value, value, …</c>.<para>Bound the iterator with <c>.Take(n)</c> or <c>.TakeWhile(...)</c> from <c>System.Linq</c> at the call site.</para><code language="gs">let five = Sequences.Repeat("hi").Take(3)   // "hi", "hi", "hi"</code><para>See also <see cref="Gsharp.Extensions.Sequences.Sequences.Iterate">Iterate</see>, <see cref="Gsharp.Extensions.Sequences.Sequences.Empty">Empty</see>.</para></summary>
+            <param name="value">the value yielded on every iteration.</param>
+            <returns>an infinite <c>IEnumerable[T]</c> of repeated <c>value</c>.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.SingleOrNil``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Returns the sole element of <c>source</c> as a present optional, or <c>nil</c> when the sequence is empty *or* contains more than one element (reference-typed overload).<para>Stops iterating after the second <c>MoveNext</c> so it is <c>O(1)</c> when the input is too long. Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">let theAdmin = users.Where(u =&gt; u.IsAdmin).SingleOrNil()
+            theAdmin.IfPresent(u =&gt; grant(u))</code><para>See also <see cref="Gsharp.Extensions.Sequences.FirstOrNil">FirstOrNil</see>, <see cref="Gsharp.Extensions.Sequences.LastOrNil">LastOrNil</see>.</para></summary>
+            <returns>the sole element wrapped as <c>T?</c>, or <c>nil</c> for empty or multi-element sequences.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.SingleOrNil``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Returns the sole element of <c>source</c> as a present optional, or <c>nil</c> when the sequence is empty *or* contains more than one element (value-typed overload).<para>Stops iterating after the second <c>MoveNext</c> so it is <c>O(1)</c> when the input is too long. Carries <c>AggressiveInlining</c> per ADR-0084.</para><code language="gs">let onlyId = ids.SingleOrNil()
+            let resolved = onlyId.OrThrow("expected exactly one id")</code><para>See also <see cref="Gsharp.Extensions.Sequences.FirstOrNil">FirstOrNil</see>, <see cref="Gsharp.Extensions.Sequences.LastOrNil">LastOrNil</see>.</para></summary>
+            <returns>the sole element wrapped as <c>T?</c>, or <c>nil</c> for empty or multi-element sequences.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.ToMap``2(System.Collections.Generic.IEnumerable{System.ValueTuple{``0,``1}})">
+            <summary>Materializes a sequence of <c>(key, value)</c> tuples into a <c>Dictionary[TKey, TValue]</c>.<para>Duplicate keys throw <c>ArgumentException</c> (matching <c>Dictionary.Add</c> semantics); pre-deduplicate the source if duplicates are expected.</para><code language="gs">let lookup = Sequences.Of(("a", 1), ("b", 2)).ToMap()
+            // lookup["a"] == 1</code><para>See also <see cref="Gsharp.Extensions.Sequences.ToSlice">ToSlice</see>.</para></summary>
+            <returns>a new <c>Dictionary[TKey, TValue]</c> containing one entry per source pair.</returns>
+            <exception cref="ArgumentException">the source contains duplicate keys.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.ToMap``3(System.Collections.Generic.IEnumerable{``0},System.Func{``0,``1},System.Func{``0,``2})">
+            <summary>Materializes <c>source</c> into a <c>Dictionary[TKey, TValue]</c> by projecting each element through <c>keyFn</c> and <c>valueFn</c>.<para>Duplicate keys throw <c>ArgumentException</c> (matching <c>Dictionary.Add</c> semantics).</para><code language="gs">let byId = users.ToMap(u =&gt; u.Id, u =&gt; u)        // identity-valued lookup
+            let nameById = users.ToMap(u =&gt; u.Id, u =&gt; u.Name)</code><para>See also <see cref="Gsharp.Extensions.Sequences.ToSlice">ToSlice</see>.</para></summary>
+            <param name="keyFn">extracts the dictionary key from each element; must not be <c>nil</c>.</param>
+            <param name="valueFn">extracts the dictionary value from each element; must not be <c>nil</c>.</param>
+            <returns>a new <c>Dictionary[TKey, TValue]</c> built from the projected pairs.</returns>
+            <exception cref="ArgumentNullException">
+                <c>keyFn</c> or <c>valueFn</c> is <c>nil</c>.</exception>
+            <exception cref="ArgumentException">
+                <c>keyFn</c> produces the same key for two distinct elements.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.ToSlice``1(System.Collections.Generic.IEnumerable{``0})">
+            <summary>Materializes <c>source</c> into a freshly-allocated <c>[]T</c> slice.<para>Iterates the source exactly once into a <c>List[T]</c> buffer before copying out via <c>ToArray()</c> — used in lieu of the open-generic <c>IEnumerable[T].ToArray()</c> while the binder still erases the substitution to <c>Object[]</c>.</para><code language="gs">let frozen = Sequences.Range(0, 4).ToSlice()   // []int32 {0, 1, 2, 3}</code><para>See also <see cref="Gsharp.Extensions.Sequences.ToMap">ToMap</see>.</para></summary>
+            <returns>a new <c>[]T</c> containing every element of <c>source</c> in iteration order.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sequences.Windowed``1(System.Collections.Generic.IEnumerable{``0},System.Int32)">
+            <summary>Yields each contiguous sliding window of length <c>size</c> from <c>source</c>.<para>The window slides one element at a time, so for a source of length <c>n &gt;= size</c> the result contains <c>n - size + 1</c> snapshots. Each yielded window is an independent <c>IList[T]</c> copy (safe to retain across <c>MoveNext</c> calls). If <c>source</c> is shorter than <c>size</c>, the result is empty. Per ADR-0084 the iterator is not inlined; the underlying enumerator is disposed on early termination (issue #836).</para><code language="gs">for w in Sequences.Of(1, 2, 3, 4).Windowed(2) {
+                Console.WriteLine(string.Join(",", w))   // "1,2", "2,3", "3,4"
+            }</code><para>See also <see cref="Gsharp.Extensions.Sequences.Chunked">Chunked</see>, <see cref="Gsharp.Extensions.Sequences.Pairwise">Pairwise</see>.</para></summary>
+            <param name="size">the window length; must be positive.</param>
+            <returns>an <c>IEnumerable[IList[T]]</c> of sliding windows.</returns>
+            <exception cref="ArgumentOutOfRangeException">
+                <c>size &lt;= 0</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Contains(`0)">
+            <summary>Reports whether <c>key</c> currently has an entry.<para>Lock-free; never blocks writers.</para></summary>
+            <param name="key">the key to test.</param>
+            <returns>
+                <c>true</c> when the key is present.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Delete(`0)">
+            <summary>Removes the entry under <c>key</c>, if present.</summary>
+            <param name="key">the key to remove.</param>
+            <returns>
+                <c>true</c> when an entry was removed, <c>false</c> when the key was          absent.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Keys">
+            <summary>Returns a snapshot slice of the keys present when the snapshot was taken. Safe under concurrent writes (never throws); keys added or removed while snapshotting may or may not appear.</summary>
+            <returns>a new slice holding the snapshot keys, in no particular          order.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Length">
+            <summary>Returns the number of entries.<para>Lock-free; never blocks writers. Under concurrent writes the count is a snapshot that may be stale by the time it is observed.</para></summary>
+            <returns>the entry count.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Load(`0)">
+            <summary>Returns the value stored under <c>key</c>, or <c>V</c>'s zero value when the key is absent — the same absent-key behavior as a G# map read.<para>Lock-free; never blocks writers.</para></summary>
+            <param name="key">the key to read.</param>
+            <returns>the stored value, or the zero value of <c>V</c> when absent.</returns>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Range(System.Action{`0,`1})">
+            <summary>Invokes <c>action</c> for each entry. Safe under concurrent writes (never throws): enumeration walks the concurrent backing store, so entries added or removed while ranging may or may not be visited. The write monitor is NOT held during <c>Range</c> — <c>action</c> may write to this map freely.</summary>
+            <param name="action">invoked with each key and value; must not be <c>nil</c>.</param>
+            <exception cref="ArgumentNullException">
+                <c>action</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Store(`0,`1)">
+            <summary>Stores <c>value</c> under <c>key</c>, replacing any existing entry.</summary>
+            <param name="key">the key to write.</param>
+            <param name="value">the value to store.</param>
+        </member>
+        <member name="M:Gsharp.Extensions.Sync.SyncMap`2.Update(`0,System.Func{`1,`1})">
+            <summary>Atomically replaces the value under <c>key</c> with <c>f(current)</c>, where <c>current</c> is the stored value or <c>V</c>'s zero value when the key is absent. The read-modify-write is atomic with respect to every other write on this map (<c>Store</c>, <c>Delete</c>, and other <c>Update</c> calls), which makes <c>m.Update(k, func(v int32) int32 { return v + 1 })</c> an exact concurrent counter.<para><c>f</c> runs while the map's write monitor is held: keep it small, and do not block in it. (Re-entrant writes to the same map from inside <c>f</c> do not deadlock — the monitor is reentrant — but they see the pre-<c>Update</c> state and are almost never what you want.)</para></summary>
+            <param name="key">the key to update.</param>
+            <param name="f">applied to the current value (or zero value) under the          write monitor; must not be <c>nil</c>.</param>
+            <returns>the value produced by <c>f</c> and stored.</returns>
+            <exception cref="ArgumentNullException">
+                <c>f</c> is <c>nil</c>.</exception>
+        </member>
+        <member name="T:Gsharp.Extensions.Sequences.Sequences">
+            <summary>Entry-point helpers for building <c>IEnumerable[T]</c> sequences from scratch — empty, inline-literal, ranged, iterated, or repeated.<para>Pair these with the extension helpers in <see cref="Gsharp.Extensions.Sequences">SequenceExtensions</see> such as <see cref="Gsharp.Extensions.Sequences.Indexed">Indexed</see>, <see cref="Gsharp.Extensions.Sequences.Pairwise">Pairwise</see>, <see cref="Gsharp.Extensions.Sequences.Windowed">Windowed</see> and <see cref="Gsharp.Extensions.Sequences.FirstOrNil">FirstOrNil</see> to build expressive pipelines.</para><code language="gs">import Gsharp.Extensions.Sequences
+
+            let evens = Sequences.Range(0, 5).Select(n =&gt; n * 2)   // 0, 2, 4, 6, 8
+            let bools = Sequences.Of(true, false, true)            // [true, false, true]</code></summary>
+        </member>
+        <member name="T:Gsharp.Extensions.Sync.SyncMap`2">
+            <summary>A goroutine-safe map for <c>K</c> → <c>V</c>, G#'s <c>sync.Map</c> analog (ADR-0158). Use it when a map must be shared across goroutines; plain <c>map[K, V]</c> is not goroutine-safe and concurrent access to one is undefined behavior.<para>Reads and enumeration are lock-free on a concurrent backing store; writes serialize on a private monitor so <see cref="Gsharp.Extensions.Sync.SyncMap.Update">Update</see> is an atomic read-modify-write. There is deliberately no index syntax — compound operations must go through <c>Update</c>, because <c>m[k] = m[k] + 1</c> on a shared map is a race no per-operation locking can fix.</para><code language="gs">import Gsharp.Extensions.Sync
+
+            var m = SyncMap[string, int32]()
+            scope {
+                for var i = 0; i &lt; 50; i++ {
+                    go bump(m)   // func bump: m.Update("hits", func(v int32) int32 { return v + 1 })
+                }
+            }
+            let hits = m.Load("hits")   // exactly 50</code></summary>
+        </member>
+    </members>
+</doc>

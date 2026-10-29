@@ -5033,6 +5033,20 @@ partial class CSharpToGSharpTranslator {
             return this.TargetWillRemainNonNullableReference(parameter.Type, parameter)
         }
 
+        /// Issue #5254: true when [`symbol`](paramref), read at [`recv`](paramref), is a widened
+        /// declaration (see (cref:IsTranslatorWidenedDeclaration)) and the sink of the read stays
+        /// non-null in G#.
+        private func WidenedReadFeedsNonNullSink(
+            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            symbol ISymbol?
+        ) bool {
+            if !this.IsTranslatorWidenedDeclaration(symbol) {
+                return false
+            }
+            let (targetType, targetSymbol) = this.FindContextualValueTarget(recv)
+            return this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
+        }
+
         /// Determines whether [`recv`](paramref) needs a G# `!!`
         /// assertion because it is either a declared-nullable reference narrowed
         /// non-null by flow or an ordinary dereference receiver whose declaration
@@ -5285,7 +5299,16 @@ partial class CSharpToGSharpTranslator {
             // dereference is asserted exactly as a flow-proven one is: C#
             // throws on a null here too.
             let flowState = this.context.GetTypeInfo(recv).Nullability.FlowState
-            let annotationsWithoutFlowAnalysis = isDereferenceReceiver &&
+            let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
+            // Issue #5254: in this context C# runs no flow analysis, so the
+            // declaration is the only contract C# states. A declaration that C#
+            // declares non-null and cs2gs widened only to bind a null write
+            // (see (cref:IsTranslatorWidenedDeclaration)) is therefore read as
+            // non-null at every read whose sink needs a non-null value, not only
+            // at a dereference. A sink that accepts nil keeps the widened value.
+            let annotationsWithoutFlowAnalysis = (
+                isDereferenceReceiver || this.WidenedReadFeedsNonNullSink(recv, symbol)
+            ) &&
                 flowState == Microsoft
                 .CodeAnalysis
                 .NullableFlowState
@@ -5304,7 +5327,6 @@ partial class CSharpToGSharpTranslator {
             if flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull && !annotationsWithoutFlowAnalysis {
                 return false
             }
-            let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
             // Static member access (`Type.StaticMember`) and namespace-qualified
             // names carry a type/namespace receiver, not a value: never assert.
             if symbol is ITypeSymbol || symbol is INamespaceSymbol || symbol == nil {
@@ -5349,7 +5371,7 @@ partial class CSharpToGSharpTranslator {
                 .IsNullableInitializer(implicitInitializer) {
                 return NullForgivenessTelemetry.Record("4500-annotations-context-nullable-local")
             }
-            if this.ShouldPromoteToNullableReference(symbol) {
+            if this.IsTranslatorWidenedDeclaration(symbol) {
                 return NullForgivenessTelemetry.Record("1072-flow-proven-promoted-nullable")
             }
             return false

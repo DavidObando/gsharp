@@ -1,0 +1,18 @@
+{
+    "$schema": "https://raw.githubusercontent.com/AArnott/Nerdbank.GitVersioning/master/src/NerdBank.GitVersioning/version.schema.json",
+  
+    // Specifies the Major and Minor product version. The build number is automatically appended
+    // to this as the 3rd part of the product version. Increment the Major product version for
+    // major product milestones. Optionally increment the Minor product version for minor milestones.
+    "version": "0.5",
+  
+    "publicReleaseRefSpec": [
+      "^refs/heads/main$", // we release out of main
+      "^refs/tags/v\\d+(?:\\.\\d+)*$" // tagged releases (e.g. refs/tags/v1.2.3)
+    ],
+    "cloudBuild": {
+      "buildNumber": {
+        "enabled": true
+      }
+    }
+  }

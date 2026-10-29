@@ -1,0 +1,835 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <Import Project="$(MSBuildThisFileDirectory)Gsharp.NET.SourceLink.targets"
+          Condition="'$(_GsharpSourceLinkTargetsImported)' != 'true'" />
+
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" />
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.GsgenTask" />
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.WriteGsharpAssemblyInfoTask" />
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.WriteGsharpHotReloadArtifactsTask" />
+
+  <PropertyGroup>
+    <CoreCompileDependsOn>_ComputeNonExistentFileProperty;_GsharpWriteHotReloadManifest</CoreCompileDependsOn>
+    <!-- Avalonia's CompileAvaloniaXaml target hooks AfterCompile, a standard
+         Microsoft.Managed.Core target that the G# language SDK does not import. -->
+    <CompileDependsOn>$(CompileDependsOn);AfterCompile</CompileDependsOn>
+
+    <!-- Phase 7.7b: hook into the NuGet Pack infrastructure so dotnet pack
+         includes the reference assembly under ref/<tfm>/. The runtime assembly
+         under lib/<tfm>/ is handled by the standard Microsoft.NET.Sdk pack. -->
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_GsharpGetRefAssemblyForPack</TargetsForTfmSpecificContentInPackage>
+
+    <!-- Match dotnet-watch's supported runtime floor while keeping Release
+         builds and explicitly-disabled projects byte-for-byte unchanged. -->
+    <_GsharpHotReloadSupported Condition=" '$(TargetFrameworkIdentifier)' == '.NETCoreApp' and
+                                            $([MSBuild]::VersionGreaterThanOrEquals('$(TargetFrameworkVersion)', '10.0')) ">true</_GsharpHotReloadSupported>
+    <GsharpEnableHotReload Condition=" '$(GsharpEnableHotReload)' == '' and
+                                      '$(DotNetWatchBuild)' == 'true' and
+                                      '$(DesignTimeBuild)' == 'true' and
+                                      '$(_GsharpHotReloadSupported)' == 'true' ">true</GsharpEnableHotReload>
+    <_GsharpHotReloadActive>false</_GsharpHotReloadActive>
+    <_GsharpHotReloadActive Condition=" '$(GsharpEnableHotReload)' == 'true' ">true</_GsharpHotReloadActive>
+    <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(MSBuildProjectName).manifest</GsharpHotReloadManifestPath>
+    <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.g.gs</GsharpHotReloadBootstrapPath>
+    <GsharpHotReloadOutputDirectory Condition=" '$(GsharpHotReloadOutputDirectory)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\updates\</GsharpHotReloadOutputDirectory>
+    <CustomCollectWatchItems Condition=" '$(GsharpEnableHotReload)' == 'true' ">$(CustomCollectWatchItems);_GsharpFilterHotReloadWatchItems</CustomCollectWatchItems>
+  </PropertyGroup>
+
+  <ItemGroup Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Reference Include="Gsharp.HotReload.Runtime">
+      <HintPath>$(GsharpHotReloadRuntimeAssemblyFullPath)</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Include="$(GsharpHotReloadManifestPath)"
+          Link="$([System.IO.Path]::GetFileName('$(GsharpHotReloadManifestPath)'))"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="Never"
+          Pack="false"
+          Visible="false" />
+    <ProjectCapability Include="SupportsHotReload" />
+  </ItemGroup>
+
+  <!-- ADR-0207: select the ReadyToRun compiler from the RID package when it is available. The order is:
+       a value set by the user, the opt-out, an unknown launch host, the file in the RID package under
+       $(NuGetPackageRoot) of this project, and last the IL compiler of the SDK package. Any other case
+       keeps the IL compiler. -->
+  <Target Name="_GsharpSelectCompiler" BeforeTargets="CoreCompile;_GsharpCreateCoreCompileInputsCache">
+    <PropertyGroup>
+      <_GsharpCompilerReason Condition=" '$(GsharpCompilerFullPath)' != '$(_GsharpDefaultCompilerPath)' ">GsharpCompilerFullPath was set by the user</_GsharpCompilerReason>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and '$(GsharpUseReadyToRunCompiler)' == 'false' ">GsharpUseReadyToRunCompiler is false</_GsharpCompilerReason>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and '$(_GsharpCompilerPackWanted)' != 'true' ">the launch host '$(_GsharpHostRid)' is unknown or has no ReadyToRun package (MSBuildRuntimeType=$(MSBuildRuntimeType), DOTNET_HOST_PATH=$(DOTNET_HOST_PATH))</_GsharpCompilerReason>
+      <_GsharpCompilerCandidate Condition=" '$(_GsharpCompilerReason)' == '' and '$(NuGetPackageRoot)' != '' ">$([MSBuild]::EnsureTrailingSlash('$(NuGetPackageRoot)'))gsharp.net.sdk.compiler.$(_GsharpHostRid)/$(GsharpSdkVersion)/tools/$(GsharpCompilerPackTargetFramework)/$(_GsharpHostRid)/gsc.dll</_GsharpCompilerCandidate>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and '$(_GsharpCompilerCandidate)' == '' ">NuGetPackageRoot is not set</_GsharpCompilerReason>
+      <_GsharpCompilerReason Condition=" '$(_GsharpCompilerReason)' == '' and !Exists('$(_GsharpCompilerCandidate)') ">the package file '$(_GsharpCompilerCandidate)' does not exist</_GsharpCompilerReason>
+      <GsharpCompilerFullPath Condition=" '$(_GsharpCompilerReason)' == '' ">$(_GsharpCompilerCandidate)</GsharpCompilerFullPath>
+    </PropertyGroup>
+    <Message Importance="normal" Condition=" '$(_GsharpCompilerReason)' == '' " Text="G# compiler: ReadyToRun $(_GsharpHostRid) from $(GsharpCompilerFullPath)" />
+    <Message Importance="normal" Condition=" '$(_GsharpCompilerReason)' != '' " Text="G# compiler: IL from $(GsharpCompilerFullPath) because $(_GsharpCompilerReason)" />
+  </Target>
+
+  <Target Name="_GsharpFilterHotReloadWatchItems"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' ">
+    <ItemGroup>
+      <_GsharpAgentOwnedWatch Include="@(Compile->'%(FullPath)');
+                                      @(AdditionalFiles->'%(FullPath)');
+                                      @(EmbeddedResource->'%(FullPath)')" />
+      <Compile Remove="@(Compile)" />
+      <AdditionalFiles Remove="@(AdditionalFiles)" />
+      <Watch Remove="@(_GsharpAgentOwnedWatch)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_CheckCompileDesignTimePrerequisite">
+    <Error Condition="'$(SkipCompilerExecution)|$(ProvideCommandLineArgs)' != 'true|true'"
+           Text="SkipCompilerExecution and ProvideCommandLineArgs should be set before calling the CompileDesignTime target" />
+  </Target>
+
+  <Target Name="_GsharpValidateHotReload"
+          BeforeTargets="CoreCompile"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' != 'true' ">
+    <Error Text="G# hot reload requires a .NETCoreApp target framework version 10.0 or newer." />
+  </Target>
+
+  <Target Name="GsharpFormatCheck"
+          BeforeTargets="CoreCompile"
+          Condition=" '$(GsharpFormatOnBuild)' == 'true' and '$(DesignTimeBuild)' != 'true' ">
+    <ItemGroup>
+      <_GsharpFormatSource Include="@(Compile)"
+                           Condition=" '%(Extension)' == '.gs' " />
+    </ItemGroup>
+    <Error Condition="!Exists('$(GsharpFormatterFullPath)')"
+           Text="GsharpFormatOnBuild requires gsfmt at '$(GsharpFormatterFullPath)'." />
+    <Exec Condition=" '@(_GsharpFormatSource)' != '' "
+          Command="dotnet &quot;$(GsharpFormatterFullPath)&quot; --check @(_GsharpFormatSource->'&quot;%(FullPath)&quot;', ' ')" />
+  </Target>
+
+  <!-- dotnet-watch's first ordinary `dotnet build` does not carry its
+       DotNetWatchBuild marker. The following design-time build does. Rebuild
+       this TFM once with the runtime bootstrap before watch launches it. -->
+  <Target Name="_GsharpBuildHotReloadBaseline"
+          BeforeTargets="CompileDesignTime"
+          Condition=" '$(DotNetWatchBuild)' == 'true' and
+                      '$(DesignTimeBuild)' == 'true' and
+                      '$(SkipCompilerExecution)' == 'true' and
+                      '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Delete Files="@(IntermediateAssembly);
+                   $(IntermediateOutputPath)$(AssemblyName)$(TargetExt);
+                   $(ProjectDepsFilePath)" />
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             BuildInParallel="false"
+             RemoveProperties="DesignTimeBuild;SkipCompilerExecution;ProvideCommandLineArgs;BuildingInsideVisualStudio"
+             Properties="TargetFramework=$(TargetFramework);
+                         Configuration=$(Configuration);
+                         DotNetWatchBuild=false;
+                         GsharpEnableHotReload=true;
+                         BuildProjectReferences=false" />
+  </Target>
+
+  <Target Name="_GsharpPrepareHotReload"
+          Condition=" '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Error Condition=" '$(GsharpEnableHotReload)' == 'true' and !Exists('$(GsharpHotReloadRuntimeAssemblyFullPath)')"
+           Text="G# hot reload runtime not found at '$(GsharpHotReloadRuntimeAssemblyFullPath)'." />
+    <ItemGroup>
+      <_GsharpHotReloadWatch Include="@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+    <WriteGsharpHotReloadArtifactsTask
+        ProjectPath="$(MSBuildProjectFullPath)"
+        TargetFramework="$(TargetFramework)"
+        Configuration="$(Configuration)"
+        AssemblyName="$(TargetName)"
+        ManifestPath="$(GsharpHotReloadManifestPath)"
+        BootstrapPath="$(GsharpHotReloadBootstrapPath)"
+        UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
+        RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
+        CopyRuntime="$(_GsharpHotReloadActive)"
+        WriteBootstrap="$(_GsharpHotReloadActive)"
+        IntermediateDirectory="$(IntermediateOutputPath)"
+        OutputDirectory="$(OutputPath)"
+        WatchFiles="@(_GsharpHotReloadWatch)" />
+    <ItemGroup>
+      <FileWrites Include="$(GsharpHotReloadBootstrapPath);$(GsharpHotReloadManifestPath)" />
+    </ItemGroup>
+    <ItemGroup Condition=" '$(GsharpEnableHotReload)' == 'true' ">
+      <Compile Remove="$(GsharpHotReloadBootstrapPath)" />
+      <Compile Include="$(GsharpHotReloadBootstrapPath)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_GsharpWriteHotReloadManifest"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' "
+          DependsOnTargets="_GsharpPrepareHotReload;_GsharpIncludeGeneratedCompile">
+    <ItemGroup>
+      <_GsharpHotReloadWatch Remove="@(_GsharpHotReloadWatch)" />
+      <_GsharpHotReloadWatch Include="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+    <WriteGsharpHotReloadArtifactsTask
+        ProjectPath="$(MSBuildProjectFullPath)"
+        TargetFramework="$(TargetFramework)"
+        Configuration="$(Configuration)"
+        AssemblyName="$(TargetName)"
+        ManifestPath="$(GsharpHotReloadManifestPath)"
+        BootstrapPath="$(GsharpHotReloadBootstrapPath)"
+        UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
+        RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
+        CopyRuntime="true"
+        WriteBootstrap="true"
+        IntermediateDirectory="$(IntermediateOutputPath)"
+        OutputDirectory="$(OutputPath)"
+        WatchFiles="@(_GsharpHotReloadWatch)" />
+  </Target>
+
+  <!-- Phase 7.7b / Issue #855: set DocumentationFile here (in targets) where
+       IntermediateOutputPath and TargetName are already resolved by the .NET SDK.
+       Setting it in Sdk.props caused both properties to be empty, producing a
+       bare '.xml' filename. -->
+  <PropertyGroup>
+    <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
+    <_GsharpShouldGenerateRunSettings Condition=" '$(IsTestProject)' == 'true' and '$(RunSettingsFilePath)' == '' ">true</_GsharpShouldGenerateRunSettings>
+    <RunSettingsFilePath Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">$([MSBuild]::NormalizePath('$(IntermediateOutputPath)', 'gsharp.generated.runsettings'))</RunSettingsFilePath>
+  </PropertyGroup>
+
+  <!-- Visual Studio's legacy VSTest launcher does not infer a target framework
+       for non-C#/VB CPS projects. Supply the same standard runsettings property
+       framework adapters already honor, without overriding user runsettings. -->
+  <Target Name="_GsharpGenerateRunSettings"
+          BeforeTargets="CoreCompile;VSTest"
+          Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">
+    <ItemGroup>
+      <_GsharpRunSettingsLine Include="&lt;RunSettings&gt;" />
+      <_GsharpRunSettingsLine Include="  &lt;RunConfiguration&gt;" />
+      <_GsharpRunSettingsLine Include="    &lt;TargetFrameworkVersion&gt;$(TargetFramework)&lt;/TargetFrameworkVersion&gt;" />
+      <_GsharpRunSettingsLine Include="  &lt;/RunConfiguration&gt;" />
+      <_GsharpRunSettingsLine Include="&lt;/RunSettings&gt;" />
+    </ItemGroup>
+    <WriteLinesToFile Lines="@(_GsharpRunSettingsLine)"
+                      File="$(RunSettingsFilePath)"
+                      Overwrite="True"
+                      WriteOnlyWhenDifferent="True" />
+    <ItemGroup>
+      <FileWrites Include="$(RunSettingsFilePath)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Locate and add mscorlib unless NoStdLib. Mirrors peachpie's Core.Sdk.targets. -->
+  <ItemGroup Condition=" '$(NoStdLib)' != 'true' ">
+    <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
+  </ItemGroup>
+
+  <!-- Issue #1666: property-only changes (e.g. `-p:Version=`, `-p:DebugType=`,
+       `-p:Deterministic=`, `-p:NoWarn=`, `-p:TreatWarningsAsErrors=`,
+       `-p:OutputType=`, ...) touch nothing on disk that $(MSBuildAllProjects),
+       @(Compile), or @(ReferencePathWithRefAssemblies) would catch, so
+       CoreCompile's own up-to-date check silently skips gsc and ships a
+       stale assembly (e.g. with the previous build's version stamp). csc
+       avoids this via the .NET SDK's CoreCompileInputs.cache idiom (see
+       Microsoft.Managed.Core.targets / _GenerateCompileDependencyCache):
+       hash compilation-affecting properties and metadata dependency membership
+       consumed by BuildTask into a cache file
+       whose timestamp — via WriteOnlyWhenDifferent — only advances when the
+       hash actually changes, then list that file as a CoreCompile input. -->
+  <Target Name="_GsharpCreateCoreCompileInputsCache"
+          BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_GsharpCoreCompileInputsCacheFile>$(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache</_GsharpCoreCompileInputsCacheFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_GsharpCoreCompileInputsToHash Include="$(Version)" />
+      <_GsharpCoreCompileInputsToHash Include="$(DebugType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(Deterministic)" />
+      <_GsharpCoreCompileInputsToHash Include="$(NoWarn)" />
+      <_GsharpCoreCompileInputsToHash Include="$(TreatWarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(WarningsNotAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(OutputType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(TargetFramework)" />
+      <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
+      <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
+      <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />
+      <_GsharpCoreCompileInputsToHash Include="$(ProduceReferenceAssembly)" />
+      <_GsharpCoreCompileInputsToHash Include="$(GenerateDocumentationFile)" />
+      <_GsharpCoreCompileInputsToHash Include="@(ReferenceDependencyPaths)" />
+      <_GsharpCoreCompileInputsToHash Include="@(RuntimeCopyLocalItems)" />
+    </ItemGroup>
+
+    <Hash ItemsToHash="@(_GsharpCoreCompileInputsToHash)">
+      <Output TaskParameter="HashResult" PropertyName="_GsharpCoreCompileInputsHash" />
+    </Hash>
+
+    <WriteLinesToFile Lines="$(_GsharpCoreCompileInputsHash)"
+                       File="$(_GsharpCoreCompileInputsCacheFile)"
+                       Overwrite="True"
+                       WriteOnlyWhenDifferent="True" />
+
+    <ItemGroup>
+      <FileWrites Include="$(_GsharpCoreCompileInputsCacheFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- ADR-0145 §E/§F: source-generator (gsgen) integration.
+
+       Cooperating targets run before CoreCompile:
+         1. _GsharpResolveAnalyzers        - resolve the C# analyzer/generator set.
+         2. _GsharpPartitionForeignCompile - pull any stray .cs Compile item out
+                                             of @(Compile) (issue #2214).
+         3. _GsharpRunSourceGenerators     - run gsgen (incremental): projects
+                                             generators over the .gs sources AND
+                                             translates any partitioned .cs.
+         4. _GsharpIncludeGeneratedCompile - fold the resulting .g.gs into
+                                             @(Compile) (always runs, even when
+                                             (3) was up to date). -->
+
+  <!-- (1) Because the SDK sets <Language>Gsharp</Language>, NuGet's normal
+       ResolvePackageAssets never selects C# analyzer assets (it filters analyzer
+       folders by ProjectLanguage). Re-invoke the SAME task a second time with
+       ProjectLanguage=C# and our CompilerApiVersion, into a DISTINCT cache file,
+       capturing only its Analyzers output. Then union in any user @(Analyzer)
+       items. If the resulting set is empty, the generator run is skipped (fast
+       path via the Condition on _GsharpRunSourceGenerators).
+
+       This covers NuGet-delivered generators (e.g. CommunityToolkit.Mvvm), but
+       NOT an SDK-BUNDLED generator such as System.Text.RegularExpressions.
+       Generator (backing `[GeneratedRegex]`) or System.Text.Json.Source
+       Generation: those ship inside the Microsoft.NETCore.App.Ref TARGETING
+       PACK (analyzers/dotnet/cs/*.dll), resolved by the wholly separate
+       ResolveTargetingPackAssets task/target (Microsoft.NET.Sdk.Framework
+       ReferenceResolution.targets) — never through project.assets.json, so
+       ResolvePackageAssets can never see them regardless of ProjectLanguage.
+       The standard ResolveTargetingPackAssets TARGET already ran (it hangs off
+       $(ResolveAssemblyReferencesDependsOn), unconditioned on Language) by the
+       time this target's DependsOnTargets reaches it below, but it ran with
+       ProjectLanguage=$(Language) (`Gsharp`), which matches no analyzer folder
+       and so contributes zero analyzers to @(Analyzer) — exactly the gap
+       confirmed empirically (a bare `[GeneratedRegex]`-eligible net10.0 .gsproj
+       with NO PackageReference resolves @(GsharpAnalyzer) to nothing). Mirror
+       the ResolvePackageAssets re-invocation above: call the SAME
+       ResolveTargetingPackAssets TASK a second time with ProjectLanguage=C#,
+       reusing the @(FrameworkReference)/@(ResolvedTargetingPack) items the
+       standard target already resolved, capturing only its AnalyzersToAdd
+       output. This is the same class of gap as ADR-0145's NBGV / Avalonia
+       follow-ups (a standard SDK extensibility point that only fires for a
+       $(Language) the SDK recognizes) — surfaced here for a build-in analyzer
+       instead of a NuGet package. -->
+  <Target Name="_GsharpResolveAnalyzers"
+          DependsOnTargets="ResolvePackageAssets;ResolveTargetingPackAssets"
+          Condition=" '$(GsharpRunSourceGenerators)' != 'false' ">
+    <ResolvePackageAssets
+        ProjectAssetsFile="$(ProjectAssetsFile)"
+        ProjectAssetsCacheFile="$(ProjectAssetsCacheFile).gsgen"
+        ProjectPath="$(MSBuildProjectFullPath)"
+        ProjectLanguage="C#"
+        CompilerApiVersion="$(GsharpCompilerApiVersion)"
+        EmitAssetsLogMessages="$(EmitAssetsLogMessages)"
+        TargetFramework="$(TargetFramework)"
+        RuntimeIdentifier="$(RuntimeIdentifier)"
+        PlatformLibraryName="$(MicrosoftNETPlatformLibrary)"
+        RuntimeFrameworks="@(RuntimeFramework)"
+        IsSelfContained="$(SelfContained)"
+        MarkPackageReferencesAsExternallyResolved="$(MarkPackageReferencesAsExternallyResolved)"
+        DisablePackageAssetsCache="$(DisablePackageAssetsCache)"
+        DisableFrameworkAssemblies="$(DisableLockFileFrameworks)"
+        CopyLocalRuntimeTargetAssets="$(CopyLocalRuntimeTargetAssets)"
+        DisableTransitiveProjectReferences="$(DisableTransitiveProjectReferences)"
+        DisableTransitiveFrameworkReferences="$(DisableTransitiveFrameworkReferences)"
+        DotNetAppHostExecutableNameWithoutExtension="$(_DotNetAppHostExecutableNameWithoutExtension)"
+        ShimRuntimeIdentifiers="@(_PackAsToolShimRuntimeIdentifiers)"
+        EnsureRuntimePackageDependencies="$(EnsureRuntimePackageDependencies)"
+        VerifyMatchingImplicitPackageVersion="$(VerifyMatchingImplicitPackageVersion)"
+        ExpectedPlatformPackages="@(ExpectedPlatformPackages)"
+        SatelliteResourceLanguages="$(SatelliteResourceLanguages)"
+        DesignTimeBuild="$(DesignTimeBuild)"
+        PackageReferences="@(PackageReference)"
+        DefaultImplicitPackages="$(DefaultImplicitPackages)"
+        ContinueOnError="true">
+      <Output TaskParameter="Analyzers" ItemName="GsharpAnalyzer" />
+    </ResolvePackageAssets>
+
+    <!-- Second re-invocation, this time of ResolveTargetingPackAssets rather
+         than ResolvePackageAssets: surfaces an SDK-BUNDLED analyzer (e.g.
+         System.Text.RegularExpressions.Generator, backing `[GeneratedRegex]`)
+         that ships inside the Microsoft.NETCore.App.Ref targeting pack rather
+         than via NuGet, so the ResolvePackageAssets re-invocation above can
+         never see it regardless of ProjectLanguage. The standard
+         ResolveTargetingPackAssets TARGET (a DependsOnTargets dependency on
+         this target, above) already ran once with ProjectLanguage=$(Language)
+         ("Gsharp"), which matches no analyzer folder and so contributed zero
+         analyzers — confirmed empirically (a bare `[GeneratedRegex]`-eligible
+         net10.0 .gsproj with no PackageReference resolved @(GsharpAnalyzer) to
+         nothing before this fix). Re-invoke the SAME task with
+         ProjectLanguage=C#, reusing the @(FrameworkReference)/
+         @(ResolvedTargetingPack) items the standard target already resolved.
+         ReferencesToAdd and the task's other outputs are deliberately left
+         unwired here: the first (default-language) invocation already folded
+         the targeting pack's reference assemblies into @(Reference); wiring
+         ReferencesToAdd again would duplicate that item group. -->
+    <ResolveTargetingPackAssets
+        FrameworkReferences="@(FrameworkReference)"
+        ProjectLanguage="C#"
+        ResolvedTargetingPacks="@(ResolvedTargetingPack)"
+        RuntimeFrameworks="@(RuntimeFramework)"
+        GenerateErrorForMissingTargetingPacks="false"
+        NuGetRestoreSupported="$(_NuGetRestoreSupported)"
+        DisableTransitiveFrameworkReferenceDownloads="$(DisableTransitiveFrameworkReferenceDownloads)"
+        NetCoreTargetingPackRoot="$(NetCoreTargetingPackRoot)"
+        ContinueOnError="true"
+        Condition=" '@(FrameworkReference)' != '' ">
+      <Output TaskParameter="AnalyzersToAdd" ItemName="GsharpAnalyzer" />
+    </ResolveTargetingPackAssets>
+
+    <!-- Union ALL analyzer sources — NuGet (above), targeting-pack (above),
+         AND any user-supplied @(Analyzer) item — BEFORE filtering anything
+         out. Filtering earlier (i.e. before this union) would only ever
+         cover the resolved-task output, not a user item that names the same
+         assembly directly; a user's own <Analyzer Include="...
+         LibraryImportGenerator.dll"> would then bypass the exclusion below
+         entirely (Copilot review, PR #4334). -->
+    <ItemGroup>
+      <GsharpAnalyzer Include="@(Analyzer)" />
+    </ItemGroup>
+
+    <!-- Apply both filters once, over the full unioned set, keyed on the
+         well-known/intrinsic %(FileName) metadata (populated for EVERY item
+         in EVERY list — including a plain user <Analyzer Include="..."/>,
+         which carries no task-supplied AssemblyName metadata at all — unlike
+         AssemblyName, which only resolved-task output items carry). This is
+         the same metadata key the standard SDK's own ResolveOffByDefaultAnalyzers
+         (below) matches on.
+
+         1. Mirrors ResolveOffByDefaultAnalyzers itself (Microsoft.NET.Sdk.
+            FrameworkReferenceResolution.targets): that target's Remove only
+            ever touches @(Analyzer) — the STANDARD, default-language
+            (ProjectLanguage=$(Language), i.e. "Gsharp") invocation's output,
+            captured above into @(GsharpAnalyzer) — but our SECOND (C#)
+            invocation of the same task, immediately above, feeds its
+            AnalyzersToAdd into that same @(GsharpAnalyzer) item list SEPARATELY
+            and is never touched by ResolveOffByDefaultAnalyzers regardless of
+            target execution order, since that target only ever names
+            @(Analyzer). So RequestDelegateGenerator/ConfigurationBindingGenerator
+            get their own off-by-default removal here, gated the identical
+            way (EnableRequestDelegateGenerator/EnableConfigurationBindingGenerator)
+            as defense in depth for THIS item list — empirically, on the SDK
+            version this was verified against (10.0.401 / ref pack 10.0.12),
+            ResolveTargetingPackAssets's own AnalyzersToAdd output already
+            excludes both regardless of this filter's presence, for a reason
+            unrelated to ResolveOffByDefaultAnalyzers (not yet root-caused —
+            possibly a Roslyn/analyzer-API-version compatibility check inside
+            the task itself); this filter still matters if that upstream
+            behavior ever changes, or on an SDK version where it doesn't hold.
+
+         2. Microsoft.Interop.LibraryImportGenerator backs `[LibraryImport]`,
+            which gsc already implements natively end-to-end (ADR-0092's
+            PInvokeBinder synthesizes the P/Invoke wrapper directly at bind
+            time; `@LibraryImport(...) func ... ;` is a complete declaration,
+            not a partial awaiting an externally-generated part). Letting
+            gsgen ALSO run the real generator against the same trigger would
+            be a second, independent implementation of the same member with
+            no coordination between the two — remove it, unconditionally
+            (not gated by any opt-in switch, unlike (1)).
+            Microsoft.Interop.ComInterfaceGenerator (`[GeneratedComInterface]`)
+            and Microsoft.Interop.JavaScript.JSImportGenerator have no
+            gsc-native equivalent (confirmed empirically — no binder
+            references either attribute) and Microsoft.Interop.SourceGeneration
+            is shared interop infrastructure those two depend on, so all
+            three are left resolvable. -->
+    <ItemGroup>
+      <!-- IsEnabled="false" (never 'true') makes the LibraryImportGenerator
+           removal below unconditional, via the exact same Remove/Condition/
+           MatchOnMetadata mechanism as the two opt-in-gated entries — rather
+           than a separate literal-string Remove, whose comparison semantics
+           against a computed %(FileName) (extension-stripped from a real
+           .dll path) are not worth relying on being exactly equivalent. -->
+      <_GsharpOffByDefaultAnalyzer Include="Microsoft.AspNetCore.Http.RequestDelegateGenerator.dll" IsEnabled="$(EnableRequestDelegateGenerator)" />
+      <_GsharpOffByDefaultAnalyzer Include="Microsoft.Extensions.Configuration.Binder.SourceGeneration.dll" IsEnabled="$(EnableConfigurationBindingGenerator)" />
+      <_GsharpOffByDefaultAnalyzer Include="Microsoft.Interop.LibraryImportGenerator.dll" IsEnabled="false" />
+      <GsharpAnalyzer Remove="@(_GsharpOffByDefaultAnalyzer)" Condition="'%(_GsharpOffByDefaultAnalyzer.IsEnabled)' != 'true'" MatchOnMetadata="FileName" />
+    </ItemGroup>
+
+    <Message Importance="Low" Text="gsgen: resolved analyzers: @(GsharpAnalyzer)" />
+  </Target>
+
+  <!-- Issue #2814 / ADR-0143 §D: reproduce the SDK-derived AssemblyInfo.
+
+       Microsoft.NET.GenerateAssemblyInfo.targets gates CoreGenerateAssemblyInfo
+       on `'$(Language)'=='VB' or '$(Language)'=='C#'`. Because this SDK sets
+       Language=Gsharp, that target silently no-ops and the emitted assembly
+       loses AssemblyTitle/AssemblyProduct/AssemblyCompany/AssemblyConfiguration
+       and peers — attributes the equivalent .csproj build always carries. ADR-0143
+       §D makes reproducing them the G# SDK's job (cs2gs deliberately drops the
+       generated AssemblyInfo.cs and keeps only the project properties).
+
+       The SDK's own WriteCodeFragment task cannot be reused: it is CodeDom-based
+       and only emits C#/VB. WriteGsharpAssemblyInfoTask renders the very same
+       @(AssemblyAttribute) item group — already populated for us by the standard
+       GetAssemblyAttributes target — as file-level G# `@assembly:` annotations.
+
+       $(GeneratedAssemblyInfoFile) needs no override: the SDK already defaults it
+       to $(IntermediateOutputPath)$(MSBuildProjectName).AssemblyInfo$(DefaultLanguageSourceExtension),
+       and Sdk.props sets DefaultLanguageSourceExtension to `.gs`.
+
+       This runs BEFORE _GsharpPartitionForeignCompile so the generated file is in
+       @(Compile) by the time gsgen computes its inputs. It emits `.gs`, so the
+       partition target leaves it alone. -->
+  <Target Name="_GsharpGenerateAssemblyInfo"
+          Condition=" '$(GenerateAssemblyInfo)' == 'true' "
+          DependsOnTargets="CreateGeneratedAssemblyInfoInputsCacheFile"
+          BeforeTargets="_GsharpPartitionForeignCompile;CoreCompile"
+          Inputs="$(GeneratedAssemblyInfoInputsCacheFile)"
+          Outputs="$(GeneratedAssemblyInfoFile)">
+    <WriteGsharpAssemblyInfoTask AssemblyAttributes="@(AssemblyAttribute)"
+                                 OutputFile="$(GeneratedAssemblyInfoFile)" />
+  </Target>
+
+  <!-- Fold the generated AssemblyInfo into @(Compile). Kept separate from, and
+       with no Inputs/Outputs unlike, _GsharpGenerateAssemblyInfo above so it
+       ALWAYS runs — an incremental build that skips regeneration must still add
+       the existing file to @(Compile), mirroring _GsharpIncludeGeneratedCompile.
+       The Remove guards against a project that also globs the file in. -->
+  <Target Name="_GsharpIncludeGeneratedAssemblyInfo"
+          Condition=" '$(GenerateAssemblyInfo)' == 'true' "
+          DependsOnTargets="_GsharpGenerateAssemblyInfo"
+          BeforeTargets="_GsharpPartitionForeignCompile;CoreCompile">
+    <ItemGroup Condition="Exists('$(GeneratedAssemblyInfoFile)')">
+      <Compile Remove="$(GeneratedAssemblyInfoFile)" />
+      <Compile Include="$(GeneratedAssemblyInfoFile)" />
+      <FileWrites Include="$(GeneratedAssemblyInfoFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Issue #2214 / ADR-0145 extension: partition any stray C# `.cs` Compile
+       item out of @(Compile) before gsc/gsgen ever see it. gsc only understands
+       G# syntax; a raw .cs item — e.g. Nerdbank.GitVersioning's generated
+       `ThisAssembly.cs`, added as an ordinary <Compile> item by NBGV's own
+       MSBuild target — would otherwise be handed to gsc's /gs: exactly like a
+       .gs file and fail to parse. Generalized per issue #2214: ANY `.cs`
+       Compile item is routed through the same gsgen translation pipeline that
+       already back-translates generator output, not just this one known
+       generator's file. -->
+  <Target Name="_GsharpPartitionForeignCompile"
+          DependsOnTargets="_GsharpPrepareHotReload">
+    <ItemGroup>
+      <_GsharpForeignCompile Include="@(Compile)" Condition=" '%(Extension)' == '.cs' " />
+      <Compile Remove="@(_GsharpForeignCompile)" />
+    </ItemGroup>
+
+    <Message Condition=" '@(_GsharpForeignCompile)' != '' " Importance="Low" Text="gsgen: found stray C# Compile item(s) to translate: @(_GsharpForeignCompile)" />
+  </Target>
+
+  <!-- Issue #2223: project-wide generator options forwarded to gsgen as
+       build_property.* AnalyzerConfigOptions. A file/options-driven generator
+       (e.g. Avalonia's XAML name generator) reads these. Only the concrete
+       properties known to matter are forwarded; a generator's own default
+       applies for any it does not find. -->
+  <Target Name="_GsharpCollectGeneratorOptions">
+    <ItemGroup>
+      <_GsharpGeneratorGlobalOption Include="RootNamespace" Condition=" '$(RootNamespace)' != '' ">
+        <Value>$(RootNamespace)</Value>
+      </_GsharpGeneratorGlobalOption>
+      <_GsharpGeneratorGlobalOption Include="ProjectDir">
+        <Value>$(MSBuildProjectDirectory)</Value>
+      </_GsharpGeneratorGlobalOption>
+      <_GsharpGeneratorGlobalOption Include="AvaloniaNameGeneratorBehavior" Condition=" '$(AvaloniaNameGeneratorBehavior)' != '' ">
+        <Value>$(AvaloniaNameGeneratorBehavior)</Value>
+      </_GsharpGeneratorGlobalOption>
+      <_GsharpGeneratorGlobalOption Include="AvaloniaNameGeneratorViewFileNamingStrategy" Condition=" '$(AvaloniaNameGeneratorViewFileNamingStrategy)' != '' ">
+        <Value>$(AvaloniaNameGeneratorViewFileNamingStrategy)</Value>
+      </_GsharpGeneratorGlobalOption>
+    </ItemGroup>
+  </Target>
+
+  <!-- Issue #2294 / ADR-0145 parity gap: several generator-adjacent NuGet
+       packages populate @(AdditionalFiles) themselves by hooking a standard
+       csc/vbc extensibility target rather than a plain ItemGroup. The
+       canonical example is Avalonia: Avalonia.Generators.props injects the
+       project's AXAML into @(AdditionalFiles) via
+       `BeforeTargets="GenerateMSBuildEditorConfigFileShouldRun"` — a target
+       defined only in Microsoft.Managed.Core.targets, which a Gsharp project
+       never imports (§E). MSBuild silently no-ops a BeforeTargets reference to
+       a target name that does not exist, so that injection never ran and
+       @(AdditionalFiles) reached gsgen empty even though gsgen's
+       AdditionalText/SourceItemGroup plumbing (issue #2223) already fully
+       supports it. Defining the same hook name here — even as a no-op body —
+       is enough for such packages' BeforeTargets to fire, matching csc's
+       extensibility surface without special-casing Avalonia. -->
+  <Target Name="GenerateMSBuildEditorConfigFileShouldRun" />
+
+  <!-- Track argument and item membership changes even when no input file is newer. -->
+  <Target Name="_GsharpCreateGeneratorInputsCache">
+    <ItemGroup>
+      <_GsharpGeneratorInputsToHash Include="@(Compile->'GS:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(_GsharpForeignCompile->'CS:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(ReferencePathWithRefAssemblies->'REF:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(GsharpAnalyzer->'ANALYZER:%(FullPath)')" />
+      <_GsharpGeneratorInputsToHash Include="@(AdditionalFiles->'ADDITIONAL:%(FullPath)|%(SourceItemGroup)|%(TargetPath)|%(ManifestResourceName)')" />
+      <_GsharpGeneratorInputsToHash Include="@(_GsharpGeneratorGlobalOption->'OPTION:%(Identity)=%(Value)')" />
+      <_GsharpGeneratorInputsToHash Include="ROOTNAMESPACE:$(RootNamespace);TOOL:$(GsgenToolFullPath)" />
+    </ItemGroup>
+    <Hash ItemsToHash="@(_GsharpGeneratorInputsToHash)" IgnoreCase="false">
+      <Output TaskParameter="HashResult" PropertyName="_GsharpGeneratorInputsHash" />
+    </Hash>
+    <MakeDir Directories="$(IntermediateOutputPath)gsgen" />
+    <WriteLinesToFile Lines="$(_GsharpGeneratorInputsHash)"
+                      File="$(IntermediateOutputPath)gsgen/inputs.cache"
+                      Overwrite="True"
+                      WriteOnlyWhenDifferent="True" />
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)gsgen/inputs.cache" />
+    </ItemGroup>
+  </Target>
+
+  <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
+       @(Compile)), the resolved reference closure, and the resolved analyzers.
+       The manifest owns generated files; the task commits a separate success
+       stamp only after exit status and diagnostic streams are accepted. -->
+  <Target Name="_GsharpRunSourceGenerators"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_GsharpPartitionForeignCompile;GenerateMSBuildEditorConfigFileShouldRun;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences;_GsharpCreateGeneratorInputsCache"
+          Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
+          Inputs="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(GsgenToolFullPath);$(IntermediateOutputPath)gsgen/inputs.cache;$(MSBuildAllProjects)"
+          Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest;$(IntermediateOutputPath)gsgen\gsgen.manifest.success">
+    <!-- The analyzer-empty fast path is gated on the TASK, not the target's
+         Condition: a target whose Condition is false never runs its
+         DependsOnTargets, so gating the target on '@(GsharpAnalyzer)' would
+         prevent _GsharpResolveAnalyzers (which POPULATES that item) from ever
+         running — a chicken-and-egg deadlock. Keep the target unconditional and
+         let _GsharpResolveAnalyzers run first, then skip the actual gsgen launch
+         when it resolved nothing AND there is no stray C# to translate either.
+         A previous manifest still needs an empty run to delete orphaned parts. -->
+    <GsgenTask
+        Condition=" '@(GsharpAnalyzer)' != '' or '@(_GsharpForeignCompile)' != '' or Exists('$(IntermediateOutputPath)gsgen\gsgen.manifest') "
+        GsgenToolFullPath="$(GsgenToolFullPath)"
+        Compile="@(Compile)"
+        ForeignCompile="@(_GsharpForeignCompile)"
+        References="@(ReferencePathWithRefAssemblies)"
+        Analyzers="@(GsharpAnalyzer)"
+        AdditionalFiles="@(AdditionalFiles)"
+        GlobalOptions="@(_GsharpGeneratorGlobalOption)"
+        OutputDir="$(IntermediateOutputPath)gsgen\"
+        ManifestPath="$(IntermediateOutputPath)gsgen\gsgen.manifest"
+        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).gsgen.rsp"
+        RootNamespace="$(RootNamespace)"
+        UseSharedCompilation="$(GSharpUseSharedCompilation)"
+        WorkerGrant="$(GSharpWorkerGrant)"
+        BasePath="$(MSBuildProjectDirectory)" />
+  </Target>
+
+
+  <!-- (3) Fold the generated parts into @(Compile). This target has NO
+       Inputs/Outputs so it ALWAYS runs before CoreCompile — even when (2) was
+       skipped as up to date — reading the manifest gsgen wrote (this run or a
+       prior one) and adding each listed .g.gs to @(Compile) so CoreCompile's
+       Inputs="@(Compile)" picks them up. -->
+  <Target Name="_GsharpIncludeGeneratedCompile"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_GsharpRunSourceGenerators"
+          Condition=" '$(GsharpRunSourceGenerators)' != 'false' and Exists('$(IntermediateOutputPath)gsgen\gsgen.manifest') ">
+    <ItemGroup>
+      <_GsharpGeneratedManifest Include="$(IntermediateOutputPath)gsgen/gsgen.manifest" />
+    </ItemGroup>
+    <ReadLinesFromFile File="$(IntermediateOutputPath)gsgen\gsgen.manifest">
+      <Output TaskParameter="Lines" ItemName="_GsharpGeneratedGsFile" />
+    </ReadLinesFromFile>
+
+    <ItemGroup>
+      <Compile Include="@(_GsharpGeneratedGsFile)" Condition=" '@(_GsharpGeneratedGsFile)' != '' " />
+
+      <!-- Track generated outputs (parts + manifest) so Clean removes them and
+           incremental build sees them. -->
+      <FileWrites Include="@(_GsharpGeneratedGsFile)" Condition=" '@(_GsharpGeneratedGsFile)' != '' " />
+      <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest" />
+      <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest.success" />
+      <FileWrites Include="$(IntermediateOutputPath)$(TargetName).gsgen.rsp" Condition="Exists('$(IntermediateOutputPath)$(TargetName).gsgen.rsp')" />
+    </ItemGroup>
+
+    <Message Importance="Low" Text="gsgen: added generated sources to Compile: @(_GsharpGeneratedGsFile)" />
+  </Target>
+
+  <!-- ADR-0169: G# diagnostic analyzers. @(GsharpCodeAnalyzer) items — added
+       directly by the project, or flowed from a ProjectReference with
+       OutputItemType="GsharpCodeAnalyzer" ReferenceOutputAssembly="false" —
+       are forwarded to gsc as /gsanalyzer: lines by BuildTask. Analyzer
+       diagnostics come back through the normal stdout relogging. Resolving
+       analyzers from package assets (analyzers/gsharp/) is future work. -->
+  <Target Name="CoreCompile"
+          Inputs="$(MSBuildAllProjects);
+                  @(Compile);
+                  @(GsharpCodeAnalyzer);
+                  @(ReferencePathWithRefAssemblies);
+                  @(ReferenceDependencyPaths);
+                  @(RuntimeCopyLocalItems);
+                  @(_CoreCompileResourceInputs);
+                  @(CompiledLicenseFile);
+                  @(_GsharpGeneratedManifest);
+                  $(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache"
+          Outputs="@(IntermediateAssembly);
+                   $(DocumentationFile);
+                   @(IntermediateRefAssembly);
+                   @(_DebugSymbolsIntermediatePath)"
+          Returns="@(GsharpCommandLineArgs)"
+          DependsOnTargets="$(CoreCompileDependsOn)">
+
+    <!-- When the SDK asks for a reference assembly (ProduceReferenceAssembly=true),
+         Microsoft.Common.Targets sets @(IntermediateRefAssembly) to obj/refint/{name}.dll.
+         Forward that path to gsc via /refout: so the metadata-only sibling is written
+         in the same pass as the runtime assembly. -->
+    <PropertyGroup>
+      <_GsharpRefAssemblyPath Condition=" '$(ProduceReferenceAssembly)' == 'true' ">@(IntermediateRefAssembly)</_GsharpRefAssemblyPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GsharpCoreCompileResource Include="@(_CoreCompileResourceInputs)"
+                                  Condition="'%(_CoreCompileResourceInputs.WithCulture)' != 'true'" />
+      <_GsharpCoreCompileResource Include="@(CompiledLicenseFile)" />
+    </ItemGroup>
+
+    <!-- MetadataLoadContext needs dependencies that csc does not require as direct references (issues #340 and #5493).
+         RAR reports loose dependencies separately, and NuGet can supply dependencies only as runtime assets.
+         Put compile references first so the compiler preserves their metadata-identity precedence. -->
+    <BuildTask
+        UseSharedCompilation="$(GSharpUseSharedCompilation)"
+        WorkerGrant="$(GSharpWorkerGrant)"
+        MaxWorkers="$(GSharpMaxWorkers)"
+        WorkerMemoryBudgetMiB="$(GSharpWorkerMemoryBudgetMiB)"
+        GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
+        SdkToolsDirectory="$(GsharpSdkToolsDirectory)"
+        OutputPath="$(IntermediateOutputPath)"
+        OutputName="$(TargetName)"
+        TempOutputPath="$(IntermediateOutputPath)"
+        TargetFramework="$(TargetFramework)"
+        BasePath="$(MSBuildProjectDirectory)"
+        Optimization="$(Optimize)"
+        DebugType="$(DebugType)"
+        PdbFile="@(_DebugSymbolsIntermediatePath)"
+        DocumentationFile="$(DocumentationFile)"
+        SourceLink="$(SourceLink)"
+        EmbedAllSources="$(EmbedAllSources)"
+        Deterministic="$(Deterministic)"
+        Version="$(Version)"
+        OutputType="$(OutputType)"
+        RefAssembly="$(_GsharpRefAssemblyPath)"
+        NoWarn="$(NoWarn)"
+        TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
+        WarningsAsErrors="$(WarningsAsErrors)"
+        WarningsNotAsErrors="$(WarningsNotAsErrors)"
+        Compile="@(Compile)"
+        References="@(ReferencePathWithRefAssemblies);@(ReferenceDependencyPaths);@(RuntimeCopyLocalItems)"
+        GsAnalyzers="@(GsharpCodeAnalyzer)"
+        Resources="@(_GsharpCoreCompileResource)"
+        SkipCompilerExecution="$(SkipCompilerExecution)"
+        ProvideCommandLineArgs="$(ProvideCommandLineArgs)"
+        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp">
+      <Output TaskParameter="CommandLineArgs" ItemName="GsharpCommandLineArgs" />
+    </BuildTask>
+
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
+      <FileWrites Include="$(_GsharpRefAssemblyPath)" Condition=" '$(_GsharpRefAssemblyPath)' != '' " />
+      <FileWrites Include="$(DocumentationFile)" Condition=" '$(DocumentationFile)' != '' " />
+
+      <!-- Phase 8: declare the sidecar PDB to MSBuild so incremental build,
+           Clean, dotnet publish, and dotnet pack (when GeneratePackageOnBuild
+           or Symbols=true) all see the symbols alongside the runtime assembly.
+           Embedded PDBs land inside the PE so we deliberately skip the entry
+           for DebugType=embedded; DebugType=none / "" produces no file at
+           all and we likewise skip. -->
+      <FileWrites Include="@(_DebugSymbolsIntermediatePath)"
+                  Condition=" '@(_DebugSymbolsIntermediatePath)' != '' and
+                              '$(DebugType)' != ''                       and
+                              '$(DebugType)' != 'none'                   and
+                              '$(DebugType)' != 'embedded' " />
+    </ItemGroup>
+  </Target>
+
+  <!-- Visual Studio's managed CPS targets require each language SDK to expose
+       its design-time compiler arguments without running the compiler. -->
+  <Target Name="CompileDesignTime"
+          Returns="@(_CompilerCommandLineArgs)"
+          DependsOnTargets="_CheckCompileDesignTimePrerequisite;Compile"
+          Condition="'$(IsCrossTargetingBuild)' != 'true'">
+    <ItemGroup>
+      <_CompilerCommandLineArgs Include="@(GsharpCommandLineArgs)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Runtime agent invokes this target after a source change. It reuses the
+       normal Compile pipeline, then copies its full candidate image outside
+       bin/ so the running process can derive and apply an EnC delta. -->
+  <Target Name="_GsharpHotReloadCompile"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' "
+          DependsOnTargets="Compile">
+    <MakeDir Directories="$(GsharpHotReloadOutputDirectory)" />
+    <Copy SourceFiles="@(IntermediateAssembly)"
+          DestinationFiles="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName)$(TargetExt)'))" />
+    <Copy SourceFiles="@(_DebugSymbolsIntermediatePath)"
+          DestinationFiles="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName).pdb'))"
+          Condition=" '@(_DebugSymbolsIntermediatePath)' != '' and Exists('@(_DebugSymbolsIntermediatePath)') " />
+    <ItemGroup>
+      <FileWrites Include="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName).dll'))" />
+      <FileWrites Include="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName).pdb'))" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Phase 7.7b: feed the reference assembly into NuGet pack under ref/<tfm>/.
+       This target is referenced from TargetsForTfmSpecificContentInPackage. -->
+  <Target Name="_GsharpGetRefAssemblyForPack"
+          Condition=" '$(ProduceReferenceAssembly)' == 'true' ">
+    <!-- Use the effective framework identity, as NuGet does for lib/<tfm>/. -->
+    <GetNuGetShortFolderName TargetFrameworkMoniker="$(TargetFrameworkMoniker)"
+                            TargetPlatformMoniker="$(TargetPlatformMoniker)">
+      <Output TaskParameter="NuGetShortFolderName" PropertyName="_GsharpPackTargetFramework" />
+    </GetNuGetShortFolderName>
+    <ItemGroup>
+      <!-- Issue #1672: use the SDK-computed $(TargetRefPath) instead of
+           reconstructing the obj/ layout by string concatenation, so pack
+           still works with customized BaseIntermediateOutputPath/
+           IntermediateOutputPath (see build/gsharp.build.props), UseArtifactsOutput,
+           or a non-default MSBuildProjectExtensionsPath. -->
+      <TfmSpecificPackageFile Include="$(TargetRefPath)"
+                              PackagePath="ref/$(_GsharpPackTargetFramework)/" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="AfterCompile" />
+
+  <!-- Microsoft.Common.targets delegates language-specific manifest naming to
+       this target. Reuse the standard C# naming task without importing the
+       C#-specific managed compile pipeline. -->
+  <PropertyGroup>
+    <CreateManifestResourceNamesDependsOn />
+  </PropertyGroup>
+  <Target Name="CreateManifestResourceNames"
+          Condition=" '@(EmbeddedResource)' != '' "
+          DependsOnTargets="$(CreateManifestResourceNamesDependsOn)">
+    <ItemGroup>
+      <_Temporary Remove="@(_Temporary)" />
+    </ItemGroup>
+
+    <CreateCSharpManifestResourceName
+        ResourceFiles="@(EmbeddedResource)"
+        RootNamespace="$(RootNamespace)"
+        EnableCustomCulture="$(EnableCustomCulture)"
+        UseDependentUponConvention="$(EmbeddedResourceUseDependentUponConvention)"
+        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' and
+                    ('%(EmbeddedResource.WithCulture)' == 'false' or '%(EmbeddedResource.Type)' == 'Resx') ">
+      <Output TaskParameter="ResourceFilesWithManifestResourceNames" ItemName="_Temporary" />
+    </CreateCSharpManifestResourceName>
+
+    <CreateCSharpManifestResourceName
+        ResourceFiles="@(EmbeddedResource)"
+        RootNamespace="$(RootNamespace)"
+        PrependCultureAsDirectory="false"
+        UseDependentUponConvention="$(EmbeddedResourceUseDependentUponConvention)"
+        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' and
+                    '%(EmbeddedResource.WithCulture)' == 'true' and
+                    '%(EmbeddedResource.Type)' == 'Non-Resx' ">
+      <Output TaskParameter="ResourceFilesWithManifestResourceNames" ItemName="_Temporary" />
+    </CreateCSharpManifestResourceName>
+
+    <ItemGroup>
+      <EmbeddedResource Remove="@(EmbeddedResource)"
+                        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' " />
+      <EmbeddedResource Include="@(_Temporary)" />
+      <_Temporary Remove="@(_Temporary)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

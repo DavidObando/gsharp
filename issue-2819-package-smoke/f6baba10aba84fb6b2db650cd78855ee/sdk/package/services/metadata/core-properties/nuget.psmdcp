@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties">
+  <dc:creator>David Obando</dc:creator>
+  <dc:description>MSBuild Project SDK for the GSharp language. Enables `&lt;Project Sdk="Gsharp.NET.Sdk"&gt;` and .gsproj files to build with `dotnet build`.</dc:description>
+  <dc:identifier>Gsharp.NET.Sdk</dc:identifier>
+  <version>0.5.430-g30fbaa41a4</version>
+  <keywords>gsharp dotnet sdk msbuild compiler</keywords>
+  <lastModifiedBy>NuGet.Packaging, Version=7.9.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35;.NET 8.0</lastModifiedBy>
+</coreProperties>

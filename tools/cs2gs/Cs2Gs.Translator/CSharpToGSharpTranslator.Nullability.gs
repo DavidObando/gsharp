@@ -1143,6 +1143,40 @@ partial class CSharpToGSharpTranslator {
         // `!!` insertion both route through this helper so a tainted interface/
         // implementation member, local/parameter/property/field, or method return
         // gets the same `T?`/forgiveness treatment everywhere.
+        /// Decides whether [`symbol`](paramref) is a declaration that the translator emits as `T?`
+        /// although C# declares it non-null: a parameter or `out` parameter that cs2gs widened, or a local
+        /// that an `out var` / `out T x` argument declares for such a parameter (G# infers the local's
+        /// type from the widened parameter).
+        /// @remarks This is the one place that names the declarations whose reads need a forgiving
+        /// `!!` when the C# flow state at the read is non-null (issue #5254). The flow-state rule
+        /// itself stays in `ReceiverNeedsNullForgiveness`.
+        private func IsTranslatorWidenedDeclaration(symbol ISymbol?) bool {
+            if this.ShouldPromoteToNullableReference(symbol) {
+                return true
+            }
+            if symbol is not ILocalSymbol local {
+                return false
+            }
+            for reference in local.DeclaringSyntaxReferences {
+                // `out var x` declares through a designation; `out T x` through a declaration expression.
+                let declaration SyntaxNode? = reference.GetSyntax()?.Parent
+                let argumentNode SyntaxNode? = if declaration is DeclarationExpressionSyntax {
+                    declaration.Parent
+                } else {
+                    default(SyntaxNode?)
+                }
+                if argumentNode is ArgumentSyntax argument && argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) &&
+                    this
+                    .context
+                    .SemanticModel
+                    .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                    this.ShouldPromoteToNullableReference(parameter.OriginalDefinition) {
+                    return true
+                }
+            }
+            return false
+        }
+
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
             let declared ITypeSymbol? = switch symbol {
                 case m is IMethodSymbol: m.ReturnType

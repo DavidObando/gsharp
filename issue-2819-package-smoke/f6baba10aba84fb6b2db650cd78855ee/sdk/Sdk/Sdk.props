@@ -1,0 +1,42 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/*.gsproj.lscache</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <DefaultLanguageSourceExtension>.gs</DefaultLanguageSourceExtension>
+    <EnableDefaultCompileItems Condition=" '$(EnableDefaultCompileItems)' == '' ">true</EnableDefaultCompileItems>
+    <EnableDefaultItems Condition=" '$(EnableDefaultItems)' == '' ">true</EnableDefaultItems>
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
+
+    <!-- gsc emits a metadata-only sibling assembly via /refout:. Enable the
+         SDK's reference-assembly pipeline so consumers get refint/ and ref/
+         outputs alongside the runtime assembly. -->
+    <ProduceReferenceAssembly Condition=" '$(ProduceReferenceAssembly)' == '' ">true</ProduceReferenceAssembly>
+
+    <!-- Phase 7.7b: enable XML documentation file generation for library
+         projects so consumers get IntelliSense / XML doc hover.
+         NOTE: DocumentationFile is set in Gsharp.NET.Core.Sdk.targets where
+         IntermediateOutputPath and TargetName are already resolved (#855). -->
+    <GenerateDocumentationFile Condition=" '$(GenerateDocumentationFile)' == '' and '$(OutputType)' != 'Exe' ">true</GenerateDocumentationFile>
+
+    <!-- Default an unset format independently of IncludeSymbols.
+         Pack uses the format only when IncludeSymbols is true. -->
+    <SymbolPackageFormat Condition=" '$(SymbolPackageFormat)' == '' ">snupkg</SymbolPackageFormat>
+
+    <!-- Phase 7.7b: suppress NU5131 — our Pack target populates ref/<tfm>/
+         via TfmSpecificPackageFile which NuGet's nuspec validation doesn't
+         cross-check with the References element. The layout is correct. -->
+    <NoWarn>$(NoWarn);NU5131</NoWarn>
+  </PropertyGroup>
+
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="$(MSBuildThisFileDirectory)..\build\Gsharp.NET.Sdk.props" />
+
+  <ItemGroup>
+    <None Include="**/*.gsproj.lscache" Visible="false" />
+  </ItemGroup>
+
+</Project>

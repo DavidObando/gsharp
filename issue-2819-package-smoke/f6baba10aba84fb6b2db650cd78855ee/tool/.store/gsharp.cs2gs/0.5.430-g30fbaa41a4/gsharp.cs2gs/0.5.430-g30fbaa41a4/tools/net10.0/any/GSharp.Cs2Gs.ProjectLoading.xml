@@ -1,0 +1,274 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>GSharp.Cs2Gs.ProjectLoading</name>
+    </assembly>
+    <members>
+        <member name="F:Cs2Gs.Translator.Analyzers.SnippetTranslator.SnippetDiagnosticId">
+            <summary>The diagnostic id carried by unplaceable-marker warnings.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Analyzers.SnippetTranslator.UnitSeparator">
+            <summary>The line separating one emitted G# compilation unit from the next (issue #3794). MUST equal <c>GSharpAnalyzerVerifier.UnitSeparator</c>, which is what splits it back apart; <c>Issue3794AnalyzerSnippetPackageSplitTests</c> asserts the two spellings agree, because cs2gs cannot reference the G# testing assembly it emits calls into.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.CSharpProjectLoader.GeneratedSourceSkippedDescriptor">
+            <summary>Diagnostic id emitted (informationally) for each source file excluded from translation because it is genuinely build-generated (recognized by an <c>&lt;auto-generated&gt;</c> header or by living under the project's own <c>obj/</c>/<c>bin/</c> output directories) — never by file name alone.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.CSharpProjectLoader.MSBuildWorkspaceLoadFailureDescriptor">
+            <summary>Diagnostic id for an MSBuild workspace load failure (a project that soft-failed to load: missing SDK/targets, skipped project reference, wrong TFM, etc.). Surfaced as an <see cref="DiagnosticSeverity.Error" /> so <see cref="LoadedCSharpProject.BoundWithoutErrors" /> reflects the real state of the load instead of silently proceeding on a degraded project.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.CSharpProjectLoader.NuGetAuditAdvisoryDescriptor">
+            <summary>Issue #2321: a NuGet audit vulnerability advisory (NU1901-NU1904 shape) that MSBuildWorkspace misclassified as a <see cref="WorkspaceDiagnosticKind.Failure" />. Recorded informationally instead of as an error — the package still restores and builds.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId">
+            <summary>Diagnostic id for a benign NuGet audit vulnerability advisory (issue #2321) — a <see cref="WorkspaceDiagnosticKind.Failure" /> MSBuildWorkspace diagnostic that <see cref="NuGetAuditAdvisoryPolicy.IsBenignAdvisory(string" />) recognized as the stable NU1901-NU1904 advisory shape. Recorded at <see cref="DiagnosticSeverity.Info" /> — visible in <see cref="LoadedCSharpProject.LoadDiagnostics" /> for anything that later wants to surface it, but excluded from <see cref="LoadedCSharpProject.ErrorDiagnostics" /> so it does not trip <see cref="LoadedCSharpProject.BoundWithoutErrors" /> or <see cref="LoadedCSharpProject.WorkspaceLoadFailed" />.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId">
+            <summary>Diagnostic id for an MSBuild workspace load failure — the exact signal pipeline stages must gate on (issue #1742): a project that soft-failed to open (missing SDK/targets, an unresolvable project reference, an unsupported TFM, ...), as opposed to an ordinary C# semantic error in a document that did load (some corpus fixtures carry those deliberately, e.g. to exercise the later <c>gsc</c> compile-gap stage).</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.MinimumGSharpVersion">
+            <summary>The lowest nbgv version that emits the G# <c>ThisAssembly</c> source. A below-floor literal reference is bumped up to exactly this value.</summary>
+        </member>
+        <member name="F:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.PackageId">
+            <summary>The nbgv package id, matched case-insensitively.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.DeclarationOrdinal(Cs2Gs.Translator.Loading.LoadedDocument,Cs2Gs.Translator.Analyzers.SnippetTranslator.MarkedText,System.Collections.Generic.IReadOnlyList{System.String},System.Int32)">
+            <summary>When <paramref name="marked" /> covers exactly the identifier a C# declaration is NAMED by, the number of same-named declarations earlier in the snippet; otherwise <c>null</c> (issue #3794).</summary>
+            <param name="document">The loaded snippet document.</param>
+            <param name="marked">The marker.</param>
+            <param name="packages">The emitted packages.</param>
+            <param name="unitIndex">The unit containing the marker.</param>
+            <returns>The declaration ordinal, or <c>null</c>.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.IsDeclarationName(Microsoft.CodeAnalysis.SyntaxToken)">
+            <summary>Whether <paramref name="token" /> is the identifier that names its declaration — a field/local declarator, a property, a method, a type, a parameter, or an enum member.</summary>
+            <param name="token">The candidate identifier token.</param>
+            <returns>True when the token names a declaration.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.NthDeclarationOccurrence(System.String,System.String,System.Int32)">
+            <summary>The index of the <paramref name="ordinal" />-th (zero-based) occurrence of <paramref name="text" /> in <paramref name="source" /> that is spelled as a G# DECLARATION name — a whole word immediately preceded, on the same line, by a declaration keyword — or -1.</summary>
+            <param name="source">The printed G#.</param>
+            <param name="text">The declaration name.</param>
+            <param name="ordinal">The zero-based declaration occurrence to find.</param>
+            <returns>The index, or -1.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.NthOccurrence(System.String,System.String,System.Int32)">
+            <summary>Returns the index of the <paramref name="ordinal" />-th (zero-based) non-overlapping occurrence of <paramref name="text" />, or -1.</summary>
+            <param name="source">The text to scan.</param>
+            <param name="text">The occurrence text.</param>
+            <param name="ordinal">The zero-based occurrence to find.</param>
+            <returns>The index, or -1 when there are fewer occurrences.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.PredefinedRenaming.For(Cs2Gs.Translator.Loading.LoadedDocument,System.String)">
+            <summary>Builds the renaming for <paramref name="document" />.</summary>
+            <param name="document">The loaded snippet document.</param>
+            <param name="cleanSource">The marker-free C# source.</param>
+            <returns>The renaming.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.PredefinedRenaming.OriginalOffset(System.Int32)">
+            <summary>Maps an offset in <see cref="Source" /> back to the original C# source.</summary>
+            <param name="offset">The renamed-source offset.</param>
+            <returns>The corresponding original-source offset.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.PredefinedRenaming.Rename(Cs2Gs.Translator.Analyzers.SnippetTranslator.MarkedText)">
+            <summary>Carries <paramref name="marked" /> into the renamed source: its text re-spelled, and its start offset shifted.</summary>
+            <param name="marked">The marker as it appears in the C# source.</param>
+            <returns>The marker as it appears in the renamed source.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.Translate(System.String)">
+            <summary>Translates <paramref name="csharpWithMarkers" /> to a G# snippet with re-placed markers.</summary>
+            <param name="csharpWithMarkers">The marked C# snippet (a full compilation unit).</param>
+            <returns>The translation result.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Analyzers.SnippetTranslator.TryNullForgivingTolerantOccurrence(System.String,System.String,System.Int32,System.Int32@,System.Int32@)">
+            <summary>Issue #4190: retries placement tolerating a <c>!!</c> RUNTIME null-assertion cs2gs inserts immediately after an identifier the marked text reads — e.g. a guarded reassignment walk, <c>current = current.BaseClass</c>, whose receiver's nullability cs2gs's flow-sensitive analysis cannot always prove narrowed (a <c>do</c>/<c>while</c> loop's post-test guard, in particular, narrows nothing the G# binder itself recognizes — see <c>StatementBinder.Loops.BindDoWhileStatementCore</c> — so the bridging <c>!!</c> is not merely conservative there; it is required for the translated G# to bind at all), prints as <c>current = current!!.BaseClass</c>. Unlike <see cref="PredefinedRenaming" /> (a lexical rename computed from the marked region's own syntax), the <c>!!</c> decision depends on flow analysis of the FULL surrounding method body, invisible from inside the marked region alone — so instead of predicting the exact re-spelling, this searches for the marked text with an OPTIONAL <c>!!</c> tolerated after every identifier, keeping every other character an exact literal match. The same occurrence-ordinal counted over the UNMODIFIED marker text in the clean C# source (shared with the plain-match stage above) selects which tolerant match is the right one, so a repeated marker still lands on its own occurrence.</summary>
+            <param name="printed">The printed G#.</param>
+            <param name="markedText">The marker's original C# text.</param>
+            <param name="ordinal">The zero-based occurrence to find.</param>
+            <param name="index">The matched span's start index, when found.</param>
+            <param name="length">The matched span's length, when found.</param>
+            <returns>True when a tolerant match was found.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.BuildLoadedProjectAsync(Microsoft.CodeAnalysis.Project,System.Collections.Generic.List{Microsoft.CodeAnalysis.Diagnostic},System.Threading.CancellationToken,System.Boolean,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>Builds a <see cref="LoadedCSharpProject" /> from a bound Roslyn <see cref="Project" />, seeding its diagnostics with the supplied list (e.g. workspace load failures for the primary project).</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.ClassifyWorkspaceLoadDiagnostics(Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace)">
+            <summary>Issue #2321: classifies every <see cref="WorkspaceDiagnosticKind.Failure" /> diagnostic MSBuildWorkspace recorded while opening a project into either a genuine <see cref="MSBuildWorkspaceLoadFailureDescriptor" /> error, or — when <see cref="NuGetAuditAdvisoryPolicy.IsBenignAdvisory(string" />) recognizes the message as the stable NU1901-NU1904 advisory shape — a non-fatal <see cref="NuGetAuditAdvisoryDescriptor" /> info diagnostic. Applied identically by both <see cref="LoadProjectAsync" /> and <see cref="LoadProjectWithReferencesAsync" /> so neither path lets a benign vulnerability warning trip <see cref="WorkspaceLoadFailureDiagnosticId" /> (CS2GS0001), while every other soft-fail (missing SDK/imports, an unresolvable <c>ProjectReference</c>, an unsupported TFM, NU1900 audit-fetch failures, or a mixed/multiline message with any non-advisory line) remains fatal.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.CreateWorkspace">
+            <summary>Creates the <see cref="MSBuildWorkspace" /> every design-time project load in this class uses. Issue #4278: under CI (<c>ContinuousIntegrationBuild</c> true, e.g. the self-migration nightly, which sets <c>GITHUB_ACTIONS</c>) the SDK's default targets turn on <c>DeterministicSourcePaths</c>, which requires <c>@(SourceRoot)</c> to resolve to a git repository. A throwaway fixture <c>.csproj</c> written under a scratch/test-output directory (or, worse, one loaded from inside the self-migration mirror, which has no <c>.git</c> by design — see <c>RepositoryFileInventory</c>) inherits this repo's root <c>Directory.Build.props</c> (SourceLink + git-versioning package references) via MSBuild's normal upward search, but has no git root to resolve against, and the design-time build fails outright with <c>CS2GS0001: SourceRoot items must include at least one top-level (not nested) item when DeterministicSourcePaths is true</c> instead of loading. This loader only ever READS a project's syntax/semantics for translation — it never persists a deterministic PathMap-mapped build output — so forcing the CI flag off for the load is safe and has no effect on any real build.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.DiscoverAdditionalFiles(Microsoft.CodeAnalysis.Project,System.String)">
+            <summary>Issue #2223: the non-source generator inputs the project exposes to Roslyn analyzers/generators — the MSBuild <c>@(AdditionalFiles)</c> set (Roslyn <see cref="Project.AdditionalDocuments" />, which Avalonia's targets populate with each <c>.axaml</c>), unioned with an explicit <c>*.axaml</c> glob under the project directory as a fallback for a workspace load that did not surface them. Files under the project's own <c>obj</c>/<c>bin</c> are excluded (generated/copied artifacts).</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.DiscoverResxFiles(System.String)">
+            <summary>Finds every <c>.resx</c> file under <paramref name="projectDirectory" /> (issue #2200), mirroring the .NET SDK's implicit default-item globbing for <c>EmbeddedResource</c> items — Roslyn's <see cref="Project" /> does not surface <c>.resx</c> files itself, since they are an MSBuild <c>EmbeddedResource</c> item rather than an <c>AdditionalFiles</c>/document. Files under the project's own <c>obj</c>/<c>bin</c> output directories are excluded (generated/copied artifacts, not source).</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.IsGeneratedSource(Microsoft.CodeAnalysis.SyntaxTree,System.String,System.Boolean,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>Determines whether a C# source is a build-generated artifact that should not be translated. A file is only considered generated when it lives under the project's own <c>obj/</c> or <c>bin/</c> output directories, or its text carries the standard <c>&lt;auto-generated&gt;</c> header — never by file name alone.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.LoadInMemory(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.String}},System.Collections.Generic.IReadOnlyList{Microsoft.CodeAnalysis.MetadataReference},System.String,Microsoft.CodeAnalysis.OutputKind)">
+            <summary>Compiles a set of in-memory C# sources into a bound compilation. This is the fast path for unit tests; it does not touch MSBuild.</summary>
+            <param name="sources">The <c>(fileName, sourceText)</c> pairs to compile.</param>
+            <param name="references">The metadata references; when <c>null</c> the running runtime's reference assemblies (from <c>TRUSTED_PLATFORM_ASSEMBLIES</c>) are used.</param>
+            <param name="assemblyName">The output assembly name.</param>
+            <param name="outputKind">The compilation's output kind. Defaults to a library, so <c>Compilation.GetEntryPoint</c> is <c>null</c> and entry-point flattening (<c>TranslateEntryType</c>) is not exercised. Pass <see cref="OutputKind.ConsoleApplication" /> to test entry-point translation (issue #1904) with this fast in-memory harness.</param>
+            <returns>The loaded project with its compilation, documents, and diagnostics.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.LoadProjectAsync(System.String,System.Threading.CancellationToken,System.Boolean,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>Opens a C# project through <see cref="MSBuildWorkspace" /> and returns its bound compilation. Registers the SDK MSBuild via <see cref="MSBuildLocator.RegisterDefaults" /> exactly once before the workspace is created.</summary>
+            <param name="projectPath">The absolute or relative path to the <c>.csproj</c>.</param>
+            <param name="cancellationToken">A cancellation token.</param>
+            <param name="includeAutoGenerated">Whether checked-in files carrying an auto-generated header are included. Files under build output directories remain excluded.</param>
+            <param name="includedAutoGeneratedPaths">When supplied, limits auto-generated-header inclusion to these inventoried paths.</param>
+            <returns>The loaded project with its compilation, documents, and diagnostics.</returns>
+            <exception cref="FileNotFoundException">The project file does not exist.</exception>
+            <exception cref="InvalidOperationException">The opened project did not produce a C# compilation.</exception>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.LoadProjectWithReferencesAsync(System.String,System.Threading.CancellationToken,System.Boolean,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>Loads a C# project together with the transitive closure of its same-solution <c>ProjectReference</c>s, each as its own bound <see cref="LoadedCSharpProject" />. The primary (requested) project is returned first and carries any MSBuild workspace load-failure diagnostics; the referenced projects follow. This lets the migration pipeline translate sibling-project source into G# so an app's uses of sibling types resolve at the gsc compile stage (Refs #914). Package references are unaffected — they remain metadata references on each compilation.</summary>
+            <param name="projectPath">The absolute or relative path to the app's <c>.csproj</c>.</param>
+            <param name="cancellationToken">A cancellation token.</param>
+            <param name="includeAutoGenerated">Whether checked-in files carrying an auto-generated header are included. Files under build output directories remain excluded.</param>
+            <param name="includedAutoGeneratedPaths">When supplied, limits auto-generated-header inclusion to these inventoried paths.</param>
+            <returns>The primary project followed by its transitively referenced C# projects.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.ResolveAnalyzerReferencePaths(Microsoft.CodeAnalysis.Project)">
+            <summary>Issue #2215: the on-disk analyzer/generator assembly paths the project references (its <c>&lt;Analyzer&gt;</c> items, resolved by MSBuild), so the Compile stage can forward them to gsc's <c>/analyzer:</c> flag and get the same generator output a real build of this project would produce. Only file-backed references resolve to a path; an in-memory or otherwise non-file analyzer reference is skipped.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.ResolveRootNamespace(Microsoft.CodeAnalysis.Project)">
+            <summary>Resolves a project's effective root/default namespace (issue #2200): Roslyn's <see cref="Project.DefaultNamespace" /> reflects MSBuild's <c>&lt;RootNamespace&gt;</c> for an SDK-style C# project; when unset (older non-SDK projects, or the property genuinely absent) MSBuild itself defaults <c>RootNamespace</c> to the assembly name, so falling back to <see cref="Project.AssemblyName" /> and finally the project file's base name mirrors that same default.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.RuntimeReferences">
+            <summary>Builds the default metadata reference set from the running runtime's trusted platform assemblies (the shared framework).</summary>
+            <returns>The metadata references for the current runtime.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.CSharpProjectLoader.TransitiveCSharpProjectReferences(Microsoft.CodeAnalysis.Project)">
+            <summary>Enumerates the transitive closure of a project's same-solution <c>ProjectReference</c>s that produce a C# compilation, each visited once (breadth-first). The root project itself is excluded.</summary>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.LoadedCSharpProject.#ctor(Microsoft.CodeAnalysis.CSharp.CSharpCompilation,System.Collections.Generic.IReadOnlyList{Cs2Gs.Translator.Loading.LoadedDocument},System.Collections.Generic.IReadOnlyList{Microsoft.CodeAnalysis.Diagnostic},System.String,System.String,System.Collections.Generic.IReadOnlyList{System.String},System.Collections.Generic.IReadOnlyList{System.String},System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Boolean)">
+            <summary>Initializes a new instance of the <see cref="LoadedCSharpProject" /> class.</summary>
+            <param name="compilation">The bound C# compilation.</param>
+            <param name="documents">The per-file syntax tree + semantic model pairs.</param>
+            <param name="loadDiagnostics">The compile diagnostics surfaced while loading.</param>
+            <param name="projectDirectory">The directory containing the project file, or <c>null</c> for an in-memory-loaded project (<see cref="CSharpProjectLoader.LoadInMemory" />).</param>
+            <param name="rootNamespace">The project's effective root/default namespace (issue #2200), used to compute the namespace of a generated resx codebehind file; empty for an in-memory-loaded project.</param>
+            <param name="resxFiles">The absolute paths of the <c>.resx</c> files discovered under <paramref name="projectDirectory" /> (issue #2200), excluding the project's own <c>obj</c>/<c>bin</c> output directories.</param>
+            <param name="analyzerReferencePaths">The on-disk analyzer/generator assembly paths the project references (issue #2215), forwarded by the Compile stage to gsc's <c>/analyzer:</c> flag so generator output reaches the cs2gs-compiled assembly the same way a real build would produce it.</param>
+            <param name="additionalFiles">The non-source generator inputs (issue #2223) — the project's <c>@(AdditionalFiles)</c> plus discovered <c>.axaml</c> — forwarded to gsc/gsgen as Roslyn <c>AdditionalText</c> so file-driven generators (e.g. Avalonia's XAML name generator) can materialize their output.</param>
+            <param name="projectPath">The loaded project file path, or <c>null</c> for in-memory inputs.</param>
+            <param name="isTestProject">Whether evaluated MSBuild properties identify a test project.</param>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.IsPlainLiteral(System.String)">
+            <summary>Determines whether <paramref name="version" /> is a plain semantic-version literal cs2gs can reason about outside its original MSBuild evaluation context — i.e. not an MSBuild property (<c>$(...)</c>), a floating/wildcard (<c>*</c>), or a version range (<c>[..]</c>/<c>(..)</c>).</summary>
+            <param name="version">The raw <c>Version</c> attribute value.</param>
+            <returns>
+                <c>true</c> when the value is a plain literal.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.ResolveEffectiveVersion(System.String)">
+            <summary>Resolves the concrete nbgv version to declare in a rebuilt/isolated project (issue #2267) from a raw declared version that may come from a different MSBuild evaluation context (e.g. a CPM <c>Directory.Packages.props</c> not present alongside an isolated gsproj). A below-floor literal is bumped to <see cref="MinimumGSharpVersion" /> (mirrors <see cref="TryGetRequiredBump" />); an at-or-above-floor literal is preserved as-is; anything else (missing, an MSBuild property, a range, or a wildcard — none of which resolve outside their original context) falls back to <see cref="MinimumGSharpVersion" />, the lowest version known to work.</summary>
+            <param name="rawVersion">The raw declared <c>Version</c> attribute value, or <c>null</c>.</param>
+            <returns>The concrete version to declare.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.TryBumpProjectXml(System.String,System.String@)">
+            <summary>Rewrites an MSBuild file's XML so any below-floor literal nbgv version is bumped to <see cref="MinimumGSharpVersion" />. Only the version attribute value is edited; the surrounding formatting, comments, and unrelated items are preserved. A version-less nbgv reference (the CPM consumer side) is left unchanged — the version lives in <c>Directory.Packages.props</c>.</summary>
+            <param name="msbuildXml">The full text of a <c>.csproj</c>/<c>.props</c> file.</param>
+            <param name="rewrittenXml">Receives the bumped text when a change was made.</param>
+            <returns>
+                <c>true</c> when the text was changed.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.TryFindDeclaration(System.String,System.String@,System.String@,System.String@)">
+            <summary>Scans a single MSBuild file's text for an nbgv <c>PackageReference</c> or <c>PackageVersion</c> declaration (issue #2267). Central Package Management commonly splits the declaration across two files: a versionless <c>&lt;PackageReference Include="Nerdbank.GitVersioning" PrivateAssets="all" /&gt;</c> in the consuming project (or a shared <c>Directory.Build.props</c>) and the actual <c>&lt;PackageVersion Include="Nerdbank.GitVersioning" Version="..." /&gt;</c> in <c>Directory.Packages.props</c> — so this only reports whichever pieces this particular file's text contributes; callers combine results across the full candidate file set to recover the complete declaration.</summary>
+            <param name="msbuildXml">The full text of a <c>.csproj</c>/<c>.props</c> file.</param>
+            <param name="version">Receives the raw <c>Version</c> attribute value, or <c>null</c> when absent.</param>
+            <param name="privateAssets">Receives the raw <c>PrivateAssets</c> attribute value, or <c>null</c> when absent.</param>
+            <param name="includeAssets">Receives the raw <c>IncludeAssets</c> attribute value, or <c>null</c> when absent.</param>
+            <returns>
+                <c>true</c> when an nbgv element was found in this file.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.TryGetRequiredBump(System.String,System.String@)">
+            <summary>Determines whether the supplied version string denotes an nbgv version strictly below <see cref="MinimumGSharpVersion" /> that can be safely bumped. A version is bumpable only when it is a plain semantic-version literal; a version carrying an MSBuild property (<c>$(...)</c>), a floating/wildcard (<c>*</c>), or a version range (<c>[..]</c>/<c>(..)</c>) is left untouched ("if possible").</summary>
+            <param name="version">The raw <c>Version</c> attribute value.</param>
+            <param name="bumpedVersion">Receives <see cref="MinimumGSharpVersion" /> when a bump is warranted; otherwise <c>null</c>.</param>
+            <returns>
+                <c>true</c> when a bump should be applied.</returns>
+        </member>
+        <member name="M:Cs2Gs.Translator.Loading.NuGetAuditAdvisoryPolicy.IsBenignAdvisory(System.String)">
+            <summary>Determines whether a <see cref="Microsoft.CodeAnalysis.WorkspaceDiagnostic" /> message reported at <see cref="Microsoft.CodeAnalysis.WorkspaceDiagnosticKind.Failure" /> is, in its entirety, one or more benign NuGet audit vulnerability advisories (the NU1901-NU1904 shape) and therefore must not be treated as a fatal project-load failure.</summary>
+            <param name="message">The raw <c>WorkspaceDiagnostic.Message</c> text.</param>
+            <returns>
+                <c>true</c> only if every non-blank line of <paramref name="message" /> independently matches the advisory shape; <c>false</c> for a <c>null</c>/blank message, for any genuine workspace failure, and for a mixed/multiline message that carries even one non-advisory line.</returns>
+        </member>
+        <member name="P:Cs2Gs.Translator.Analyzers.SnippetTranslator.PredefinedRenaming.Source">
+            <summary>Gets the renamed source.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.AdditionalFiles">
+            <summary>Gets the non-source generator inputs (issue #2223) — the project's <c>@(AdditionalFiles)</c> plus discovered <c>.axaml</c> — forwarded to gsc/gsgen as Roslyn <c>AdditionalText</c>. Empty for an in-memory-loaded project.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.AnalyzerReferencePaths">
+            <summary>Gets the on-disk analyzer/generator assembly paths the project references (issue #2215) — empty for an in-memory-loaded project.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.BoundWithoutErrors">
+            <summary>Gets a value indicating whether the project bound with no C# errors.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.Compilation">
+            <summary>Gets the bound C# compilation.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.Documents">
+            <summary>Gets the per-file syntax tree + semantic model pairs.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.ErrorDiagnostics">
+            <summary>Gets the subset of <see cref="LoadDiagnostics" /> with <see cref="DiagnosticSeverity.Error" /> severity — a non-empty list means the project does not bind in C# and the Translate stage should not run.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.IsTestProject">
+            <summary>Gets a value indicating whether this is an evaluated test project.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.LoadDiagnostics">
+            <summary>Gets the compile diagnostics surfaced while loading.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.ProjectDirectory">
+            <summary>Gets the directory containing the project file, or <c>null</c> for an in-memory-loaded project.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.ProjectPath">
+            <summary>Gets the loaded project file path, or <c>null</c>.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.ResxFiles">
+            <summary>Gets the absolute paths of the <c>.resx</c> files discovered under <see cref="ProjectDirectory" /> (issue #2200), excluding the project's own <c>obj</c>/<c>bin</c> output directories. Each drives a generated <c>*.Designer.gs</c> codebehind via <see cref="GSharp.Core.Resx.ResxCodeGenerator" /> instead of translating a hand-authored <c>*.Designer.cs</c> (which is skipped as generated source; see <see cref="CSharpProjectLoader" />'s auto-generated-header check).</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.RootNamespace">
+            <summary>Gets the project's effective root/default namespace (Roslyn's <c>Project.DefaultNamespace</c>, which reflects MSBuild's <c>&lt;RootNamespace&gt;</c>, falling back to the assembly/project file name) — issue #2200. Empty for an in-memory-loaded project.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.WorkspaceLoadErrors">
+            <summary>Gets the subset of <see cref="ErrorDiagnostics" /> that are MSBuild workspace load failures — the diagnostics a stage should surface when <see cref="WorkspaceLoadFailed" /> is <c>true</c>.</summary>
+        </member>
+        <member name="P:Cs2Gs.Translator.Loading.LoadedCSharpProject.WorkspaceLoadFailed">
+            <summary>Gets a value indicating whether MSBuild itself failed to open the project (missing SDK/targets, an unresolvable project reference, an unsupported TFM, ...) — see <see cref="CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId" /> (ADR-0115 §C, issue #1742). Unlike <see cref="BoundWithoutErrors" />, this ignores ordinary C# semantic errors from documents that did load (some corpus fixtures carry those deliberately to exercise a later stage), so pipeline stages should gate on THIS to stop before translating a project that never even bound, without misfiring on those fixtures.</summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Analyzers.SnippetTranslator">
+            <summary>Translates a C# analyzer-test snippet — a self-contained compilation unit annotated with <c>[|…|]</c> expected-diagnostic markers — into the equivalent G# snippet with the markers re-placed (docs/cs2gs-analyzer-translation.md §Test-harness). Markers are re-placed by ordered exact-text match: analyzer-test markers overwhelmingly wrap expressions whose surface text survives translation verbatim. A marker whose text does not survive is dropped from the output and surfaced as a <c>CS2GS-ANALYZER-SNIPPET</c> warning — loud, never silently misplaced — for the human to re-place during review. Re-placed markers denote expected-diagnostic REGIONS: G#'s syntax shapes differ (e.g. its index node is narrower than C#'s element access), so migrated verifications should assert the diagnostic starts within the marker, or hand-tighten the span during review.</summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Analyzers.SnippetTranslator.MarkedText">
+            <summary>One <c>[|…|]</c> marker: its text and its offset in the marker-free C# source.</summary>
+            <param name="Text">The marked text.</param>
+            <param name="Start">The offset of the marked text in the stripped source.</param>
+        </member>
+        <member name="T:Cs2Gs.Translator.Analyzers.SnippetTranslator.PredefinedRenaming">
+            <summary>Issue #3797: the C# snippet re-spelled with G#'s predefined type names (<c>int</c> → <c>int32</c>, <c>float</c> → <c>float32</c>, …), plus the offset map that carries a marker from the C# text to that re-spelling.<para>This is the one lexical rename translation applies INSIDE expression text, and it is the reason ordered exact-text marker placement drops an otherwise perfectly survivable marker. Replacements come from the C# tree's <c>PredefinedTypeSyntax</c> nodes, so nothing that merely contains the keyword's letters is rewritten.</para></summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Loading.CSharpProjectLoader">
+            <summary>Loads C# input into a fully bound <see cref="CSharpCompilation" /> with a <see cref="SemanticModel" /> per file (ADR-0115 §A). Two entry points are provided:<list type="bullet"><item><description><see cref="LoadProjectAsync" /> — the primary loader that opens a real <c>.csproj</c> through Roslyn's</description></item></list><para><see cref="MSBuildWorkspace" /> (SDK resolution via <see cref="MSBuildLocator" />). This is the production ingestion path.</para><list type="bullet"><item><description>(cref:LoadInMemory(IReadOnlyList{ValueTuple{string, string}}, IReadOnlyList{MetadataReference},</description></item></list><para>string, OutputKind)) — a lightweight secondary loader that compiles in-memory C# source strings against the running runtime's reference assemblies, for fast unit tests of the visitor without spinning up MSBuild.</para></summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Loading.LoadedCSharpProject">
+            <summary>The result of loading a C# input (a <c>.csproj</c> or a set of loose sources) into a fully bound Roslyn compilation. This is the front-end hand-off the translator consumes (ADR-0115 §A); the pipeline inspects <see cref="ErrorDiagnostics" /> to detect a project that does not even bind in C# before the Translate stage runs (ADR-0115 §C).</summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy">
+            <summary>Policy for the <c>Nerdbank.GitVersioning</c> (nbgv) package during migration (issue #2225). nbgv only generates the <c>ThisAssembly</c> source for the languages its MSBuild <c>&lt;Language&gt;</c> switch supports; G# support first shipped in <c>3.11.13-beta</c>. A C# project that references an older nbgv will, once migrated to G#, silently fail to produce <c>ThisAssembly</c>. cs2gs therefore bumps a below-floor nbgv reference up to the minimum G#-capable version when it can do so safely (a plain literal version — never an MSBuild property, floating range, or wildcard).</summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Loading.NerdbankGitVersioningPolicy.SemVer">
+            <summary>A minimal semantic-version value (numeric release plus an optional dot-separated prerelease), compared per the SemVer 2.0.0 precedence rules. Build metadata (<c>+...</c>) is ignored. Missing minor/patch segments are treated as zero so <c>3.11</c> equals <c>3.11.0</c>.</summary>
+        </member>
+        <member name="T:Cs2Gs.Translator.Loading.NuGetAuditAdvisoryPolicy">
+            <summary>Issue #2321: <see cref="Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace" /> records every warning-or-worse line MSBuild logs while opening a project as a <see cref="Microsoft.CodeAnalysis.WorkspaceDiagnosticKind.Failure" /> — including the non-fatal NuGet audit vulnerability advisories NuGet emits as warnings NU1901 (low), NU1902 (moderate), NU1903 (high), and NU1904 (critical) per https://learn.microsoft.com/nuget/reference/errors-and-warnings/nu1901-nu1904. A package flagged by one of those carries a known vulnerability but still restores and builds; it must not make <see cref="CSharpProjectLoader" /> gate the project out with <see cref="CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId" /> (CS2GS0001).</summary>
+            <remarks>This policy recognizes ONLY that one stable advisory message shape as benign. It intentionally does not match:<list type="bullet"><item><description>NU1900 (a failure to even fetch vulnerability data, or a source that returned an out-of-band</description></item></list><para>severity value such as "unknown" — see https://learn.microsoft.com/nuget/reference/errors-and-warnings/nu1900): these mean the audit itself is unreliable, not that a benign advisory was found, and must stay fatal.</para><list type="bullet"><item><description>Genuine MSBuild workspace load failures — missing SDK/imports, an unresolvable <c>ProjectReference</c>,</description></item></list><para>an unsupported target framework, etc.</para><list type="bullet"><item><description>A mixed or multiline diagnostic message where any non-blank line is not itself an advisory: every</description></item></list><para>line must independently match, or the whole message is treated as fatal.</para></remarks>
+        </member>
+    </members>
+</doc>
