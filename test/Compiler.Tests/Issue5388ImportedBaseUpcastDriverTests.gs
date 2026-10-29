@@ -167,6 +167,69 @@ class Program {
     }
 
     @Fact
+    func SourceInterfaceJoin_PreservesInheritedClrContract() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+interface Lifetime : IDisposable {}
+class Resource : Lifetime { func Dispose() { Console.Write("D") } }
+shared class Counts { var Receivers int32 = 0 }
+func Target(value Resource) object {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func Join(value object, flag bool) IDisposable {
+    if flag {
+        if value !is Lifetime { return Resource() }
+    } else {
+        if value !is IDisposable { return Resource() }
+    }
+    return value
+}
+func Main() {
+    let value = Resource()
+    let boxed = Target(value)
+    let left = Join(boxed, true)
+    let right = Join(boxed, false)
+    left.Dispose()
+    right.Dispose()
+    Console.Write(Counts.Receivers)
+    Console.Write(Object.ReferenceEquals(left, value))
+    Console.Write(Object.ReferenceEquals(right, value))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using UpcastControl;
+interface Lifetime : IDisposable {}
+class Resource : Lifetime { public void Dispose() { Console.Write("D"); } }
+class Program {
+    static int receivers;
+    static object Target(Resource value) { receivers++; Console.Write("R"); return value; }
+    static IDisposable Join(object value, bool flag) {
+        if (flag) { if (value is not Lifetime) return new Resource(); }
+        else if (value is not IDisposable) return new Resource();
+        return (IDisposable)value;
+    }
+    static void Main() {
+        var value = new Resource();
+        var boxed = Target(value);
+        var left = Join(boxed, true);
+        var right = Join(boxed, false);
+        left.Dispose();
+        right.Dispose();
+        Console.Write(receivers);
+        Console.Write(Object.ReferenceEquals(left, value));
+        Console.Write(Object.ReferenceEquals(right, value));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "RDD1TrueTrue1")
+    }
+
+    @Fact
     func SourceConstructedBase_RejectsWrongOwner() {
         using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
         let result = Compile(

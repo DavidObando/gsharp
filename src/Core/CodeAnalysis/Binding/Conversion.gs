@@ -1480,25 +1480,12 @@ class Conversion {
                 // interface that appears in its base-type clause (or any base
                 // class's base-type clause). The G# class has no ClrType during
                 // binding, so the general #521 rule below cannot fire — match
-                // structurally against `ImplementedClrInterfaces` and use the
-                // CLR's IsAssignableFrom to cover interface inheritance from the
-                // imported side (e.g. implementing `IList<T>` also satisfies
-                // `IEnumerable<T>`).
+                // nominally against `ImplementedClrInterfaces`, preserving
+                // symbolic arguments through imported interface inheritance.
                 if to != nil && !(to is InterfaceSymbol) && IsInterfaceLikeType(to) {
                     for c in GetStructHierarchy(fromClass) {
                         for iface in c.ImplementedClrInterfaces {
-                            let ifaceClr Type? = iface?.ClrType
-                            if ifaceClr == nil {
-                                continue
-                            }
-                            // Issue #2135: `to.ClrType` may be a
-                            // TypeBuilderInstantiation (a same-compilation generic
-                            // user interface instantiated concretely) whose
-                            // IsAssignableFrom throws NotSupportedException at emit.
-                            // Route through the reference-context-independent
-                            // by-name helper, which guards that call and falls back
-                            // to the interface/base-class name walk.
-                            if ifaceClr == to.ClrType || ClrTypeUtilities.IsAssignableByName(to.ClrType, ifaceClr) {
+                            if IsRepresentationPreservingImplicit(iface, to) {
                                 return Conversion.Implicit
                             }
                         }
@@ -1567,18 +1554,10 @@ class Conversion {
                         }
                     }
                 }
-                if to?.ClrType is {IsInterface: true} toClrInterface {
+                if to != nil && to is not InterfaceSymbol && IsInterfaceLikeType(to) {
                     for iface in fromInterface.SelfAndAllBaseInterfaces() {
                         for baseClrInterface in iface.BaseClrInterfaces {
-                            let clr Type? = baseClrInterface?.ClrType
-                            // Issue #2135: `toClrInterface` may be a
-                            // TypeBuilderInstantiation whose IsAssignableFrom throws
-                            // NotSupportedException at emit; use the guarded by-name
-                            // helper instead of calling IsAssignableFrom directly.
-                            if clr != nil &&
-                                (
-                                clr.IsSameAs(toClrInterface) || ClrTypeUtilities.IsAssignableByName(toClrInterface, clr)
-                            ) {
+                            if IsRepresentationPreservingImplicit(baseClrInterface, to) {
                                 return Conversion.Implicit
                             }
                         }
@@ -2209,18 +2188,16 @@ class Conversion {
                         return true
                     }
                 }
-                if source is InterfaceSymbol sourceInterface {
-                    for iface in sourceInterface.SelfAndAllBaseInterfaces() {
-                        if target is InterfaceSymbol targetInterface &&
-                            (
-                            iface == targetInterface || IsVarianceCompatibleInterfaceConversion(iface, targetInterface)
-                        ) {
+            }
+            if source is InterfaceSymbol sourceInterface {
+                for iface in sourceInterface.SelfAndAllBaseInterfaces() {
+                    if target is InterfaceSymbol targetInterface &&
+                        (iface == targetInterface || IsVarianceCompatibleInterfaceConversion(iface, targetInterface)) {
+                        return true
+                    }
+                    for imported in iface.BaseClrInterfaces {
+                        if IsRepresentationPreservingImplicit(imported, target) {
                             return true
-                        }
-                        for imported in iface.BaseClrInterfaces {
-                            if IsRepresentationPreservingImplicit(imported, target) {
-                                return true
-                            }
                         }
                     }
                 }
