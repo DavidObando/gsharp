@@ -120,6 +120,543 @@ class Program {
     }
 
     @Fact
+    func CompositeNominalProof_PreservesJoinGainAndReceiverRecovery() {
+        let item = StructSymbol(
+            "Item",
+            ImmutableArray[FieldSymbol].Empty,
+            SymbolAccessibility.Public,
+            nil,
+            "probe",
+            false,
+            false,
+            true
+        )
+        let other = StructSymbol(
+            "Other",
+            ImmutableArray[FieldSymbol].Empty,
+            SymbolAccessibility.Public,
+            nil,
+            "probe",
+            false,
+            false,
+            true
+        )
+        let items = SequenceTypeSymbol.Get(item)
+        let objects = SequenceTypeSymbol.Get(TypeSymbol.Object)
+        let slice = SliceTypeSymbol.Get(item)
+        let asyncItems = AsyncSequenceTypeSymbol.Get(item)
+        let asyncObjects = AsyncSequenceTypeSymbol.Get(TypeSymbol.Object)
+        let path = AccessPath.ForVariable(LocalVariableSymbol("value", false, TypeSymbol.Object))
+        Assert.True(NominalConversion.IsRepresentationPreservingImplicit(items, objects))
+        Assert.True(NominalConversion.IsRepresentationPreservingImplicit(slice, items))
+        Assert.True(NominalConversion.IsRepresentationPreservingImplicit(asyncItems, asyncObjects))
+        Assert.True(NarrowingState.IsNoStrongerThan(objects, items))
+        Assert.True(ExpressionBinder.CanRecoverDeclaredMemberWriteReceiver(slice, items))
+        Assert.Same(objects, NarrowingState.JoinTypes(path, []TypeSymbol{items, objects}))
+        Assert.Same(objects, NarrowingState.JoinTypes(path, []TypeSymbol{objects, items}))
+        Assert.Same(items, NarrowingState.JoinTypes(path, []TypeSymbol{slice, items}))
+        Assert.Same(asyncObjects, NarrowingState.JoinTypes(path, []TypeSymbol{asyncItems, asyncObjects}))
+        Assert.False(NominalConversion.IsRepresentationPreservingImplicit(items, SequenceTypeSymbol.Get(other)))
+        Assert.False(
+            NominalConversion.IsRepresentationPreservingImplicit(SequenceTypeSymbol.Get(TypeSymbol.Int32), objects)
+        )
+        Assert.False(
+            NominalConversion.IsRepresentationPreservingImplicit(
+                AsyncSequenceTypeSymbol.Get(TypeSymbol.Int32),
+                asyncObjects
+            )
+        )
+    }
+
+    @Theory
+    @InlineData("int32?", "int32", "int?", "int")
+    @InlineData("int32", "int32?", "int", "int?")
+    @InlineData("List[int32?]", "List[int32]", "List<int?>", "List<int>")
+    func NullableValueArgument_RejectsDifferentRuntimeStorage(
+        sourceArgument string,
+        targetArgument string,
+        oracleSourceArgument string,
+        oracleTargetArgument string
+    ) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let declaration = "func Up(x D) List[" + targetArgument + "] -> "
+        let source = "import System.Collections.Generic\nclass D : List[" +
+            sourceArgument +
+            "] {}\n" +
+            declaration +
+            "x\nfunc Main() {}\n"
+        let oracle = "using System.Collections.Generic;\nclass D : List<" +
+            oracleSourceArgument +
+            "> {}\nclass Program { static List<" +
+            oracleTargetArgument +
+            "> Up(D x) => x; }\n"
+        Reject(fixture, source, oracle, "CS0029", 3, declaration.Length + 1, 1)
+    }
+
+    @Fact
+    func NullableValueArgument_PreservesOptionalValuesAndReferenceIdentity() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Collections.Generic
+import UpcastControl
+class D : List[int32?] {}
+func Up(x D) List[int32?] -> x
+func Main() {
+    let value = D()
+    value.Add(nil)
+    value.Add(7)
+    let view = Up(value)
+    Console.Write(view[0] == nil)
+    Console.Write(view[1] == 7)
+    Console.Write(Object.ReferenceEquals(view, value))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using System.Collections.Generic;
+using UpcastControl;
+class D : List<int?> {}
+class Program {
+    static List<int?> Up(D x) => x;
+    static void Main() {
+        var value = new D { null, 7 };
+        var view = Up(value);
+        Console.Write(view[0] == null);
+        Console.Write(view[1] == 7);
+        Console.Write(Object.ReferenceEquals(view, value));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "TrueTrueTrue1")
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ImportedMultipleInstantiations_KeepEveryOwnerDispatchAndIdentity(inherited bool, symbolic bool) {
+        using let fixture = CSharpFixture(MultiContract, assemblyName: "UpcastContract", deterministic: true)
+        let parent = if symbolic {
+            if inherited {
+                "GenericBoth[Item]"
+            } else {
+                "IGenericBoth[Item]"
+            }
+        } else {
+            if inherited {
+                "Both"
+            } else {
+                "IBoth"
+            }
+        }
+        let oracleParent = parent.Replace("[Item]", "<Item>")
+        let argument = if symbolic {
+            "List[Item]"
+        } else {
+            "int32"
+        }
+        let oracleArgument = if symbolic {
+            "List<Item>"
+        } else {
+            "int"
+        }
+        let source = `import System
+import System.Collections.Generic
+import UpcastControl
+import MultiControl
+class Item {}
+class C : @PARENT@ {}
+shared class Counts { var Receivers int32 = 0 }
+func Target(value C) C {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func First(value C) ITag[@ARG@] -> value
+func Second(value C) ITag[string] -> value
+func Main() {
+    let value = C()
+    let first = First(Target(value))
+    let second = Second(Target(value))
+    @READ@(first)
+    Observe.String(second)
+    Console.Write(Object.ReferenceEquals(value, first))
+    Console.Write(Object.ReferenceEquals(value, second))
+    Console.Write(Counts.Receivers)
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`.Replace(
+            "@PARENT@",
+            parent
+        ).Replace(
+            "@ARG@",
+            argument
+        ).Replace(
+            "@READ@",
+            if symbolic {
+                "Observe.Source[Item]"
+            } else {
+                "Observe.Int"
+            }
+        )
+        let oracle = `using System;
+using System.Collections.Generic;
+using UpcastControl;
+using MultiControl;
+class Item {}
+class C : @PARENT@ {}
+class Program {
+    static int receivers;
+    static C Target(C value) { receivers++; Console.Write("R"); return value; }
+    static ITag<@ARG@> First(C value) => value;
+    static ITag<string> Second(C value) => value;
+    static void Main() {
+        var value = new C();
+        var first = First(Target(value));
+        var second = Second(Target(value));
+        @READ@(first);
+        Observe.String(second);
+        Console.Write(Object.ReferenceEquals(value, first));
+        Console.Write(Object.ReferenceEquals(value, second));
+        Console.Write(receivers);
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`.Replace(
+            "@PARENT@",
+            oracleParent
+        ).Replace(
+            "@ARG@",
+            oracleArgument
+        ).Replace(
+            "@READ@",
+            if symbolic {
+                "Observe.Source<Item>"
+            } else {
+                "Observe.Int"
+            }
+        )
+        Check(
+            fixture,
+            source,
+            oracle,
+            if symbolic {
+                "RRT7S5TrueTrue21"
+            } else {
+                "RRI3S5TrueTrue21"
+            },
+            contractSource: MultiContract
+        )
+    }
+
+    @Theory
+    @InlineData("sequence", "sequence[Item]", "sequence[object]")
+    @InlineData("array", "[]Item", "sequence[Item]")
+    @InlineData("async", "async sequence[Item]", "async sequence[object]")
+    func SymbolicSequenceJoin_PreservesEnumerationIdentityAndEffects(kind string, from string, to string) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let isAsync = kind == "async"
+        let asyncPrefix = if isAsync {
+            "async "
+        } else {
+            ""
+        }
+        let awaitPrefix = if isAsync {
+            "await "
+        } else {
+            ""
+        }
+        let source = `import System
+import UpcastControl
+class Item {
+    let Value int32
+    init(value int32) { Value = value }
+}
+shared class Counts { var Visits int32 = 0 }
+@ASYNC@func Values() @VALUESFROM@ {
+    yield Item(3)
+    yield Item(4)
+}
+func Up(value @FROM@) @TO@ -> value
+@ASYNC@func Read(value object, flag bool) int32 {
+    if flag {
+        if value !is @FROM@ { return 0 }
+    } else {
+        if value !is @TO@ { return 0 }
+    }
+    var sum = 0
+    @AWAIT@for item in value {
+        Counts.Visits += 1
+        Console.Write("E")
+        if item is Item found { sum += found.Value }
+    }
+    return sum
+}
+@ASYNC@func Main() {
+    let value = @VALUE@
+    Console.Write(@AWAIT@Read(value, true))
+    Console.Write(@AWAIT@Read(value, false))
+    Console.Write(Counts.Visits)
+    Console.Write(Object.ReferenceEquals(value, Up(value)))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`.Replace(
+            "@ASYNC@",
+            asyncPrefix
+        ).Replace(
+            "@AWAIT@",
+            awaitPrefix
+        ).Replace(
+            "@VALUESFROM@",
+            if isAsync {
+                "async sequence[Item]"
+            } else {
+                "sequence[Item]"
+            }
+        ).Replace(
+            "@FROM@",
+            from
+        ).Replace(
+            "@TO@",
+            to
+        ).Replace(
+            "@VALUE@",
+            if kind == "array" {
+                "[]Item{Item(3), Item(4)}"
+            } else {
+                "Values()"
+            }
+        )
+        let oracle = `using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using UpcastControl;
+class Item { public readonly int Value; public Item(int value) { Value = value; } }
+class Program {
+    static int visits;
+    static @ASYNC@@VALUESFROM@ Values() {
+        @WAIT@
+        yield return new Item(3);
+        yield return new Item(4);
+    }
+    static @TO@ Up(@FROM@ value) => value;
+    static @ASYNC@@RETURN@ Read(object value, bool flag) {
+        if (flag) { if (value is not @FROM@) return 0; }
+        else { if (value is not @TO@) return 0; }
+        var sum = 0;
+        @AWAIT@foreach (var item in (@TO@)value) {
+            visits++;
+            Console.Write("E");
+            if (item is Item found) sum += found.Value;
+        }
+        return sum;
+    }
+    static @ASYNC@@MAIN@ Main() {
+        var value = @VALUE@;
+        Console.Write(@AWAIT@Read(value, true));
+        Console.Write(@AWAIT@Read(value, false));
+        Console.Write(visits);
+        Console.Write(Object.ReferenceEquals(value, Up(value)));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`.Replace(
+            "@ASYNC@",
+            asyncPrefix
+        ).Replace(
+            "@AWAIT@",
+            awaitPrefix
+        ).Replace(
+            "@VALUESFROM@",
+            if isAsync {
+                "IAsyncEnumerable<Item>"
+            } else {
+                "IEnumerable<Item>"
+            }
+        ).Replace(
+            "@FROM@",
+            if isAsync {
+                "IAsyncEnumerable<Item>"
+            } else if kind == "array" {
+                "Item[]"
+            } else {
+                "IEnumerable<Item>"
+            }
+        ).Replace(
+            "@TO@",
+            if isAsync {
+                "IAsyncEnumerable<object>"
+            } else if kind == "array" {
+                "IEnumerable<Item>"
+            } else {
+                "IEnumerable<object>"
+            }
+        ).Replace(
+            "@RETURN@",
+            if isAsync {
+                "Task<int>"
+            } else {
+                "int"
+            }
+        ).Replace(
+            "@MAIN@",
+            if isAsync {
+                "Task"
+            } else {
+                "void"
+            }
+        ).Replace(
+            "@WAIT@",
+            if isAsync {
+                "await Task.CompletedTask;"
+            } else {
+                ""
+            }
+        ).Replace(
+            "@VALUE@",
+            if kind == "array" {
+                "new[] { new Item(3), new Item(4) }"
+            } else {
+                "Values()"
+            }
+        )
+        Check(fixture, source, oracle, "EE7EE74True1")
+    }
+
+    @Theory
+    @InlineData("sequence[Item]", "sequence[Other]", "IEnumerable<Item>", "IEnumerable<Other>", "CS0266", "GS0156")
+    @InlineData("sequence[int32]", "sequence[object]", "IEnumerable<int>", "IEnumerable<object>", "CS0266", "GS0156")
+    @InlineData(
+        "async sequence[int32]",
+        "async sequence[object]",
+        "IAsyncEnumerable<int>",
+        "IAsyncEnumerable<object>",
+        "CS0266",
+        "GS0156"
+    )
+    @InlineData(
+        "sequence[Channel[int32]]",
+        "sequence[ChannelReader[int32]]",
+        "IEnumerable<Channel<int>>",
+        "IEnumerable<ChannelReader<int>>",
+        "CS0266",
+        "GS0156"
+    )
+    @InlineData(
+        "[]Channel[int32]",
+        "sequence[ChannelReader[int32]]",
+        "Channel<int>[]",
+        "IEnumerable<ChannelReader<int>>",
+        "CS0029",
+        "GS0155"
+    )
+    func NominalVariance_RejectsWrongOwnerValueTypesAndNestedProjections(
+        from string,
+        to string,
+        oracleFrom string,
+        oracleTo string,
+        oracleDiagnostic string,
+        diagnostic string
+    ) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let declaration = "func Up(x " + from + ") " + to + " -> "
+        let source = "import System.Threading.Channels\nclass Item {}\nclass Other {}\n" +
+            declaration +
+            "x\nfunc Main() {}\n"
+        let oracle = "using System.Collections.Generic;\nusing System.Threading.Channels;\nclass Item {}\n" +
+            "class Other {}\nclass Program { static " +
+            oracleTo +
+            " Up(" +
+            oracleFrom +
+            " x) => x; }\n"
+        Reject(fixture, source, oracle, oracleDiagnostic, 4, declaration.Length + 1, 1, diagnostic: diagnostic)
+    }
+
+    @Fact
+    func NestedReferenceVariance_KeepsBoundMapAndDelegateUpcasts() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Collections.Generic
+import UpcastControl
+open class Animal {}
+class Dog : Animal {}
+class Item {}
+delegate Handler(x Item) Item;
+func Bound[T Animal](x sequence[T]) sequence[Animal] -> x
+func Maps(x sequence[map[string, Item]]) sequence[IReadOnlyDictionary[string, Item]] -> x
+func Delegates(x sequence[Handler]) sequence[Delegate] -> x
+func Main() {
+    let leaves sequence[Dog] = []Dog{Dog(), Dog()}
+    let maps sequence[map[string, Item]] = []map[string, Item]{map[string, Item]{"a": Item()}}
+    let handlers sequence[Handler] = []Handler{(x Item) -> x}
+    let bases = Bound[Dog](leaves)
+    let views = Maps(maps)
+    let delegates = Delegates(handlers)
+    var count = 0
+    for b in bases { if b is Dog { count += 1 } }
+    for view in views { count += view.Count * 10 }
+    for d in delegates { if d is Handler { count += 100 } }
+    Console.Write(count)
+    Console.Write(Object.ReferenceEquals(object(leaves), object(bases)))
+    Console.Write(Object.ReferenceEquals(object(maps), object(views)))
+    Console.Write(Object.ReferenceEquals(object(handlers), object(delegates)))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using System.Collections.Generic;
+using UpcastControl;
+class Animal {}
+class Dog : Animal {}
+class Item {}
+delegate Item Handler(Item x);
+class Program {
+    static IEnumerable<Animal> Bound<T>(IEnumerable<T> x) where T : Animal => x;
+    static IEnumerable<IReadOnlyDictionary<string, Item>> Maps(IEnumerable<Dictionary<string, Item>> x) => x;
+    static IEnumerable<Delegate> Delegates(IEnumerable<Handler> x) => x;
+    static void Main() {
+        IEnumerable<Dog> leaves = new[] { new Dog(), new Dog() };
+        IEnumerable<Dictionary<string, Item>> maps = new[] { new Dictionary<string, Item> { ["a"] = new Item() } };
+        IEnumerable<Handler> handlers = new Handler[] { x => x };
+        var bases = Bound<Dog>(leaves);
+        var views = Maps(maps);
+        var delegates = Delegates(handlers);
+        var count = 0;
+        foreach (var b in bases) { if (b is Dog) count += 1; }
+        foreach (var view in views) { count += view.Count * 10; }
+        foreach (var d in delegates) { if (d is Handler) count += 100; }
+        Console.Write(count);
+        Console.Write(Object.ReferenceEquals(leaves, bases));
+        Console.Write(Object.ReferenceEquals(maps, views));
+        Console.Write(Object.ReferenceEquals(handlers, delegates));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "112TrueTrueTrue1")
+    }
+
+    @Fact
+    func MultipleHierarchy_RejectsWrongSymbolicOwner() {
+        using let fixture = CSharpFixture(MultiContract, assemblyName: "UpcastContract", deterministic: true)
+        let declaration = "func Up(x C) ITag[List[Other]] -> "
+        let source = "import System.Collections.Generic\nimport MultiControl\nclass Item {}\nclass Other {}\n" +
+            "class C : IGenericBoth[Item] {}\n" +
+            declaration +
+            "x\nfunc Main() {}\n"
+        let oracle = `using System.Collections.Generic;
+using MultiControl;
+class Item {}
+class Other {}
+class C : IGenericBoth<Item> {}
+class Program { static ITag<List<Other>> Up(C x) => x; }
+`
+        Reject(fixture, source, oracle, "CS0266", 6, declaration.Length + 1, 1, MultiContract)
+    }
+
+    @Fact
     func SourceConstructedBaseJoin_PreservesValidBaseMember() {
         using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
         let source = `import System
@@ -766,6 +1303,72 @@ class Program {
         Assert.True(File.Exists(fixture.AssemblyPath))
         Assert.True(File.Exists(unmanaged))
         Assert.Empty(RuntimeReferences(fixture.DirectoryPath))
+    }
+
+    private let MultiContract string = Contract + `
+namespace MultiControl {
+    public interface ITag<T> {
+        int Read() => typeof(T) == typeof(int) ? 3 : typeof(T) == typeof(string) ? 5 : 7;
+    }
+    public interface IBoth : ITag<int>, ITag<string> {}
+    public class Both : IBoth {}
+    public interface IGenericBoth<T> : ITag<System.Collections.Generic.List<T>>, ITag<string> {}
+    public class GenericBoth<T> : IGenericBoth<T> {}
+    public static class Observe {
+        public static void Int(ITag<int> value) { System.Console.Write("I"); System.Console.Write(value.Read()); }
+        public static void String(ITag<string> value) { System.Console.Write("S"); System.Console.Write(value.Read()); }
+        public static void Source<T>(ITag<System.Collections.Generic.List<T>> value) { System.Console.Write("T"); System.Console.Write(value.Read()); }
+    }
+}
+`
+
+    private func Reject(
+        fixture CSharpFixture,
+        source string,
+        oracle string,
+        oracleDiagnostic string,
+        line int32,
+        column int32,
+        length int32,
+        contractSource string? = nil,
+        diagnostic string = "GS0155"
+    ) {
+        output.WriteLine("Contract source:\n" + (contractSource ?? Contract))
+        output.WriteLine("Oracle source:\n" + oracle)
+        let compilation = CSharpCompilation.Create(
+            "RejectedOracle",
+            []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
+            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
+                (path string) -> MetadataReference.CreateFromFile(path)
+            ),
+            CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable
+            )
+        )
+        using let stream = MemoryStream()
+        let emitted = compilation.Emit(stream)
+        Assert.False(emitted.Success)
+        let oracleError = Assert.Single(
+            emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        Assert.Equal(oracleDiagnostic, oracleError.Id)
+        let result = Compile(fixture, source)
+        output.WriteLine("Oracle diagnostic: " + oracleError.ToString())
+        Assert.NotEqual(0, result.Code)
+        let errors = Regex.Matches(
+            Encoding.UTF8.GetString(result.Bytes) + result.Error,
+            `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+        )
+        let error = Assert.Single(errors)
+        Assert.Equal(diagnostic, error.Groups[5].Value)
+        Assert.Equal(line.ToString(), error.Groups[1].Value)
+        Assert.Equal(column.ToString(), error.Groups[2].Value)
+        Assert.Equal(line.ToString(), error.Groups[3].Value)
+        Assert.Equal((column + length).ToString(), error.Groups[4].Value)
+        for path in[]string{"Consumer.dll", "Consumer.ref.dll", "Consumer.pdb"} {
+            Assert.False(File.Exists(Path.Combine(fixture.DirectoryPath, path)))
+        }
     }
 
     private func Check(

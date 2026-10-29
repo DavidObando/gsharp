@@ -1314,8 +1314,11 @@ class Conversion {
             if to?.ClrType.IsSameAs(typeof(object)) == true && from?.ClrType != nil {
                 return Conversion.Implicit
             }
-            // A symbolic element does not change the array's reference representation.
-            if (from is SliceTypeSymbol || from is ArrayTypeSymbol) && to?.ClrType.IsSameAs(typeof(object)) == true {
+            // Symbolic elements do not change the reference representation of arrays and sequences.
+            if (from is SliceTypeSymbol or ArrayTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
+                to
+                ?.ClrType
+                .IsSameAs(typeof(object)) == true {
                 return Conversion.Implicit
             }
             // Issue #3303: a `map[K, V]` is unconditionally a CLR reference type
@@ -2062,8 +2065,7 @@ class Conversion {
             if IsElementIndependentArrayInterface(targetInterface) {
                 return true
             }
-            if targetInterface is not ImportedTypeSymbol imported ||
-                !TryGetConstructedGenericShape(imported, out var openDefinition, out var targetArguments) ||
+            if !TryGetConstructedGenericShape(targetInterface, out var openDefinition, out var targetArguments) ||
                 targetArguments.Length != 1 {
                 return false
             }
@@ -2112,8 +2114,7 @@ class Conversion {
                 !IsReferenceTypeArgument(targetElement) {
                 return false
             }
-            let elementConversion = Classify(sourceElement, targetElement)
-            return elementConversion.Exists && elementConversion.IsImplicit
+            return IsVarianceArgumentCompatible(sourceElement, targetElement, allowPlatformNilCheck: true)
         }
 
         /// Issue #3505: true when [`from`](paramref) implicitly converts to
@@ -2202,7 +2203,54 @@ class Conversion {
                     }
                 }
             }
-            if sourceShape is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
+            // A reference-constrained type parameter is represented by its argument, which derives from each declared bound.
+            if sourceShape is TypeParameterSymbol typeParameter {
+                for bound in[]TypeSymbol? {
+                    typeParameter.ClassConstraint,
+                    typeParameter.InterfaceConstraint,
+                    typeParameter.ClrInterfaceConstraint
+                } {
+                    if bound != nil && IsRepresentationPreservingImplicit(bound, target) {
+                        return true
+                    }
+                }
+            }
+            if (sourceShape is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol) ||
+                sourceShape
+                .ClrType
+                ?.IsArray == true {
+                if targetShape.ClrType?.IsSameAs(typeof(Array)) == true ||
+                    IsElementIndependentArrayInterface(targetShape) {
+                    return true
+                }
+                if OneDimensionalArrayElement(sourceShape) is {} sourceElement &&
+                    ArrayElementConvertsToInterfaceSymbolically(sourceElement, targetShape) {
+                    return true
+                }
+            }
+            if sourceShape is MapTypeSymbol && IsMapInterfaceReferenceUpcast(sourceShape, targetShape) {
+                return true
+            }
+            // Every function value and delegate is already a System.Delegate reference.
+            if targetShape.ClrType is {} delegateBase &&
+                IsSystemDelegateBaseType(delegateBase) &&
+                (
+                (sourceShape is FunctionTypeSymbol or DelegateTypeSymbol) || ClrTypeUtilities.IsDelegateType(
+                    sourceShape.ClrType
+                )
+            ) {
+                return true
+            }
+            // IEnumerable<T> derives from the non-generic IEnumerable (#3566).
+            if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(sourceShape, out var enumerableDefinition, out _) &&
+                enumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1" &&
+                targetShape
+                .ClrType
+                ?.FullName == "System.Collections.IEnumerable" {
+                return true
+            }
+            if (sourceShape is ImportedTypeSymbol || TryGetConstructedGenericShape(source, out _, out _)) &&
+                TryGetConstructedGenericShape(target, out _, out _) {
                 return TryClassifyConstructedImportedReferenceConversion(source, target)
             }
             return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {
@@ -3000,36 +3048,42 @@ class Conversion {
             // Closed CLR signatures have no symbolic owner vector to map.
             // Project their real hierarchy; symbolic sources must
             // keep the owner-aware path and never fall back to erased probes.
-            var sourceArguments ImmutableArray[TypeSymbol]
             if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
-                (!sourceOpen!!.IsValueType || targetOpen.IsInterface) {
-                if ClrTypeUtilities.AreSame(sourceOpen, targetOpen) {
-                    sourceArguments = sourceTypeArguments
-                } else if from is not ImportedTypeSymbol importedSource ||
-                    (
-                    if importedSource.OpenDefinition != nil && !importedSource.TypeArguments.IsDefaultOrEmpty {
-                        !MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
-                            importedSource,
-                            targetOpen,
-                            out sourceArguments
-                        )
-                    } else {
-                        !TryProjectClrHierarchyArguments(importedSource, targetOpen, out sourceArguments)
-                    }
-                ) {
-                    return false
-                }
-            } else if from is not ImportedTypeSymbol importedSource ||
-                !TryProjectClrHierarchyArguments(importedSource, targetOpen, out sourceArguments) {
-                // Issue #3501: a NON-generic imported class (e.g. Roslyn's
-                // `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`) has no
-                // symbolic type arguments to map, but its CLR hierarchy
-                // still names the target's open definition; project that closed
-                // base or interface's CLR arguments so the variance loop below can accept
-                // `SymbolEqualityComparer -> IEqualityComparer[IMethodSymbol]`
-                // exactly as C# does.
+                (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
+                ClrTypeUtilities
+                .AreSame(sourceOpen, targetOpen) {
+                return AreConstructedReferenceArgumentsCompatible(
+                    sourceTypeArguments,
+                    targetArguments,
+                    targetOpen,
+                    clrArgumentBoundary
+                )
+            }
+            if from is not ImportedTypeSymbol importedSource {
                 return false
             }
+            for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                importedSource,
+                targetOpen
+            ) {
+                if AreConstructedReferenceArgumentsCompatible(
+                    arguments,
+                    targetArguments,
+                    targetOpen,
+                    clrArgumentBoundary
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func AreConstructedReferenceArgumentsCompatible(
+            sourceArguments ImmutableArray[TypeSymbol],
+            targetArguments ImmutableArray[TypeSymbol],
+            targetOpen Type,
+            clrArgumentBoundary bool
+        ) bool {
             if sourceArguments.Length != targetArguments.Length {
                 return false
             }
@@ -3091,49 +3145,6 @@ class Conversion {
                 }
             }
             return true
-        }
-
-        /// Issue #3501: projects the CLR generic arguments a (possibly non-generic)
-        /// imported reference type supplies for [`targetOpenDefinition`](paramref)
-        /// by walking its CLR bases and interfaces. This is the CLR-level counterpart
-        /// to (cref:MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy)
-        /// for sources with no symbolic type-argument vector (e.g. Roslyn's
-        /// non-generic `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`).
-        /// Nullable annotations are erased at this level, which only widens the
-        /// source side — exactly the C#/CLR variance behaviour.
-        private func TryProjectClrHierarchyArguments(
-            from ImportedTypeSymbol,
-            targetOpenDefinition Type,
-            out sourceArguments ImmutableArray[TypeSymbol]
-        ) bool {
-            sourceArguments = default(ImmutableArray[TypeSymbol])
-            let clr Type? = from.ClrType
-            if clr == nil || clr.IsArray {
-                return false
-            }
-            for candidate in MemberLookup.EnumerateOpenInterfacesAndBases(clr) {
-                var candidateDefinition Type
-                var candidateArguments[]Type
-                try {
-                    if !candidate.IsGenericType || candidate.IsGenericTypeDefinition {
-                        continue
-                    }
-                    candidateDefinition = candidate.GetGenericTypeDefinition()
-                    candidateArguments = candidate.GetGenericArguments()
-                } catch (NotSupportedException) {
-                    continue
-                }
-                if !ClrTypeUtilities.AreSame(candidateDefinition, targetOpenDefinition) {
-                    continue
-                }
-                let builder = ImmutableArray.CreateBuilder[TypeSymbol](candidateArguments.Length)
-                for argument in candidateArguments {
-                    builder.Add(TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure))
-                }
-                sourceArguments = builder.MoveToImmutable()
-                return true
-            }
-            return false
         }
 
         // Issue #4172: this used to be its own unguarded copy of the hierarchy
@@ -4300,7 +4311,8 @@ class Conversion {
             let conversion = Classify(source, target)
             return conversion.Exists &&
                 conversion.IsImplicit &&
-                (allowPlatformNilCheck || !conversion.RequiresPlatformNilCheck)
+                (allowPlatformNilCheck || !conversion.RequiresPlatformNilCheck) &&
+                IsRepresentationPreservingImplicit(source.StripToBareShape(), target.StripToBareShape())
         }
 
         /// The element positions of a magic collection, <b>with the nullability
@@ -4521,6 +4533,12 @@ class Conversion {
             }
             a = a.StripToBareShape()
             b = b.StripToBareShape()
+            // After stripping, a remaining wrapper is value optionality: `Nullable<V>` is a different runtime argument than `V`.
+            if a is NullableTypeSymbol || b is NullableTypeSymbol {
+                return a is NullableTypeSymbol aValue &&
+                    b is NullableTypeSymbol bValue &&
+                    AreTypeArgumentsEquivalent(aValue.UnderlyingType, bValue.UnderlyingType)
+            }
             // Nested generic arguments retain their symbolic shape through aliases
             // and annotation carriers instead of comparing erased CLR envelopes.
             if TryGetConstructedGenericShape(a, out _, out _) && TryGetConstructedGenericShape(b, out _, out _) {
