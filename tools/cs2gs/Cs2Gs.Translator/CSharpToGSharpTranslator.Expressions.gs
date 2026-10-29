@@ -4050,13 +4050,13 @@ partial class CSharpToGSharpTranslator {
                 return !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
             }
             if $scope.DescendantNodes(OutsideNestedFunctions).Any(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(node) &&
-                    node.SpanStart >= narrowingGuard
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart >= narrowingGuard
                     .Span
                     .End &&
                     node
                     .Span
-                    .End <= use.SpanStart
+                    .End <= use.SpanStart &&
+                    RunsSourceCode(node)
             ) {
                 return true
             }
@@ -4076,9 +4076,8 @@ partial class CSharpToGSharpTranslator {
                     node is ForStatementSyntax ||
                     node is ForEachStatementSyntax ||
                     node is ForEachVariableStatementSyntax {
-                    if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodes(OutsideNestedFunctions).Any(
-                        RunsSourceCode
-                    ) {
+                    if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodesAndSelf(OutsideNestedFunctions)
+                        .Any(RunsSourceCode) {
                         return true
                     }
                 }
@@ -4098,6 +4097,19 @@ partial class CSharpToGSharpTranslator {
         /// classifies a call through a callable value by its own rule: the wider set can
         /// only add an `!!` that the redundant-assertion pass removes, never miss one.
         private func NodeMayRunEscapedClosure(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            // A contextual user-defined conversion (`int n = token;`) runs source code at any expression.
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax anyExpression &&
+                this
+                .context
+                .SemanticModel
+                .GetConversion(anyExpression)
+                .IsUserDefined {
+                return true
+            }
             if node is InvocationExpressionSyntax ||
                 node is BaseObjectCreationExpressionSyntax ||
                 node is ForEachStatementSyntax ||
@@ -4208,6 +4220,13 @@ partial class CSharpToGSharpTranslator {
                         .PropertyDeclarationSyntax propertyDeclaration &&
                         (
                         propertyDeclaration.ExpressionBody != nil ||
+                            // An initialized static auto-property lowers to a computed property over a backing
+                        // field (TryTranslateStaticInitializedAutoProperty).
+                        (
+                            propertyDeclaration.Initializer != nil && propertyDeclaration.Modifiers.Any(
+                                Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                            )
+                        ) ||
                             (
                             propertyDeclaration.AccessorList != nil && propertyDeclaration.AccessorList!!.Accessors.Any(
                                 (
@@ -4224,12 +4243,17 @@ partial class CSharpToGSharpTranslator {
         private func NearestFunctionBoundary(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
             .CodeAnalysis
             .SyntaxNode? {
+            // A node of a top-level program has no function ancestor: the compilation unit is its
+            // function (the synthesized entry point).
             return node.Ancestors().FirstOrDefault(
                 (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
                     ancestor is AccessorDeclarationSyntax ||
                     ancestor is LocalFunctionStatementSyntax ||
                     ancestor is AnonymousFunctionExpressionSyntax
-            )
+            ) ??
+                node
+                .SyntaxTree
+                .GetRoot()
         }
 
         private func SymbolIsWrittenBetween(

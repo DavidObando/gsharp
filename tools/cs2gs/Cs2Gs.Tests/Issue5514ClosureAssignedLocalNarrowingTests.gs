@@ -72,6 +72,97 @@ public class Demo
     }
 
     @Fact
+    func ClosureAssignedLocal_ReadInACallFreeForEach_IsAsserted() {
+        let printed = Translate(`
+using System.Collections.Generic;
+public class Demo
+{
+    public static int Run(IEnumerable<int> items)
+    {
+        string? current = null;
+        void Set() { current = null; }
+        Set();
+        current = "x";
+        if (current != null)
+        {
+            var total = 0;
+            foreach (var item in items)
+            {
+                total += current.Length;
+            }
+            return total;
+        }
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterAUserDefinedConversion_IsAsserted() {
+        let printed = Translate(`
+public struct Token
+{
+    public static implicit operator int(Token t) => 1;
+}
+public class Demo
+{
+    public static int Run(Token token)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            int n = token;
+            return n + current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterAnInitializedStaticProperty_IsAsserted() {
+        let printed = Translate(`
+public class Demo
+{
+    public static int Counter { get; } = 4;
+
+    public static int Run()
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var n = Counter;
+            return n + current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_TopLevelProgram_ReadAfterACall_IsAsserted() {
+        let printed = Translate(`
+using System;
+string? current = "x";
+void Reset() { current = null; }
+if (current != null)
+{
+    Console.WriteLine("hi");
+    Console.WriteLine(current.Length);
+}
+Reset();
+`, OutputKind.ConsoleApplication)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
     func ClosureAssignedLocal_ReadWithoutACallBetween_StaysBare() {
         let printed = Translate(`
 public class Demo
@@ -111,7 +202,7 @@ public class Demo
     }
 
     shared {
-        private func Translate(source string) string {
+        private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {
             let tree = CSharpSyntaxTree.ParseText(
                 source,
                 CSharpParseOptions(LanguageVersion.Latest),
@@ -121,9 +212,7 @@ public class Demo
                 "Snippet",
                 []SyntaxTree{tree},
                 CSharpProjectLoader.RuntimeReferences(),
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
-                    NullableContextOptions.Enable
-                )
+                CSharpCompilationOptions(outputKind).WithNullableContextOptions(NullableContextOptions.Enable)
             )
             Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error))
             let model = compilation.GetSemanticModel(tree)
