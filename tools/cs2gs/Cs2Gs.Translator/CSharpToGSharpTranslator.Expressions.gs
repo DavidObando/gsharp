@@ -3583,6 +3583,7 @@ partial class CSharpToGSharpTranslator {
                     !ComputePatternFlowRegions(isPattern, whenTrue, includeWhenClauseRegion: false).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
                 ) ||
+                    this.ClosureAssignedLocalLosesNarrowing(symbol, isPattern, expression, scope_) ||
                     this.SymbolIsWrittenBetween(symbol, isPattern, expression, scope_) || this.HasLoopCarriedWrite(
                     expression,
                     symbol,
@@ -3607,6 +3608,7 @@ partial class CSharpToGSharpTranslator {
                     !ComputeBooleanFlowRegions(nullCheck, whenTrue, includeWhenClauseRegion: false).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
                 ) ||
+                    this.ClosureAssignedLocalLosesNarrowing(symbol, nullCheck, expression, scope_) ||
                     this.SymbolIsWrittenBetween(symbol, nullCheck, expression, scope_) || this.HasLoopCarriedWrite(
                     expression,
                     symbol,
@@ -4000,6 +4002,234 @@ partial class CSharpToGSharpTranslator {
                 (IsNullLiteral(comparison.Right) && this.BindsToGuardSymbol(comparison.Left, symbol))
             whenTrue = comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression)
             return comparesSymbolToNull
+        }
+
+        /// ADR-0208 R15 (#5237): gsc kills the narrowing of a local that a CLOSURE
+        /// assigns at every node that runs source code, because that code may run a
+        /// closure that escaped. C# flow analysis keeps the fact, so a read the C#
+        /// compiler proves non-null can be nilable in the emitted G#. This is the one
+        /// decision for it: the guard narrows the use in G# only when no such
+        /// call lies between them (and no loop that holds the use but not the
+        /// guard runs one), so callers fall back to the asserted read otherwise.
+        private func ClosureAssignedLocalLosesNarrowing(
+            symbol ISymbol?,
+            narrowingGuard Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if symbol is not ILocalSymbol && symbol is not IParameterSymbol {
+                return false
+            }
+            let declaration Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = symbol!!
+                .DeclaringSyntaxReferences
+                .Select((reference SyntaxReference) -> reference.GetSyntax())
+                .FirstOrDefault()
+            if declaration == nil {
+                return false
+            }
+            let declaringFunction = NearestFunctionBoundary(declaration)
+            if declaringFunction == nil {
+                return false
+            }
+            var closureAssigned = false
+            for node in declaringFunction.DescendantNodes() {
+                if this.SyntaxNodeWritesSymbol(node, symbol) && NearestFunctionBoundary(node) != declaringFunction {
+                    closureAssigned = true
+                    break
+                }
+            }
+            if !closureAssigned {
+                return false
+            }
+            let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return this.NodeMayRunEscapedClosure(node)
+            }
+            let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
+            }
+            if $scope.DescendantNodes(OutsideNestedFunctions).Any(
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(node) &&
+                    node.SpanStart >= narrowingGuard
+                    .Span
+                    .End &&
+                    node
+                    .Span
+                    .End <= use.SpanStart
+            ) {
+                return true
+            }
+            for var node Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = use.Parent;
+                node != nil &&
+                node != $scope;
+                node = node!!
+                .Parent {
+                if node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WhileStatementSyntax ||
+                    node is DoStatementSyntax ||
+                    node is ForStatementSyntax ||
+                    node is ForEachStatementSyntax ||
+                    node is ForEachVariableStatementSyntax {
+                    if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodes(OutsideNestedFunctions).Any(
+                        RunsSourceCode
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        /// The translator's mirror of the compiler's `MayRunEscapedClosure` collector
+        /// (src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs, `VisitExpression`
+        /// of the mutation collector, ADR-0208 row R15): a node that runs source code
+        /// and so may run a closure that escaped. Calls of every kind (declared, base,
+        /// imported, constructor, function pointer, delegate invoke), object creation
+        /// (also `new T()` of a type parameter), foreach / await foreach, an
+        /// interpolation hole that is not a built-in value or a string, a computed
+        /// (non-auto) source property or indexer, an event subscription, and a user
+        /// defined operator or conversion. A delegate invoke is counted although gsc
+        /// classifies a call through a callable value by its own rule: the wider set can
+        /// only add an `!!` that the redundant-assertion pass removes, never miss one.
+        private func NodeMayRunEscapedClosure(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if node is InvocationExpressionSyntax ||
+                node is BaseObjectCreationExpressionSyntax ||
+                node is ForEachStatementSyntax ||
+                node is ForEachVariableStatementSyntax {
+                return true
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax interpolation {
+                return interpolation
+                    .Contents
+                    .OfType[InterpolationSyntax]()
+                    .Any(
+                    (hole InterpolationSyntax) -> this
+                        .context
+                        .GetTypeInfo(hole.Expression)
+                        .Type is {} holeType &&
+                        (
+                        holeType.SpecialType < SpecialType.System_Boolean ||
+                            holeType.SpecialType > SpecialType.System_UIntPtr
+                    )
+                )
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment {
+                let target ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
+                return target is IEventSymbol || this.IsComputedSourceMember(target) ||
+                    this.RunsUserOperatorOrConversion(assignment)
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PrefixUnaryExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PostfixUnaryExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .CastExpressionSyntax {
+                return this.RunsUserOperatorOrConversion(node)
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ElementAccessExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .IdentifierNameSyntax {
+                return this.IsComputedSourceMember(this.context.GetSymbolInfo(node).Symbol)
+            }
+            return false
+        }
+
+        private func RunsUserOperatorOrConversion(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if this
+                .context
+                .GetSymbolInfo(node)
+                .Symbol is IMethodSymbol{
+                MethodKind: Microsoft
+                    .CodeAnalysis
+                    .MethodKind
+                    .UserDefinedOperator or
+                    Microsoft
+                    .CodeAnalysis
+                    .MethodKind
+                    .Conversion
+            } {
+                return true
+            }
+            return node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax expression &&
+                this
+                .context
+                .SemanticModel
+                .GetConversion(expression)
+                .IsUserDefined
+        }
+
+        /// A property or indexer of the translated sources that has an accessor body,
+        /// the compiler's non-auto property (`IsAutoProperty == false`).
+        private func IsComputedSourceMember(symbol ISymbol?) bool {
+            if symbol is not IPropertySymbol property {
+                return false
+            }
+            return property
+                .DeclaringSyntaxReferences
+                .Select((reference SyntaxReference) -> reference.GetSyntax())
+                .Any(
+                (declaration Microsoft.CodeAnalysis.SyntaxNode) -> declaration is IndexerDeclarationSyntax ||
+                    (
+                    declaration is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PropertyDeclarationSyntax propertyDeclaration &&
+                        (
+                        propertyDeclaration.ExpressionBody != nil ||
+                            (
+                            propertyDeclaration.AccessorList != nil && propertyDeclaration.AccessorList!!.Accessors.Any(
+                                (
+                                    accessor Microsoft.CodeAnalysis.CSharp.Syntax.AccessorDeclarationSyntax
+                                ) -> accessor.Body != nil ||
+                                    accessor.ExpressionBody != nil
+                            )
+                        )
+                    )
+                )
+            )
+        }
+
+        private func NearestFunctionBoundary(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
+            .CodeAnalysis
+            .SyntaxNode? {
+            return node.Ancestors().FirstOrDefault(
+                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
+                    ancestor is AccessorDeclarationSyntax ||
+                    ancestor is LocalFunctionStatementSyntax ||
+                    ancestor is AnonymousFunctionExpressionSyntax
+            )
         }
 
         private func SymbolIsWrittenBetween(
