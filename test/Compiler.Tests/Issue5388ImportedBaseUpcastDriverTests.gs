@@ -1,12 +1,16 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
+import NominalConversion = GSharp.Core.CodeAnalysis.Binding.Conversion
+import SymbolAccessibility = GSharp.Core.CodeAnalysis.Symbols.Accessibility
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
@@ -21,6 +25,170 @@ class Issue5388ImportedBaseUpcastDriverTests {
 
     init(output ITestOutputHelper) {
         this.output = output
+    }
+
+    @Fact
+    func SourceClassObjectRelation_PreservesNarrowingAndReceiverRecovery() {
+        let source = StructSymbol(
+            "Source",
+            ImmutableArray[FieldSymbol].Empty,
+            SymbolAccessibility.Public,
+            nil,
+            "probe",
+            false,
+            false,
+            true
+        )
+        Assert.True(NominalConversion.IsRepresentationPreservingImplicit(source, TypeSymbol.Object))
+        Assert.True(NarrowingState.IsNoStrongerThan(TypeSymbol.Object, source))
+        Assert.True(ExpressionBinder.CanRecoverDeclaredMemberWriteReceiver(source, TypeSymbol.Object))
+        Assert.False(NominalConversion.IsRepresentationPreservingImplicit(TypeSymbol.Object, source))
+        let parent = StructSymbol(
+            "Parent",
+            ImmutableArray[FieldSymbol].Empty,
+            SymbolAccessibility.Public,
+            nil,
+            "probe",
+            false,
+            false,
+            true
+        )
+        source.SetBaseClass(parent)
+        let path = AccessPath.ForVariable(LocalVariableSymbol("value", false, TypeSymbol.Object))
+        Assert.Same(parent, NarrowingState.JoinTypes(path, []TypeSymbol{source, parent}))
+        Assert.Same(parent, NarrowingState.JoinTypes(path, []TypeSymbol{parent, source}))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func SourceClrInterface_PreservesDispatchIdentityAndReceiverOnce(inherited bool) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+open class Resource : IDisposable {
+    func Dispose() { Console.Write("D") }
+}
+class Derived : Resource {}
+shared class Counts { var Receivers int32 = 0 }
+func Target(value @TYPE@) @TYPE@ {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func Main() {
+    let value = @TYPE@()
+    let view IDisposable = Target(value)
+    view.Dispose()
+    Console.Write(Counts.Receivers)
+    Console.Write(Object.ReferenceEquals(view, value))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`.Replace(
+            "@TYPE@",
+            if inherited {
+                "Derived"
+            } else {
+                "Resource"
+            }
+        )
+        let oracle = `using System;
+using UpcastControl;
+class Resource : IDisposable { public void Dispose() { Console.Write("D"); } }
+class Derived : Resource {}
+class Program {
+    static int receivers;
+    static @TYPE@ Target(@TYPE@ value) { receivers++; Console.Write("R"); return value; }
+    static void Main() {
+        var value = new @TYPE@();
+        IDisposable view = Target(value);
+        view.Dispose();
+        Console.Write(receivers);
+        Console.Write(Object.ReferenceEquals(view, value));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`.Replace(
+            "@TYPE@",
+            if inherited {
+                "Derived"
+            } else {
+                "Resource"
+            }
+        )
+        Check(fixture, source, oracle, "RD1True1")
+    }
+
+    @Fact
+    func SourceConstructedBaseJoin_PreservesValidBaseMember() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+open class Parent[T] { func Read() int32 -> 7 }
+class Child : Parent[int32] {}
+func Read(value object, flag bool) int32 {
+    if flag {
+        if value !is Child { return 0 }
+    } else {
+        if value !is Parent[int32] { return 0 }
+    }
+    return value.Read()
+}
+func Main() {
+    let value = Child()
+    Console.Write(Read(value, true))
+    Console.Write(Read(value, false))
+    let boxed object = value
+    Console.Write(Object.ReferenceEquals(boxed, value))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using UpcastControl;
+class Parent<T> { public int Read() => 7; }
+class Child : Parent<int> {}
+class Program {
+    static int Read(object value, bool flag) {
+        if (flag) { if (value is not Child) return 0; }
+        else if (value is not Parent<int>) return 0;
+        return ((Parent<int>)value).Read();
+    }
+    static void Main() {
+        var value = new Child();
+        Console.Write(Read(value, true));
+        Console.Write(Read(value, false));
+        object boxed = value;
+        Console.Write(Object.ReferenceEquals(boxed, value));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "77True1")
+    }
+
+    @Fact
+    func SourceConstructedBase_RejectsWrongOwner() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let result = Compile(
+            fixture,
+            "open class Parent[T] {}\nclass Child : Parent[int32] {}\n" +
+                "func Up(value Child) Parent[string] -> value\nfunc Main() {}\n"
+        )
+        Assert.NotEqual(0, result.Code)
+        let error = Assert.Single(
+            Regex.Matches(
+                Encoding.UTF8.GetString(result.Bytes) + result.Error,
+                `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+            )
+        )
+        Assert.Equal("GS0155", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal("40", error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal("45", error.Groups[4].Value)
+        for path in[]string{"Consumer.dll", "Consumer.ref.dll", "Consumer.pdb"} {
+            Assert.False(File.Exists(Path.Combine(fixture.DirectoryPath, path)))
+        }
     }
 
     @Theory

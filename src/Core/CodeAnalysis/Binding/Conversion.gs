@@ -2184,11 +2184,44 @@ class Conversion {
             let source = source.StripToBareShape()
             let target = target.StripToBareShape()
             // Prove nominal inheritance separately from implicit conversions that construct or select another reference.
+            if target == TypeSymbol.Object || target.ClrType?.IsSameAs(typeof(object)) == true {
+                return true
+            }
             if source is StructSymbol sourceClass && sourceClass.IsClass {
+                if target is StructSymbol targetClass &&
+                    targetClass.IsClass &&
+                    DerivesFromConstructed(sourceClass, targetClass) {
+                    return true
+                }
                 for c in GetStructHierarchy(sourceClass) {
+                    for iface in c.Interfaces {
+                        if IsRepresentationPreservingImplicit(iface, target) {
+                            return true
+                        }
+                    }
+                    for iface in c.ImplementedClrInterfaces {
+                        if IsRepresentationPreservingImplicit(iface, target) {
+                            return true
+                        }
+                    }
                     if c.ImportedBaseType is {} importedBase &&
                         IsRepresentationPreservingImplicit(importedBase, target) {
                         return true
+                    }
+                }
+                if source is InterfaceSymbol sourceInterface {
+                    for iface in sourceInterface.SelfAndAllBaseInterfaces() {
+                        if target is InterfaceSymbol targetInterface &&
+                            (
+                            iface == targetInterface || IsVarianceCompatibleInterfaceConversion(iface, targetInterface)
+                        ) {
+                            return true
+                        }
+                        for imported in iface.BaseClrInterfaces {
+                            if IsRepresentationPreservingImplicit(imported, target) {
+                                return true
+                            }
+                        }
                     }
                 }
             }
