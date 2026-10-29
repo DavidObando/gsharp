@@ -54,6 +54,8 @@ import Xunit
 /// | 25 | two versions of assembly `Lib` declare the same `Demo.Frame(Header, Frame)`; only v2 is called with `null!` | v1 widens too | only v2 widens (full assembly identity in the key) |
 /// | 26 | `M(default(int))` into `M(object value)` | would widen `value` | unchanged: a value-type default is no null |
 /// | 27 | `Library.Sink(p)` from a consumer whose `p` receives `null!`; `Sink` is bound through the emitted reference assembly | `Sink(p!!)` throws | `Sink(p)` |
+/// | 28 | `set => Sink(value);` behind a widened constructor store | `Sink(Node value)` stays non-null, the setter passes a `Node?` | `Sink` widens (the setter's `value` is the property) |
+/// | 29 | linked `Frame.cs` compiled by A and B; C passes `null!` through B's emitted reference assembly | A and B translate the linked file differently | A, B and C agree: `parent Frame?` |
 /// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
@@ -649,6 +651,59 @@ namespace Demo
         let printed = GSharpPrinter.Print(unit)
         Assert.Contains("Forward(p Node?)", printed)
         Assert.DoesNotContain("p!!", printed)
+    }
+
+    /// Row 28.
+    @Fact
+    func CustomSetterCall_FollowsThePromotedProperty() {
+        let printed = TranslateEnabled(("Holder.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Holder
+    {
+        public Holder(Node node) { Stored = node; }
+        public Node Stored { get; set => Sink(value); }
+        private static void Sink(Node target) { }
+        public static Holder Make() => new Holder(null!);
+    }
+}`))
+        Assert.Contains("Sink(target Node?)", printed[0])
+        Assert.DoesNotContain("value!!", printed[0])
+    }
+
+    /// Row 29: the three-project linked-source case.
+    @Fact
+    func LinkedSourceCompiledByTwoProjects_NullThroughOneEmittedReference_DecidesTheSameInBoth() {
+        let a = Compile("A", NullableContextOptions.Enable, nil, ("Frame.cs", FrameSource))
+        let b = Compile("B", NullableContextOptions.Enable, nil, ("Frame.cs", FrameSource))
+        let image = System.IO.MemoryStream()
+        Assert.True(b.Emit(image).Success)
+        image.Position = 0
+        let c = Compile("C", NullableContextOptions.Enable, MetadataReference.CreateFromStream(image), ("Tag.cs", `
+namespace Demo
+{
+    public class Tag : Frame
+    {
+        private Tag(Header header) : base(header, null!) { }
+    }
+}`))
+        let siblings = []CSharpCompilation{a, b, c}
+        let printed = List[string]()
+        for compilation in[]CSharpCompilation{a, b} {
+            let tree = compilation.SyntaxTrees.Single()
+            let context = TranslationContext(compilation, compilation.GetSemanticModel(tree), tree.FilePath, siblings)
+            printed.Add(
+                GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(
+                        LoadedDocument(tree.FilePath, tree, compilation.GetSemanticModel(tree)),
+                        context
+                    )
+                )
+            )
+        }
+        Assert.Contains("parent Frame?", printed[0])
+        Assert.Equal(printed[0], printed[1])
     }
 
     /// Row 8: the null argument lives in another project of the run.

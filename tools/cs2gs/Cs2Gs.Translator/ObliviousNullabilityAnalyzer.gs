@@ -406,6 +406,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         HashSet[string]
     ]()
 
+    // Issue #5508: the file paths each compilation compiles, for linked-source aliases.
+    private let SourcePaths ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
+        Compilation,
+        HashSet[string]
+    ]()
+
     // Issue #5508: per-compilation null-ARGUMENT evidence graph, cached like
     // `NullTargets`. The seeds are cheap (a syntactic scan for `null` / `null!`
     // arguments); the forwarding edges are built lazily, only once some
@@ -605,6 +611,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !graphs.Any((g NullArgumentGraph) -> g.Seeds.Count != 0) {
             return false
         }
+        keys.AddRange(NullArgumentAliasKeys(original, graphs))
         // Some compilation has a null argument, so the forwarding edges can
         // matter. They are built once per compilation and only now.
         for graph in graphs {
@@ -2012,6 +2019,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     // substituted `string` hides that the declaration is a bare `T` that can
     // never be repainted `T?`; every eligibility test reads the original.
     private func OriginalNullArgumentDeclaration(symbol ISymbol?) ISymbol? -> switch symbol {
+        // The implicit `value` of a `set` / `init` accessor IS the property.
+        case parameter is IParameterSymbol{
+            ContainingSymbol: IMethodSymbol{AssociatedSymbol: IPropertySymbol setterProperty}
+        }: setterProperty.OriginalDefinition
         case parameter is IParameterSymbol: ReducedExtensionParameter(parameter).OriginalDefinition
         case method is IMethodSymbol: (method.ReducedFrom ?? method).OriginalDefinition
         case property is IPropertySymbol: property.OriginalDefinition
@@ -2139,19 +2150,13 @@ internal shared class ObliviousNullabilityAnalyzer {
     // method id alone.
     private func NullArgumentKeys(symbol ISymbol?) List[string] {
         let keys = List[string]()
-        let owner ISymbol? = if symbol is IParameterSymbol{ContainingSymbol: {} container} {
+        if symbol == nil || NullArgumentId(symbol) is not{} id {
+            return keys
+        }
+        let owner ISymbol = if symbol is IParameterSymbol{ContainingSymbol: {} container} {
             container
         } else {
             symbol
-        }
-        let ownerId string? = owner?.OriginalDefinition.GetDocumentationCommentId()
-        if symbol == nil || owner == nil || ownerId == nil {
-            return keys
-        }
-        let id = if symbol is IParameterSymbol parameter {
-            "P:" + ownerId + "#" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
-        } else {
-            ownerId
         }
         keys.Add((symbol.ContainingAssembly?.Identity.GetDisplayName() ?? "") + "|" + id)
         let path string? = owner.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath
@@ -2159,6 +2164,59 @@ internal shared class ObliviousNullabilityAnalyzer {
             keys.Add("@" + path + "|" + id)
         }
         return keys
+    }
+
+    // The assembly-independent part of a key: a parameter is its method's
+    // documentation id plus its ordinal, a method's RETURN the method id alone.
+    private func NullArgumentId(symbol ISymbol?) string? {
+        let owner ISymbol? = if symbol is IParameterSymbol{ContainingSymbol: {} container} {
+            container
+        } else {
+            symbol
+        }
+        let ownerId string? = owner?.OriginalDefinition.GetDocumentationCommentId()
+        if ownerId == nil {
+            return default(string?)
+        }
+        return if symbol is IParameterSymbol parameter {
+            "P:" + ownerId + "#" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
+        } else {
+            ownerId
+        }
+    }
+
+    // Every compilation of the run that compiles the SAME source file also
+    // declares this declaration under its own assembly identity, and a call
+    // bound through THAT project's emitted reference assembly records only that
+    // assembly's key (a metadata symbol has no file). The aliases connect the
+    // two, so the linked file decides identically wherever it is compiled.
+    private func NullArgumentAliasKeys(original ISymbol, graphs List[NullArgumentGraph]) List[string] {
+        let keys = List[string]()
+        let owner ISymbol = if original is IParameterSymbol{ContainingSymbol: {} container} {
+            container
+        } else {
+            original
+        }
+        let path string? = owner.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath
+        if path == nil || path.Length == 0 || NullArgumentId(original) is not{} id {
+            return keys
+        }
+        for graph in graphs {
+            if SourcePaths.GetValue(graph.Owner, ComputeSourcePaths).Contains(path) {
+                keys.Add(graph.Owner.Assembly.Identity.GetDisplayName() + "|" + id)
+            }
+        }
+        return keys
+    }
+
+    private func ComputeSourcePaths(compilation Compilation) HashSet[string] {
+        let paths = HashSet[string](StringComparer.Ordinal)
+        for tree in compilation.SyntaxTrees {
+            if !string.IsNullOrEmpty(tree.FilePath) {
+                paths.Add(tree.FilePath)
+            }
+        }
+        return paths
     }
 
     // `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`: G# renders a task return
@@ -2320,15 +2378,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     ReadsEnclosingParameterByName(assignment.Right) {
                     let target ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
                     if target is IFieldSymbol or IPropertySymbol {
-                        // `set => stored = value;` stores the property's own
-                        // contract: the setter's implicit `value` is the property.
-                        var source ISymbol? = model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol
-                        if source is IParameterSymbol{
-                            ContainingSymbol: IMethodSymbol{AssociatedSymbol: IPropertySymbol setterProperty}
-                        } {
-                            source = setterProperty
-                        }
-                        AddEdge(target, source)
+                        AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol)
                     }
                 } else if (
                     node is ReturnStatementSyntax{Expression: {} returned} && ReadsEnclosingParameterByName(returned)
