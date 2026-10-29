@@ -2099,8 +2099,10 @@ internal partial class StatementBinder {
                     {Property: {IsAutoProperty: false}}
             )
             // ADR-0208 R11 (#5170): any call, property getter or constructor
-            // with user code may assign a mutable global.
-            if sourcePropertyRunsUserCode || sourceConstructionRunsUserCode {
+            // with user code may assign a mutable global. A static member access runs the type initializer (#5504).
+            if sourcePropertyRunsUserCode ||
+                sourceConstructionRunsUserCode ||
+                StatementBinder.StaticMemberAccessRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
             }
             // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
@@ -4968,22 +4970,76 @@ internal partial class StatementBinder {
             return false
         }
 
+        /// ADR-0208 R11 (#5170), R15 (#5237), #5483 and #5504: the one definition of whether initializing
+        /// [`type`](paramref) runs user code. R11 (mutable globals) and R15 (closure-assigned locals) both read it,
+        /// for the two events that can trigger the type initializer. The generic definition of a constructed type
+        /// is checked.
+        ///
+        /// | type initializer                                                  | at construction (`newobj`) | at a static member access |
+        /// | ----------------------------------------------------------------- | -------------------------- | ------------------------- |
+        /// | `shared { init { ... } }` of a class (not `beforefieldinit`)       | yes                        | yes                       |
+        /// | `shared { init { ... } }` of a value type (a literal is `initobj`) | no                         | yes                       |
+        /// | `shared` field initializers only (`beforefieldinit`)               | no                         | no (known limitation, #5520) |
+        ///
+        /// The test reads the declaration (`DeclaresStaticInitializerBlock`), not the bound statements, which exist
+        /// only after the body of the type is bound.
+        internal func TypeInitializationRunsUserCode(type StructSymbol, atStaticMemberAccess bool) bool {
+            let definition = type.Definition ?? type
+            return definition.DeclaresStaticInitializerBlock && (atStaticMemberAccess || definition.IsClass)
+        }
+
+        /// ADR-0208 R11 and R15 (#5504): whether [`node`](paramref) reads, writes or subscribes a static member
+        /// whose declaring type runs user code in its initializer (see (cref:TypeInitializationRunsUserCode)). The
+        /// `StructType` of these nodes is the type that declares the member, so an inherited member triggers the
+        /// base type and a derived type that hides it triggers the hiding type (corpus rows s08, s09, s22, s23,
+        /// s25, s26). A constant has no access node: it is a literal.
+        internal func StaticMemberAccessRunsUserCode(node BoundExpression) bool {
+            var owner StructSymbol? = nil
+            switch node.Kind {
+                case BoundNodeKind.FieldAccessExpression:
+                if node is BoundFieldAccessExpression{
+                    Field: {IsStatic: true, IsConst: false},
+                    StructType: {} fieldOwner
+                } {
+                    owner = fieldOwner
+                }
+                case BoundNodeKind.FieldAssignmentExpression:
+                if node is BoundFieldAssignmentExpression{
+                    Field: {IsStatic: true, IsConst: false},
+                    StructType: {} fieldOwner
+                } {
+                    owner = fieldOwner
+                }
+                case BoundNodeKind.PropertyAccessExpression:
+                if node is BoundPropertyAccessExpression{Property: {IsStatic: true}, StructType: {} propertyOwner} {
+                    owner = propertyOwner
+                }
+                case BoundNodeKind.PropertyAssignmentExpression:
+                if node is BoundPropertyAssignmentExpression{Property: {IsStatic: true}, StructType: {} propertyOwner} {
+                    owner = propertyOwner
+                }
+                case BoundNodeKind.EventSubscriptionExpression:
+                if node is BoundEventSubscriptionExpression{
+                    Event: {IsStatic: true},
+                    StructType: StructSymbol eventOwner
+                } {
+                    owner = eventOwner
+                }
+            }
+            return owner != nil && TypeInitializationRunsUserCode(owner, atStaticMemberAccess: true)
+        }
+
         /// ADR-0208 R11 (#5170), R15 (#5237) and #5483: the one definition of whether constructing
-        /// [`type`](paramref) can run user code. R11 (mutable globals) and R15 (closure-assigned locals) both read
-        /// it. The type, the generic definition of a constructed type, and every base class are checked for
+        /// [`type`](paramref) can run user code. The type, the generic definition of a constructed type, and
+        /// every base class are checked for
         ///
         /// | member                                              | runs at construction |
         /// | --------------------------------------------------- | -------------------- |
         /// | instance field initializer                          | yes                  |
         /// | primary constructor                                 | yes                  |
         /// | explicit constructor                                | yes                  |
-        /// | `shared { init { ... } }` block of a class (non-beforefieldinit `.cctor`, runs at the first `newobj`) | yes |
-        /// | `shared { init { ... } }` block of a value type (a literal or `default` is `initobj`, which does not run it) | no |
-        /// | `shared` field initializer only (`beforefieldinit`, runs at the first static field access, which is user code that is classified where it is written) | no |
+        /// | the type initializer (see (cref:TypeInitializationRunsUserCode)) | per that table |
         /// | none of the above                                   | no                   |
-        ///
-        /// The static-block test reads the declaration (`DeclaresStaticInitializerBlock`), not the bound
-        /// statements, which exist only after the body of the type is bound.
         internal func ConstructionRunsUserCode(type StructSymbol) bool {
             var current StructSymbol? = type
             for var depth = 0; current != nil && depth < 64; depth++ {
@@ -4995,7 +5051,7 @@ internal partial class StatementBinder {
                     !definition
                     .EffectiveExplicitConstructors
                     .IsDefaultOrEmpty ||
-                    (definition.IsClass && definition.DeclaresStaticInitializerBlock) {
+                    TypeInitializationRunsUserCode(definition, atStaticMemberAccess: false) {
                     return true
                 }
                 current = definition.BaseClass
