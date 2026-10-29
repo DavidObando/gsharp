@@ -1292,6 +1292,8 @@ System.Console.WriteLine(Effects.Trace)
     @InlineData(true, "arrbroken", false)
     @InlineData(false, "arr-1", false)
     @InlineData(true, "arr-1", false)
+    @InlineData(false, "rect1", false)
+    @InlineData(true, "rect1", false)
     @InlineData(false, "arr3", true)
     @InlineData(true, "slice", true)
     func ImportedGenericDataClassLiteral_MissingOrUnusableShapeFailsClosed(

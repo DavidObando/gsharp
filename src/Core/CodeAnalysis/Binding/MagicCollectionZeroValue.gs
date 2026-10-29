@@ -349,6 +349,7 @@ internal shared class MagicCollectionZeroValue {
                 CultureInfo.InvariantCulture,
                 out var rank
             ) ||
+                rank < 2 ||
                 fieldInfo
                 .FieldType
                 .GetArrayRank() != rank {
