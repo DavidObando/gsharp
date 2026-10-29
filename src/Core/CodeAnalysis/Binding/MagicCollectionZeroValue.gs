@@ -171,11 +171,14 @@ internal shared class MagicCollectionZeroValue {
             if field != nil && ImportedAssemblySemantics.TryGetMagicCollectionFields(imported, out var kinds) &&
                 kinds!!
                 .TryGetValue(field.Name, out var kind) {
-                return TrySynthesizeEmptyInstanceFromMarker(
+                let zero = TrySynthesizeEmptyInstanceFromMarker(
                     field,
                     kind,
                     parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
                 )
+                if zero != nil {
+                    return zero
+                }
             }
             if constructor != nil {
                 let declaration = if imported.IsGenericType && !imported.IsGenericTypeDefinition {
@@ -322,18 +325,19 @@ internal shared class MagicCollectionZeroValue {
             type = MapTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), ElementShape(fieldInfo, 1, fieldType))
         } else if string.Equals(markerKind, "slice", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
-            if elementClr == nil {
+            if elementClr == nil || !fieldInfo.FieldType.IsSZArray {
                 return nil
             }
             type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType))
         } else if markerKind!!.StartsWith("arr", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
-            if elementClr == nil || !int32.TryParse(
+            if elementClr == nil || !fieldInfo.FieldType.IsSZArray || !int32.TryParse(
                 markerKind.AsSpan(3),
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
                 out var length
-            ) {
+            ) ||
+                length < 0 {
                 return nil
             }
             type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), length)

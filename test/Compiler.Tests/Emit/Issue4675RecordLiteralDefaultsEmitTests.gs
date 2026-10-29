@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests.Emit
 
 import System
+import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
@@ -1121,17 +1122,50 @@ System.Console.WriteLine(ScalarBox[int32](7).Extra)
         Assert.Equal("0\n3\n0\n0\n0\n3\n0\n0\n9\n9\n9\n", fixture.Run(knownShapes))
     }
 
-    @Fact
-    func ImportedGenericDataClassLiteral_UnknownCollectionOmissionsAreDiagnosedAndExplicitInputsWork() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_DeclaredCollectionZerosPreserveShape(referenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "CollectionLiteral5419.ref.dll")
         let contract = fixture.Compile(`package CollectionLiteral5419
 public data class SliceBox[T](Items []int32)
 public data class FixedBox[T](Items [3]int32)
 public data class GenericSliceBox[T](Items []T)
 public data class GenericFixedBox[T](Items [3]T)
+public data class RectBox[T](Items [,]T)
 public data class ArgumentBox[T](Items T)
-`, "CollectionLiteral5419", false)
+`, "CollectionLiteral5419", false, "/refout:" + reference)
         IlVerifier.Verify(contract)
+        IlVerifier.Verify(reference)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        using let context = MetadataLoadContext(
+            PathAssemblyResolver(
+                (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))).Split(System.IO.Path.PathSeparator)
+                    .Concat([]string{selected})
+            )
+        )
+        let metadata = context.LoadFromAssemblyPath(selected)
+        let slice = metadata.GetType("CollectionLiteral5419.SliceBox`1", throwOnError: true)!!
+        let fixedType = metadata.GetType("CollectionLiteral5419.FixedBox`1", throwOnError: true)!!
+        Assert.Equal(slice.GetProperty("Items")!!.PropertyType, fixedType.GetProperty("Items")!!.PropertyType)
+        let markers = metadata
+            .GetCustomAttributesData()
+            .Where(
+            (attribute CustomAttributeData) -> attribute
+                .AttributeType
+                .FullName == "System.Reflection.AssemblyMetadataAttribute" &&
+                cast[string](attribute.ConstructorArguments[0].Value) == "GSharp.MagicCollectionFields"
+        )
+            .Select((attribute CustomAttributeData) -> cast[string](attribute.ConstructorArguments[1].Value))
+            .ToArray()
+        Assert.NotEmpty(markers)
+        Assert.Contains(slice.MetadataToken.ToString() + "|<Items>k__BackingField:slice", markers)
+        Assert.Contains(fixedType.MetadataToken.ToString() + "|<Items>k__BackingField:arr3", markers)
         let dll = fixture.Compile(`import CollectionLiteral5419
 let sliceValue = SliceBox[int32]{Items: []int32{}}
 System.Console.WriteLine(sliceValue.Items.Length)
@@ -1148,25 +1182,188 @@ System.Console.WriteLine(argumentSlice.Items.Length)
 let argumentFixed = ArgumentBox[[3]int32]{}
 System.Console.WriteLine(argumentFixed.Items.Length)
 System.Console.WriteLine(argumentFixed.Items[2])
-`, "CollectionOmission", true, "/r:" + contract)
+let omittedSlice = SliceBox[int32]{}
+let omittedFixed = FixedBox[int32]{}
+System.Console.WriteLine(omittedSlice.Items.Length)
+System.Console.WriteLine(omittedFixed.Items.Length)
+System.Console.WriteLine(omittedFixed.Items[2])
+let second = FixedBox[int32]{}
+omittedFixed.Items[0] = 7
+System.Console.WriteLine(second.Items[0])
+System.Console.WriteLine(System.Object.ReferenceEquals(omittedFixed.Items, second.Items))
+let rectangular = RectBox[int32]{}
+System.Console.WriteLine(rectangular.Items.Length)
+`, "CollectionOmission", true, "/r:" + selected)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
-        Assert.Equal("0\n3\n0\n0\n3\n0\n0\n3\n0\n", fixture.Run(dll))
-        for name in[]string{"SliceBox", "FixedBox", "GenericSliceBox", "GenericFixedBox"} {
-            let (code, output) = fixture.TryCompile(
-                "import CollectionLiteral5419\nlet value = " + name + "[int32]{}",
-                "MissingShape",
+        Assert.Equal("0\n3\n0\n0\n3\n0\n0\n3\n0\n0\n3\n0\n0\nFalse\n0\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_PrimaryShapeDoesNotChangeConstructorOwnership(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "OwnedShape5425.ref.dll")
+        let source = `package OwnedShape5425
+public class Effects {
+    shared {
+        public var Trace string = ""
+        public func Input(label string) int32 { Trace += label return 7 }
+        public func Construct(length int32) int32 { Trace += "C" return length }
+    }
+}
+public data class Box[T](Items [3]T, Value int32 = 9) {
+    public let Seen int32 = Effects.Construct(Items.Length)
+    public var Tail int32
+    public var Body []int32
+}
+public class BodyOnly { public var Items []int32 }
+`
+        let contract = fixture.Compile(source, "OwnedShape5425", false, "/refout:" + reference)
+        let implementationBytes = System.IO.File.ReadAllBytes(contract)
+        let referenceBytes = System.IO.File.ReadAllBytes(reference)
+        fixture.Compile(source, "OwnedShape5425", false, "/refout:" + reference)
+        Assert.Equal(implementationBytes, System.IO.File.ReadAllBytes(contract))
+        Assert.Equal(referenceBytes, System.IO.File.ReadAllBytes(reference))
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(reference)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        using let context = MetadataLoadContext(
+            PathAssemblyResolver(
+                (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))).Split(System.IO.Path.PathSeparator)
+                    .Concat([]string{selected})
+            )
+        )
+        let metadata = context.LoadFromAssemblyPath(selected)
+        let marker = Assert.Single(
+            metadata.GetCustomAttributesData().Where(
+                (attribute CustomAttributeData) ->
+                attribute
+                    .AttributeType
+                    .FullName == "System.Reflection.AssemblyMetadataAttribute" &&
+                    cast[string](attribute.ConstructorArguments[0].Value) == "GSharp.MagicCollectionFields"
+            )
+        )
+        Assert.Equal(
+            metadata.GetType("OwnedShape5425.Box`1", throwOnError: true)!!.MetadataToken.ToString() +
+                "|<Items>k__BackingField:arr3",
+            cast[string](marker.ConstructorArguments[1].Value)
+        )
+        let dll = fixture.Compile(`import OwnedShape5425
+let omitted = Box[int32]{}
+System.Console.WriteLine(omitted.Items.Length)
+System.Console.WriteLine(omitted.Seen)
+System.Console.WriteLine(omitted.Value)
+System.Console.WriteLine(Effects.Trace)
+Effects.Trace = ""
+let explicitValue = Box[int32]{Value: Effects.Input("A"), Items: [3]int32{7, 8, 9}, Tail: Effects.Input("T")}
+System.Console.WriteLine(explicitValue.Items[0])
+System.Console.WriteLine(explicitValue.Value)
+System.Console.WriteLine(explicitValue.Tail)
+System.Console.WriteLine(Effects.Trace)
+Effects.Trace = ""
+let call = Box[int32]([3]int32{})
+System.Console.WriteLine(call.Value)
+System.Console.WriteLine(call.Seen)
+System.Console.WriteLine(Effects.Trace)
+`, "OwnedShapeConsumer", true, "/r:" + selected)
+        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        Assert.Equal("3\n3\n0\nC\n7\n7\n7\nACT\n9\n3\nC\n", fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(false, "arrbroken", false)
+    @InlineData(true, "arrbroken", false)
+    @InlineData(false, "arr-1", false)
+    @InlineData(true, "arr-1", false)
+    @InlineData(false, "arr3", true)
+    @InlineData(true, "slice", true)
+    func ImportedGenericDataClassLiteral_MissingOrUnusableShapeFailsClosed(
+        referenceAssembly bool,
+        unusableKind string,
+        rectangular bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        for kind in[]string{"", unusableKind} {
+            let reference = System.IO.Path.Combine(fixture.Directory, "Unavailable5425.ref.dll")
+            let marker = if kind.Length == 0 {
+                ""
+            } else {
+                "[assembly: AssemblyMetadata(\"GSharp.MagicCollectionFields\", \"33554434|Items:" + kind + "\")]"
+            }
+            let contract = fixture.CompileCSharpWithReference((`using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Items:67108865")]
+MARKER
+namespace Unavailable5425;
+public class Box<T> {
+    public readonly CARRIER Items;
+    public Box(CARRIER Items) { this.Items = Items; }
+}
+`).Replace("MARKER", marker, StringComparison.Ordinal)
+                    .Replace(
+                    "CARRIER",
+                    if rectangular {
+                        "int[,]"
+                    } else {
+                        "int[]"
+                    },
+                    StringComparison.Ordinal
+                ), "Unavailable5425", reference)
+            IlVerifier.Verify(contract)
+            IlVerifier.Verify(reference)
+            let selected = if referenceAssembly {
+                reference
+            } else {
+                contract
+            }
+            let explicitValue = fixture.Compile(
+                if rectangular {
+                    `import Unavailable5425
+let value = Box[int32]{Items: [0,0]int32}
+System.Console.WriteLine(value.Items.Length)
+`
+                } else {
+                    `import Unavailable5425
+let value = Box[int32]{Items: []int32{7}}
+System.Console.WriteLine(value.Items[0])
+`
+                },
+                "UnavailableExplicit",
                 true,
-                "/r:" + contract
+                "/r:" + selected
+            )
+            IlVerifier.Verify(explicitValue, additionalReferences: []string{contract})
+            Assert.Equal(
+                if rectangular {
+                    "0\n"
+                } else {
+                    "7\n"
+                },
+                fixture.Run(explicitValue)
+            )
+            let rejectedReference = System.IO.Path.Combine(fixture.Directory, "UnavailableOmission.ref.dll")
+            let pdb = System.IO.Path.Combine(fixture.Directory, "UnavailableOmission.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import Unavailable5425\nlet value = Box[int32]{}",
+                "UnavailableOmission",
+                true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference,
+                "/debug:portable",
+                "/pdb:" + pdb
             )
             Assert.Equal(1, code)
             Assert.True(
-                output.Contains(
-                    "MissingShape.gs(2,13,2," + (13 + name.Length).ToString() + "): error GS0267",
-                    StringComparison.Ordinal
-                ),
+                output.Contains("UnavailableOmission.gs(2,13,2,16): error GS0267", StringComparison.Ordinal),
                 output
             )
-            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingShape.dll")))
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "UnavailableOmission.dll")))
+            Assert.False(System.IO.File.Exists(rejectedReference))
+            Assert.False(System.IO.File.Exists(pdb))
         }
     }
 
@@ -1202,15 +1399,22 @@ System.Console.WriteLine(provided.Items[0])
     @InlineData("GenericFixedBox", false)
     @InlineData("GenericSliceBox", true)
     @InlineData("GenericFixedBox", true)
-    func ImportedGenericDataClassLiteral_SymbolicArrayOmissionIsDiagnosed(name string, inGenericFunction bool) {
+    func ImportedGenericDataClassLiteral_SymbolicArrayOmissionPreservesShape(name string, inGenericFunction bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
+        let producerReference = System.IO.Path.Combine(fixture.Directory, "SymbolicCollection5419.ref.dll")
         let contract = fixture.Compile(`package SymbolicCollection5419
 public data class GenericSliceBox[T](Items []T)
 public data class GenericFixedBox[T](Items [3]T)
 public data class NullableBox[T](Items []?T)
 public data class ArgumentBox[T](Items T)
-`, "SymbolicCollection5419", false)
+`, "SymbolicCollection5419", false, "/refout:" + producerReference)
         IlVerifier.Verify(contract)
+        IlVerifier.Verify(producerReference)
+        let selected = if inGenericFunction {
+            producerReference
+        } else {
+            contract
+        }
         let dll = fixture.Compile(`import SymbolicCollection5419
 struct Point { public var Value int32 }
 func Shapes[U]() {
@@ -1230,52 +1434,39 @@ let directSlice = ArgumentBox[[]Point]{}
 System.Console.WriteLine(directSlice.Items.Length)
 let directFixed = ArgumentBox[[3]Point]{}
 System.Console.WriteLine(directFixed.Items.Length)
-`, "KnownSymbolicShapes", true, "/r:" + contract)
+`, "KnownSymbolicShapes", true, "/r:" + selected)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
         Assert.Equal("0\n3\n0\n3\nTrue\n0\n3\n", fixture.Run(dll))
         let source = "import SymbolicCollection5419\nstruct Point { public var Value int32 }\n" + if inGenericFunction {
-            "func Make[U]() {\n    let value = " + name + "[U]{}\n}\n"
+            "func Make[U]() {\n    let value = " +
+                name +
+                "[U]{}\n    System.Console.WriteLine(value.Items.Length)\n}\nMake[Point]()\n"
         } else {
-            "let value = " + name + "[Point]{}\n"
+            "let value = " + name + "[Point]{}\nSystem.Console.WriteLine(value.Items.Length)\n"
         }
         let referenceDirectory = System.IO.Path.Combine(fixture.Directory, "ref")
         System.IO.Directory.CreateDirectory(referenceDirectory)
         let reference = System.IO.Path.Combine(referenceDirectory, "MissingSymbolicShape.dll")
         let pdb = System.IO.Path.Combine(fixture.Directory, "MissingSymbolicShape.pdb")
-        let (code, output) = fixture.TryCompile(
+        let omitted = fixture.Compile(
             source,
             "MissingSymbolicShape",
             true,
-            "/r:" + contract,
+            "/r:" + selected,
             "/refout:" + reference,
             "/debug:portable",
             "/pdb:" + pdb
         )
-        Assert.Equal(1, code)
-        let line = if inGenericFunction {
-            "4"
-        } else {
-            "3"
-        }
-        let column = if inGenericFunction {
-            17
-        } else {
-            13
-        }
-        Assert.True(
-            output.Contains(
-                "MissingSymbolicShape.gs(" + line + "," + column.ToString() +
-                    "," +
-                    line +
-                    "," +
-                    (column + name.Length).ToString() + "): error GS0267",
-                StringComparison.Ordinal
-            ),
-            output
+        IlVerifier.Verify(omitted, additionalReferences: []string{contract})
+        IlVerifier.Verify(reference, additionalReferences: []string{contract})
+        Assert.Equal(
+            if name == "GenericFixedBox" {
+                "3\n"
+            } else {
+                "0\n"
+            },
+            fixture.Run(omitted)
         )
-        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingSymbolicShape.dll")))
-        Assert.False(System.IO.File.Exists(reference))
-        Assert.False(System.IO.File.Exists(pdb))
     }
 
     @Fact
@@ -1303,20 +1494,27 @@ System.Console.WriteLine(value.Value == nil)
     @InlineData("SequenceBox", "Point", false)
     @InlineData("MapBox", "U", true)
     @InlineData("SequenceBox", "U", true)
-    func ImportedGenericDataClassLiteral_DeclaredMapOrSequenceOmissionIsDiagnosed(
+    func ImportedGenericDataClassLiteral_DeclaredMapOrSequenceOmissionPreservesShape(
         name string,
         element string,
         inGenericFunction bool
     ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
+        let producerReference = System.IO.Path.Combine(fixture.Directory, "ReferenceCollection5419.ref.dll")
         let contract = fixture.Compile(`package ReferenceCollection5419
 public data class MapBox[T](Items map[string,T])
 public data class SequenceBox[T](Items sequence[T])
 public data class NullableMapBox[T](Items map[string,T]?)
 public data class NullableSequenceBox[T](Items (sequence[T])?)
 public data class ArgumentBox[T](Items T)
-`, "ReferenceCollection5419", false)
+`, "ReferenceCollection5419", false, "/refout:" + producerReference)
         IlVerifier.Verify(contract)
+        IlVerifier.Verify(producerReference)
+        let selected = if inGenericFunction {
+            producerReference
+        } else {
+            contract
+        }
         let dll = fixture.Compile(`import ReferenceCollection5419
 struct Point { public var Value int32 }
 func Shapes[U](item U) {
@@ -1337,51 +1535,42 @@ Shapes[int32](7)
 Shapes[Point](Point{Value: 7})
 let call = MapBox[int32](map[string,int32]{})
 System.Console.WriteLine(call.Items.Count)
-`, "KnownReferenceShapes", true, "/r:" + contract)
+`, "KnownReferenceShapes", true, "/r:" + selected)
         IlVerifier.Verify(dll, additionalReferences: []string{contract})
         Assert.Equal("0\n0\n1\n1\nTrue\nTrue\n0\n0\n1\n1\nTrue\nTrue\n0\n", fixture.Run(dll))
+        let count = if name == "MapBox" {
+            "value.Items.Count"
+        } else {
+            "System.Linq.Enumerable.Count[" + element + "](value.Items)"
+        }
         let source = "import ReferenceCollection5419\nstruct Point { public var Value int32 }\n" +
             if inGenericFunction {
-            "func Make[U]() {\n    let value = " + name + "[" + element + "]{}\n}\n"
+            "func Make[U]() {\n    let value = " +
+                name +
+                "[" +
+                element +
+                "]{}\n    System.Console.WriteLine(" +
+                count +
+                ")\n}\nMake[Point]()\n"
         } else {
-            "let value = " + name + "[" + element + "]{}\n"
+            "let value = " + name + "[" + element + "]{}\nSystem.Console.WriteLine(" + count + ")\n"
         }
         let referenceDirectory = System.IO.Path.Combine(fixture.Directory, "ref")
         System.IO.Directory.CreateDirectory(referenceDirectory)
         let reference = System.IO.Path.Combine(referenceDirectory, "MissingReferenceShape.dll")
         let pdb = System.IO.Path.Combine(fixture.Directory, "MissingReferenceShape.pdb")
-        let (code, output) = fixture.TryCompile(
+        let omitted = fixture.Compile(
             source,
             "MissingReferenceShape",
             true,
-            "/r:" + contract,
+            "/r:" + selected,
             "/refout:" + reference,
             "/debug:portable",
             "/pdb:" + pdb
         )
-        Assert.Equal(1, code)
-        let line = if inGenericFunction {
-            4
-        } else {
-            3
-        }
-        let column = if inGenericFunction {
-            17
-        } else {
-            13
-        }
-        Assert.True(
-            output.Contains(
-                "MissingReferenceShape.gs(" + line.ToString() + "," + column.ToString() + "," + line.ToString() +
-                    "," +
-                    (column + name.Length).ToString() + "): error GS0267",
-                StringComparison.Ordinal
-            ),
-            output
-        )
-        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MissingReferenceShape.dll")))
-        Assert.False(System.IO.File.Exists(reference))
-        Assert.False(System.IO.File.Exists(pdb))
+        IlVerifier.Verify(omitted, additionalReferences: []string{contract})
+        IlVerifier.Verify(reference, additionalReferences: []string{contract})
+        Assert.Equal("0\n", fixture.Run(omitted))
     }
 
     @Fact
