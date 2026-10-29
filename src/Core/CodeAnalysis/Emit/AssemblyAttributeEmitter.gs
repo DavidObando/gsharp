@@ -495,6 +495,14 @@ internal class AssemblyAttributeEmitter {
             if type.IsClass && !type.IsData || !this.cache.StructTypeDefs.TryGetValue(type, out var handle) {
                 continue
             }
+            let primaryFields = HashSet[FieldSymbol](ReferenceEqualityComparer.Instance)
+            if type.IsClass {
+                for parameter in type.PrimaryConstructorParameters {
+                    if ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, parameter.Name, out var field) {
+                        primaryFields.Add(field)
+                    }
+                }
+            }
             let entries = type
                 .Fields
                 .Concat(
@@ -512,16 +520,7 @@ internal class AssemblyAttributeEmitter {
                     Enumerable.Empty[FieldSymbol]()
                 }
             )
-                .Where(
-                (field FieldSymbol) -> !type.IsClass || type.PrimaryConstructorParameters.Any(
-                    (parameter ParameterSymbol) -> ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(
-                        type,
-                        parameter.Name,
-                        out var primaryField
-                    ) &&
-                        object.ReferenceEquals(field, primaryField)
-                )
-            )
+                .Where((field FieldSymbol) -> !type.IsClass || primaryFields.Contains(field))
                 .Select((f FieldSymbol) -> (Field: f, Kind: MagicCollectionZeroValue.ClassifyForMarker(f.Type)))
                 .Where((e(Field FieldSymbol, Kind string?)) -> e.Item2 != nil)
                 .Select((e(Field FieldSymbol, Kind string?)) -> "${e.Item1.Name}:${e.Item2}")
