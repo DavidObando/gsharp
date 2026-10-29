@@ -5369,7 +5369,13 @@ partial class CSharpToGSharpTranslator {
                 return NullForgivenessTelemetry.Record("4500-annotations-context-nullable-local")
             }
             if this.IsTranslatorWidenedDeclaration(symbol) {
-                return NullForgivenessTelemetry.Record("1072-flow-proven-promoted-nullable")
+                // Issue #5254: a value read of a widened declaration is forgiven
+                // only where the caller has proved the sink needs a non-null value
+                // (`widenedSinkNeedsNonNull`). A sink that accepts nil, or one that
+                // G# infers from the value, keeps the `T?` that C# writes into it.
+                return (isDereferenceReceiver || widenedSinkNeedsNonNull) && NullForgivenessTelemetry.Record(
+                    "1072-flow-proven-promoted-nullable"
+                )
             }
             return false
         }
@@ -7309,9 +7315,16 @@ partial class CSharpToGSharpTranslator {
                 callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             ) bool {
                 let declared = parameter.OriginalDefinition.Type
-                let generic = declared is ITypeParameterSymbol ||
+                // Only a METHOD type parameter is re-inferred from the argument. A
+                // containing-type parameter is already fixed by the receiver
+                // (`Box[C].Use(x)`), so its substituted type is the real target.
+                let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
+                    return candidate is ITypeParameterSymbol methodParameter &&
+                        methodParameter.TypeParameterKind == TypeParameterKind.Method
+                }
+                let generic = IsMethodTypeParameter(declared) ||
                     (
-                    parameter.IsParams && (declared is IArrayTypeSymbol && declared.ElementType is ITypeParameterSymbol)
+                    parameter.IsParams && (declared is IArrayTypeSymbol && IsMethodTypeParameter(declared.ElementType))
                 )
                 return generic && !CallHasExplicitTypeArguments(callSite)
             }

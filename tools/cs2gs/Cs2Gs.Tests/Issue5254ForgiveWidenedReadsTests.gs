@@ -38,6 +38,9 @@ import Xunit
 /// | 9 | assignment into a widened `out` local | `w = p`, no `!!` (the sink accepts null) |
 /// | 10 | argument whose parameter type G# infers | `Id(p)`, no `!!` |
 /// | 11 | argument to a non-null parameter, annotations context | `Use(p!!)` |
+/// | 12 | argument to a receiver-fixed generic parameter (`Box[C].Use`) | `Use(p!!)` |
+/// | 13 | widened `out` local returned or forwarded to an inferred generic, full flow | no `!!` |
+/// | 14 | `params` carrier | never widened, so no `!!` |
 open class Issue5254ForgiveWidenedReadsTests {
     @Fact
     func Row1_ParameterReassignedFromNullableCall_IsForgivenAtReturn() {
@@ -226,6 +229,51 @@ public static class K {
   public static int Pass(C p) { p = Maybe(); if (p == null) { p = new C(); } return Use(p); }
 }`)
         Assert.Equal(1, Count(printed, "Use(p!!)"))
+    }
+
+    @Fact
+    func Row12_ReceiverFixedGenericParameter_IsForgiven() {
+        let printed = Translate(
+            true,
+            `public class C { public int N; }
+public class Box<T> where T : class { public static int Use(T x) => 1; }
+public static class K {
+  static C? Maybe() => null;
+  public static int Pass(C p) { p = Maybe(); if (p == null) { p = new C(); } return Box<C>.Use(p); }
+}`
+        )
+        Assert.Equal(1, Count(printed, "Use(p!!)"))
+    }
+
+    @Fact
+    func Row13_NullableSinkInFullFlow_KeepsTheWidenedOutLocal() {
+        let printed = Translate(
+            false,
+            `public class C { public int N; }
+public static class K {
+  public static bool TryGet(out C c) { c = null; return false; }
+  static T Id<T>(T x) => x;
+  public static C? Ret() { TryGet(out C x); return x; }
+  public static C? Fwd() { TryGet(out C y); return Id(y); }
+}`
+        )
+        Assert.Contains("out c C?", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("x!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("y!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row14_VariadicCarrier_IsNeverWidened_SoNeverForgiven() {
+        for annotationsOnly in [](bool){true, false} {
+            let printed = Translate(
+                annotationsOnly,
+                `public class C { public int N; }
+public static class K {
+  public static C[] Echo(params C[] xs) { if (xs == null) throw new System.Exception(); return xs; }
+}`
+            )
+            Assert.DoesNotContain("xs!!", printed, StringComparison.Ordinal)
+        }
     }
 
     shared {

@@ -1151,6 +1151,10 @@ partial class CSharpToGSharpTranslator {
         /// `!!` when the C# flow state at the read is non-null (issue #5254). The flow-state rule
         /// itself stays in `ReceiverNeedsNullForgiveness`.
         private func IsTranslatorWidenedDeclaration(symbol ISymbol?) bool {
+            // The declaration side never widens a variadic carrier (`TranslateParameter`).
+            if IsVariadicCarrierParameter(symbol) {
+                return false
+            }
             if this.ShouldPromoteToNullableReference(symbol) {
                 return true
             }
