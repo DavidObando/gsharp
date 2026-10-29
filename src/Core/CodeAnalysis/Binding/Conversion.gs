@@ -5618,7 +5618,7 @@ class Conversion {
         /// behaves as a reference type for conversion and equality purposes in both
         /// its nullable (`T?`) and non-nullable (`T`) forms.
         private func IsReferenceConstrainedTypeParameter(type TypeSymbol?) bool -> type is TypeParameterSymbol tp &&
-            (tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil)
+            (tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil || tp.DependentBoundProvesReferenceType)
 
         private func HasExplicitUnboxingConversion(from TypeSymbol?, to TypeSymbol?) bool {
             var from = from

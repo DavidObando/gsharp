@@ -354,6 +354,14 @@ class H {
         }
     }
 }`, "")
+            yield Row("ok-dependent-bound-coalesce", `class Fixture {
+    shared {
+        func F[A class, B A](value B?) {
+            let x = value ?? nil
+            let y B? = x
+        }
+    }
+}`, "")
             yield Row("field-initializer-conditional-bare-field", `class Flags {
     shared {
         public var R bool
