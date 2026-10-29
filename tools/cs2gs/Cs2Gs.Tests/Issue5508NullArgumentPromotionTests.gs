@@ -49,6 +49,11 @@ import Xunit
 /// | 20 | two unrelated projects declare the same `Demo.Frame(Header, Frame)`; only one passes `null!` | both widen | only the calling project's declaration widens |
 /// | 21 | `static Node Identity(Node node) => node;` + `Identity(null!)` | `node Node` and `Node` (a `node!!` return bridge throws) | `node Node?` and `Node?` |
 /// | 22 | `Run(Node n, Node value) => n.Keep(value)` (extension) + `Run(n, null!)` | `Keep`'s `value` stays `Node`; `value!!` throws | `Keep`'s `value Node?` |
+/// | 23 | `Task<Node> Pass(Task<Node> task) => task;` + `Pass(null!)` | unchanged | unchanged: a task reference has no widened spelling in the return rendering |
+/// | 24 | `set => stored = value;` behind a widened constructor store | field `stored Node` | field and property `Node?` |
+/// | 25 | two versions of assembly `Lib` declare the same `Demo.Frame(Header, Frame)`; only v2 is called with `null!` | v1 widens too | only v2 widens (full assembly identity in the key) |
+/// | 26 | `M(default(int))` into `M(object value)` | would widen `value` | unchanged: a value-type default is no null |
+/// | 27 | `Library.Sink(p)` from a consumer whose `p` receives `null!`; `Sink` is bound through the emitted reference assembly | `Sink(p!!)` throws | `Sink(p)` |
 /// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
@@ -504,6 +509,146 @@ namespace Demo
         Assert.Contains("value Node?", printed[0])
         Assert.DoesNotContain("value!!", printed[0])
         Assert.DoesNotContain("Keep(n, value)!!", printed[0])
+    }
+
+    /// Row 23.
+    @Fact
+    func TaskReferenceParameter_PassedNull_IsNotPromoted() {
+        let printed = TranslateEnabled(
+            "Round-trip only: a task reference has no widened spelling here, so the null stays an explicit error.",
+            ("Pass.cs", `
+using System.Threading.Tasks;
+namespace Demo
+{
+    public class Node { }
+    public static class Pass
+    {
+        public static Task<Node> Through(Task<Node> task) => task;
+        public static Task<Node> Run() => Through(null!);
+    }
+}`)
+        )
+        Assert.DoesNotContain("Task[Node]?", printed[0])
+    }
+
+    /// Row 24.
+    @Fact
+    func CustomSetterStore_FollowsThePromotedProperty() {
+        let printed = TranslateEnabled(("Holder.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Holder
+    {
+        private Node stored;
+        public Holder(Node node) { Stored = node; }
+        public Node Stored { get => stored; set => stored = value; }
+        public static Holder Make() => new Holder(null!);
+    }
+}`))
+        Assert.Contains("Stored Node?", printed[0])
+        Assert.Contains("stored Node?", printed[0])
+        Assert.DoesNotContain("value!!", printed[0])
+    }
+
+    /// Row 25.
+    @Fact
+    func SameNamedAssemblyOfAnotherVersion_IsNotTheDeclaringProject() {
+        let version1 = Compile(
+            "Lib",
+            NullableContextOptions.Enable,
+            nil,
+            ("Frame.cs", FrameSource),
+            ("V.cs", "[assembly: System.Reflection.AssemblyVersion(\"1.0.0.0\")]")
+        )
+        let version2 = Compile(
+            "Lib",
+            NullableContextOptions.Enable,
+            nil,
+            ("Frame2.cs", FrameSource),
+            ("V.cs", "[assembly: System.Reflection.AssemblyVersion(\"2.0.0.0\")]"),
+            ("Tag.cs", `
+namespace Demo
+{
+    public class Tag : Frame
+    {
+        private Tag(Header header) : base(header, null!) { }
+    }
+}`)
+        )
+        let tree = version1.SyntaxTrees.First()
+        let context = TranslationContext(
+            version1,
+            version1.GetSemanticModel(tree),
+            tree.FilePath,
+            []CSharpCompilation{version1, version2}
+        )
+        let unit = CSharpToGSharpTranslator().TranslateDocument(
+            LoadedDocument(tree.FilePath, tree, version1.GetSemanticModel(tree)),
+            context
+        )
+        Assert.DoesNotContain("parent Frame?", GSharpPrinter.Print(unit))
+    }
+
+    /// Row 26.
+    @Fact
+    func BoxedValueTypeDefault_IsNotNullEvidence() {
+        let printed = TranslateEnabled(("Boxer.cs", `
+namespace Demo
+{
+    public static class Boxer
+    {
+        public static int Count(object value) => value.GetHashCode();
+        public static int Run() => Count(default(int));
+    }
+}`))
+        Assert.DoesNotContain("value object?", printed[0])
+    }
+
+    /// Row 27.
+    @Fact
+    func ForwardIntoSiblingEmittedReferenceAssembly_DoesNotBridgeWithAThrowingAssertion() {
+        let library = Compile("Library", NullableContextOptions.Enable, nil, ("Sink.cs", `
+namespace Demo
+{
+    public class Node { }
+    public static class Library
+    {
+        public static void Sink(Node value) { }
+        public static void Feed() => Sink(null!);
+    }
+}`))
+        let image = System.IO.MemoryStream()
+        Assert.True(library.Emit(image).Success)
+        image.Position = 0
+        let consumer = Compile(
+            "Consumer",
+            NullableContextOptions.Enable,
+            MetadataReference.CreateFromStream(image),
+            ("Forward.cs", `
+namespace Demo
+{
+    public static class Forwarder
+    {
+        public static void Forward(Node p) { Library.Sink(p); }
+        public static void Go() => Forward(null!);
+    }
+}`)
+        )
+        let tree = consumer.SyntaxTrees.Single()
+        let context = TranslationContext(
+            consumer,
+            consumer.GetSemanticModel(tree),
+            tree.FilePath,
+            []CSharpCompilation{library, consumer}
+        )
+        let unit = CSharpToGSharpTranslator().TranslateDocument(
+            LoadedDocument(tree.FilePath, tree, consumer.GetSemanticModel(tree)),
+            context
+        )
+        let printed = GSharpPrinter.Print(unit)
+        Assert.Contains("Forward(p Node?)", printed)
+        Assert.DoesNotContain("p!!", printed)
     }
 
     /// Row 8: the null argument lives in another project of the run.

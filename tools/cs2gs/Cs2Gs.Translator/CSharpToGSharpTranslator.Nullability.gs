@@ -1555,6 +1555,16 @@ partial class CSharpToGSharpTranslator {
             let targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
             ) == true
+            // Issue #5508: a member another project of THIS run emits, seen here
+            // through that project's reference assembly, carries the widening the
+            // producer decided from the same run-wide evidence.
+            if !targetDeclaredInThisCompilation && ObliviousNullabilityAnalyzer.IsNullArgumentTarget(
+                this.context.Compilation,
+                targetSymbol,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
+                return false
+            }
             return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
         }
 

@@ -582,10 +582,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         let original ISymbol? = OriginalNullArgumentDeclaration(symbol)
         if compilation == nil ||
             original == nil ||
-            original
-            .DeclaringSyntaxReferences
-            .Length == 0 ||
-            !IsNullArgumentCandidate(original) {
+            !IsNullArgumentCandidate(original) ||
+            !IsDeclaredInThisRun(compilation, original, siblingCompilations) {
             return false
         }
         let keys = NullArgumentKeys(original)
@@ -1979,6 +1977,36 @@ internal shared class ObliviousNullabilityAnalyzer {
         return targets
     }
 
+    // Issue #5508: whether this run EMITS the declaration. A source declaration
+    // is; so is a declaration another project of the run owns that this
+    // compilation sees through that project's emitted reference assembly (its
+    // full assembly identity is a run compilation's). An external contract (the
+    // BCL, a package) is neither, and keeps the contract its assembly carries.
+    private func IsDeclaredInThisRun(
+        compilation CSharpCompilation,
+        symbol ISymbol,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?
+    ) bool {
+        if symbol.DeclaringSyntaxReferences.Length != 0 {
+            return true
+        }
+        let identity = symbol.ContainingAssembly?.Identity
+        if identity == nil {
+            return false
+        }
+        if compilation.Assembly.Identity.Equals(identity) {
+            return true
+        }
+        if siblingCompilations != nil {
+            for sibling in siblingCompilations {
+                if sibling != nil && sibling.Assembly.Identity.Equals(identity) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     // Issue #5508: the DECLARATION a null-argument decision is about. A call
     // binds the constructed member (`Box<string>(string value)`), whose
     // substituted `string` hides that the declaration is a bare `T` that can
@@ -2094,14 +2122,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         reference.NullableAnnotation != Microsoft
         .CodeAnalysis
         .NullableAnnotation
-        .Annotated
+        .Annotated &&
+        !IsTaskLike(reference)
 
     // Issue #5508: the compilation-independent identities of a candidate, every
     // one of which stands for the same declaration. The documentation id alone
     // is not an identity across a run — two unrelated projects can declare the
     // same fully qualified type and method — so the first key is qualified by
-    // the declaring assembly's NAME (a project's source and its emitted
-    // reference assembly agree on it). A declaration compiled from a LINKED
+    // the declaring assembly's full IDENTITY (name and version: a project's
+    // source and its emitted reference assembly agree on it, two versions of one
+    // package do not). A declaration compiled from a LINKED
     // source file is one declaration in several assemblies and must decide the
     // same everywhere (the repository mirror rejects divergent outputs), so a
     // source declaration also answers to a key qualified by its file path.
@@ -2123,13 +2153,22 @@ internal shared class ObliviousNullabilityAnalyzer {
         } else {
             ownerId
         }
-        keys.Add((symbol.ContainingAssembly?.Name ?? "") + "|" + id)
+        keys.Add((symbol.ContainingAssembly?.Identity.GetDisplayName() ?? "") + "|" + id)
         let path string? = owner.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath
         if !string.IsNullOrEmpty(path) {
             keys.Add("@" + path + "|" + id)
         }
         return keys
     }
+
+    // `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`: G# renders a task return
+    // through its awaited result, so the task reference's own nullability has
+    // no spelling the return rendering carries (a separate decision).
+    private func IsTaskLike(type ITypeSymbol) bool -> type is INamedTypeSymbol named &&
+        named
+        .ContainingNamespace
+        ?.ToDisplayString() == "System.Threading.Tasks" &&
+        (named.OriginalDefinition.Name == "Task" || named.OriginalDefinition.Name == "ValueTask")
 
     // `null`, `null!`, `default`, a parenthesized form, or a conditional with
     // such an arm: the argument shapes in which the AUTHOR writes null. Purely
@@ -2158,6 +2197,35 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             default {
                 return false
+            }
+        }
+    }
+
+    // The semantic half of `ArgumentWritesNull`: `default(int)` boxed into an
+    // `object` parameter is not a null, so a `default` counts only where the
+    // value it produces is a reference.
+    private func ArgumentWritesNullValue(model SemanticModel, expression ExpressionSyntax) bool {
+        switch expression {
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return ArgumentWritesNullValue(model, parenthesized.Expression)
+            }
+            case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                return ArgumentWritesNullValue(model, suppress.Operand)
+            }
+            case conditional is ConditionalExpressionSyntax {
+                return ArgumentWritesNullValue(model, conditional.WhenTrue) ||
+                    ArgumentWritesNullValue(model, conditional.WhenFalse)
+            }
+            case literal is LiteralExpressionSyntax when literal.IsKind(SyntaxKind.DefaultLiteralExpression) {
+                return model.GetTypeInfo(literal).Type?.IsValueType != true
+            }
+            case defaultExpression is DefaultExpressionSyntax {
+                return model.GetTypeInfo(defaultExpression).Type?.IsValueType != true
+            }
+            default {
+                return ArgumentWritesNull(expression)
             }
         }
     }
@@ -2199,7 +2267,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         argument
                         .Value
                         ?.Syntax is ExpressionSyntax value &&
-                        ArgumentWritesNull(value) &&
+                        ArgumentWritesNullValue(model, value) &&
                         OriginalNullArgumentDeclaration(parameter) is {} original &&
                         IsNullArgumentCandidate(original) {
                         for key in NullArgumentKeys(original) {
@@ -2252,7 +2320,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                     ReadsEnclosingParameterByName(assignment.Right) {
                     let target ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
                     if target is IFieldSymbol or IPropertySymbol {
-                        AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol)
+                        // `set => stored = value;` stores the property's own
+                        // contract: the setter's implicit `value` is the property.
+                        var source ISymbol? = model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol
+                        if source is IParameterSymbol{
+                            ContainingSymbol: IMethodSymbol{AssociatedSymbol: IPropertySymbol setterProperty}
+                        } {
+                            source = setterProperty
+                        }
+                        AddEdge(target, source)
                     }
                 } else if (
                     node is ReturnStatementSyntax{Expression: {} returned} && ReadsEnclosingParameterByName(returned)
@@ -2317,6 +2393,17 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func ReadsEnclosingParameterByName(expression ExpressionSyntax) bool {
         if Unwrap(expression) is not IdentifierNameSyntax name {
             return false
+        }
+        // The implicit `value` of a `set` / `init` accessor.
+        if name
+            .Identifier
+            .ValueText == "value" &&
+            name
+            .Ancestors()
+            .OfType[AccessorDeclarationSyntax]()
+            .FirstOrDefault() is {} accessor &&
+            (accessor.Keyword.IsKind(SyntaxKind.SetKeyword) || accessor.Keyword.IsKind(SyntaxKind.InitKeyword)) {
+            return true
         }
         let method = name.Ancestors().OfType[BaseMethodDeclarationSyntax]().FirstOrDefault()
         return method
