@@ -1976,6 +1976,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         switch symbol {
             case parameter is IParameterSymbol {
                 return parameter.Ordinal >= 0 &&
+                    IsRepaintableReference(parameter.Type) &&
                     parameter.RefKind == RefKind.None &&
                     !parameter.IsParams &&
                     parameter.ContainingSymbol is IMethodSymbol{
@@ -1990,7 +1991,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     !IsSignatureFixedByAnotherDeclaration(parameter)
             }
             case property is IPropertySymbol {
-                return !property.IsVirtual &&
+                return IsRepaintableReference(property.Type) &&
+                    !property.IsVirtual &&
                     !property.IsAbstract &&
                     property
                     .OriginalDefinition
@@ -1999,13 +2001,29 @@ internal shared class ObliviousNullabilityAnalyzer {
                     !IsSignatureFixedByAnotherDeclaration(property)
             }
             case field is IFieldSymbol {
-                return field.OriginalDefinition.DeclaringSyntaxReferences.Length != 0
+                return IsRepaintableReference(field.Type) &&
+                    field
+                    .OriginalDefinition
+                    .DeclaringSyntaxReferences
+                    .Length != 0
             }
             default {
                 return false
             }
         }
     }
+
+    // Issue #5508: a slot this rule can repaint `T?` is a reference type the C#
+    // declares NOT annotated. An already-`T?` parameter is no seed (its null is
+    // the declaration's own), and — the Adr0169 GSA0005 witness — it is no
+    // forwarding source either: `FollowHelper(.., model, ..)` under
+    // `when model != null` hands a value the C# flow proved non-null to a `T`
+    // parameter, and widening that parameter would make its body read a `T?`.
+    private func IsRepaintableReference(type ITypeSymbol?) bool -> type is {IsReferenceType: true} reference &&
+        reference.NullableAnnotation != Microsoft
+        .CodeAnalysis
+        .NullableAnnotation
+        .Annotated
 
     // Issue #5508: the compilation-independent identity of a candidate. A
     // parameter is its method's documentation id plus its ordinal, so the key

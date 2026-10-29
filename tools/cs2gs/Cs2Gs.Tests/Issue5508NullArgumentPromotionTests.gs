@@ -41,6 +41,7 @@ import Xunit
 /// | 12 | `Uri.EscapeDataString(null)` in a generated file (imported non-null parameter) | `nil` (GS0154) | `default(string)` |
 /// | 13 | `string.IsNullOrEmpty(null)` (`string?` parameter), a widened parameter, and `null` / `null!` into a non-null slot in hand-authored code | `nil` | unchanged: `nil` |
 /// | 14 | `i.Filter = null;` in a generated file into a property #3676 widens | `nil` | unchanged: `nil` |
+/// | 15 | `Collect(Node? model)` called with `model: null`, and a `when model != null` call of `Follow(Node model)` | `Follow(model Node)` | unchanged: `Follow(model Node)` (an annotated source is not a forward) |
 /// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
@@ -253,6 +254,34 @@ namespace Demo
     }
 }`))
         Assert.Contains("default(string)", printed[0])
+    }
+
+    /// Row 15 (Adr0169 GSA0005 parity, `RewriterClonePreservationAnalyzer`): a
+    /// parameter that is ALREADY `T?` is neither a seed nor a forwarding source.
+    @Fact
+    func AnnotatedParameter_PassedNull_DoesNotWidenWhatItForwardsTo() {
+        let printed = TranslateEnabled(("Walker.cs", `
+namespace Demo
+{
+    public class Node { public int Id { get; } }
+    public static class Walker
+    {
+        public static int Collect(Node? model, int depth)
+        {
+            if (model != null)
+            {
+                return Follow(model, depth);
+            }
+            return depth;
+        }
+
+        public static int Follow(Node model, int depth) => model.Id + depth;
+
+        public static int Start() => Collect(model: null, depth: 0);
+    }
+}`))
+        Assert.Contains("Follow(model Node, depth int32)", printed[0])
+        Assert.DoesNotContain("model Node?, depth int32) int32 -> model", printed[0])
     }
 
     /// Row 14: a slot that a promotion widens keeps `nil` even in a generated file.
