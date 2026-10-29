@@ -56,6 +56,7 @@ import Xunit
 /// | 27 | `Library.Sink(p)` from a consumer whose `p` receives `null!`; `Sink` is bound through the emitted reference assembly | `Sink(p!!)` throws | `Sink(p)` |
 /// | 28 | `set => Sink(value);` behind a widened constructor store | `Sink(Node value)` stays non-null, the setter passes a `Node?` | `Sink` widens (the setter's `value` is the property) |
 /// | 29 | linked `Frame.cs` compiled by A and B; C passes `null!` through B's emitted reference assembly | A and B translate the linked file differently | A, B and C agree: `parent Frame?` |
+/// | 30 | linked `Forward(Node p) => Sink(p)` compiled by A and B with `Sink` in different files; C passes `null!` to A's `Forward` through A's emitted reference | A emits `Sink(p)`, B emits `Sink(p!!)` | A and B emit the same linked file |
 /// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
@@ -703,6 +704,54 @@ namespace Demo
             )
         }
         Assert.Contains("parent Frame?", printed[0])
+        Assert.Equal(printed[0], printed[1])
+    }
+
+    /// Row 30: an alias is followed at every step of a chain, not only at its end.
+    @Fact
+    func LinkedForwarder_WithSeparatelyDeclaredSinks_DecidesTheSameInBoth() {
+        let forward = `
+namespace Demo
+{
+    public class Node { }
+    public static class Forwarder
+    {
+        public static void Forward(Node p) => Sinks.Sink(p);
+    }
+}`
+        let a = Compile("A", NullableContextOptions.Enable, nil, ("Forward.cs", forward), ("SinkA.cs", `
+namespace Demo
+{
+    public static class Sinks { public static void Sink(Node value) { } }
+}`))
+        let b = Compile("B", NullableContextOptions.Enable, nil, ("Forward.cs", forward), ("SinkB.cs", `
+namespace Demo
+{
+    public static class Sinks { public static void Sink(Node value) { } }
+}`))
+        let image = System.IO.MemoryStream()
+        Assert.True(a.Emit(image).Success)
+        image.Position = 0
+        let c = Compile("C", NullableContextOptions.Enable, MetadataReference.CreateFromStream(image), ("Go.cs", `
+namespace Demo
+{
+    public static class Go { public static void Run() => Forwarder.Forward(null!); }
+}`))
+        let siblings = []CSharpCompilation{a, b, c}
+        let printed = List[string]()
+        for compilation in[]CSharpCompilation{a, b} {
+            let tree = compilation.SyntaxTrees.First((t SyntaxTree) -> t.FilePath == "Forward.cs")
+            let context = TranslationContext(compilation, compilation.GetSemanticModel(tree), tree.FilePath, siblings)
+            printed.Add(
+                GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(
+                        LoadedDocument(tree.FilePath, tree, compilation.GetSemanticModel(tree)),
+                        context
+                    )
+                )
+            )
+        }
+        Assert.Contains("Forward(p Node?)", printed[0])
         Assert.Equal(printed[0], printed[1])
     }
 

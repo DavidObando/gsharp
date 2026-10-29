@@ -611,7 +611,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !graphs.Any((g NullArgumentGraph) -> g.Seeds.Count != 0) {
             return false
         }
-        keys.AddRange(NullArgumentAliasKeys(original, graphs))
         // Some compilation has a null argument, so the forwarding edges can
         // matter. They are built once per compilation and only now.
         for graph in graphs {
@@ -626,6 +625,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             let current = pending.Pop()
             if !visited.Add(current) {
                 continue
+            }
+            for alias in NullArgumentAliasKeys(current, graphs) {
+                pending.Push(alias)
             }
             for graph in graphs {
                 if graph.Seeds.Contains(current) {
@@ -2186,21 +2188,20 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     // Every compilation of the run that compiles the SAME source file also
-    // declares this declaration under its own assembly identity, and a call
-    // bound through THAT project's emitted reference assembly records only that
-    // assembly's key (a metadata symbol has no file). The aliases connect the
-    // two, so the linked file decides identically wherever it is compiled.
-    private func NullArgumentAliasKeys(original ISymbol, graphs List[NullArgumentGraph]) List[string] {
+    // declares a file-keyed declaration under its own assembly identity, and a
+    // call bound through THAT project's emitted reference assembly records only
+    // that assembly's key (a metadata symbol has no file). The aliases connect
+    // the two, so the linked file decides identically wherever it is compiled.
+    // Applied to EVERY visited key, not only the queried one: a forwarding
+    // parameter in the middle of a chain is a linked declaration too.
+    private func NullArgumentAliasKeys(key string, graphs List[NullArgumentGraph]) List[string] {
         let keys = List[string]()
-        let owner ISymbol = if original is IParameterSymbol{ContainingSymbol: {} container} {
-            container
-        } else {
-            original
-        }
-        let path string? = owner.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath
-        if path == nil || path.Length == 0 || NullArgumentId(original) is not{} id {
+        let separator = key.LastIndexOf('|')
+        if !key.StartsWith("@", StringComparison.Ordinal) || separator < 0 {
             return keys
         }
+        let path = key.Substring(1, separator - 1)
+        let id = key.Substring(separator + 1)
         for graph in graphs {
             if SourcePaths.GetValue(graph.Owner, ComputeSourcePaths).Contains(path) {
                 keys.Add(graph.Owner.Assembly.Identity.GetDisplayName() + "|" + id)
