@@ -915,27 +915,8 @@ class StructSymbol : TypeSymbol {
     )
 
     /// Finds the storage selected by existing primary-member metadata.
-    internal func GetDataConstructionPrimaryField(type Type, index int32) FieldInfo? {
-        if !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics) ||
-            index < 0 ||
-            index >= semantics!!
-            .PrimaryConstructorParameterNames
-            .Length {
-            return nil
-        }
-        let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
-        return ClrTypeUtilities.SafeGetFields(
-            type,
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-        )
-            .FirstOrDefault(
-            (field FieldInfo) -> if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
-                field.MetadataToken == tokens[index]
-            } else {
-                field.Name == semantics!!.PrimaryConstructorParameterNames[index]
-            }
-        )
-    }
+    internal func GetDataConstructionPrimaryField(type Type, index int32) FieldInfo? ->
+    ImportedAssemblySemantics.GetPrimaryConstructorMember(type, index) as FieldInfo
 
     /// Selects the declaration signature before mapping it to a closed imported type.
     internal func GetDataConstructionConstructor() ConstructorInfo? {
@@ -961,17 +942,11 @@ class StructSymbol : TypeSymbol {
         }
         let expectedTypes = ImmutableArray.CreateBuilder[Type](parameters.Length)
         for var i = 0; i < parameters.Length; i++ {
-            let field = GetDataConstructionPrimaryField(signatureType, i)
-            let physicalType = field?.FieldType ?? ClrTypeUtilities.SafeGetProperty(
-                signatureType,
-                parameters[i].Name,
-                flags
-            )
-                ?.PropertyType
-            if physicalType == nil {
+            let member = ImportedAssemblySemantics.GetPrimaryConstructorMember(signatureType, i)
+            if member == nil {
                 return nil
             }
-            expectedTypes.Add(physicalType)
+            expectedTypes.Add(ClrNullability.GetSignatureType(member))
         }
         for constructor in ClrTypeUtilities.SafeGetConstructors(signatureType, flags) {
             let actual = constructor.GetParameters()

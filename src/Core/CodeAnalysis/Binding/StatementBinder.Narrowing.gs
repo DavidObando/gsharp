@@ -3420,8 +3420,15 @@ internal partial class StatementBinder {
             // exists).
             variableType = type ?? TypeSymbol.Error
             channelSlotWithoutInitializer = MagicCollectionZeroValue.RequiresExplicitInitializer(variableType)
-            convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, variableType) ??
+            convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(
+                syntax,
+                variableType,
+                out var missingDeclarationShape
+            ) ??
                 BoundDefaultExpression(syntax, variableType)
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(syntax.Location, variableType.ToString())
+            }
         } else {
             // ADR-0055 Tier 4: an interpolated-string initializer whose declared
             // type is IFormattable/FormattableString lowers to
