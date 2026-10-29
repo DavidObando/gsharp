@@ -14,6 +14,18 @@ import Xunit
 import GSharp.Compiler.Tests
 
 class Issue4675RecordLiteralDefaultsEmitTests {
+    private func VerifyPrimaryShapeIl(assemblyPath string, additionalReferences[]string? = nil) {
+        Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
+        IlVerifier.Verify(
+            assemblyPath,
+            additionalReferences,
+            report: (details string) -> Assert.Contains(
+                "${Environment.NewLine}raw exit: 0${Environment.NewLine}",
+                details
+            )
+        )
+    }
+
     @Fact
     func EmptyPrimaryList_SeparatesExplicitConstructionFromBareZeroInitialization() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -1136,8 +1148,8 @@ public data class GenericFixedBox[T](Items [3]T)
 public data class RectBox[T](Items [,]T)
 public data class ArgumentBox[T](Items T)
 `, "CollectionLiteral5419", false, "/refout:" + reference)
-        IlVerifier.Verify(contract)
-        IlVerifier.Verify(reference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(reference)
         let selected = if referenceAssembly {
             reference
         } else {
@@ -1194,7 +1206,7 @@ System.Console.WriteLine(System.Object.ReferenceEquals(omittedFixed.Items, secon
 let rectangular = RectBox[int32]{}
 System.Console.WriteLine(rectangular.Items.Length)
 `, "CollectionOmission", true, "/r:" + selected)
-        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        VerifyPrimaryShapeIl(dll, []string{contract})
         Assert.Equal("0\n3\n0\n0\n3\n0\n0\n3\n0\n0\n3\n0\n0\nFalse\n0\n", fixture.Run(dll))
     }
 
@@ -1225,8 +1237,8 @@ public class BodyOnly { public var Items []int32 }
         fixture.Compile(source, "OwnedShape5425", false, "/refout:" + reference)
         Assert.Equal(implementationBytes, System.IO.File.ReadAllBytes(contract))
         Assert.Equal(referenceBytes, System.IO.File.ReadAllBytes(reference))
-        IlVerifier.Verify(contract)
-        IlVerifier.Verify(reference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(reference)
         let selected = if referenceAssembly {
             reference
         } else {
@@ -1271,7 +1283,7 @@ System.Console.WriteLine(call.Value)
 System.Console.WriteLine(call.Seen)
 System.Console.WriteLine(Effects.Trace)
 `, "OwnedShapeConsumer", true, "/r:" + selected)
-        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        VerifyPrimaryShapeIl(dll, []string{contract})
         Assert.Equal("3\n3\n0\nC\n7\n7\n7\nACT\n9\n3\nC\n", fixture.Run(dll))
     }
 
@@ -1313,8 +1325,8 @@ public class Box<T> {
                     },
                     StringComparison.Ordinal
                 ), "Unavailable5425", reference)
-            IlVerifier.Verify(contract)
-            IlVerifier.Verify(reference)
+            VerifyPrimaryShapeIl(contract)
+            VerifyPrimaryShapeIl(reference)
             let selected = if referenceAssembly {
                 reference
             } else {
@@ -1336,7 +1348,7 @@ System.Console.WriteLine(value.Items[0])
                 true,
                 "/r:" + selected
             )
-            IlVerifier.Verify(explicitValue, additionalReferences: []string{contract})
+            VerifyPrimaryShapeIl(explicitValue, []string{contract})
             Assert.Equal(
                 if rectangular {
                     "0\n"
@@ -1408,8 +1420,8 @@ public data class GenericFixedBox[T](Items [3]T)
 public data class NullableBox[T](Items []?T)
 public data class ArgumentBox[T](Items T)
 `, "SymbolicCollection5419", false, "/refout:" + producerReference)
-        IlVerifier.Verify(contract)
-        IlVerifier.Verify(producerReference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(producerReference)
         let selected = if inGenericFunction {
             producerReference
         } else {
@@ -1435,7 +1447,7 @@ System.Console.WriteLine(directSlice.Items.Length)
 let directFixed = ArgumentBox[[3]Point]{}
 System.Console.WriteLine(directFixed.Items.Length)
 `, "KnownSymbolicShapes", true, "/r:" + selected)
-        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        VerifyPrimaryShapeIl(dll, []string{contract})
         Assert.Equal("0\n3\n0\n3\nTrue\n0\n3\n", fixture.Run(dll))
         let source = "import SymbolicCollection5419\nstruct Point { public var Value int32 }\n" + if inGenericFunction {
             "func Make[U]() {\n    let value = " +
@@ -1457,8 +1469,8 @@ System.Console.WriteLine(directFixed.Items.Length)
             "/debug:portable",
             "/pdb:" + pdb
         )
-        IlVerifier.Verify(omitted, additionalReferences: []string{contract})
-        IlVerifier.Verify(reference, additionalReferences: []string{contract})
+        VerifyPrimaryShapeIl(omitted, []string{contract})
+        VerifyPrimaryShapeIl(reference, []string{contract})
         Assert.Equal(
             if name == "GenericFixedBox" {
                 "3\n"
@@ -1508,8 +1520,8 @@ public data class NullableMapBox[T](Items map[string,T]?)
 public data class NullableSequenceBox[T](Items (sequence[T])?)
 public data class ArgumentBox[T](Items T)
 `, "ReferenceCollection5419", false, "/refout:" + producerReference)
-        IlVerifier.Verify(contract)
-        IlVerifier.Verify(producerReference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(producerReference)
         let selected = if inGenericFunction {
             producerReference
         } else {
@@ -1536,7 +1548,7 @@ Shapes[Point](Point{Value: 7})
 let call = MapBox[int32](map[string,int32]{})
 System.Console.WriteLine(call.Items.Count)
 `, "KnownReferenceShapes", true, "/r:" + selected)
-        IlVerifier.Verify(dll, additionalReferences: []string{contract})
+        VerifyPrimaryShapeIl(dll, []string{contract})
         Assert.Equal("0\n0\n1\n1\nTrue\nTrue\n0\n0\n1\n1\nTrue\nTrue\n0\n", fixture.Run(dll))
         let count = if name == "MapBox" {
             "value.Items.Count"
@@ -1568,8 +1580,8 @@ System.Console.WriteLine(call.Items.Count)
             "/debug:portable",
             "/pdb:" + pdb
         )
-        IlVerifier.Verify(omitted, additionalReferences: []string{contract})
-        IlVerifier.Verify(reference, additionalReferences: []string{contract})
+        VerifyPrimaryShapeIl(omitted, []string{contract})
+        VerifyPrimaryShapeIl(reference, []string{contract})
         Assert.Equal("0\n", fixture.Run(omitted))
     }
 
