@@ -222,24 +222,16 @@ internal class ConversionClassifier {
         // switch-expressions, `a ?? nil`) binds against its target so a `nil`
         // arm takes the target's nullable type. Without the target the arms
         // unify first and the `nil` arm meets the arm's bare type.
-        if !allowExplicit && type != nil && type != TypeSymbol.Error && IsTargetTypedBranchSyntax(syntax) {
+        if !allowExplicit &&
+            type != nil &&
+            type != TypeSymbol.Error &&
+            ExpressionBinder
+            .IsTargetTypedBranchyArgumentSyntax(syntax) {
             return BindConversion(syntax.Location, bindExpressionWithTargetType(syntax, type), type, allowExplicit)
         }
         let expression = bindExpression(syntax)
         return BindConversion(syntax.Location, expression, type, allowExplicit)
     }
-
-    /// Whether [`syntax`](paramref) is a branchy expression whose arms need the target type.
-    /// @param syntax The initializer syntax.
-    /// @returns `true` for an if-, if-let-, conditional-, switch- or null-coalescing expression.
-    private func IsTargetTypedBranchSyntax(syntax ExpressionSyntax) bool -> syntax is IfExpressionSyntax ||
-        syntax is IfLetExpressionSyntax ||
-        syntax is ConditionalExpressionSyntax ||
-        syntax is SwitchExpressionSyntax ||
-        syntax is BinaryExpressionSyntax binary &&
-        binary
-        .OperatorToken
-        .Kind == SyntaxKind.QuestionQuestionToken
 
     /// Binds an explicit ADR-0148 spread projection.
     /// @param diagnosticLocation The source location for conversion diagnostics.

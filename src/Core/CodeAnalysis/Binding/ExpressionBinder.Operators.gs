@@ -1234,7 +1234,7 @@ internal partial class ExpressionBinder {
     /// (cref:TypeSymbol.Void).
     internal func BindLambdaBodyExpression(bodySyntax ExpressionSyntax, targetType TypeSymbol? = nil) BoundExpression {
         if bodySyntax is BlockExpressionSyntax block {
-            let trailingTarget = if block.Expression != nil && IsNestedLambdaExpression(block.Expression) {
+            let trailingTarget = if block.Expression != nil && TakesLambdaReturnTarget(block.Expression, targetType) {
                 targetType
             } else {
                 default(TypeSymbol?)
@@ -1245,12 +1245,27 @@ internal partial class ExpressionBinder {
                 }
             )
         }
-        return if targetType == nil || !IsNestedLambdaExpression(bodySyntax) {
-            BindExpression(bodySyntax, canBeVoid: true)
+        return if TakesLambdaReturnTarget(bodySyntax, targetType) {
+            BindExpression(bodySyntax, targetType!!)
         } else {
-            BindExpression(bodySyntax, targetType)
+            BindExpression(bodySyntax, canBeVoid: true)
         }
     }
+
+    /// Whether a lambda body expression binds against the contextual return type. A nested lambda
+    /// always does. A branchy expression does when the type is a closed nullable type, so a `nil`
+    /// arm takes it (issue #4316). An open or non-nullable type stays out: an unresolved generic
+    /// result type must still be inferred from the arms.
+    /// @param syntax The body or block-tail expression.
+    /// @param targetType The contextual return type, or `nil`.
+    /// @returns `true` when the expression binds against [`targetType`](paramref).
+    private func TakesLambdaReturnTarget(syntax ExpressionSyntax, targetType TypeSymbol?) bool -> targetType != nil &&
+        (
+        IsNestedLambdaExpression(syntax) ||
+            IsTargetTypedBranchyArgumentSyntax(syntax) &&
+            targetType is NullableTypeSymbol &&
+            !TypeSymbol.ContainsTypeParameter(targetType)
+    )
 
     private func BindLambdaBlockBodyExpression(block BlockExpressionSyntax, targetType TypeSymbol?) BoundExpression {
         // Lambda body block: a missing trailing expression means a void

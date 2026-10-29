@@ -282,6 +282,20 @@ class H {
         public var f Box? = if Flags.R { Box() } else { nil }
     }
 }`, "")
+            yield Row("ok-field-initializer-parenthesized-nil-arm", `class Flags {
+    shared {
+        public var R bool
+    }
+}
+class H {
+    public var f Box? = (Flags.R ? Box() : nil)
+}`, "")
+            yield Row("ok-lambda-expression-body-nil-arm", `func F(c bool) {
+    let f () -> Box? = () -> c ? Box() : nil
+}`, "")
+            yield Row("ok-lambda-block-tail-nil-arm", `func F(c bool) {
+    let f () -> Box? = () -> { if c { Box() } else { nil } }
+}`, "")
             yield Row("field-initializer-conditional-bare-field", `class Flags {
     shared {
         public var R bool
