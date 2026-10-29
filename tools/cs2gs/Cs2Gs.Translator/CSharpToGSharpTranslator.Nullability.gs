@@ -1201,6 +1201,18 @@ partial class CSharpToGSharpTranslator {
             if argument?.Parent is not ArgumentSyntax || invocation == nil {
                 return false
             }
+            // Only a result that IS the inferred type parameter forwards the null. A wrapped
+            // result (`Box[T]`) would infer `Box[C?]`, which the sink `Box[C]?` does not accept.
+            if this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is not IMethodSymbol method ||
+                method
+                .OriginalDefinition
+                .ReturnType is not ITypeParameterSymbol returnParameter ||
+                returnParameter.TypeParameterKind != TypeParameterKind.Method {
+                return false
+            }
             let (resultType, resultSymbol) = this.FindContextualValueTarget(invocation)
             return this.NullForgivingTargetAcceptsNil(resultType, resultSymbol)
         }

@@ -43,6 +43,7 @@ import Xunit
 /// | 16 | inferred generic argument whose result is consumed as non-null, full flow | `Id(p!!)` |
 /// | 17 | argument to a constrained generic parameter | `Use(p!!)` |
 /// | 18 | lambda parameter whose annotation drives inference | never widened, so no `!!` |
+/// | 19 | inferred argument whose result is wrapped (`Box[T]`) | `Wrap(p!!)` |
 /// | 14 | `params` carrier | never widened, so no `!!` |
 /// | 15 | indexer key of a widened parameter | binds (`m[key!!]` when the key stays non-null) |
 open class Issue5254ForgiveWidenedReadsTests {
@@ -321,6 +322,17 @@ public static class K {
 }`)
             Assert.DoesNotContain("Consume(p!!)", printed, StringComparison.Ordinal)
         }
+    }
+
+    @Fact
+    func Row19_WrappedInferredResult_IsAsserted() {
+        let printed = Translate(false, `public class C { public int N; }
+public class Box<T> { }
+public static class K {
+  static Box<T> Wrap<T>(T x) => new Box<T>();
+  public static Box<C>? Ret(C p, bool b) { if (b) { return Wrap(p); } if (p == null) { return null; } return null; }
+}`)
+        Assert.Equal(1, Count(printed, "Wrap(p!!)"))
     }
 
     shared {
