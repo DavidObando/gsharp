@@ -4114,7 +4114,11 @@ partial class CSharpToGSharpTranslator {
                 node is BaseObjectCreationExpressionSyntax ||
                 node is ForEachStatementSyntax ||
                 node is ForEachVariableStatementSyntax ||
-                node is Microsoft.CodeAnalysis.CSharp.Syntax.UsingStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .UsingStatementSyntax ||
                 node is Microsoft
                 .CodeAnalysis
                 .CSharp
