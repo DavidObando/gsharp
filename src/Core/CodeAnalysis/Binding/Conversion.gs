@@ -2160,14 +2160,14 @@ class Conversion {
                 !IsReferenceLikeTarget(target) {
                 return false
             }
-            let source = source.StripToBareShape()
-            let target = target.StripToBareShape()
+            let sourceShape = source.StripToBareShape()
+            let targetShape = target.StripToBareShape()
             // Prove nominal inheritance separately from implicit conversions that construct or select another reference.
-            if target == TypeSymbol.Object || target.ClrType?.IsSameAs(typeof(object)) == true {
+            if targetShape == TypeSymbol.Object || targetShape.ClrType?.IsSameAs(typeof(object)) == true {
                 return true
             }
-            if source is StructSymbol sourceClass && sourceClass.IsClass {
-                if target is StructSymbol targetClass &&
+            if sourceShape is StructSymbol sourceClass && sourceClass.IsClass {
+                if targetShape is StructSymbol targetClass &&
                     targetClass.IsClass &&
                     DerivesFromConstructed(sourceClass, targetClass) {
                     return true
@@ -2189,9 +2189,9 @@ class Conversion {
                     }
                 }
             }
-            if source is InterfaceSymbol sourceInterface {
+            if sourceShape is InterfaceSymbol sourceInterface {
                 for iface in sourceInterface.SelfAndAllBaseInterfaces() {
-                    if target is InterfaceSymbol targetInterface &&
+                    if targetShape is InterfaceSymbol targetInterface &&
                         (iface == targetInterface || IsVarianceCompatibleInterfaceConversion(iface, targetInterface)) {
                         return true
                     }
@@ -2202,7 +2202,7 @@ class Conversion {
                     }
                 }
             }
-            if source is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
+            if sourceShape is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
                 return TryClassifyConstructedImportedReferenceConversion(source, target)
             }
             return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {

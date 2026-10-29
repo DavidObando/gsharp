@@ -230,6 +230,75 @@ class Program {
     }
 
     @Fact
+    func SourceClrInterface_ExtensionArgumentsKeepTheirSymbolicOwnerAndReceiverOnce() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Collections.Generic
+import System.Linq
+import UpcastControl
+open class Symbol {
+    let Name string
+    init(name string) { Name = name }
+}
+class FunctionSymbol : Symbol { init(name string) : base(name) {} }
+class Comparer : IComparer[Symbol], IComparer[FunctionSymbol] {
+    func Compare(x Symbol?, y Symbol?) int32 {
+        Console.Write("S")
+        return StringComparer.Ordinal.Compare(y?.Name, x?.Name)
+    }
+    func Compare(x FunctionSymbol?, y FunctionSymbol?) int32 {
+        Console.Write("F")
+        return StringComparer.Ordinal.Compare(x?.Name, y?.Name)
+    }
+}
+shared class Counts { var Receivers int32 = 0 }
+func Target() Comparer {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return Comparer()
+}
+func Main() {
+    for item in []FunctionSymbol{FunctionSymbol("B"), FunctionSymbol("A")}.OrderBy(
+        (value FunctionSymbol) -> value, Target()) {
+        Console.Write(item.Name)
+    }
+    Console.Write(Counts.Receivers)
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using System.Collections.Generic;
+using System.Linq;
+using UpcastControl;
+class Symbol { public readonly string Name; public Symbol(string name) { Name = name; } }
+class FunctionSymbol : Symbol { public FunctionSymbol(string name) : base(name) {} }
+class Comparer : IComparer<Symbol>, IComparer<FunctionSymbol> {
+    public int Compare(Symbol? x, Symbol? y) {
+        Console.Write("S");
+        return StringComparer.Ordinal.Compare(y?.Name, x?.Name);
+    }
+    public int Compare(FunctionSymbol? x, FunctionSymbol? y) {
+        Console.Write("F");
+        return StringComparer.Ordinal.Compare(x?.Name, y?.Name);
+    }
+}
+class Program {
+    static int receivers;
+    static Comparer Target() { receivers++; Console.Write("R"); return new Comparer(); }
+    static void Main() {
+        foreach (var item in new[] { new FunctionSymbol("B"), new FunctionSymbol("A") }
+            .OrderBy((FunctionSymbol value) => value, Target())) {
+            Console.Write(item.Name);
+        }
+        Console.Write(receivers);
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "RFAB11")
+    }
+
+    @Fact
     func SourceConstructedBase_RejectsWrongOwner() {
         using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
         let result = Compile(
