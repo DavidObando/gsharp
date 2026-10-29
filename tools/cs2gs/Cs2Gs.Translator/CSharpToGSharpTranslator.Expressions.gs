@@ -2887,7 +2887,7 @@ partial class CSharpToGSharpTranslator {
             let inferredSink = this.SinkInfersTypeFromValue(targetSymbol, value)
             let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(
                 value,
-                widenedSinkNeedsNonNull: !(inferredSink && this.InferredCallResultAcceptsNil(value)),
+                widenedSinkNeedsNonNull: true,
                 widenedSinkInfersType: inferredSink
             ) ||
                 flowNarrowedAnnotatedValue

@@ -39,7 +39,7 @@ import Xunit
 /// | 10 | argument whose parameter type G# infers | `Id(p)`, no `!!` |
 /// | 11 | argument to a non-null parameter | `Use(p!!)` |
 /// | 12 | argument to a receiver-fixed generic parameter (`Box[C].Use`) | `Use(p!!)` |
-/// | 13 | widened `out` local returned, or forwarded through an inferred generic, in a nil-accepting method, full flow | no `!!` |
+/// | 13 | widened `out` local returned in a nil-accepting method, full flow | no `!!` |
 /// | 16 | inferred generic argument whose result is consumed as non-null, full flow | `Id(p!!)` |
 /// | 17 | argument to a constrained generic parameter | `Use(p!!)` |
 /// | 18 | lambda parameter whose annotation drives inference | never widened, so no `!!` |
@@ -271,11 +271,9 @@ public static class K {
   public static bool TryGet(out C c) { c = null; return false; }
   static T Id<T>(T x) => x;
   public static C? Ret() { TryGet(out C x); return x; }
-  public static C? Fwd() { TryGet(out C y); return Id(y); }
 }`)
         Assert.Contains("out c C?", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("x!!", printed, StringComparison.Ordinal)
-        Assert.DoesNotContain("y!!", printed, StringComparison.Ordinal)
     }
 
     @Fact
@@ -325,7 +323,7 @@ public static class K {
     }
 
     @Fact
-    func Row19_WrappedInferredResult_IsAsserted() {
+    func Row19_WrappedInferredResult_FullFlow_IsAsserted() {
         let printed = Translate(false, `public class C { public int N; }
 public class Box<T> { }
 public static class K {

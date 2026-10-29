@@ -1191,32 +1191,6 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        /// Issue #5254: whether the call that [`argument`](paramref) belongs to returns into a sink that
-        /// accepts nil. A type argument that G# infers from the argument then forwards the null: the
-        /// result is `T?` and the sink takes it.
-        private func InferredCallResultAcceptsNil(
-            argument Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
-        ) bool {
-            let invocation = argument?.Parent?.Parent?.Parent as InvocationExpressionSyntax
-            if argument?.Parent is not ArgumentSyntax || invocation == nil {
-                return false
-            }
-            // Only a result that IS the inferred type parameter forwards the null. A wrapped
-            // result (`Box[T]`) would infer `Box[C?]`, which the sink `Box[C]?` does not accept.
-            if this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol method ||
-                method
-                .OriginalDefinition
-                .ReturnType is not ITypeParameterSymbol returnParameter ||
-                returnParameter.TypeParameterKind != TypeParameterKind.Method {
-                return false
-            }
-            let (resultType, resultSymbol) = this.FindContextualValueTarget(invocation)
-            return this.NullForgivingTargetAcceptsNil(resultType, resultSymbol)
-        }
-
         /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds
         /// for a method type parameter that has no constraint a nullable type argument would break.
         /// A constrained parameter keeps its non-null type argument, so its argument needs the `!!`.
