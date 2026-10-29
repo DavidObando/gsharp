@@ -576,7 +576,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol?,
         siblingCompilations IReadOnlyList[CSharpCompilation]?
     ) bool {
-        if compilation == nil || !IsNullArgumentCandidate(symbol) || NullArgumentKey(symbol) is not{} key {
+        // Only a declaration this migration emits can be repainted. The seed
+        // side needs no such test: a sibling project that binds the callee
+        // through its emitted reference assembly still records the call.
+        let original ISymbol? = OriginalNullArgumentDeclaration(symbol)
+        if compilation == nil ||
+            original == nil ||
+            original
+            .DeclaringSyntaxReferences
+            .Length == 0 ||
+            !IsNullArgumentCandidate(original) {
+            return false
+        }
+        let keys = NullArgumentKeys(original)
+        if keys.Count == 0 {
             return false
         }
         // The compilation being translated first, then the siblings in the
@@ -594,9 +607,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !graphs.Any((g NullArgumentGraph) -> g.Seeds.Count != 0) {
             return false
         }
-        if graphs.Any((g NullArgumentGraph) -> g.Seeds.Contains(key)) {
-            return true
-        }
         // Some compilation has a null argument, so the forwarding edges can
         // matter. They are built once per compilation and only now.
         for graph in graphs {
@@ -604,7 +614,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let visited = HashSet[string](StringComparer.Ordinal)
         let pending = Stack[string]()
-        pending.Push(key)
+        for key in keys {
+            pending.Push(key)
+        }
         while pending.Count != 0 {
             let current = pending.Pop()
             if !visited.Add(current) {
@@ -1967,45 +1979,66 @@ internal shared class ObliviousNullabilityAnalyzer {
         return targets
     }
 
-    // Issue #5508: whether `symbol` may be repainted `T?` by null-argument
-    // evidence at all. The declaration must be emitted by this migration, own
-    // its signature (see `IsSignatureFixedByAnotherDeclaration`), and — for a
-    // member another declaration could override — not be virtual or abstract,
-    // because the overrides keep the base's type and would stop matching it.
+    // Issue #5508: the DECLARATION a null-argument decision is about. A call
+    // binds the constructed member (`Box<string>(string value)`), whose
+    // substituted `string` hides that the declaration is a bare `T` that can
+    // never be repainted `T?`; every eligibility test reads the original.
+    private func OriginalNullArgumentDeclaration(symbol ISymbol?) ISymbol? -> switch symbol {
+        case parameter is IParameterSymbol: parameter.OriginalDefinition
+        case method is IMethodSymbol: (method.ReducedFrom ?? method).OriginalDefinition
+        case property is IPropertySymbol: property.OriginalDefinition
+        case field is IFieldSymbol: field.OriginalDefinition
+        default: default(ISymbol?)
+    }
+
+    // Issue #5508: whether `symbol` (an ORIGINAL declaration) may be repainted
+    // `T?` by null-argument evidence. It must own its signature (see
+    // `IsSignatureFixedByAnotherDeclaration`) and — for a member another
+    // declaration could override — not be virtual or abstract, because the
+    // overrides keep the base's type and would stop matching it. A positional
+    // record parameter is one declaration with its synthesized property, so the
+    // property's contract (an interface it implements, a base it overrides)
+    // fixes the parameter too. Whether the declaration is emitted by this
+    // migration is NOT asked here: a call bound through a reference assembly is
+    // still evidence about the source declaration in the sibling project.
     private func IsNullArgumentCandidate(symbol ISymbol?) bool {
         switch symbol {
             case parameter is IParameterSymbol {
-                return parameter.Ordinal >= 0 &&
-                    IsRepaintableReference(parameter.Type) &&
-                    parameter.RefKind == RefKind.None &&
-                    !parameter.IsParams &&
-                    parameter.ContainingSymbol is IMethodSymbol{
+                if parameter.Ordinal < 0 ||
+                    !IsRepaintableReference(parameter.Type) ||
+                    parameter.RefKind != RefKind.None ||
+                    parameter.IsParams ||
+                    parameter.ContainingSymbol is not IMethodSymbol{
                     MethodKind: MethodKind.Constructor or MethodKind.Ordinary
-                } method &&
+                } method ||
+                    method.IsVirtual ||
+                    method.IsAbstract {
+                    return false
+                }
+                // A positional record's parameter and its synthesized property
+                // are one declaration: the property's contract decides.
+                if PositionalProperty(parameter, method) is {} positional {
+                    return IsNullArgumentCandidate(positional)
+                }
+                return !IsSignatureFixedByAnotherDeclaration(parameter)
+            }
+            case method is IMethodSymbol {
+                return method.MethodKind == MethodKind.Ordinary &&
+                    !method.IsAsync &&
                     !method.IsVirtual &&
                     !method.IsAbstract &&
-                    method
-                    .OriginalDefinition
-                    .DeclaringSyntaxReferences
-                    .Length != 0 &&
-                    !IsSignatureFixedByAnotherDeclaration(parameter)
+                    !method.ReturnsByRef &&
+                    IsRepaintableReference(method.ReturnType) &&
+                    !IsSignatureFixedByAnotherDeclaration(method)
             }
             case property is IPropertySymbol {
                 return IsRepaintableReference(property.Type) &&
                     !property.IsVirtual &&
                     !property.IsAbstract &&
-                    property
-                    .OriginalDefinition
-                    .DeclaringSyntaxReferences
-                    .Length != 0 &&
                     !IsSignatureFixedByAnotherDeclaration(property)
             }
             case field is IFieldSymbol {
-                return IsRepaintableReference(field.Type) &&
-                    field
-                    .OriginalDefinition
-                    .DeclaringSyntaxReferences
-                    .Length != 0
+                return IsRepaintableReference(field.Type)
             }
             default {
                 return false
@@ -2013,7 +2046,30 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    // Issue #5508: a slot this rule can repaint `T?` is a reference type the C#
+    // The property a positional-record constructor parameter synthesizes: same
+    // name, declared by the very `ParameterSyntax` the parameter is. Null for
+    // every other parameter.
+    private func PositionalProperty(parameter IParameterSymbol, method IMethodSymbol) IPropertySymbol? {
+        if method.MethodKind != MethodKind.Constructor || !method.ContainingType.IsRecord {
+            return default(IPropertySymbol?)
+        }
+        let syntax = parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+        if syntax == nil {
+            return default(IPropertySymbol?)
+        }
+        for member in method.ContainingType.GetMembers(parameter.Name) {
+            if member is IPropertySymbol property &&
+                property
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() == syntax {
+                return property
+            }
+        }
+        return default(IPropertySymbol?)
+    }
+
+    // Issue #5508 follow-up: a slot this rule can repaint `T?` is a reference type the C#
     // declares NOT annotated. An already-`T?` parameter is no seed (its null is
     // the declaration's own), and — the Adr0169 GSA0005 witness — it is no
     // forwarding source either: `FollowHelper(.., model, ..)` under
@@ -2025,19 +2081,39 @@ internal shared class ObliviousNullabilityAnalyzer {
         .NullableAnnotation
         .Annotated
 
-    // Issue #5508: the compilation-independent identity of a candidate. A
-    // parameter is its method's documentation id plus its ordinal, so the key
-    // for `Frame(Header, Frame)` is the same whether a sibling project sees the
-    // constructor as source or through its reference assembly.
-    private func NullArgumentKey(symbol ISymbol?) string? {
-        if symbol is IParameterSymbol{ContainingSymbol: IMethodSymbol method} parameter {
-            return if method.OriginalDefinition.GetDocumentationCommentId() is {} methodId {
-                "P:" + methodId + "#" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
-            } else {
-                default(string?)
-            }
+    // Issue #5508: the compilation-independent identities of a candidate, every
+    // one of which stands for the same declaration. The documentation id alone
+    // is not an identity across a run — two unrelated projects can declare the
+    // same fully qualified type and method — so the first key is qualified by
+    // the declaring assembly's NAME (a project's source and its emitted
+    // reference assembly agree on it). A declaration compiled from a LINKED
+    // source file is one declaration in several assemblies and must decide the
+    // same everywhere (the repository mirror rejects divergent outputs), so a
+    // source declaration also answers to a key qualified by its file path.
+    // A parameter is its method's id plus its ordinal; a method's RETURN is the
+    // method id alone.
+    private func NullArgumentKeys(symbol ISymbol?) List[string] {
+        let keys = List[string]()
+        let owner ISymbol? = if symbol is IParameterSymbol{ContainingSymbol: {} container} {
+            container
+        } else {
+            symbol
         }
-        return symbol?.OriginalDefinition.GetDocumentationCommentId()
+        let ownerId string? = owner?.OriginalDefinition.GetDocumentationCommentId()
+        if symbol == nil || owner == nil || ownerId == nil {
+            return keys
+        }
+        let id = if symbol is IParameterSymbol parameter {
+            "P:" + ownerId + "#" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
+        } else {
+            ownerId
+        }
+        keys.Add((symbol.ContainingAssembly?.Name ?? "") + "|" + id)
+        let path string? = owner.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath
+        if !string.IsNullOrEmpty(path) {
+            keys.Add("@" + path + "|" + id)
+        }
+        return keys
     }
 
     // `null`, `null!`, `default`, a parenthesized form, or a conditional with
@@ -2109,9 +2185,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                         .Value
                         ?.Syntax is ExpressionSyntax value &&
                         ArgumentWritesNull(value) &&
-                        IsNullArgumentCandidate(parameter) &&
-                        NullArgumentKey(parameter) is {} key {
-                        seeds.Add(key)
+                        OriginalNullArgumentDeclaration(parameter) is {} original &&
+                        IsNullArgumentCandidate(original) {
+                        for key in NullArgumentKeys(original) {
+                            seeds.Add(key)
+                        }
                     }
                 }
             }
@@ -2130,16 +2208,23 @@ internal shared class ObliviousNullabilityAnalyzer {
         let owner = graph.Owner
         graph.ForwardingBuilt = true
         let AddEdge = func (target ISymbol?, source ISymbol?) {
-            if IsNullArgumentCandidate(target) &&
-                IsNullArgumentCandidate(source) &&
-                NullArgumentKey(target) is {} targetKey &&
-                NullArgumentKey(source) is {} sourceKey {
-                if !graph.Incoming.TryGetValue(targetKey, out var sources) {
-                    sources = List[string]()
-                    graph.Incoming[targetKey] = sources
-                }
-                if !sources.Contains(sourceKey) {
-                    sources.Add(sourceKey)
+            let targetOriginal = OriginalNullArgumentDeclaration(target)
+            let sourceOriginal = OriginalNullArgumentDeclaration(source)
+            if targetOriginal != nil &&
+                sourceOriginal != nil &&
+                IsNullArgumentCandidate(targetOriginal) &&
+                IsNullArgumentCandidate(sourceOriginal) {
+                let sourceKeys = NullArgumentKeys(sourceOriginal)
+                for targetKey in NullArgumentKeys(targetOriginal) {
+                    if !graph.Incoming.TryGetValue(targetKey, out var sources) {
+                        sources = List[string]()
+                        graph.Incoming[targetKey] = sources
+                    }
+                    for sourceKey in sourceKeys {
+                        if !sources.Contains(sourceKey) {
+                            sources.Add(sourceKey)
+                        }
+                    }
                 }
             }
         }
@@ -2153,6 +2238,23 @@ internal shared class ObliviousNullabilityAnalyzer {
                     let target ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
                     if target is IFieldSymbol or IPropertySymbol {
                         AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol)
+                    }
+                } else if (
+                    node is ReturnStatementSyntax{Expression: {} returned} && ReadsEnclosingParameterByName(returned)
+                ) {
+                    // `return p;` hands the parameter's value on as the method's
+                    // result: the result must be as nullable as the parameter.
+                    if EnclosingNamedMethod(node) is {} declaration && model.GetDeclaredSymbol(
+                        declaration
+                    ) is {} method {
+                        AddEdge(method, model.GetSymbolInfo(Unwrap(returned)).Symbol)
+                    }
+                } else if (
+                    node is ArrowExpressionClauseSyntax{Parent: MethodDeclarationSyntax arrowMethod} arrow &&
+                        ReadsEnclosingParameterByName(arrow.Expression)
+                ) {
+                    if model.GetDeclaredSymbol(arrowMethod) is {} method {
+                        AddEdge(method, model.GetSymbolInfo(Unwrap(arrow.Expression)).Symbol)
                     }
                 } else if CallArgumentList(node) is {} list && list.Arguments.Any(
                     (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) &&
@@ -2170,6 +2272,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
+    }
+
+    // The method declaration whose body directly contains `node`: not a lambda
+    // or a local function nested in it, whose `return` is not the method's.
+    private func EnclosingNamedMethod(node SyntaxNode) MethodDeclarationSyntax? {
+        let function = node.Ancestors().FirstOrDefault(
+            (n SyntaxNode) -> n is BaseMethodDeclarationSyntax ||
+                n is LocalFunctionStatementSyntax ||
+                n is AnonymousFunctionExpressionSyntax
+        )
+        return function as MethodDeclarationSyntax
     }
 
     // The expression with its parentheses removed. A `q!` is NOT unwrapped: the

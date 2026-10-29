@@ -449,8 +449,8 @@ partial class CSharpToGSharpTranslator {
                 this
                 .TargetWillRemainNonNullableReference(declared, slot.Symbol) {
                 let mapped = this.typeMapper.Map(declared, this.context, literal.GetLocation())
-                if mapped is NamedTypeReference{IsNullable: false} {
-                    return DefaultValueExpression(mapped)
+                if mapped is {IsNullable: false} nonNullable {
+                    return DefaultValueExpression(nonNullable)
                 }
             }
             return LiteralExpression.Null()
