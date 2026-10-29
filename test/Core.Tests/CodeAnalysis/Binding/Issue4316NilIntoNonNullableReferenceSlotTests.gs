@@ -89,7 +89,9 @@ open class Issue4316NilIntoNonNullableReferenceSlotTests {
         private let Prelude string = `package p
 import System
 import System.Collections.Generic
-class Box { }
+class Box {
+    var v int32
+}
 interface IThing {
     func M() int32;
 }
@@ -295,6 +297,39 @@ class H {
 }`, "")
             yield Row("ok-lambda-block-tail-nil-arm", `func F(c bool) {
     let f () -> Box? = () -> { if c { Box() } else { nil } }
+}`, "")
+            yield Row("ok-parenthesized-local-nil-arm", `func F(c bool) {
+    let b Box? = (c ? Box() : nil)
+}`, "")
+            yield Row("ok-parenthesized-assignment-nil-arm", `func F(c bool) {
+    var b Box? = Box()
+    b = (if c { Box() } else { nil })
+}`, "")
+            yield Row("ok-function-typed-field-lambda-nil-arm", `class H {
+    public var f () -> Box? = () -> true ? Box() : nil
+    shared {
+        public var g () -> Box? = () -> true ? Box() : nil
+    }
+}`, "")
+            yield Row("ok-generic-lambda-nil-arm", `class Fixture {
+    shared {
+        func F[T class](c bool, value T) {
+            let f () -> T? = () -> c ? value : nil
+            let g () -> T? = () -> { if c { value } else { nil } }
+        }
+    }
+}`, "")
+            yield Row("ok-switch-expression-nil-arm", `func F(i int32) {
+    let b Box? = switch i {
+        case 0: Box()
+        default: nil
+    }
+}`, "")
+            yield Row("ok-untargeted-join-is-nullable", `func F(c bool) {
+    let b = c ? Box() : nil
+    if b != nil {
+        let n = b.v
+    }
 }`, "")
             yield Row("field-initializer-conditional-bare-field", `class Flags {
     shared {

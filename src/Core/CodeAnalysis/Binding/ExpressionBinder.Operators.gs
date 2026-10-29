@@ -1234,7 +1234,7 @@ internal partial class ExpressionBinder {
     /// (cref:TypeSymbol.Void).
     internal func BindLambdaBodyExpression(bodySyntax ExpressionSyntax, targetType TypeSymbol? = nil) BoundExpression {
         if bodySyntax is BlockExpressionSyntax block {
-            let trailingTarget = if block.Expression != nil && TakesLambdaReturnTarget(block.Expression, targetType) {
+            let trailingTarget = if block.Expression != nil && IsNestedLambdaExpression(block.Expression) {
                 targetType
             } else {
                 default(TypeSymbol?)
@@ -1245,27 +1245,12 @@ internal partial class ExpressionBinder {
                 }
             )
         }
-        return if TakesLambdaReturnTarget(bodySyntax, targetType) {
-            BindExpression(bodySyntax, targetType!!)
-        } else {
+        return if targetType == nil || !IsNestedLambdaExpression(bodySyntax) {
             BindExpression(bodySyntax, canBeVoid: true)
+        } else {
+            BindExpression(bodySyntax, targetType)
         }
     }
-
-    /// Whether a lambda body expression binds against the contextual return type. A nested lambda
-    /// always does. A branchy expression does when the type is a closed nullable type, so a `nil`
-    /// arm takes it (issue #4316). An open or non-nullable type stays out: an unresolved generic
-    /// result type must still be inferred from the arms.
-    /// @param syntax The body or block-tail expression.
-    /// @param targetType The contextual return type, or `nil`.
-    /// @returns `true` when the expression binds against [`targetType`](paramref).
-    private func TakesLambdaReturnTarget(syntax ExpressionSyntax, targetType TypeSymbol?) bool -> targetType != nil &&
-        (
-        IsNestedLambdaExpression(syntax) ||
-            IsTargetTypedBranchyArgumentSyntax(syntax) &&
-            targetType is NullableTypeSymbol &&
-            !TypeSymbol.ContainsTypeParameter(targetType)
-    )
 
     private func BindLambdaBlockBodyExpression(block BlockExpressionSyntax, targetType TypeSymbol?) BoundExpression {
         // Lambda body block: a missing trailing expression means a void
@@ -3081,17 +3066,18 @@ internal partial class ExpressionBinder {
             return ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target)
         }
 
-        /// Issue #1151: lifts a non-nullable value type to its nullable form when it
-        /// is unified with a `nil` arm in an if/switch-expression. A value type
-        /// `T` becomes `T?` so the value arm can be lifted and the nil arm
-        /// can become the null `T?`. Reference types already legally hold
-        /// `nil`, and already-nullable types are idempotent, so both are
-        /// returned unchanged.
+        /// Issues #1151 and #4316: the join of a `nil` arm and a non-nullable arm `T` is `T?`, so a
+        /// value type lifts to `Nullable<T>` and a reference type takes the nullable annotation. The
+        /// join carries the `nil`, so no context has to supply a target for it. A `T!`, a `T?` and a
+        /// type that cannot hold `nil` (an unconstrained type parameter) stay as they are.
         /// @param type The non-nil arm's type.
-        /// @returns `T?` for a non-nullable value type `T`; otherwise [`type`](paramref).
+        /// @returns The nullable form of [`type`](paramref) when `nil` can join it; otherwise [`type`](paramref).
         private func LiftForNilArm(type TypeSymbol?) TypeSymbol? {
-            if !(type is NullableTypeSymbol) && type?.ClrType is {IsValueType: true} {
-                return NullableTypeSymbol.Get(type!!)
+            if type == nil || type is NullableTypeSymbol || type is PlatformTypeSymbol {
+                return type
+            }
+            if type.ClrType is {IsValueType: true} || Conversion.IsReferenceLikeTarget(type) {
+                return NullableTypeSymbol.Get(type)
             }
             return type
         }

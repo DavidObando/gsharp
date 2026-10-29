@@ -218,17 +218,6 @@ internal class ConversionClassifier {
             }
             return BoundDefaultExpression(defaultExpr, type)
         }
-        // Issue #4316: a branchy initializer (`c ? X{} : nil`, if- and
-        // switch-expressions, `a ?? nil`) binds against its target so a `nil`
-        // arm takes the target's nullable type. Without the target the arms
-        // unify first and the `nil` arm meets the arm's bare type.
-        if !allowExplicit &&
-            type != nil &&
-            type != TypeSymbol.Error &&
-            ExpressionBinder
-            .IsTargetTypedBranchyArgumentSyntax(syntax) {
-            return BindConversion(syntax.Location, bindExpressionWithTargetType(syntax, type), type, allowExplicit)
-        }
         let expression = bindExpression(syntax)
         return BindConversion(syntax.Location, expression, type, allowExplicit)
     }
