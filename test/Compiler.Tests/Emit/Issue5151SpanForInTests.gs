@@ -45,8 +45,8 @@ func MakeColors() List[Color] {
     l.Add(Color.Blue)
     return l
 }
-func MakeTuples() List[(A int64, B object)] {
-    var l = List[(A int64, B object)]()
+func MakeTuples() List[(A int64, B object?)] {
+    var l = List[(A int64, B object?)]()
     l.Add((A: 1, B: nil))
     l.Add((A: 2, B: "x"))
     return l
@@ -88,7 +88,7 @@ func SpanColors(items List[Color]) int32 {
     }
     return s
 }
-func SpanTuples(items List[(A int64, B object)]) int64 {
+func SpanTuples(items List[(A int64, B object?)]) int64 {
     var s int64 = 0
     let view Span[(A int64, B object)] = CollectionsMarshal.AsSpan(items)
     for t in view {
@@ -131,7 +131,7 @@ func ReadOnlyColors(items List[Color]) int32 {
     }
     return s
 }
-func ReadOnlyTuples(items List[(A int64, B object)]) int64 {
+func ReadOnlyTuples(items List[(A int64, B object?)]) int64 {
     var s int64 = 0
     let view ReadOnlySpan[(A int64, B object)] = ReadOnlySpan[(A int64, B object)](items.ToArray())
     for t in view {

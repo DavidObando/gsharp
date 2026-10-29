@@ -63,8 +63,8 @@ func MakeSet() HashSet[Node] {
     h.Add(Node{N: 11})
     return h
 }
-func MakeTuples() List[(A int64, B object)] {
-    var l = List[(A int64, B object)]()
+func MakeTuples() List[(A int64, B object?)] {
+    var l = List[(A int64, B object?)]()
     l.Add((A: 1, B: nil))
     l.Add((A: 2, B: "x"))
     return l
@@ -130,7 +130,7 @@ func CountGeneric[T](l List[T]) int32 {
     }
     return c
 }
-func SumTuples(l List[(A int64, B object)]) int64 {
+func SumTuples(l List[(A int64, B object?)]) int64 {
     var c int64 = 0
     for x in l {
         c += x.A
