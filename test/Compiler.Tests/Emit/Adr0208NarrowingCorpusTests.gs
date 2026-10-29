@@ -231,12 +231,19 @@ open class Adr0208NarrowingCorpusTests {
                 "q4_5456_initializer_write_names_the_enclosing_variable",
                 "q5_5456_do_condition_is_outside_the_body_declaration",
                 "r10_5483_static_block_declared_after_the_use",
+                "r1_5482_ref_alias_of_closure_replaced_callable",
                 "r1_5483_static_block_only_construction",
+                "r2_5482_condition_call_replaces_the_aliased_callable",
                 "r2_5483_static_block_call_syntax",
+                "r3_5482_two_level_ref_alias_chain",
                 "r3_5483_static_block_in_base_class",
+                "r4_5482_ref_alias_without_a_call_keeps_the_fact",
                 "r4_5483_static_block_of_generic_definition",
+                "r5_5482_filter_runs_a_closure_that_replaces_the_aliased_callable",
                 "r5_5483_static_block_of_value_type_literal_is_initobj",
+                "r6_5482_plain_alias_keeps_the_fact_across_a_call",
                 "r6_5483_static_block_runs_a_mutable_global_writer",
+                "r7_5482_condition_call_replaces_the_aliased_callable_inside_the_body",
                 "r7_5483_shared_field_initializer_only_keeps_the_fact",
                 "r8_5483_type_without_initializers_keeps_the_fact",
                 "r9_5483_static_block_type_not_constructed_keeps_the_fact"
@@ -2276,6 +2283,216 @@ class Trigger {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@11:14", "reject", "", "R15"}
+            yield[]object{"r1_5482_ref_alias_of_closure_replaced_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    Wrapper(h)
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@26:14", "reject", "", "R15"}
+            yield[]object{"r2_5482_condition_call_replaces_the_aliased_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    if Check(h) {
+    }
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", "", "R15"}
+            yield[]object{"r7_5482_condition_call_replaces_the_aliased_callable_inside_the_body", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    if Check(h) {
+        if x == nil { return 0 }
+        alias()
+        return x.Value
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@26:18", "reject", "", "R15"}
+            yield[]object{"r3_5482_two_level_ref_alias_chain", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref first = action
+    let ref second = first
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    second = callback
+    Wrapper(h)
+    if x == nil { return 0 }
+    second()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", "", "R15"}
+            yield[]object{"r4_5482_ref_alias_without_a_call_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let clear = func() { x = nil }
+    alias = callback
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1", "R15"}
+            yield[]object{"r6_5482_plain_alias_keeps_the_fact_across_a_call", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Touch() {
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var alias = callback
+    let clear = func() { x = nil }
+    Touch()
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1", "R15"}
+            yield[]object{"r5_5482_filter_runs_a_closure_that_replaces_the_aliased_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let clear = func() { x = nil }
+    let h = Holder{}
+    h.Callback = func() { action = clear }
+    alias = callback
+    if x == nil { return 0 }
+    try {
+        try {
+            try {
+                throw FormatException("f")
+            } finally {
+                throw InvalidOperationException("g")
+            }
+        } catch (InvalidOperationException) {
+            alias()
+            return x.Value
+        }
+    } catch (FormatException) when Check(h) {
+        return 0
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@34:22", "reject", "", "R15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

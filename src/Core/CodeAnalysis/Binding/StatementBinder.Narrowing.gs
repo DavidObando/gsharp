@@ -662,7 +662,7 @@ internal partial class StatementBinder {
         }
         // ADR-0208 R15: a call can run an escaped closure that replaces a callable alias which a closure assigns.
         if collector.MayRunEscapedClosure {
-            aliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
+            aliases.RemoveWhere(NamesClosureAssignedStorage)
         }
         if assignsExternalCallable {
             aliases.Add(
@@ -1751,6 +1751,19 @@ internal partial class StatementBinder {
         return false
     }
 
+    // ADR-0208 R15 (#5482): whether a closure of the function may assign [`alias`](paramref) or the plain variable
+    // that a `ref` local names. The exit state of a statement and the header of a construct ask this about the storage an alias names, like
+    // MayBeMutatedByEscapedClosure does for a narrowing fact, not about the alias's own name.
+    private func NamesClosureAssignedStorage(alias VariableSymbol) bool {
+        if binderCtx.HasNoClosureAssignedNames() {
+            return false
+        }
+        if binderCtx.MayBeAssignedByClosure(alias) {
+            return true
+        }
+        return alias is LocalVariableSymbol{RefKind: not RefKind.None} && MayBeMutatedByEscapedClosure(alias)
+    }
+
     // The same decision from the two flags, for the region walker of ADR-0213 (slice L0).
     private func MayBeMutatedByUnknownWrite(mayMutateAnyRoot bool, viaPointer bool, path AccessPath) bool -> (
         viaPointer && (path.HasMembers || !path.Root.IsReadOnly || IsByReferenceRoot(path.Root))
@@ -1775,7 +1788,7 @@ internal partial class StatementBinder {
         }
         RemoveAssignedAliases(externalCallableAliases, collector)
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
+            externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
         }
         before.ExceptWith(externalCallableAliases)
         return before
