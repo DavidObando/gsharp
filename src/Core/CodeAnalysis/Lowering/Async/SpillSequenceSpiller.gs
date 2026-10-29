@@ -1099,8 +1099,7 @@ shared class SpillSequenceSpiller {
                         expression.Syntax,
                         "SpillSequenceSpiller: unhandled BoundExpression kind '${expression.Kind}'."
                     )
-                    return nil // unreachable
-
+                    throw InvalidOperationException("EmitDiagnosticException.Throw returned.")
                 }
             }
         }

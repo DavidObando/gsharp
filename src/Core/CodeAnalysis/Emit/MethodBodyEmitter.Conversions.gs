@@ -254,21 +254,11 @@ internal partial class MethodBodyEmitter {
             }
             return
         }
-        // Phase 3.C.2 / ADR-0001 (generalized by issue #2354 follow-up): `nil`
-        // flows into any reference-typed slot; the IL value is already
-        // ldnull. A reference-typed `Nullable<T>` shares the CLR
-        // representation of the underlying reference type, so ldnull is a
-        // valid value for it too. Likewise a non-nullable G# `class`, an
-        // interface, or a reference-constrained type parameter —
-        // `Conversion.IsNilAssignableWithoutNullableWrapper` is the single
-        // shared (deliberately narrow — see its doc comment) predicate the
-        // binder itself now uses (Conversion.Classify) to admit these as
-        // implicit `nil ->` conversions, so emission mirrors it exactly
-        // rather than re-deriving its own subset. General CLR-backed
-        // reference types (`string`, `object`, function/delegate/sequence
-        // types) are NOT included — the binder never produces a `nil ->`
-        // conversion node for them (they still require an explicit `T?`), so
-        // this emit path is never reached for those targets.
+        // Phase 3.C.2 / ADR-0001: `nil` flows into a nullable reference slot;
+        // the IL value is already ldnull. A reference-typed `Nullable<T>` shares
+        // the CLR representation of the underlying reference type, so ldnull is
+        // a valid value for it too. Since issue #4316 the binder produces no
+        // `nil ->` conversion for a bare (non-`?`) target, so none reaches here.
         // Value-type `Nullable<T>` is the CLR struct `System.Nullable<T>`;
         // the binder lowers `nil → Nullable<value-type>` to a
         // BoundDefaultExpression so emission can materialise the proper
@@ -280,10 +270,8 @@ internal partial class MethodBodyEmitter {
         // (ADR-0186 §3's `nil -> T!` row is answered above, before the
         // platform wrapper is stripped.)
         if from == TypeSymbol.Null &&
-            (
-            (to is NullableTypeSymbol toNullForNil && !ReflectionMetadataEmitter.IsValueTypeNullable(toNullForNil)) ||
-                Conversion.IsNilAssignableWithoutNullableWrapper(to)
-        ) {
+            to is NullableTypeSymbol toNullForNil &&
+            !ReflectionMetadataEmitter.IsValueTypeNullable(toNullForNil) {
             return
         }
         if from == TypeSymbol.Null &&

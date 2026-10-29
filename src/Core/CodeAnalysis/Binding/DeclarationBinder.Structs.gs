@@ -3977,6 +3977,23 @@ internal partial class DeclarationBinder {
         }
     }
 
+    /// Binds a field initializer against the field's declared type (issue #4316), so a `nil` arm of
+    /// a branchy initializer takes the field's nullable type, as it does for a local.
+    /// @remarks Merged partial declarations keep the declaring part's imports (issue #3336), so the
+    /// referencing tree is the initializer's own while the classifier binds it.
+    /// @param initSyntax The initializer syntax.
+    /// @param fieldType The declared field type.
+    /// @returns The converted initializer.
+    private func BindFieldInitializer(initSyntax ExpressionSyntax, fieldType TypeSymbol) BoundExpression {
+        let bindingScope = this.$scope
+        let previousTree = bindingScope.SetCurrentReferencingSyntaxTree(initSyntax.SyntaxTree)
+        try {
+            return conversions.BindConversion(initSyntax, fieldType)
+        } finally {
+            bindingScope.SetCurrentReferencingSyntaxTree(previousTree)
+        }
+    }
+
     /// Issue #1194: binds a single type's deferred field/const/static
     /// initializers within the active static-member scope. Const initializers
     /// are folded with a fixpoint so sibling const references resolve regardless
@@ -4039,16 +4056,7 @@ internal partial class DeclarationBinder {
             try {
                 let staticInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
                 for (fieldSym, initSyntax, fieldType) in staticFieldInitializers {
-                    let boundInit = if initSyntax is BlockExpressionSyntax {
-                        conversions.BindConversion(initSyntax, fieldType)
-                    } else {
-                        bindExpression(initSyntax)
-                    }
-                    let convertedInit = if initSyntax is BlockExpressionSyntax {
-                        boundInit
-                    } else {
-                        conversions.BindConversion(initSyntax.Location, boundInit, fieldType)
-                    }
+                    let convertedInit = BindFieldInitializer(initSyntax, fieldType)
                     // Issue #4453: an initializer is class code too, so the
                     // protected-receiver rule applies to it.
                     ProtectedReceiverDiagnostics.Report(convertedInit, staticInitializerContext, Diagnostics)
@@ -4112,16 +4120,7 @@ internal partial class DeclarationBinder {
                         }
                         continue
                     }
-                    let boundInit = if initSyntax is BlockExpressionSyntax {
-                        conversions.BindConversion(initSyntax, fieldType)
-                    } else {
-                        bindExpression(initSyntax)
-                    }
-                    let convertedInit = if initSyntax is BlockExpressionSyntax {
-                        boundInit
-                    } else {
-                        conversions.BindConversion(initSyntax.Location, boundInit, fieldType)
-                    }
+                    let convertedInit = BindFieldInitializer(initSyntax, fieldType)
                     // Issue #4453: see the static initializers above.
                     ProtectedReceiverDiagnostics.Report(convertedInit, getCurrentFunction(), Diagnostics)
                     instanceInitBuilder[fieldSym] = convertedInit

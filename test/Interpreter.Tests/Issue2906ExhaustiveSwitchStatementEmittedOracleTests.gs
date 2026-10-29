@@ -23,7 +23,7 @@ func F(x Expr) int32 {
     }
     return 0
 }
-F(nil)`
+F(default(Expr))`
         let result = EmittedOracle.Evaluate(Source)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(0, result.Value)

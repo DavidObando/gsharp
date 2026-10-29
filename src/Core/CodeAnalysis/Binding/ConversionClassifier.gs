@@ -218,9 +218,28 @@ internal class ConversionClassifier {
             }
             return BoundDefaultExpression(defaultExpr, type)
         }
+        // Issue #4316: a branchy initializer (`c ? X{} : nil`, if- and
+        // switch-expressions, `a ?? nil`) binds against its target so a `nil`
+        // arm takes the target's nullable type. Without the target the arms
+        // unify first and the `nil` arm meets the arm's bare type.
+        if !allowExplicit && type != nil && type != TypeSymbol.Error && IsTargetTypedBranchSyntax(syntax) {
+            return BindConversion(syntax.Location, bindExpressionWithTargetType(syntax, type), type, allowExplicit)
+        }
         let expression = bindExpression(syntax)
         return BindConversion(syntax.Location, expression, type, allowExplicit)
     }
+
+    /// Whether [`syntax`](paramref) is a branchy expression whose arms need the target type.
+    /// @param syntax The initializer syntax.
+    /// @returns `true` for an if-, if-let-, conditional-, switch- or null-coalescing expression.
+    private func IsTargetTypedBranchSyntax(syntax ExpressionSyntax) bool -> syntax is IfExpressionSyntax ||
+        syntax is IfLetExpressionSyntax ||
+        syntax is ConditionalExpressionSyntax ||
+        syntax is SwitchExpressionSyntax ||
+        syntax is BinaryExpressionSyntax binary &&
+        binary
+        .OperatorToken
+        .Kind == SyntaxKind.QuestionQuestionToken
 
     /// Binds an explicit ADR-0148 spread projection.
     /// @param diagnosticLocation The source location for conversion diagnostics.
@@ -1051,9 +1070,8 @@ internal class ConversionClassifier {
         //
         // Issue #4027: the BARE (unwrapped) open type parameter needs exactly
         // the same lowering, and #814 reached only the `T?` spelling. A
-        // reference-constrained `[T class]` slot accepts `nil` — that is
-        // deliberate (#2354), and `Conversion.IsNilAssignableWithoutNullableWrapper`
-        // is the predicate that admits it — but the ARGUMENT was still emitted
+        // reference-constrained `[T class]` slot accepted `nil` (since
+        // #4316 only `T?` does, and the lowering below serves both) — but the ARGUMENT was still emitted
         // as a bare `ldnull`, whose stack type is `Nullobjref` where the slot's
         // signature type is `!!T`. ECMA-335 III.1.8.1.3 has no rule that lets a
         // null reference match a generic-parameter slot, constraint or no

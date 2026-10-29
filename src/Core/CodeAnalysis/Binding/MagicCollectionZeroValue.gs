@@ -388,7 +388,7 @@ internal shared class MagicCollectionZeroValue {
         if clrType == nil || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds) {
             return nil
         }
-        let ownerType = if receiverType != nil {
+        let ownerType TypeSymbol? = if receiverType != nil {
             MemberLookup.GetProjectionReceiverImportedType(receiverType) ?? receiverType.StripToBareShape()
         } else {
             nil

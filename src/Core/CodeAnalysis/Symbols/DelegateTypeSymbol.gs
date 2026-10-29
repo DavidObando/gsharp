@@ -30,7 +30,7 @@ class DelegateTypeSymbol : TypeSymbol {
     private var parameters ImmutableArray[ParameterSymbol]
     private var returnType TypeSymbol
     private var signatureVersion int32
-    private var declarationSyntax DelegateDeclarationSyntax
+    private var declarationSyntax DelegateDeclarationSyntax?
 
     /// Initializes a new instance of the (cref:DelegateTypeSymbol) class.
     /// @param name The delegate type name (the identifier from `type Name = …`).
@@ -39,14 +39,15 @@ class DelegateTypeSymbol : TypeSymbol {
     /// @param parameters The delegate's parameter symbols (names preserved for emit so consumers see
     /// meaningful names).
     /// @param returnType The delegate's return type. Use (cref:TypeSymbol.Void) for a void delegate.
-    /// @param declaration The declaring syntax node (used to surface diagnostics later).
+    /// @param declaration The declaring syntax node (used to surface diagnostics later), or `nil` for a
+    /// compiler-synthesized delegate.
     init(
         name string,
         packageName string,
         accessibility Accessibility,
         parameters ImmutableArray[ParameterSymbol],
         returnType TypeSymbol,
-        declaration DelegateDeclarationSyntax
+        declaration DelegateDeclarationSyntax?
     ) : base(name) {
         PackageName = packageName
         Accessibility = accessibility
@@ -87,7 +88,7 @@ class DelegateTypeSymbol : TypeSymbol {
 
     /// Gets the declaring syntax node. A constructed delegate reads its definition's node, so a
     /// re-point of the definition (issue #5324) reaches every cached construction.
-    prop Declaration DelegateDeclarationSyntax -> if Definition is {} definition && !object.ReferenceEquals(
+    prop Declaration DelegateDeclarationSyntax? -> if Definition is {} definition && !object.ReferenceEquals(
         definition,
         this
     ) {

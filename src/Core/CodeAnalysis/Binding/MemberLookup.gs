@@ -9760,7 +9760,7 @@ internal class MemberLookup {
                     case arr is ArrayTypeSymbol: (arr.ElementType, 1)
                     case slice is SliceTypeSymbol: (slice.ElementType, 1)
                     case rectangular is RectangularArrayTypeSymbol: (rectangular.ElementType, rectangular.Rank)
-                    default: (nil, 0)
+                    default: (default(TypeSymbol?), 0)
                 }
                 return candidateElementType != nil && candidateRank == openType.GetArrayRank() &&
                     ClrParamTypeMatchesGenericMethodParam(

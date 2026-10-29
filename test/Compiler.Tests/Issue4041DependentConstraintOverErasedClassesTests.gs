@@ -481,7 +481,7 @@ class A {
 }
 
 class Impl : IDep[A] {
-    public prop Item A { get { return nil } }
+    public prop Item A { get { return A() } }
 }
 
 var c Coupled3[A, Impl]

@@ -2559,12 +2559,11 @@ internal partial class OverloadResolver {
             // argument again flowed through unchecked. `nil` at a non-nullable
             // slot is a pure SHAPE question too, and `Conversion.Classify`
             // already decides it for EVERY target without needing the pair
-            // closed: `Classify(nil, X)` consults
-            // `Conversion.IsNilAssignableWithoutNullableWrapper`, which answers
-            // from `X`'s symbol kind alone (a G#-declared class, an interface,
-            // a reference-CONSTRAINED type parameter, or any nullable target
-            // accepts `nil`; a `chan[T]`, `[]T`, `map[K,V]`, `sequence[T]`,
-            // `[4]T`, `(T) -> T` or an unconstrained `T` does not). Asking it
+            // closed: `Classify(nil, X)` answers
+            // from `X`'s nullability alone (issue #4316): a nullable target
+            // accepts `nil`; every bare target — a G#-declared class, an
+            // interface, `chan[T]`, `[]T`, `map[K,V]`, `sequence[T]`, `[4]T`,
+            // `(T) -> T`, a type parameter — does not. Asking it
             // is therefore not a closed-world judgement — it makes the OPEN
             // spelling answer exactly what the CLOSED spelling already
             // answered. Measured on the parent: `takesMap[K, V](nil)` forwarded
@@ -2720,10 +2719,9 @@ internal partial class OverloadResolver {
                 // purpose is to avoid re-materialising an open-to-open pair
                 // whose conversion has no closed answer, and `nil` needs no
                 // closed answer. `nil` only REACHES here at all when the first
-                // branch above classified it implicit, which per
-                // `Conversion.IsNilAssignableWithoutNullableWrapper` means the
-                // parameter is reference-CONSTRAINED — an unconstrained `T`
-                // was already refused with GS0154 by #4010. `BindConversion`
+                // branch above classified it implicit, which since
+                // #4316 means the parameter is nullable (`T?`) — a bare `T`
+                // is refused with GS0154 (#4010, #4316). `BindConversion`
                 // lowers it to `BoundDefaultExpression(T)`, which emits the
                 // `ldloca; initobj !!T; ldloc` shape `csc` emits for the same
                 // C# program and which verifies. The value is unchanged: for a

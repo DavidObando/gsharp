@@ -1141,37 +1141,17 @@ class Conversion {
                     }
                 }
             }
-            // Phase 3.C.2 (generalized by issue #2354 follow-up): nil literal is
-            // never assignable to a non-nullable VALUE type — a struct/value-kind
-            // type genuinely needs an explicit `T?` (CLR `Nullable<T>`) wrapper to
-            // carry a null, and that diagnostic must be preserved. A non-nullable
-            // G#-DECLARED reference type — a `class` or an interface — or a
-            // reference-constrained type parameter is ALWAYS nullable at the CLR
-            // level regardless of whether the source spells its slot with an
-            // explicit `?` — the IL value is already `ldnull` either way (see
-            // MethodBodyEmitter.EmitConversion). Previously every one of these
-            // reference-capable targets rejected a bare `return nil` /
-            // `let x T = nil` with a misleading `GS0155`, forcing callers to widen
-            // to `T?` even when the declared type was already a reference type.
-            //
-            // Deliberately narrower than `IsReferenceLikeTarget` (which also
-            // matches ANY CLR-backed reference type, e.g. `string`, `object`, or a
-            // function/delegate/sequence type): those already participate in G#'s
-            // dedicated nullable-narrowing / smart-cast tracking (issue #2159) and
-            // its explicit-`?`-required arrow-function-type rule (issue #715),
-            // both of which rely on a bare (non-`?`) slot of one of THOSE kinds
-            // still rejecting `nil` outright. Widening the rule to cover them too
-            // would silently defeat that narrowing-invalidation diagnostic and the
-            // arrow-function-type's deliberate strictness — so only the
-            // G#-declared-type-or-constraint arm below is relaxed.
+            // Issue #4316: `nil` converts only into a slot that declares it can
+            // hold nil — `T?` (handled above) or `T!` (ADR-0186 §3, handled in
+            // `ClassifyPlatformType`). Every other target is refused, whatever
+            // its kind: a value type, a string, an imported class, and equally a
+            // G#-declared class, an interface or a reference-constrained type
+            // parameter. This is the one place that answers "can `nil` be
+            // assigned to this slot?"; assignment, initializers, returns,
+            // arguments, fields, elements and generic instantiations all reach it
+            // through `Classify`.
             if from == TypeSymbol.Null && !(to is NullableTypeSymbol) {
-                return if IsNilAssignableWithoutNullableWrapper(
-                    Invariant.Required(to, "a conversion classification has a target type", expression: "to")
-                ) {
-                    Conversion.Implicit
-                } else {
-                    Conversion.None
-                }
+                return Conversion.None
             }
             // ADR-0102 follow-up / issue #818: two anonymous function types that
             // share parameter types and return type but differ only in the
@@ -2515,37 +2495,6 @@ class Conversion {
                 NullabilityFreeReason.TypeStructure
             )
             default: default(TypeSymbol?)
-        }
-
-        /// Issue #2354 follow-up: true when a bare (non-`?`) [`type`](paramref) should accept an implicit
-        /// `nil ->` conversion
-        /// without requiring an explicit `T?` wrapper. Deliberately
-        /// NARROWER than (cref:IsReferenceLikeTarget): only a G#-declared
-        /// reference type — a `class` ((cref:StructSymbol) with
-        /// (cref:StructSymbol.IsClass)) or an (cref:InterfaceSymbol)
-        /// — or a reference-constrained type parameter qualifies. A general
-        /// CLR-backed reference type reached only through
-        /// (cref:IsReferenceLikeTarget)'s final `ClrType` fallback
-        /// (e.g. `string`, `object`, or a function/delegate/sequence
-        /// type) is intentionally EXCLUDED here: those already participate in
-        /// G#'s dedicated nullable-narrowing / smart-cast tracking (issue #2159)
-        /// and the arrow-function-type's deliberate explicit-`?`-required
-        /// rule (issue #715), both of which rely on a bare slot of one of those
-        /// kinds still rejecting `nil` to detect narrowing invalidation /
-        /// enforce the annotation. Only the new G#-declared-type-or-constraint
-        /// case was ever spuriously over-restrictive.
-        /// @param type The candidate (non-nullable-wrapper) target type.
-        /// @returns `true` when `nil` converts to [`type`](paramref) without a `T?` wrapper.
-        internal func IsNilAssignableWithoutNullableWrapper(type TypeSymbol?) bool {
-            if type != nil && NativeProtocolMetadata.IsProtocol(type) {
-                return false
-            }
-            return type is InterfaceSymbol ||
-                type is StructSymbol &&
-                type.IsClass == true ||
-                IsReferenceConstrainedTypeParameter(type) ||
-                type is TypeParameterSymbol &&
-                type.DependentBoundProvesReferenceType == true
         }
 
         /// Issue #2354 follow-up: true when [`from`](paramref) and

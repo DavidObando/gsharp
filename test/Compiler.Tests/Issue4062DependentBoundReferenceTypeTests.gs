@@ -40,7 +40,7 @@ import Xunit
 /// The repair therefore answers only the reference-ness HALF, in one new
 /// depth-bounded property (`DependentBoundProvesReferenceType`) read by
 /// exactly ONE consumer,
-/// `Conversion.IsNilAssignableWithoutNullableWrapper`.
+/// the nil rule of `Conversion.Classify` (the old predicate was removed by #4316).
 /// `IsReferenceConstrainedTypeParameter` — which also drives
 /// `IsReferenceLikeTarget`'s conversion arms, where `ClassConstraint`
 /// additionally names the type to box or upcast TO — is deliberately left
@@ -169,7 +169,7 @@ import System
 
 class Fixture {
     shared {
-        func Deep[` + "${string.Join(", ", parameters)}" + `](d T` + "$depth" + `) T` + "$depth" + ` {
+        func Deep[` + "${string.Join(", ", parameters)}" + `](d T` + "$depth" + `) T` + "$depth" + `? {
             return nil
         }
     }
@@ -306,11 +306,11 @@ import System
 
 class Fixture {
     shared {
-        func Dependent[TBase class, TDerived TBase](d TDerived) TDerived {
+        func Dependent[TBase class, TDerived TBase](d TDerived) TDerived? {
             return nil
         }
 
-        func Bare[T class](d T) T {
+        func Bare[T class](d T) T? {
             return nil
         }
     }
@@ -359,7 +359,7 @@ import System
 
 class Fixture {
     shared {
-        func Take[TBase class, TDerived TBase](d TDerived) TDerived {
+        func Take[TBase class, TDerived TBase](d TDerived) TDerived? {
             return nil
         }
     }
@@ -375,7 +375,7 @@ import System
 class Fixture {
     shared {
         func Take[TBase class, TDerived TBase](d TDerived) bool {
-            var local TDerived = nil
+            var local TDerived? = nil
             return local == nil
         }
     }
@@ -391,7 +391,7 @@ import System
 
 class Fixture {
     shared {
-        func Sink[T](d T) string {
+        func Sink[T](d T?) string {
             if d == nil {
                 return "got-nil"
             }
@@ -414,7 +414,7 @@ import System
 class Fixture {
     shared {
         func Take[TBase class, TDerived TBase](d TDerived) bool {
-            var local TDerived = d
+            var local TDerived? = d
             local = nil
             return local == nil
         }
@@ -429,8 +429,8 @@ import System
 
 class Fixture {
     shared {
-        func Chain[A class, B A, C B](c C) C {
-            var local C = nil
+        func Chain[A class, B A, C B](c C) C? {
+            var local C? = nil
             return local
         }
     }
@@ -446,7 +446,7 @@ import System
 
 class Box[T class] {
     public func Accept[U T](u U) string {
-        var v U = nil
+        var v U? = nil
         if v == nil {
             return "nil-ok"
         }
@@ -468,7 +468,7 @@ open class Animal {
 
 class Fixture {
     shared {
-        func Take[TBase Animal, TDerived TBase](d TDerived) TDerived {
+        func Take[TBase Animal, TDerived TBase](d TDerived) TDerived? {
             return nil
         }
     }
@@ -483,7 +483,7 @@ import System
 
 class Fixture {
     shared {
-        func Take[T class](d T) T {
+        func Take[T class](d T) T? {
             return nil
         }
     }
