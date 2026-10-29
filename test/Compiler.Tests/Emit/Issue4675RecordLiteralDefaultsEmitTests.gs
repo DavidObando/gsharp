@@ -30,6 +30,170 @@ class Issue4675RecordLiteralDefaultsEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ImportedDataStructPrimaryMarker_UnusableRecipeCannotUseGenericZero(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        for (kind, carrier, input) in[](string, string, string){
+            ("rect1", "int[,]", "[0,0]int32"),
+            ("rect3", "int[,]", "[0,0]int32"),
+            ("rect2", "int[]", "[]int32{7}"),
+            ("slice", "int[,]", "[0,0]int32"),
+            ("arr-1", "int[]", "[]int32{7}"),
+            ("unknown", "int[,]", "[0,0]int32"),
+            ("unknown", "System.Collections.Generic.Dictionary<string, int>", "map[string,int32]{}"),
+            ("unknown", "System.Collections.Generic.IEnumerable<int>", "[]int32{7}"),
+            ("", "int[]", "[]int32{7}")
+        } {
+            let reference = System.IO.Path.Combine(fixture.Directory, "StructMarker5425.ref.dll")
+            let marker = if kind.Length == 0 {
+                ""
+            } else {
+                "[assembly: AssemblyMetadata(\"GSharp.MagicCollectionFields\", \"33554434|Items:" + kind + "\")]"
+            }
+            let contract = fixture.CompileCSharpWithReference((`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|1|Items:67108865")]
+MARKER
+namespace StructMarker5425;
+public struct Box<T> {
+    public CARRIER Items;
+    public Box(CARRIER Items) { this.Items = Items; }
+}
+`).Replace("MARKER", marker, StringComparison.Ordinal)
+                    .Replace("CARRIER", carrier, StringComparison.Ordinal), "StructMarker5425", reference)
+            VerifyPrimaryShapeIl(contract)
+            VerifyPrimaryShapeIl(reference)
+            let selected = if referenceAssembly {
+                reference
+            } else {
+                contract
+            }
+            let rejectedReference = System.IO.Path.Combine(fixture.Directory, "MarkerOmission.ref.dll")
+            let pdb = System.IO.Path.Combine(fixture.Directory, "MarkerOmission.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import StructMarker5425\nlet value = Box[int32]{}",
+                "MarkerOmission",
+                true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference,
+                "/debug:portable",
+                "/pdb:" + pdb
+            )
+            Assert.Equal(1, code)
+            Assert.Contains("MarkerOmission.gs(2,13,2,16): error GS0267", output)
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MarkerOmission.dll")))
+            Assert.False(System.IO.File.Exists(rejectedReference))
+            Assert.False(System.IO.File.Exists(pdb))
+            let controls = fixture.Compile(
+                (
+                    "import StructMarker5425\n" +
+                        "let value = Box[int32]{Items: INPUT}\n" +
+                        "System.Console.WriteLine(System.Object.ReferenceEquals(value.Items, nil))\n" +
+                        "let call = Box[int32](INPUT)\n" +
+                        "System.Console.WriteLine(System.Object.ReferenceEquals(call.Items, nil))\n"
+                ).Replace("INPUT", input, StringComparison.Ordinal),
+                "MarkerControls",
+                true,
+                "/r:" + selected
+            )
+            VerifyPrimaryShapeIl(controls, []string{contract})
+            Assert.Equal("False\nFalse\n", fixture.Run(controls))
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedStructMarkerClosure_UnusableRecipeFailsAtZeroConsumers(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "StructClosure5425.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|0|")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554434|Bad:rect1,Good:slice")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|struct|1|Value:67108867")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554435|Value:struct")]
+namespace StructClosure5425;
+public struct Inner {
+    public int[,] Bad;
+    public int[] Good;
+}
+public struct Outer<T> {
+    public Inner Value;
+    public Outer(Inner Value) { this.Value = Value; }
+}`, "StructClosure5425", reference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(reference)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        for (source, span) in[](string, string){
+            ("let value = Outer[int32]{}", "(2,13,2,18)"),
+            ("let value = Inner{}", "(2,13,2,18)"),
+            ("var value Inner", "(2,1,2,16)"),
+            ("data struct Local { public var Value Inner }", "(2,21,2,43)"),
+            ("data struct Local { shared { public var Value Inner } }", "(2,30,2,52)")
+        } {
+            let rejectedReference = System.IO.Path.Combine(fixture.Directory, "MarkerClosure.ref.dll")
+            let pdb = System.IO.Path.Combine(fixture.Directory, "MarkerClosure.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import StructClosure5425\n" + source,
+                "MarkerClosure",
+                true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference,
+                "/debug:portable",
+                "/pdb:" + pdb
+            )
+            Assert.Equal(1, code)
+            Assert.True(output.Contains("MarkerClosure.gs" + span + ": error GS0267", StringComparison.Ordinal), output)
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "MarkerClosure.dll")))
+            Assert.False(System.IO.File.Exists(rejectedReference))
+            Assert.False(System.IO.File.Exists(pdb))
+        }
+        let controlsReference = System.IO.Path.Combine(fixture.Directory, "StructZeroControls5425.ref.dll")
+        let controlsContract = fixture.CompileCSharpWithReference(`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|1|Items:67108865")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|struct|1|Items:67108866")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554436|struct|1|Value:67108867")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554435|Items:rect1")]
+namespace StructZeroControls5425;
+public struct Rect {
+    public int[,] Items;
+    public Rect(int[,] Items) { this.Items = Items; }
+}
+public struct Nullable {
+    public int[]? Items;
+    public Nullable(int[]? Items = null) { this.Items = Items; }
+}
+public struct Scalar {
+    public int Value;
+    public Scalar(int Value = 9) { this.Value = Value; }
+}`, "StructZeroControls5425", controlsReference)
+        VerifyPrimaryShapeIl(controlsContract)
+        VerifyPrimaryShapeIl(controlsReference)
+        let controls = fixture.Compile(`import StructZeroControls5425
+let rect = Rect{}
+System.Console.WriteLine(rect.Items.GetLength(0))
+System.Console.WriteLine(rect.Items.GetLength(1))
+System.Console.WriteLine(System.Object.ReferenceEquals(Nullable{}.Items, nil))
+System.Console.WriteLine(Scalar{}.Value)
+System.Console.WriteLine(Scalar().Value)
+`, "MarkerlessControls", true, "/r:" +
+                if referenceAssembly {
+                controlsReference
+            } else {
+                controlsContract
+            })
+        VerifyPrimaryShapeIl(controls, []string{controlsContract})
+        Assert.Equal("0\n0\nTrue\n0\n9\n", fixture.Run(controls))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ImportedDataClassLegacyPrimaryStorage_RejectsInheritedProperty(referenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let baseContract = fixture.CompileCSharp(`namespace LegacyStorage5425;

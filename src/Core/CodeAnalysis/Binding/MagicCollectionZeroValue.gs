@@ -79,10 +79,23 @@ internal shared class MagicCollectionZeroValue {
     /// @param syntax The originating declaration syntax (may be null in synthesized contexts).
     /// @param type The declared slot type.
     /// @returns The synthesized empty-instance expression, or null.
-    func TrySynthesizeEmptyInstance(
+    func TrySynthesizeEmptyInstance(syntax SyntaxNode?, type TypeSymbol) BoundExpression? -> TrySynthesizeEmptyInstance(
+        syntax,
+        type,
+        out _
+    )
+
+    internal func TrySynthesizeEmptyInstance(
         syntax SyntaxNode?,
-        type TypeSymbol
-    ) BoundExpression? -> TrySynthesizeEmptyInstanceCore(syntax, type, visiting: nil, Dictionary[TypeSymbol, bool]())
+        type TypeSymbol,
+        out missingDeclarationShape bool
+    ) BoundExpression? -> TrySynthesizeEmptyInstanceCore(
+        syntax,
+        type,
+        visiting: nil,
+        Dictionary[TypeSymbol, bool](),
+        out missingDeclarationShape
+    )
 
     /// Issue #3319: a cheap, NON-recursive shape check for whether a
     /// declared field's type is a zero-value CANDIDATE — used at the eager
@@ -174,11 +187,11 @@ internal shared class MagicCollectionZeroValue {
                 let zero = TrySynthesizeEmptyInstanceFromMarker(
                     field,
                     kind,
+                    out missingDeclarationShape,
                     parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
                 )
-                if zero != nil {
-                    return zero
-                }
+                // A declared marker cannot fall back to a different zero recipe.
+                return zero
             }
             if constructor != nil {
                 let declaration = if imported.IsGenericType && !imported.IsGenericTypeDefinition {
@@ -209,7 +222,7 @@ internal shared class MagicCollectionZeroValue {
                 }
             }
         }
-        return TrySynthesizeEmptyInstance(syntax, type)
+        return TrySynthesizeEmptyInstance(syntax, type, out missingDeclarationShape)
     }
 
     internal func CanSynthesizeInTypeZeroConstructor(owner StructSymbol) bool {
@@ -298,8 +311,24 @@ internal shared class MagicCollectionZeroValue {
         fieldInfo FieldInfo?,
         markerKind string?,
         fieldType TypeSymbol? = nil
+    ) BoundExpression? -> TrySynthesizeEmptyInstanceFromMarker(fieldInfo, markerKind, out _, fieldType)
+
+    internal func TrySynthesizeEmptyInstanceFromMarker(
+        fieldInfo FieldInfo?,
+        markerKind string?,
+        out missingDeclarationShape bool,
+        fieldType TypeSymbol? = nil
     ) BoundExpression? {
-        if fieldInfo == nil || string.IsNullOrEmpty(markerKind) {
+        missingDeclarationShape = true
+        if fieldInfo == nil {
+            return nil
+        }
+        let signatureType = fieldType ?? ClrNullability.GetFieldTypeSymbol(fieldInfo)
+        if signatureType.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+            missingDeclarationShape = false
+            return nil
+        }
+        if string.IsNullOrEmpty(markerKind) {
             return nil
         }
         // Issue #3330 composition: a nested struct-typed field. Its own zero
@@ -311,10 +340,13 @@ internal shared class MagicCollectionZeroValue {
         // recursion, but walks reflected metadata instead of a bound
         // StructSymbol.
         if string.Equals(markerKind, "struct", StringComparison.Ordinal) {
-            return TrySynthesizeEmptyInstanceForImportedStruct(
+            let zero = TrySynthesizeEmptyInstanceForImportedStruct(
                 fieldType?.ClrType ?? fieldInfo.FieldType,
+                out missingDeclarationShape,
                 receiverType: fieldType
             )
+            missingDeclarationShape = missingDeclarationShape || zero == nil
+            return zero
         }
         var type TypeSymbol
         if string.Equals(markerKind, "map", StringComparison.Ordinal) {
@@ -329,7 +361,7 @@ internal shared class MagicCollectionZeroValue {
                 return nil
             }
             type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType))
-        } else if markerKind!!.StartsWith("arr", StringComparison.Ordinal) {
+        } else if markerKind.StartsWith("arr", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil || !fieldInfo.FieldType.IsSZArray || !int32.TryParse(
                 markerKind.AsSpan(3),
@@ -341,7 +373,7 @@ internal shared class MagicCollectionZeroValue {
                 return nil
             }
             type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0, fieldType), length)
-        } else if markerKind!!.StartsWith("rect", StringComparison.Ordinal) {
+        } else if markerKind.StartsWith("rect", StringComparison.Ordinal) {
             let elementClr Type? = fieldInfo.FieldType.GetElementType()
             if elementClr == nil || !fieldInfo.FieldType.IsArray || !int32.TryParse(
                 markerKind.AsSpan(4),
@@ -365,7 +397,9 @@ internal shared class MagicCollectionZeroValue {
         } else {
             return nil
         }
-        return TrySynthesizeEmptyInstance(nil, type)
+        let zero = TrySynthesizeEmptyInstance(nil, type, out missingDeclarationShape)
+        missingDeclarationShape = missingDeclarationShape || zero == nil
+        return zero
     }
 
     /// Issue #3329/#3330 composition: reconstructs a
@@ -387,9 +421,11 @@ internal shared class MagicCollectionZeroValue {
     /// it can be reconstructed.
     private func TrySynthesizeEmptyInstanceForImportedStruct(
         clrType Type?,
+        out missingDeclarationShape bool,
         syntax SyntaxNode? = nil,
         receiverType TypeSymbol? = nil
     ) BoundExpression? {
+        missingDeclarationShape = false
         if clrType == nil || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds) {
             return nil
         }
@@ -448,8 +484,12 @@ internal shared class MagicCollectionZeroValue {
             let zeroValue BoundExpression? = TrySynthesizeEmptyInstanceFromMarker(
                 reflectedField,
                 kind,
+                out missingDeclarationShape,
                 fieldSymbol.Type
             )
+            if missingDeclarationShape {
+                return nil
+            }
             if zeroValue == nil {
                 continue
             }
@@ -473,9 +513,16 @@ internal shared class MagicCollectionZeroValue {
         syntax SyntaxNode?,
         type TypeSymbol,
         visiting HashSet[StructSymbol]?,
-        needsZeroCache Dictionary[TypeSymbol, bool]
+        needsZeroCache Dictionary[TypeSymbol, bool],
+        out missingDeclarationShape bool
     ) BoundExpression? {
-        let result BoundExpression? = TrySynthesizeEmptyInstanceCoreUncached(syntax, type, visiting, needsZeroCache)
+        let result BoundExpression? = TrySynthesizeEmptyInstanceCoreUncached(
+            syntax,
+            type,
+            visiting,
+            needsZeroCache,
+            out missingDeclarationShape
+        )
         needsZeroCache[type] = result != nil
         return result
     }
@@ -484,8 +531,10 @@ internal shared class MagicCollectionZeroValue {
         syntax SyntaxNode?,
         type TypeSymbol,
         visiting HashSet[StructSymbol]?,
-        needsZeroCache Dictionary[TypeSymbol, bool]
+        needsZeroCache Dictionary[TypeSymbol, bool],
+        out missingDeclarationShape bool
     ) BoundExpression? {
+        missingDeclarationShape = false
         switch type {
             case mapType is MapTypeSymbol {
                 // `map[K, V]{}` — symbolic Dictionary`2 ctor for open K/V.
@@ -535,12 +584,28 @@ internal shared class MagicCollectionZeroValue {
             }
             case structType is StructSymbol when !structType.IsClass && !structType.IsInline {
                 if structType.ClrType is {} imported {
-                    return TrySynthesizeEmptyInstanceForImportedStruct(imported, syntax, structType)
+                    return TrySynthesizeEmptyInstanceForImportedStruct(
+                        imported,
+                        out missingDeclarationShape,
+                        syntax,
+                        structType
+                    )
                 }
-                return TrySynthesizeStructFieldDefaults(syntax, structType, visiting, needsZeroCache)
+                return TrySynthesizeStructFieldDefaults(
+                    syntax,
+                    structType,
+                    visiting,
+                    needsZeroCache,
+                    out missingDeclarationShape
+                )
             }
             case importedType is ImportedTypeSymbol when importedType.Type.IsValueType {
-                return TrySynthesizeEmptyInstanceForImportedStruct(importedType.Type, syntax, importedType)
+                return TrySynthesizeEmptyInstanceForImportedStruct(
+                    importedType.Type,
+                    out missingDeclarationShape,
+                    syntax,
+                    importedType
+                )
             }
             default {
                 return nil
@@ -561,8 +626,10 @@ internal shared class MagicCollectionZeroValue {
         syntax SyntaxNode?,
         structType StructSymbol,
         visiting HashSet[StructSymbol]?,
-        needsZeroCache Dictionary[TypeSymbol, bool]
+        needsZeroCache Dictionary[TypeSymbol, bool],
+        out missingDeclarationShape bool
     ) BoundExpression? {
+        missingDeclarationShape = false
         var visiting = visiting
         // Key the cycle guard by the generic DEFINITION so a self-referential
         // shape is caught regardless of which closed instantiation is being
@@ -581,8 +648,12 @@ internal shared class MagicCollectionZeroValue {
                     syntax,
                     field.Type,
                     visiting,
-                    needsZeroCache
+                    needsZeroCache,
+                    out missingDeclarationShape
                 )
+                if missingDeclarationShape {
+                    return nil
+                }
                 if fieldZeroValue == nil {
                     continue
                 }
@@ -633,7 +704,8 @@ internal shared class MagicCollectionZeroValue {
                                         syntax,
                                         definitionField.Type,
                                         visiting,
-                                        needsZeroCache
+                                        needsZeroCache,
+                                        out _
                                     ) != nil
                                 }
                             )

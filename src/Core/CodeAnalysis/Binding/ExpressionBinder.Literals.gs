@@ -2310,6 +2310,8 @@ internal partial class ExpressionBinder {
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
                     inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
                     seenFieldNames.Add(field.Name)
+                } else if structSymbol!!.ClrType != nil {
+                    let _ = GetStructFieldZeroValue(syntax, structSymbol!!, field)
                 }
             }
         }
@@ -3152,6 +3154,43 @@ internal partial class ExpressionBinder {
         return BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr)
     }
 
+    private func GetStructFieldZeroValue(syntax SyntaxNode, type StructSymbol, field FieldSymbol) BoundExpression? {
+        let location = if syntax is StructLiteralExpressionSyntax literal {
+            literal.TypeIdentifier.Location
+        } else {
+            syntax.Location
+        }
+        let clrType = type.ClrType
+        if clrType == nil {
+            let zero = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(
+                syntax,
+                field.Type,
+                out var missingDeclarationShape
+            )
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(location, type.Name)
+            }
+            return zero
+        }
+        // Imported declaration initializers are not mandatory collection zero values.
+        if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
+            field.Name,
+            out var kind
+        ) {
+            let zero = MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                kind,
+                out var missingDeclarationShape,
+                field.Type
+            )
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(location, type.Name)
+            }
+            return zero
+        }
+        return nil
+    }
+
     private func AppendImportedStructZeroInitializers(
         syntax SyntaxNode,
         clrType Type,
@@ -3167,14 +3206,20 @@ internal partial class ExpressionBinder {
                 continue
             }
             let field FieldInfo? = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance)
+            var missingDeclarationShape = field == nil
             let zeroValue BoundExpression? = if field != nil {
                 MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
                     field,
                     kind,
+                    out missingDeclarationShape,
                     MemberLookup.GetClrFieldTypeSymbol(receiver.Type, field)
                 )
             } else {
                 nil
+            }
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(syntax.Location, clrType.Name)
+                continue
             }
             if field == nil ||
                 zeroValue == nil ||
@@ -4308,25 +4353,6 @@ internal partial class ExpressionBinder {
                 if constructor.GetParameters().Length == 0 {
                     return constructor
                 }
-            }
-            return nil
-        }
-
-        private func GetStructFieldZeroValue(syntax SyntaxNode, type StructSymbol, field FieldSymbol) BoundExpression? {
-            let clrType = type.ClrType
-            if clrType == nil {
-                return MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
-            }
-            // Imported declaration initializers are not mandatory collection zero values.
-            if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
-                field.Name,
-                out var kind
-            ) {
-                return MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
-                    clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
-                    kind,
-                    field.Type
-                )
             }
             return nil
         }

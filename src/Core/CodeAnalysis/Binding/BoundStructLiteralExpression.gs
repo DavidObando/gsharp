@@ -238,7 +238,16 @@ class BoundStructLiteralExpression : BoundExpression {
                             .Select((initializer FieldInitializerSyntax) -> initializer.FieldIdentifier.ValueText)
                     )
                     for parameter in type.PrimaryConstructorParameters {
-                        if !suppliedNames.Contains(parameter.Name) &&
+                        if suppliedNames.Contains(parameter.Name) {
+                            continue
+                        }
+                        let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                            syntax,
+                            type,
+                            parameter,
+                            out var missingDeclarationShape
+                        )
+                        if missingDeclarationShape ||
                             parameter
                             .Type
                             .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
@@ -246,7 +255,7 @@ class BoundStructLiteralExpression : BoundExpression {
                             .Type
                             .ClrType
                             ?.IsArray == true &&
-                            MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) == nil {
+                            zero == nil {
                             valid = false
                             break
                         }
