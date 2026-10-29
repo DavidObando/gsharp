@@ -3327,7 +3327,8 @@ internal class ConversionClassifier {
         targetType TypeSymbol
     ) BoundExpression {
         if StatementBinder.IsNilLiteral(expression) {
-            return if targetType is NullableTypeSymbol || Conversion.IsReferenceLikeTarget(targetType) {
+            // Issue #4316: only a `T?` target takes the bare `nil`; any other target asks the shared rule.
+            return if targetType is NullableTypeSymbol {
                 cast[BoundExpression](BoundDefaultExpression(expression.Syntax, targetType))
             } else {
                 BindConversion(diagnosticLocation, expression, targetType)

@@ -62,7 +62,7 @@ open class ChannelOpsTests {
         Assert.Equal("a", ChannelOps.Receive(reader, CancellationToken.None))
         Assert.Equal(("b", true), ChannelOps.Receive2(reader, CancellationToken.None))
         ChannelOps.Close(writer)
-        Assert.Equal((nil, false), ChannelOps.Receive2(reader, CancellationToken.None))
+        Assert.Equal((default(string), false), ChannelOps.Receive2(reader, CancellationToken.None))
     }
 
     @Fact

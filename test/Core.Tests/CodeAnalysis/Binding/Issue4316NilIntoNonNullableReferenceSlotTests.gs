@@ -153,6 +153,18 @@ func F() {
     let ch = chan[Box](1)
     ch <- nil
 }`, "GS0155")
+            yield Row("tuple-element-in-imported-generic-call", `func F() {
+    let xs = List[(Box, int32)]()
+    xs.Add((nil, 1))
+}`, "GS0155")
+            yield Row("tuple-element-string-in-imported-generic-call", `func F() {
+    let xs = List[(string, int32)]()
+    xs.Add((nil, 1))
+}`, "GS0155")
+            yield Row("ok-tuple-element-nullable-in-imported-generic-call", `func F() {
+    let xs = List[(Box?, int32)]()
+    xs.Add((nil, 1))
+}`, "")
             yield Row("tuple-element", `func F() (Box, int32) -> (nil, 1)`, "GS0155")
             yield Row("if-expression-arm", `func F(c bool) Box -> if c { nil } else { Box() }`, "GS0155")
             yield Row("lambda-return", `func F() Func[Box] {
