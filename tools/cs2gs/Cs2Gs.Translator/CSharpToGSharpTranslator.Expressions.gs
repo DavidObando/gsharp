@@ -4029,12 +4029,9 @@ partial class CSharpToGSharpTranslator {
         /// decision for it: the guard narrows the use in G# only when no such
         /// call lies between them (and no loop that holds the use but not the
         /// guard runs one), so callers fall back to the asserted read otherwise.
-        private func ClosureAssignedLocalLosesNarrowing(
-            symbol ISymbol?,
-            narrowingGuard Microsoft.CodeAnalysis.SyntaxNode,
-            use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
-            $scope Microsoft.CodeAnalysis.SyntaxNode
-        ) bool {
+        /// A local or parameter that a closure (lambda or local function) other than its declaring
+        /// function writes, directly or through a `ref` local that names it.
+        private func IsClosureAssignedVariable(symbol ISymbol?) bool {
             if symbol is not ILocalSymbol && symbol is not IParameterSymbol {
                 return false
             }
@@ -4052,14 +4049,24 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // A `ref` local names the storage of another variable, which a closure may assign.
-            var closureAssigned = symbol is ILocalSymbol{RefKind: not RefKind.None}
+            if symbol is ILocalSymbol{RefKind: not RefKind.None} {
+                return true
+            }
             for node in declaringFunction.DescendantNodes() {
                 if this.SyntaxNodeWritesSymbol(node, symbol) && NearestFunctionBoundary(node) != declaringFunction {
-                    closureAssigned = true
-                    break
+                    return true
                 }
             }
-            if !closureAssigned {
+            return false
+        }
+
+        private func ClosureAssignedLocalLosesNarrowing(
+            symbol ISymbol?,
+            narrowingGuard Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if !this.IsClosureAssignedVariable(symbol) {
                 return false
             }
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
