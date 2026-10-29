@@ -471,6 +471,27 @@ public class Demo
     }
 
     @Fact
+    func ClosureAssignedLocal_ReadOfAnArrayARefElementNames_IsAsserted() {
+        let printed = Translate(`
+public class Demo
+{
+    static void Touch() { }
+
+    public static int Run(string?[]? current)
+    {
+        ref string? alias = ref current![0];
+        if (current != null)
+        {
+            Touch();
+            return current.Length;
+        }
+        return alias == null ? 0 : 1;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
     func ClosureAssignedLocal_ReadWithoutACallBetween_StaysBare() {
         let printed = Translate(`
 public class Demo

@@ -4029,6 +4029,16 @@ partial class CSharpToGSharpTranslator {
         /// decision for it: the guard narrows the use in G# only when no such
         /// call lies between them (and no loop that holds the use but not the
         /// guard runs one), so callers fall back to the asserted read otherwise.
+        /// Whether a `ref` or address-of operand names the variable anywhere in its path
+        /// (`ref current`, `ref current[0]`, `&current.Field`): the compiler scans the names in
+        /// the operand the same way (CollectAddressTakenNames).
+        private func OperandNamesVariable(operand Microsoft.CodeAnalysis.SyntaxNode, symbol ISymbol?) bool {
+            return operand
+                .DescendantNodesAndSelf()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax]()
+                .Any((name Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax) -> this.BindsTo(name, symbol))
+        }
+
         /// A local or parameter that a closure (lambda or local function) other than its declaring
         /// function writes, directly or through a `ref` local that names it.
         private func IsClosureAssignedVariable(symbol ISymbol?) bool {
@@ -4058,10 +4068,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 // A `ref` alias or an address-of keeps the variable's storage reachable after a call
                 // (gsc's CollectAddressTakenNames), which ends its narrowing the same way.
-                if node is Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax refExpression && this.BindsTo(
-                    refExpression.Expression,
-                    symbol
-                ) {
+                if node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .RefExpressionSyntax refExpression &&
+                    this.OperandNamesVariable(refExpression.Expression, symbol) {
                     return true
                 }
                 if node is Microsoft
@@ -4069,10 +4081,8 @@ partial class CSharpToGSharpTranslator {
                     .CSharp
                     .Syntax
                     .PrefixUnaryExpressionSyntax addressOf &&
-                    addressOf.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) && this.BindsTo(
-                    addressOf.Operand,
-                    symbol
-                ) {
+                    addressOf.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) &&
+                    this.OperandNamesVariable(addressOf.Operand, symbol) {
                     return true
                 }
             }
