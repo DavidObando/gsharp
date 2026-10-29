@@ -170,7 +170,8 @@ import System
 class Fixture {
     shared {
         func Deep[` + "${string.Join(", ", parameters)}" + `](d T` + "$depth" + `) T` + "$depth" + `? {
-            return nil
+            let joined = false ? d : nil
+            return joined
         }
     }
 }
@@ -307,11 +308,13 @@ import System
 class Fixture {
     shared {
         func Dependent[TBase class, TDerived TBase](d TDerived) TDerived? {
-            return nil
+            let joined = false ? d : nil
+            return joined
         }
 
         func Bare[T class](d T) T? {
-            return nil
+            let joined = false ? d : nil
+            return joined
         }
     }
 }
@@ -360,7 +363,8 @@ import System
 class Fixture {
     shared {
         func Take[TBase class, TDerived TBase](d TDerived) TDerived? {
-            return nil
+            let joined = false ? d : nil
+            return joined
         }
     }
 }
@@ -375,7 +379,7 @@ import System
 class Fixture {
     shared {
         func Take[TBase class, TDerived TBase](d TDerived) bool {
-            var local TDerived? = nil
+            var local = false ? d : nil
             return local == nil
         }
     }
@@ -430,7 +434,7 @@ import System
 class Fixture {
     shared {
         func Chain[A class, B A, C B](c C) C? {
-            var local C? = nil
+            var local = false ? c : nil
             return local
         }
     }
@@ -446,7 +450,7 @@ import System
 
 class Box[T class] {
     public func Accept[U T](u U) string {
-        var v U? = nil
+        var v = false ? u : nil
         if v == nil {
             return "nil-ok"
         }
@@ -469,7 +473,8 @@ open class Animal {
 class Fixture {
     shared {
         func Take[TBase Animal, TDerived TBase](d TDerived) TDerived? {
-            return nil
+            let joined = false ? d : nil
+            return joined
         }
     }
 }
@@ -484,7 +489,8 @@ import System
 class Fixture {
     shared {
         func Take[T class](d T) T? {
-            return nil
+            let joined = false ? d : nil
+            return joined
         }
     }
 }
@@ -641,6 +647,11 @@ Console.WriteLine("x")`}
                 case 0x12: ("ldloca.s", 2)
                 case 0x13: ("stloc.s", 2)
                 case 0x14: ("ldnull", 1)
+                case 0x16: ("ldc.i4.0", 1)
+                case 0x2C: ("brfalse.s", 2)
+                case 0x2D: ("brtrue.s", 2)
+                case 0x39: ("brfalse", 5)
+                case 0x3A: ("brtrue", 5)
                 case 0x25: ("dup", 1)
                 case 0x2A: ("ret", 1)
                 case 0x38: ("br", 5)
