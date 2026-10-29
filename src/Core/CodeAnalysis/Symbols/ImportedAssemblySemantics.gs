@@ -84,6 +84,36 @@ internal shared class ImportedAssemblySemantics {
         }
     }
 
+    /// Resolves primary storage within its declaring type and module, including private backing fields.
+    /// A nonzero field token never falls back to another member.
+    internal func GetPrimaryConstructorMember(type Type, index int32) MemberInfo? {
+        if !TryGetTypeSemantics(type, out var semantics) ||
+            index < 0 ||
+            index >= semantics!!
+            .PrimaryConstructorParameterNames
+            .Length {
+            return nil
+        }
+        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+        let fields = ClrTypeUtilities.SafeGetFields(type, flags)
+        let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
+        if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
+            return fields.FirstOrDefault(
+                (field FieldInfo) -> field.MetadataToken == tokens[index] && object.ReferenceEquals(
+                    field.Module,
+                    type.Module
+                )
+            )
+        }
+        let name = semantics!!.PrimaryConstructorParameterNames[index]
+        let field = fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == name)
+        return if field != nil {
+            cast[MemberInfo](field)
+        } else {
+            ClrTypeUtilities.SafeGetProperty(type, name, flags)
+        }
+    }
+
     /// Checks CLR eligibility and the declaring G# assembly's inheritance policy.
     /// @param type The imported base class.
     /// @returns Whether a different compilation may derive from the class.

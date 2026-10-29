@@ -23,6 +23,9 @@ Keep the existing metadata key, type token, field identity, payload grammar, and
 
 Resolve storage through the existing primary-member mapping. Do not mark inherited storage or class body fields.
 
+Resolve field tokens within the declaring type and module, including private backing fields.
+Keep private storage out of the accessible member model. Do not replace an unavailable nonzero token with inherited or named storage.
+
 Primary automatic-property backing fields use the existing field-token mapping in implementation and reference metadata.
 
 Reuse canonical primary-argument zero synthesis and receiver-aware signature readers. Select the same exact primary constructor before synthesis.

@@ -8,6 +8,7 @@ import System
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import GSharp.Tests
 import Xunit
@@ -24,6 +25,120 @@ class Issue4675RecordLiteralDefaultsEmitTests {
                 details
             )
         )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataClassPrimaryStorage_UsesDeclaringModule(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let baseContract = fixture.Compile(`package StorageBase5425
+public open class Base {
+    public var Other string = "base"
+    public var OtherGeneric string = "generic"
+    public var OtherSlice string = "slice"
+    public var OtherFixed string = "fixed"
+    public init() { }
+    protected init(other Base) {
+        Other = other.Other
+        OtherGeneric = other.OtherGeneric
+        OtherSlice = other.OtherSlice
+        OtherFixed = other.OtherFixed
+    }
+}`, "StorageBase5425", false)
+        let reference = System.IO.Path.Combine(fixture.Directory, "StorageProducer5425.ref.dll")
+        let pdb = System.IO.Path.Combine(fixture.Directory, "StorageProducer5425.pdb")
+        const producerSource = `package StorageProducer5425
+import StorageBase5425
+public data class Derived(Value int32) : Base() { }
+public data class Generic[T](Value T) : Base() { }
+public data class Slice[T](Items []T) : Base() { }
+public data class Fixed[T](Items [3]T) : Base() { }`
+        let producer = fixture.Compile(
+            producerSource,
+            "StorageProducer5425",
+            false,
+            "/r:" + baseContract,
+            "/refout:" + reference,
+            "/debug:portable",
+            "/pdb:" + pdb
+        )
+        let bytes = System.IO.File.ReadAllBytes(producer)
+        let referenceBytes = System.IO.File.ReadAllBytes(reference)
+        let pdbBytes = System.IO.File.ReadAllBytes(pdb)
+        fixture.Compile(
+            producerSource,
+            "StorageProducer5425",
+            false,
+            "/r:" + baseContract,
+            "/refout:" + reference,
+            "/debug:portable",
+            "/pdb:" + pdb
+        )
+        Assert.Equal(bytes, System.IO.File.ReadAllBytes(producer))
+        Assert.Equal(referenceBytes, System.IO.File.ReadAllBytes(reference))
+        Assert.Equal(pdbBytes, System.IO.File.ReadAllBytes(pdb))
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            producer
+        }
+        using let basePe = PEReader(System.IO.File.OpenRead(baseContract))
+        using let producerPe = PEReader(System.IO.File.OpenRead(selected))
+        let baseMetadata = basePe.GetMetadataReader()
+        let producerMetadata = producerPe.GetMetadataReader()
+        let foreign = baseMetadata.FieldDefinitions.First()
+        let own = producerMetadata.FieldDefinitions.First()
+        Assert.Equal(0x04000001, MetadataTokens.GetToken(foreign))
+        Assert.Equal(MetadataTokens.GetToken(foreign), MetadataTokens.GetToken(own))
+        Assert.NotEqual(
+            baseMetadata.GetGuid(baseMetadata.GetModuleDefinition().Mvid),
+            producerMetadata.GetGuid(producerMetadata.GetModuleDefinition().Mvid)
+        )
+        let inheritedField = baseMetadata.GetFieldDefinition(foreign)
+        let primaryField = producerMetadata.GetFieldDefinition(own)
+        Assert.Equal("Other", baseMetadata.GetString(inheritedField.Name))
+        Assert.Equal("<Value>k__BackingField", producerMetadata.GetString(primaryField.Name))
+        Assert.Equal(FieldAttributes.Private, primaryField.Attributes & FieldAttributes.FieldAccessMask)
+        Assert.Equal([]uint8{0x06, 0x0e}, baseMetadata.GetBlobBytes(inheritedField.Signature))
+        Assert.Equal([]uint8{0x06, 0x08}, producerMetadata.GetBlobBytes(primaryField.Signature))
+        VerifyPrimaryShapeIl(baseContract)
+        VerifyPrimaryShapeIl(producer, []string{baseContract})
+        VerifyPrimaryShapeIl(reference, []string{baseContract})
+        let consumer = fixture.Compile(`import StorageProducer5425
+data struct Point(X int32)
+func Build[T](value T) Generic[T] -> Generic[T]{Value: value}
+let call = Derived(7)
+System.Console.WriteLine(call.Value)
+System.Console.WriteLine(call.Other)
+System.Console.WriteLine(Derived{}.Value)
+System.Console.WriteLine(Derived{Value: 11, Other: "changed"}.Other)
+System.Console.WriteLine(Generic[int32](9).Value)
+System.Console.WriteLine(Build[Point](Point{X: 13}).Value.X)
+System.Console.WriteLine(Build[string?](nil).Value == nil)
+System.Console.WriteLine(Slice[int32]{}.Items.Length)
+System.Console.WriteLine(Fixed[int32]{}.Items.Length)
+System.Console.WriteLine(Fixed[int32]{Items: [3]int32{2, 4, 6}}.Items[2])
+`, "StorageConsumer5425", true, "/r:" + baseContract, "/r:" + selected)
+        VerifyPrimaryShapeIl(consumer, []string{baseContract, producer})
+        Assert.Equal("7\nbase\n0\nchanged\n9\n13\nTrue\n0\n3\n6\n", fixture.Run(consumer))
+        let rejectedReference = System.IO.Path.Combine(fixture.Directory, "StorageRejected5425.ref.dll")
+        let rejectedPdb = System.IO.Path.Combine(fixture.Directory, "StorageRejected5425.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import StorageProducer5425\nlet value = Derived(\"wrong\")",
+            "StorageRejected5425",
+            true,
+            "/r:" + baseContract,
+            "/r:" + selected,
+            "/refout:" + rejectedReference,
+            "/debug:portable",
+            "/pdb:" + rejectedPdb
+        )
+        Assert.Equal(1, code)
+        Assert.Contains("StorageRejected5425.gs(2,21,2,28): error GS0154", output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "StorageRejected5425.dll")))
+        Assert.False(System.IO.File.Exists(rejectedReference))
+        Assert.False(System.IO.File.Exists(rejectedPdb))
     }
 
     @Fact
