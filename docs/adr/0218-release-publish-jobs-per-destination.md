@@ -60,13 +60,17 @@ aggregate (`build.yml:1090-1100`) requires more jobs: `format`,
 | "Re-run failed jobs" also runs the jobs that were skipped because they needed a failed job. | Not stated in the documentation that was read. The runbook assumes it. | **Unverified** |
 | A job with `needs` is skipped when a prerequisite fails or is skipped, unless its `if` uses `always()`. | GitHub documentation | Verified (docs) |
 | `actions/download-artifact@v5` downloads from another run with `run-id` and `github-token` (`actions: read`). | Action README | Verified (docs) |
-| Run artifacts of a tag run expire after about 90 days (the v0.4.591 run of 2026-09-09 expired 2026-12-08). | #4640 comment | Verified (one observation) |
+| Run artifacts of a tag run expire after 90 days. The v0.4.591 run 34300319345 was created 2026-09-09 and its artifacts expired 2026-12-08. | `gh api .../runs/34300319345`, #4640 comment | Verified (one observation) |
 | The REST `workflow_dispatch` `ref` "can be a branch or tag name". The workflow file must exist on the default branch for the event to be offered. A dispatch uses the workflow file at `ref`. | GitHub documentation | Verified (docs) |
 | A job-level `concurrency` group is repository-wide, so it serializes the same job across two runs. `cancel-in-progress: false` keeps a running job. | GitHub documentation | Verified (docs) |
 | Environments with protection rules work on public repositories under GitHub Free. Deployment policies accept tag name patterns. Environment secrets reach only jobs that name the environment, after its rules pass. The repository is public and has environments `copilot` and `github-pages` only. | GitHub documentation; `gh api .../environments`; `gh repo view` | Verified (docs and API) |
 | `jobs.<id>.environment` accepts an expression for its name. | Not re-read. | **Unverified** |
 | nuget.org trusted publishing binds a policy to repository owner, repository, workflow file name and an optional GitHub environment. Scopes select "new packages" versus "new versions" by glob. | NuGet documentation | Verified (docs) |
 | `build/ci-selection.py` treats `workflow_dispatch` as full validation (`build/test-ci-selection.py:141-144`). | Source | Verified |
+| A `uses:` job that calls a reusable workflow accepts `needs`, `if`, `permissions` and `secrets: inherit`. | GitHub documentation on reusable workflows, from memory. Not re-read. | **Unverified** |
+| A job inside a called workflow can declare `environment` and `concurrency`, and `secrets: inherit` resolves the environment secrets of the environment that the called job names. | Not re-read. | **Unverified** |
+| "Re-run failed jobs" re-runs individual jobs inside a called workflow, not the whole call. | Not re-read. | **Unverified** |
+| `actions/upload-artifact@v4` and later reject a second upload of the same name in one run unless `overwrite: true`. | Action README, from memory. | **Unverified** |
 | A `v*-rc1` tag still runs `publish`, with a prerelease `-g<sha>` version. | Runbook, `version.json` | Verified (runbook) |
 
 ### Where a partial failure leaves things today
@@ -125,16 +129,21 @@ Inputs of the reusable workflow: `run_id` (the run whose artifacts to publish),
 | `publish-verify` | ubuntu | none | none | `actions: read` | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix` from `run_id`. Runs `release-publish.py verify` (section 3). Uploads the verified set as artifact `release-set` with a `manifest.json` of SHA-256 digests. Outputs `version`. |
 | `publish-github-release` | ubuntu | `publish-verify` | `release` | `contents: write` | `gh release view \|\| gh release create --draft --generate-notes`; `gh release upload --clobber` of all assets. The release stays a draft until `publish-finalize`. |
 | `publish-nuget-compiler` | ubuntu | `publish-verify` | `release` | none | Pushes the six `Gsharp.NET.Sdk.Compiler.<rid>` packages with retry, then `check-rid-packages.py --wait-minutes 30`. |
-| `publish-nuget-sdk` | ubuntu | `publish-nuget-compiler` (see the `if` below) | `release` | none | Runs `check-rid-packages.py` (no wait) as a precondition. Pushes `Gsharp.NET.Sdk` and the remaining packages with retry. Runs `check-rid-packages.py --require-sdk --wait-minutes 15`. |
+| `publish-nuget-sdk` | ubuntu | `publish-verify`, `publish-nuget-compiler` (see the `if` below) | `release` | none | Runs `check-rid-packages.py` (no wait) as a precondition. Pushes `Gsharp.NET.Sdk` and the remaining packages with retry. Runs `check-rid-packages.py --require-sdk --wait-minutes 15`. |
 | `publish-vscode-marketplace` | ubuntu | `publish-verify` | `release` | none | Reads the version inside the VSIX. Queries the Marketplace. Skips when present. Else `npx @vscode/vsce@<pinned> publish --packagePath ... --skip-duplicate`. Confirms presence after the publish. |
 | `publish-visual-studio-marketplace` | windows | `publish-verify` (open question 3 adds `publish-nuget-sdk`) | `release` | none | Reads `Identity/@Version` from `extension.vsixmanifest` in the VSIX. Queries the Marketplace. Skips when present. Else `VsixPublisher.exe publish`. Confirms presence. |
-| `publish-finalize` | ubuntu | all five publish jobs, `if: always()` | `release` | `contents: write` | Reads `toJSON(needs)`. Queries every destination (section 4). When every destination has the version, `gh release edit --draft=false` and a summary table. Else fails and names the destinations to retry. |
+| `publish-finalize` | ubuntu | `publish-verify` and all five publish jobs, `if: !cancelled()` | `release` | `contents: write` | Reads `toJSON(needs)`. Queries every destination (section 4). When every destination has the version, `gh release edit --draft=false` and a summary table. Else fails and names the destinations to retry. |
 
 Rules for every publish job:
 
-- `if: always() && needs.publish-verify.result == 'success' && (inputs.destination == 'all' || inputs.destination == '<this job>')`.
-  A job that is not selected is skipped, not failed, so `publish-finalize`
-  can tell the two apart.
+- `if: !cancelled() && needs.publish-verify.result == 'success' && (inputs.destination == 'all' || inputs.destination == '<this job>')`.
+  Not `always()`: `always()` is true in a cancelled run, so a cancelled tag
+  run would still push. `!cancelled()` runs the job after a failed or skipped
+  prerequisite, but not after a cancel. A job that is not selected is skipped,
+  not failed, so `publish-finalize` can tell the two apart.
+- The `needs` context holds direct prerequisites only. Every job that reads
+  `needs.publish-verify.result` or its `version` output lists `publish-verify`
+  in its own `needs`.
 - `publish-nuget-sdk` adds `&& (needs.publish-nuget-compiler.result == 'success' || inputs.destination == 'publish-nuget-sdk')`.
   The topology edge is not the only guard. The feed check inside the job is
   the guard that matters, because ADR-0207 result 6 makes a missing RID
@@ -203,8 +212,9 @@ release before any push when:
   `Gsharp.NET.Sdk/<version>`.
 
 The job writes `manifest.json` with the SHA-256 of every file and uploads the
-set as `release-set`. Every publish job downloads `release-set` and checks the
-digests. The runbook's stage-2 section wanted a digest-bound manifest; this is
+set as `release-set` with `overwrite: true`, because artifacts v4 are
+immutable per run and "Re-run all jobs" uploads the name a second time. Every
+publish job downloads `release-set` and checks the digests. The runbook's stage-2 section wanted a digest-bound manifest; this is
 the small version of it.
 
 ### 4. Idempotency per destination
@@ -268,7 +278,9 @@ publish, up to the write. It downloads nothing from secrets. It:
 A job `publish-dry-run` runs on every push to `main`, needs `build`, `vsix` and
 `visual-studio-extension`, and has no environment and no secrets, so step 4 is
 skipped there. Credential checks run only in the environments: in the retry
-with `dry_run: true`, and in a tag run before the first write.
+with `dry_run: true`, and in a tag run as the first step of each destination
+job, before that job's first write. `publish-verify` has no environment and
+runs no credential check.
 
 This is the check that would have caught the current gap. Since #5198 every
 `main` run packs seven NuGet packages that no publish code has ever consumed.
@@ -351,9 +363,12 @@ the publish topology.
    `rerun-probe.yml` (`on: pull_request`): job A uploads an artifact; job B
    fails when `github.run_attempt == 1`; job C needs B and downloads the
    artifact. Re-run failed jobs. Record whether C ran and whether the download
-   found the attempt-1 artifact. The same PR tries `environment: ${{ ... }}`
-   against a throwaway environment. The PR is closed without merge; the
-   findings go into this ADR's fact table.
+   found the attempt-1 artifact. Job A also uploads its artifact with
+   `overwrite: true` on attempt 2. The same PR tries `environment: ${{ ... }}`
+   against a throwaway environment, and calls a throwaway reusable workflow
+   whose jobs declare `environment` and `concurrency`, to observe `secrets:
+   inherit`, per-job re-run inside the call, and `needs` on the `uses:` job.
+   The PR is closed without merge; the findings go into this ADR's fact table.
 3. **Dry run on `main`.** Add `publish-dry-run` to `build.yml`. Register the
    new paths in `build/ci-selection.py` so a PR that changes them runs it.
    Verifiable on the next `main` push.
