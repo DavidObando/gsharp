@@ -4056,6 +4056,25 @@ partial class CSharpToGSharpTranslator {
                 if this.SyntaxNodeWritesSymbol(node, symbol) && NearestFunctionBoundary(node) != declaringFunction {
                     return true
                 }
+                // A `ref` alias or an address-of keeps the variable's storage reachable after a call
+                // (gsc's CollectAddressTakenNames), which ends its narrowing the same way.
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax refExpression && this.BindsTo(
+                    refExpression.Expression,
+                    symbol
+                ) {
+                    return true
+                }
+                if node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PrefixUnaryExpressionSyntax addressOf &&
+                    addressOf.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) && this.BindsTo(
+                    addressOf.Operand,
+                    symbol
+                ) {
+                    return true
+                }
             }
             return false
         }

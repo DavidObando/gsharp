@@ -449,6 +449,28 @@ public class Demo
     }
 
     @Fact
+    func ClosureAssignedLocal_ReadOfTheVariableAFreshRefAliasNames_IsAsserted() {
+        let printed = Translate(`
+public class Demo
+{
+    static void Touch() { }
+
+    public static int Run()
+    {
+        string? current = "x";
+        ref string? alias = ref current;
+        if (current != null)
+        {
+            Touch();
+            return current.Length;
+        }
+        return alias == null ? 0 : 1;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
     func ClosureAssignedLocal_ReadWithoutACallBetween_StaysBare() {
         let printed = Translate(`
 public class Demo
