@@ -235,7 +235,8 @@ open class Adr0208NarrowingCorpusTests {
                 "r3_5482_two_level_ref_alias_chain",
                 "r4_5482_ref_alias_without_a_call_keeps_the_fact",
                 "r5_5482_filter_runs_a_closure_that_replaces_the_aliased_callable",
-                "r6_5482_plain_alias_keeps_the_fact_across_a_call"
+                "r6_5482_plain_alias_keeps_the_fact_across_a_call",
+                "r7_5482_condition_call_replaces_the_aliased_callable_inside_the_body"
             },
             names
         )
@@ -2145,6 +2146,36 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", "", "R15"}
+            yield[]object{"r7_5482_condition_call_replaces_the_aliased_callable_inside_the_body", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    if Check(h) {
+        if x == nil { return 0 }
+        alias()
+        return x.Value
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@26:18", "reject", "", "R15"}
             yield[]object{"r3_5482_two_level_ref_alias_chain", `import System
 
 class C {

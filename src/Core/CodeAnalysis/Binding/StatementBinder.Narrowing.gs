@@ -1752,7 +1752,7 @@ internal partial class StatementBinder {
     }
 
     // ADR-0208 R15 (#5482): whether a closure of the function may assign [`alias`](paramref) or the plain variable
-    // that a `ref` local names. The exit state of a statement asks this about the storage an alias names, like
+    // that a `ref` local names. The exit state of a statement and the header of a construct ask this about the storage an alias names, like
     // MayBeMutatedByEscapedClosure does for a narrowing fact, not about the alias's own name.
     private func NamesClosureAssignedStorage(alias VariableSymbol) bool {
         if binderCtx.HasNoClosureAssignedNames() {
@@ -1788,7 +1788,7 @@ internal partial class StatementBinder {
         }
         RemoveAssignedAliases(externalCallableAliases, collector)
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            externalCallableAliases.RemoveWhere(binderCtx.MayBeAssignedByClosure)
+            externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
         }
         before.ExceptWith(externalCallableAliases)
         return before
