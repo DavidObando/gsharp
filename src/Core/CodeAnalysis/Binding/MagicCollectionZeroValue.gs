@@ -165,19 +165,17 @@ internal shared class MagicCollectionZeroValue {
         syntax SyntaxNode?,
         owner StructSymbol,
         parameter ParameterSymbol,
-        parameterType TypeSymbol? = nil
-    ) BoundExpression? -> TrySynthesizePrimaryArgument(syntax, owner, parameter, out _, parameterType)
-
-    internal func TrySynthesizePrimaryArgument(
-        syntax SyntaxNode?,
-        owner StructSymbol,
-        parameter ParameterSymbol,
         out missingDeclarationShape bool,
         parameterType TypeSymbol? = nil,
         constructor ConstructorInfo? = nil
     ) BoundExpression? {
         missingDeclarationShape = false
         let type = parameterType ?? parameter.Type
+        if type.ReferenceNullability == ReferenceNullabilityKind.Nullable || NullableLifting.IsAnyValueTypeNullable(
+            type as NullableTypeSymbol
+        ) {
+            return nil
+        }
         if owner.ClrType is {} imported {
             let index = owner.PrimaryConstructorParameters.IndexOf(parameter)
             let field = owner.GetDataConstructionPrimaryField(imported, index)
@@ -324,7 +322,8 @@ internal shared class MagicCollectionZeroValue {
             return nil
         }
         let signatureType = fieldType ?? ClrNullability.GetFieldTypeSymbol(fieldInfo)
-        if signatureType.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+        if signatureType.ReferenceNullability == ReferenceNullabilityKind.Nullable ||
+            NullableLifting.IsAnyValueTypeNullable(signatureType as NullableTypeSymbol) {
             missingDeclarationShape = false
             return nil
         }
@@ -343,9 +342,9 @@ internal shared class MagicCollectionZeroValue {
             let zero = TrySynthesizeEmptyInstanceForImportedStruct(
                 fieldType?.ClrType ?? fieldInfo.FieldType,
                 out missingDeclarationShape,
-                receiverType: fieldType
+                receiverType: fieldType,
+                requiresDeclarationShape: true
             )
-            missingDeclarationShape = missingDeclarationShape || zero == nil
             return zero
         }
         var type TypeSymbol
@@ -423,10 +422,15 @@ internal shared class MagicCollectionZeroValue {
         clrType Type?,
         out missingDeclarationShape bool,
         syntax SyntaxNode? = nil,
-        receiverType TypeSymbol? = nil
+        receiverType TypeSymbol? = nil,
+        requiresDeclarationShape bool = false
     ) BoundExpression? {
         missingDeclarationShape = false
-        if clrType == nil || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds) {
+        if clrType == nil || !clrType.IsValueType || !ImportedAssemblySemantics.TryGetMagicCollectionFields(
+            clrType,
+            out var magicFieldKinds
+        ) {
+            missingDeclarationShape = requiresDeclarationShape
             return nil
         }
         let ownerType = if receiverType != nil {
@@ -458,6 +462,10 @@ internal shared class MagicCollectionZeroValue {
                 )
             )
             reflectedFields[field.Name] = field
+        }
+        if requiresDeclarationShape && magicFieldKinds!!.Keys.Any((name string) -> !reflectedFields.ContainsKey(name)) {
+            missingDeclarationShape = true
+            return nil
         }
         let nestedStruct = StructSymbol(
             name: clrType.Name,

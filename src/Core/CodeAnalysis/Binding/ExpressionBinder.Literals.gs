@@ -2760,7 +2760,7 @@ internal partial class ExpressionBinder {
                     parameterType,
                     constructor
                 )
-                if missingDeclarationShape && parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
                     return BoundErrorExpression(syntax)
                 }
@@ -2943,19 +2943,22 @@ internal partial class ExpressionBinder {
             }
             for var i = 0; i < parameters.Length; i++ {
                 let type = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor!!, i)
-                arguments.Add(
-                    if supplied.TryGetValue(parameters[i].Name, out var value) {
-                        value
-                    } else {
-                        MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
-                            syntax,
-                            aggregate!!,
-                            parameters[i],
-                            type
-                        ) ??
-                            BoundDefaultExpression(syntax, type)
-                    }
+                if supplied.TryGetValue(parameters[i].Name, out var value) {
+                    arguments.Add(value)
+                    continue
+                }
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    syntax,
+                    aggregate!!,
+                    parameters[i],
+                    out var missingDeclarationShape,
+                    type
                 )
+                if missingDeclarationShape {
+                    Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate!!.Name)
+                    return BoundErrorExpression(syntax)
+                }
+                arguments.Add(zero ?? BoundDefaultExpression(syntax, type))
             }
         }
         let construction BoundExpression = if constructor != nil {

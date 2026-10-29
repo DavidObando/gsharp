@@ -15,6 +15,179 @@ import Xunit
 import GSharp.Compiler.Tests
 
 class Issue4675RecordLiteralDefaultsEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RequiredImportedStructPrimary_RejectsFailedRecipeBeforeDefault(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "RequiredPrimary5425.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|0|")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554434|Bad:rect1,Good:slice")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|class|1|Value:67108867")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554435|Value:struct")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554436|class|1|Value:67108869")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554436|Value:struct")]
+namespace RequiredPrimary5425;
+public struct Inner {
+    public int[,] Bad;
+    public int[] Good;
+}
+public class Holder<T> {
+    public Inner Value;
+    public int Tag;
+    public Holder(Inner Value = default) {
+        this.Value = Value;
+        if (this.Value.Good is null) {
+            this.Value.Bad = new int[0,0];
+            this.Value.Good = new int[0];
+        }
+    }
+}
+public class Optional<T> {
+    public Inner? Value;
+    public int Tag;
+    public Optional(Inner? Value = null) { this.Value = Value; }
+}`, "RequiredPrimary5425", reference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(reference)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        for (source, span) in[](string, string){
+            ("data struct Local(Value Inner)\nlet value = Local{}", "(3,13,3,18)"),
+            ("data class Local(Value Inner)\nlet value = Local{}", "(3,13,3,18)"),
+            ("class Local(Value Inner)\nlet value = Local{}", "(3,13,3,18)"),
+            ("data struct Local[T](Value T)\nlet value = Local[Inner]{}", "(3,13,3,18)"),
+            ("data class Local[T](Value T)\nlet value = Local[Inner]{}", "(3,13,3,18)"),
+            ("let value = Holder[int32]{}", "(2,13,2,19)"),
+            ("data struct Source(Tag int32)\nlet value = Holder[int32]{...Source{Tag: 7}}", "(3,13,3,19)")
+        } {
+            let rejectedReference = System.IO.Path.Combine(fixture.Directory, "RequiredPrimary.ref.dll")
+            let pdb = System.IO.Path.Combine(fixture.Directory, "RequiredPrimary.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import RequiredPrimary5425\n" + source,
+                "RequiredPrimary",
+                true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference,
+                "/debug:portable",
+                "/pdb:" + pdb
+            )
+            Assert.Equal(1, code)
+            Assert.True(
+                output.Contains("RequiredPrimary.gs" + span + ": error GS0267", StringComparison.Ordinal),
+                output
+            )
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "RequiredPrimary.dll")))
+            Assert.False(System.IO.File.Exists(rejectedReference))
+            Assert.False(System.IO.File.Exists(pdb))
+        }
+        let controls = fixture.Compile(`import RequiredPrimary5425
+data struct Local(Value Inner)
+data class Class(Value Inner)
+data struct Generic[T](Value T)
+data struct Nullable(Value Inner?)
+data class NullableClass(Value Inner?)
+data struct Source(Tag int32)
+let input = Inner{Bad: [0,0]int32, Good: []int32{}}
+System.Console.WriteLine(Local{Value: input}.Value.Good.Length)
+System.Console.WriteLine(Class{Value: input}.Value.Good.Length)
+System.Console.WriteLine(Generic[Inner]{Value: input}.Value.Good.Length)
+System.Console.WriteLine(Holder[int32]{Value: input}.Value.Good.Length)
+System.Console.WriteLine(Holder[int32]{...Source{Tag: 7}, Value: input}.Value.Good.Length)
+System.Console.WriteLine(Holder[int32]().Value.Good.Length)
+System.Console.WriteLine(System.Object.ReferenceEquals(Nullable{}.Value, nil))
+System.Console.WriteLine(System.Object.ReferenceEquals(NullableClass{}.Value, nil))
+System.Console.WriteLine(System.Object.ReferenceEquals(Optional[int32]{}.Value, nil))
+System.Console.WriteLine(System.Object.ReferenceEquals(Optional[int32]{...Source{Tag: 7}}.Value, nil))
+`, "RequiredPrimaryControls", true, "/r:" + selected)
+        VerifyPrimaryShapeIl(controls, []string{contract})
+        Assert.Equal("0\n0\n0\n0\n0\n0\nTrue\nTrue\nTrue\nTrue\n", fixture.Run(controls))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedStructMarker_NullableOnlyClosureKeepsLegitimateDefault(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        for kind in[]string{"rect1", "slice"} {
+            let reference = System.IO.Path.Combine(fixture.Directory, "NullableClosure5425.ref.dll")
+            let contract = fixture.CompileCSharpWithReference((`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|0|")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554434|Items:KIND")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|struct|1|Value:67108866")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554435|Value:struct")]
+namespace NullableClosure5425;
+public struct Inner { public int[]? Items; }
+public struct Outer<T> {
+    public Inner Value;
+    public Outer(Inner Value) { this.Value = Value; }
+}
+`).Replace("KIND", kind, StringComparison.Ordinal), "NullableClosure5425", reference)
+            VerifyPrimaryShapeIl(contract)
+            VerifyPrimaryShapeIl(reference)
+            let selected = if referenceAssembly {
+                reference
+            } else {
+                contract
+            }
+            let controls = fixture.Compile(`import NullableClosure5425
+System.Console.WriteLine(System.Object.ReferenceEquals(Inner{}.Items, nil))
+System.Console.WriteLine(System.Object.ReferenceEquals(Outer[int32]{}.Value.Items, nil))
+System.Console.WriteLine(System.Object.ReferenceEquals(Outer[int32]{Value: Inner{}}.Value.Items, nil))
+System.Console.WriteLine(System.Object.ReferenceEquals(Outer[int32](Inner{}).Value.Items, nil))
+`, "NullableClosure", true, "/r:" + selected)
+            VerifyPrimaryShapeIl(controls, []string{contract})
+            Assert.Equal("True\nTrue\nTrue\nTrue\n", fixture.Run(controls))
+        }
+        for carrier in[]string{"struct", "class"} {
+            let reference = System.IO.Path.Combine(fixture.Directory, "RequiredNestedShape5425.ref.dll")
+            let contract = fixture.CompileCSharpWithReference((`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|CARRIER|0|")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|struct|1|Value:67108866")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554435|Value:struct")]
+namespace RequiredNestedShape5425;
+public CARRIER Inner {
+    public int[] Items;
+    public Inner() { Items = new int[0]; }
+}
+public struct Outer<T> {
+    public Inner Value;
+    public Outer(Inner Value) { this.Value = Value; }
+}
+`).Replace("CARRIER", carrier, StringComparison.Ordinal), "RequiredNestedShape5425", reference)
+            VerifyPrimaryShapeIl(contract)
+            VerifyPrimaryShapeIl(reference)
+            let selected = if referenceAssembly {
+                reference
+            } else {
+                contract
+            }
+            let rejectedReference = System.IO.Path.Combine(fixture.Directory, "RequiredNestedShape.ref.dll")
+            let pdb = System.IO.Path.Combine(fixture.Directory, "RequiredNestedShape.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import RequiredNestedShape5425\nlet value = Outer[int32]{}",
+                "RequiredNestedShape",
+                true,
+                "/r:" + selected,
+                "/refout:" + rejectedReference,
+                "/debug:portable",
+                "/pdb:" + pdb
+            )
+            Assert.Equal(1, code)
+            Assert.Contains("RequiredNestedShape.gs(2,13,2,18): error GS0267", output)
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "RequiredNestedShape.dll")))
+            Assert.False(System.IO.File.Exists(rejectedReference))
+            Assert.False(System.IO.File.Exists(pdb))
+        }
+    }
+
     private func VerifyPrimaryShapeIl(assemblyPath string, additionalReferences[]string? = nil) {
         Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
         IlVerifier.Verify(
