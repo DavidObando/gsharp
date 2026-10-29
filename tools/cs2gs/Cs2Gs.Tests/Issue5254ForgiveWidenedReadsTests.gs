@@ -34,6 +34,10 @@ import Xunit
 /// | 5 | reads inside a lambda and a local function | `return p!!` inside both |
 /// | 6 | flow state maybe-null, nullable sink | no `!!` (Enabled only: Annotations has no flow state) |
 /// | 7 | parameter never widened | unchanged: no `!!`, parameter stays non-null |
+/// | 8 | `out T x` local read in a local function | `x!!` |
+/// | 9 | assignment into a widened `out` local | `w = p`, no `!!` (the sink accepts null) |
+/// | 10 | argument whose parameter type G# infers | `Id(p)`, no `!!` |
+/// | 11 | argument to a non-null parameter, annotations context | `Use(p!!)` |
 open class Issue5254ForgiveWidenedReadsTests {
     @Fact
     func Row1_ParameterReassignedFromNullableCall_IsForgivenAtReturn() {
@@ -167,6 +171,61 @@ public static class K {
             Assert.Contains("func Ident(p C) C", printed, StringComparison.Ordinal)
             Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
         }
+    }
+
+    @Fact
+    func Row8_CapturedTypedOutLocal_IsForgiven() {
+        for annotationsOnly in[](bool){true, false} {
+            let printed = Translate(annotationsOnly, `public class C { public int N; }
+public static class K {
+  public static bool TryGet(out C c) { c = null; return false; }
+  public static C Read() {
+    if (!TryGet(out C x)) { x = new C(); }
+    C Local() => x;
+    return Local();
+  }
+}`)
+            Assert.Contains("out c C?", printed, StringComparison.Ordinal)
+            Assert.Equal(1, Count(printed, "x!!"))
+            Assert.DoesNotContain("!!!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Fact
+    func Row9_AssignmentIntoWidenedOutLocal_KeepsTheWidenedValue() {
+        for annotationsOnly in[](bool){true, false} {
+            let printed = Translate(annotationsOnly, `public class C { public int N; }
+public static class K {
+  public static bool TryGet(out C c) { c = null; return false; }
+  public static C? Copy(C p) { p = null; TryGet(out C w); w = p; return w; }
+}`)
+            Assert.Contains("w = p\n", printed.Replace("\r\n", "\n"), StringComparison.Ordinal)
+            Assert.DoesNotContain("p!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Fact
+    func Row10_InferredGenericArgument_KeepsTheWidenedValue() {
+        for annotationsOnly in[](bool){true, false} {
+            let printed = Translate(annotationsOnly, `public class C { public int N; }
+public static class K {
+  static T Id<T>(T x) => x;
+  public static C? Pass(C p) { p = null; return Id(p); }
+}`)
+            Assert.Contains("Id(p)", printed, StringComparison.Ordinal)
+            Assert.DoesNotContain("p!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Fact
+    func Row11_ArgumentToNonNullParameter_IsForgivenInAnnotationsContext() {
+        let printed = Translate(true, `public class C { public int N; }
+public static class K {
+  static C? Maybe() => null;
+  static int Use(C x) => x.N;
+  public static int Pass(C p) { p = Maybe(); if (p == null) { p = new C(); } return Use(p); }
+}`)
+        Assert.Equal(1, Count(printed, "Use(p!!)"))
     }
 
     shared {

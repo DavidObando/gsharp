@@ -2883,7 +2883,15 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             let flowNarrowedAnnotatedValue = this.IsFlowNarrowedAnnotatedReference(value)
-            let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(value) || flowNarrowedAnnotatedValue
+            // Issue #5254: control reached here, so the target stays non-null.
+            // A parameter whose type G# infers from this value is no such sink.
+            let inferredGenericSink = targetSymbol is IParameterSymbol sinkParameter &&
+                IsInferredGenericParameterTarget(sinkParameter, value)
+            let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(
+                value,
+                widenedSinkNeedsNonNull: !inferredGenericSink
+            ) ||
+                flowNarrowedAnnotatedValue
             // Issue #3676: promotion and forgiveness must stay symmetric. In a
             // nullable-ENABLED compilation the ONLY declaration this translator
             // repaints `T?` is a generated-code one with direct null evidence,
@@ -3446,7 +3454,7 @@ partial class CSharpToGSharpTranslator {
                 !this.IsImportedObliviousNullableMember(symbol) && !this.LocalInitializedFromImportedObliviousNullable(
                 symbol
             ) &&
-                (symbol == nil || !this.ShouldPromoteToNullableReference(symbol))
+                (symbol == nil || !this.IsTranslatorWidenedDeclaration(symbol))
         }
 
         private func TryGetInferredLocalStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
@@ -5033,20 +5041,6 @@ partial class CSharpToGSharpTranslator {
             return this.TargetWillRemainNonNullableReference(parameter.Type, parameter)
         }
 
-        /// Issue #5254: true when [`symbol`](paramref), read at [`recv`](paramref), is a widened
-        /// declaration (see (cref:IsTranslatorWidenedDeclaration)) and the sink of the read stays
-        /// non-null in G#.
-        private func WidenedReadFeedsNonNullSink(
-            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            symbol ISymbol?
-        ) bool {
-            if !this.IsTranslatorWidenedDeclaration(symbol) {
-                return false
-            }
-            let (targetType, targetSymbol) = this.FindContextualValueTarget(recv)
-            return this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
-        }
-
         /// Determines whether [`recv`](paramref) needs a G# `!!`
         /// assertion because it is either a declared-nullable reference narrowed
         /// non-null by flow or an ordinary dereference receiver whose declaration
@@ -5054,7 +5048,8 @@ partial class CSharpToGSharpTranslator {
         /// (cref:TranslateReceiverWithNullForgiveness)).
         private func ReceiverNeedsNullForgiveness(
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            isDereferenceReceiver bool = false
+            isDereferenceReceiver bool = false,
+            widenedSinkNeedsNonNull bool = false
         ) bool {
             if this.GSharpExpressionIsStaticallyNonNull(recv) || this.IsActivePatternBinding(recv) ||
                 this.IsGSharpFlowNarrowedLocal(recv) || this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv) {
@@ -5305,9 +5300,11 @@ partial class CSharpToGSharpTranslator {
             // declares non-null and cs2gs widened only to bind a null write
             // (see (cref:IsTranslatorWidenedDeclaration)) is therefore read as
             // non-null at every read whose sink needs a non-null value, not only
-            // at a dereference. A sink that accepts nil keeps the widened value.
+            // at a dereference. The caller that knows the sink says so with
+            // `widenedSinkNeedsNonNull`; a sink that accepts nil, or that G#
+            // infers from the value, keeps the widened value.
             let annotationsWithoutFlowAnalysis = (
-                isDereferenceReceiver || this.WidenedReadFeedsNonNullSink(recv, symbol)
+                isDereferenceReceiver || (widenedSinkNeedsNonNull && this.IsTranslatorWidenedDeclaration(symbol))
             ) &&
                 flowState == Microsoft
                 .CodeAnalysis

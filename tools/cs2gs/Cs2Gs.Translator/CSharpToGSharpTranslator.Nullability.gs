@@ -1508,7 +1508,7 @@ partial class CSharpToGSharpTranslator {
             let targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
             ) == true
-            return !(targetDeclaredInThisCompilation && this.ShouldPromoteToNullableReference(targetSymbol))
+            return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
         }
 
         // Issue #4843: whether <paramref name="parameter"/> is declared as one of
