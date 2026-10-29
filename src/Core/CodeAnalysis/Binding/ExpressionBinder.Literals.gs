@@ -1866,12 +1866,6 @@ internal partial class ExpressionBinder {
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a
         // use of the named type.
         reportObsoleteUseIfApplicable(syntax.TypeIdentifier.Location, structSymbol, structSymbol.Name)
-        if structSymbol.IsClass &&
-            structSymbol.ClrType is {} importedClass &&
-            ImportedAssemblySemantics
-            .TryGetTypeSemantics(importedClass, out _) {
-            return BindImportedTypeLiteralExpression(syntax, importedClass, resolveTypeOnly: resolveTypeOnly)
-        }
         // ADR-0195 / issue #4674: an `abstract` or `shared` class cannot be
         // constructed, whichever way it is spelled — `Foo()` reports GS0386
         // from the constructor-call path, and the composite literal `Foo{}`
@@ -2004,6 +1998,14 @@ internal partial class ExpressionBinder {
                 enclosingTypeArguments,
                 $scope.References!!.MapClrTypeToReferences
             )
+        }
+        // Issue #5425: an imported data class uses the CLR constructor path.
+        // Validate type arguments above first, so that every spelling gets the same arity check.
+        if structSymbol!!.IsClass &&
+            structSymbol!!.ClrType is {} importedClass &&
+            ImportedAssemblySemantics
+            .TryGetTypeSemantics(importedClass, out _) {
+            return BindImportedTypeLiteralExpression(syntax, importedClass, resolveTypeOnly: resolveTypeOnly)
         }
         if resolveTypeOnly {
             return BoundDefaultExpression(syntax, structSymbol!!)

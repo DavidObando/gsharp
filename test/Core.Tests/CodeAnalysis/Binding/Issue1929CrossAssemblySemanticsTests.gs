@@ -320,7 +320,89 @@ public struct WrongOwner {
         )
     }
 
+    /// Issue #5425: an alias to an imported nongeneric data class gets the literal arity check.
+    /// The check applies before the imported constructor path, for literals and spreads.
+    /// The test reads global-scope diagnostics only.
+    /// A separate defect makes program binding fail for these aliases.
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataClassAlias_RejectsTypeArgumentsBeforeConstructorPath(referenceAssembly bool) {
+        let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5425AliasArity", referenceAssembly.ToString())
+        Directory.CreateDirectory(outputDir)
+        let implementationPath = Path.Combine(outputDir, "AliasArity5425.dll")
+        let referencePath = Path.Combine(outputDir, "AliasArity5425.ref.dll")
+        let coreLibrary = typeof(object).Assembly.Location
+        let references = []string{
+            coreLibrary,
+            Path.Combine(Path.GetDirectoryName(coreLibrary)!!, "System.Runtime.dll")
+        }.Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+        let library = CSharpCompilation.Create(
+            "AliasArity5425",
+            []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Value:67108865")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|class|1|Value:67108866")]
+namespace AliasArity5425;
+public class Box {
+    public int Value;
+    public Box(int Value) { this.Value = Value; }
+}
+public class Generic<T> {
+    public T Value;
+    public Generic(T Value) { this.Value = Value; }
+}`)},
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        {
+            using let implementation = File.Create(implementationPath)
+            using let referenceStream = File.Create(referencePath)
+            let result = library.Emit(
+                implementation,
+                metadataPEStream: referenceStream,
+                options: Microsoft.CodeAnalysis.Emit.EmitOptions(includePrivateMembers: false)
+            )
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+        }
+        let selected = if referenceAssembly {
+            referencePath
+        } else {
+            implementationPath
+        }
+        let prefix = "package Demo\nimport AliasArity5425\ntype A = Box\ntype B = A\ndata struct S(Value int32)\n"
+        for statement in[]string{
+            "let value = A[int32]{Value: 7}",
+            "let value = B[int32]{Value: 7}",
+            "let value = A[int32, string]{Value: 7}",
+            "let value = A[int32]{...S{Value: 7}}"
+        } {
+            let diagnostics = BindGlobalScope(selected, prefix + statement)
+            let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+            Assert.Equal("GS0148", diagnostic.Id)
+            let typeArguments = statement.Substring(13, statement.IndexOf('{') - 13)
+            Assert.Equal(prefix.Length + 13, diagnostic.Location.Span.Start)
+            Assert.Equal(typeArguments, diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        }
+        let controls = BindGlobalScope(selected, prefix + `let a = A{Value: 1}
+let b = B{Value: 2}
+let c = Box{Value: 3}
+let d = A{...S{Value: 4}}
+let e = Generic[int32]{Value: 5}
+let f = Generic[int32]{...S{Value: 6}}
+let g int32 = a.Value + b.Value + c.Value + d.Value + e.Value + f.Value`)
+        Assert.Empty(controls.Where((d Diagnostic) -> d.IsError))
+    }
+
     shared {
+        private func BindGlobalScope(reference string, source string)[]Diagnostic {
+            using let resolver = ReferenceResolver.WithReferences([]string{reference})
+            resolver.CurrentAssemblyName = "AliasArity5425.Consumer"
+            let tree = SyntaxTree.Parse(SourceText.From(source))
+            let compilation = Compilation(resolver, tree)
+            return tree.Diagnostics.Concat(compilation.GlobalScope.Diagnostics).ToArray()
+        }
+
         private func EmitLibraryAssembly(libraryPath string) {
             let library = Compilation(SyntaxTree.Parse(SourceText.From(`package Demo
 
