@@ -961,15 +961,24 @@ Details per row:
   so the loop form of the probe (ADR-0213 q3) closes with it. The syntactic
   exemption of open question 7 stays deferred to #5196. Issue #5483 completes the
   construction classification: `StatementBinder.ConstructionRunsUserCode` is
-  the one definition that R11 and R15 read. A class whose declaration has a
+  the one definition that R11 and R15 read for construction. A class whose declaration has a
   `shared { init { ... } }` block, or whose base class has one, runs user code
   at its first construction (the `.cctor` is not `beforefieldinit`). A value
   type literal is `initobj` and does not run it, and a type with only `shared`
-  field initializers is `beforefieldinit`, so neither counts. The check reads
+  field initializers is `beforefieldinit`, so neither counts at construction. The check reads
   the declaration, not the bound block, so the answer does not depend on
-  which body binds first. Corpus rows r1 to r10 (issue #5483). Tests: the probe
-  q3 with a mutant witness (the predicate returns false), and a root that
-  no closure assigns keeps its fact.
+  which body binds first. Corpus rows r1 to r10 (issue #5483). Issue #5504
+  completes it for the other trigger, a static member access:
+  `StatementBinder.TypeInitializationRunsUserCode(type, atStaticMemberAccess)` is
+  the one definition of whether a type initializer runs user code, and
+  `StaticMemberAccessRunsUserCode` applies it to a static field or property
+  read or write and to a static event subscription. The type that counts is the type that declares the member (an
+  inherited member triggers the base, a hiding member triggers the hiding type). A `shared { init }` block of a
+  class or of a value type counts. A constant, an enum member and a static method call (already a call) need no
+  rule. Known limitation (#5520): the initializer of a `shared` field of a `beforefieldinit` type also runs at
+  the first static field access (probe s12 throws `NullReferenceException`), but counting it adds `GS0158` and
+  `GS0154` in `src/Core` (a static read kills member-path and by-reference facts), so it keeps the fact for now.
+  Corpus rows s01 to s27 (issue #5504).
   The external-callable alias set follows the same rule (#5482): a call that
   `MayRunEscapedClosure` drops an alias when a closure can assign the alias
   or the plain variable in its `ref` chain, not only when the alias's own
