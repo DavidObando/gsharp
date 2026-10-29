@@ -48,6 +48,7 @@ import Xunit
 /// | 19 | `null!` passed from a sibling project bound through its EMITTED reference assembly | `parent Frame` | `parent Frame?` |
 /// | 20 | two unrelated projects declare the same `Demo.Frame(Header, Frame)`; only one passes `null!` | both widen | only the calling project's declaration widens |
 /// | 21 | `static Node Identity(Node node) => node;` + `Identity(null!)` | `node Node` and `Node` (a `node!!` return bridge throws) | `node Node?` and `Node?` |
+/// | 22 | `Run(Node n, Node value) => n.Keep(value)` (extension) + `Run(n, null!)` | `Keep`'s `value` stays `Node`; `value!!` throws | `Keep`'s `value Node?` |
 /// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
@@ -481,6 +482,28 @@ namespace Demo
 }`))
         Assert.Contains("func Identity(node Node?) Node?", printed[0])
         Assert.DoesNotContain("node!!", printed[0])
+    }
+
+    /// Row 22: a reduced extension call maps its parameters back to the declaration.
+    @Fact
+    func ForwardedIntoReducedExtensionParameter_PromotesTheExtensionParameter() {
+        let printed = TranslateEnabled(("Relay.cs", `
+namespace Demo
+{
+    public class Node { }
+    public static class Ext
+    {
+        public static void Keep(this Node receiver, Node value) { }
+    }
+    public static class Relay
+    {
+        public static void Run(Node n, Node value) => n.Keep(value);
+        public static void Go(Node n) => Run(n, null!);
+    }
+}`))
+        Assert.Contains("value Node?", printed[0])
+        Assert.DoesNotContain("value!!", printed[0])
+        Assert.DoesNotContain("Keep(n, value)!!", printed[0])
     }
 
     /// Row 8: the null argument lives in another project of the run.

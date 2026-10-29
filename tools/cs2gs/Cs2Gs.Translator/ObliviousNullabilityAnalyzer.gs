@@ -1984,11 +1984,26 @@ internal shared class ObliviousNullabilityAnalyzer {
     // substituted `string` hides that the declaration is a bare `T` that can
     // never be repainted `T?`; every eligibility test reads the original.
     private func OriginalNullArgumentDeclaration(symbol ISymbol?) ISymbol? -> switch symbol {
-        case parameter is IParameterSymbol: parameter.OriginalDefinition
+        case parameter is IParameterSymbol: ReducedExtensionParameter(parameter).OriginalDefinition
         case method is IMethodSymbol: (method.ReducedFrom ?? method).OriginalDefinition
         case property is IPropertySymbol: property.OriginalDefinition
         case field is IFieldSymbol: field.OriginalDefinition
         default: default(ISymbol?)
+    }
+
+    // A call `receiver.Keep(value)` binds the REDUCED extension method, whose
+    // parameter list drops the `this` parameter: its ordinal 0 is the
+    // unreduced method's ordinal 1. The declaration (and its key) is the
+    // unreduced one.
+    private func ReducedExtensionParameter(parameter IParameterSymbol) IParameterSymbol {
+        if parameter.ContainingSymbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
+            parameter.Ordinal +
+            1 < unreduced
+            .Parameters
+            .Length {
+            return unreduced.Parameters[parameter.Ordinal + 1]
+        }
+        return parameter
     }
 
     // Issue #5508: whether `symbol` (an ORIGINAL declaration) may be repainted
