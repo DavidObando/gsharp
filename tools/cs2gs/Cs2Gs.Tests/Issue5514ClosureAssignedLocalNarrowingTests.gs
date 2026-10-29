@@ -421,6 +421,34 @@ public class Demo
     }
 
     @Fact
+    func ClosureAssignedLocal_ReadInsideACollectionInitializer_IsAsserted() {
+        let printed = Translate(`
+using System.Collections;
+public class Table : IEnumerable
+{
+    public void Add(int a, string b, bool c) { }
+
+    public IEnumerator GetEnumerator() => null!;
+}
+public class Demo
+{
+    public static int Run()
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var t = new Table { { 1, current, true } };
+            return 1;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.True(printed.Contains("current!!"), printed)
+    }
+
+    @Fact
     func ClosureAssignedLocal_ReadWithoutACallBetween_StaysBare() {
         let printed = Translate(`
 public class Demo

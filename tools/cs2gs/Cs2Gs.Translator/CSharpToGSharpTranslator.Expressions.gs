@@ -3195,10 +3195,24 @@ partial class CSharpToGSharpTranslator {
             translated GExpression?,
             targetType GTypeReference?
         ) GExpression? {
+            if targetType != nil && targetType.IsNullable == false && this.IsFlowNarrowedInCSharpOnly(
+                value,
+                translated
+            ) {
+                return EnsureNonNullAssertion(translated)
+            }
+            return translated
+        }
+
+        /// A read of a `T?` variable that C# flow analysis proves non-null but that gsc does not
+        /// narrow (so the emitted read is still `T?`). Shared by every site that stores or passes
+        /// the value at a non-null target.
+        private func IsFlowNarrowedInCSharpOnly(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translated GExpression?
+        ) bool {
             let declaredValueType ITypeSymbol? = this.GetDeclaredValueType(value)
-            if !this.GSharpExpressionIsStaticallyNonNull(value, translated) &&
-                targetType != nil &&
-                targetType.IsNullable == false &&
+            return !this.GSharpExpressionIsStaticallyNonNull(value, translated) &&
                 declaredValueType?.IsReferenceType == true &&
                 declaredValueType!!.NullableAnnotation == Microsoft
                 .CodeAnalysis
@@ -3211,10 +3225,7 @@ partial class CSharpToGSharpTranslator {
                 .FlowState == Microsoft
                 .CodeAnalysis
                 .NullableFlowState
-                .NotNull {
-                return EnsureNonNullAssertion(translated)
-            }
-            return translated
+                .NotNull
         }
 
         private func IsNullableForEachBindingUse(
@@ -4067,6 +4078,26 @@ partial class CSharpToGSharpTranslator {
                     RunsSourceCode(node)
             ) {
                 return true
+            }
+            // A construction runs before the initializer that holds the read (`new T { { current } }`).
+            for var enclosing Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = use.Parent;
+                enclosing != nil &&
+                enclosing != $scope;
+                enclosing = enclosing!!
+                .Parent {
+                if enclosing is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseObjectCreationExpressionSyntax creation &&
+                    creation.Initializer != nil &&
+                    creation.Initializer!!
+                    .Span
+                    .Contains(use.Span) && enclosing.SpanStart >= narrowingGuard.Span.End {
+                    return true
+                }
             }
             for var node Microsoft
                 .CodeAnalysis
