@@ -2181,14 +2181,24 @@ class Conversion {
                 !IsReferenceLikeTarget(target) {
                 return false
             }
-            // Symbolic imported owners must prove nominal inheritance, not a conversion that constructs a different reference.
+            let source = source.StripToBareShape()
+            let target = target.StripToBareShape()
+            // Prove nominal inheritance separately from implicit conversions that construct or select another reference.
+            if source is StructSymbol sourceClass && sourceClass.IsClass {
+                for c in GetStructHierarchy(sourceClass) {
+                    if c.ImportedBaseType is {} importedBase &&
+                        IsRepresentationPreservingImplicit(importedBase, target) {
+                        return true
+                    }
+                }
+            }
             if source is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
                 return TryClassifyConstructedImportedReferenceConversion(source, target)
             }
             return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {
                 ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
             } else {
-                IsImplicitReferenceVariantSlot(source, target)
+                false
             }
         }
 
@@ -2789,7 +2799,7 @@ class Conversion {
             return true
         }
 
-        /// Extracts the open CLR definition and semantic arguments of an imported generic, aggregate, or sequence alias.
+        /// Extracts the open CLR definition and semantic arguments of an imported generic, aggregate, or native generic alias.
         /// Reuses (cref:TryGetConstructedGenericArguments) to preserve annotation-backed contracts and CLR argument slots.
         private func TryGetConstructedGenericShape(
             symbol TypeSymbol?,
@@ -2807,6 +2817,11 @@ class Conversion {
                 .TryGetEnumerableInterfaceShape(symbol!!, out openDefinition, out var elementType) {
                 typeArguments = ImmutableArray.Create(elementType)
                 return openDefinition != nil
+            }
+            if shape is ChannelTypeSymbol channel {
+                openDefinition = ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
+                typeArguments = ImmutableArray.Create(channel.ElementType)
+                return true
             }
             if shape is not ImportedTypeSymbol && shape is not StructSymbol{ClrType: not nil} {
                 openDefinition = nil
@@ -2973,7 +2988,7 @@ class Conversion {
             // the variant interface, so only classification was missing. Non-
             // interface targets keep the value-type exclusion.
             // Closed CLR signatures have no symbolic owner vector to map.
-            // Project their real interface closure; symbolic sources must
+            // Project their real hierarchy; symbolic sources must
             // keep the owner-aware path and never fall back to erased probes.
             var sourceArguments ImmutableArray[TypeSymbol]
             if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
@@ -2989,18 +3004,18 @@ class Conversion {
                             out sourceArguments
                         )
                     } else {
-                        !TryProjectClrInterfaceArguments(importedSource, targetOpen, out sourceArguments)
+                        !TryProjectClrHierarchyArguments(importedSource, targetOpen, out sourceArguments)
                     }
                 ) {
                     return false
                 }
             } else if from is not ImportedTypeSymbol importedSource ||
-                !TryProjectClrInterfaceArguments(importedSource, targetOpen, out sourceArguments) {
+                !TryProjectClrHierarchyArguments(importedSource, targetOpen, out sourceArguments) {
                 // Issue #3501: a NON-generic imported class (e.g. Roslyn's
                 // `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`) has no
-                // symbolic type arguments to map, but its CLR interface closure
+                // symbolic type arguments to map, but its CLR hierarchy
                 // still names the target's open definition; project that closed
-                // interface's CLR arguments so the variance loop below can accept
+                // base or interface's CLR arguments so the variance loop below can accept
                 // `SymbolEqualityComparer -> IEqualityComparer[IMethodSymbol]`
                 // exactly as C# does.
                 return false
@@ -3070,13 +3085,13 @@ class Conversion {
 
         /// Issue #3501: projects the CLR generic arguments a (possibly non-generic)
         /// imported reference type supplies for [`targetOpenDefinition`](paramref)
-        /// by walking its CLR interface closure. This is the CLR-level counterpart
+        /// by walking its CLR bases and interfaces. This is the CLR-level counterpart
         /// to (cref:MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy)
         /// for sources with no symbolic type-argument vector (e.g. Roslyn's
         /// non-generic `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`).
         /// Nullable annotations are erased at this level, which only widens the
         /// source side — exactly the C#/CLR variance behaviour.
-        private func TryProjectClrInterfaceArguments(
+        private func TryProjectClrHierarchyArguments(
             from ImportedTypeSymbol,
             targetOpenDefinition Type,
             out sourceArguments ImmutableArray[TypeSymbol]
@@ -3086,7 +3101,7 @@ class Conversion {
             if clr == nil || clr.IsArray {
                 return false
             }
-            for candidate in ClrTypeUtilities.EnumerateSelfAndInterfaces(clr, true) {
+            for candidate in MemberLookup.EnumerateOpenInterfacesAndBases(clr) {
                 var candidateDefinition Type
                 var candidateArguments[]Type
                 try {

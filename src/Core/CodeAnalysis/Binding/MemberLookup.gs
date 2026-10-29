@@ -9483,7 +9483,7 @@ internal class MemberLookup {
             return false
         }
 
-        private func EnumerateOpenInterfacesAndBases(openDef Type) sequence[Type] {
+        internal func EnumerateOpenInterfacesAndBases(openDef Type) sequence[Type] {
             // Issue #4559: sparse InterfaceImpl metadata (as G# emits it) lists only
             // the DIRECT interfaces of a type, so GetInterfaces() on a class or
             // interface omits interfaces inherited through them (IReadOnlyCollection<T>

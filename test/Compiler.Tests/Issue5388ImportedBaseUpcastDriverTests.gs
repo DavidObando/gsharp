@@ -1,6 +1,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -178,9 +179,18 @@ class Program {
     @InlineData("Writer", "int32")
     @InlineData("Reader", "Payload")
     @InlineData("Writer", "Payload")
+    @InlineData("in chan", "int32")
+    @InlineData("out chan", "int32")
+    @InlineData("in chan", "Payload")
+    @InlineData("out chan", "Payload")
     func SourceClass_DoesNotInheritReferenceChangingProjection(view string, element string) {
         using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
-        let declaration = "func View(value Wrap) Channel" + view + "[" + element + "] -> "
+        let target = if view == "Reader" || view == "Writer" {
+            "Channel" + view
+        } else {
+            view
+        }
+        let declaration = "func View(value Wrap) " + target + "[" + element + "] -> "
         let source = "import System.Threading.Channels\nstruct Payload { var Value uint32 }\n" +
             "class Wrap : Channel[" +
             element +
@@ -280,15 +290,194 @@ class Program {
         Check(fixture, source, oracle, "RTrue|1|TrueTrue37|True|1", RuntimeReferences())
     }
 
+    @Theory
+    @InlineData("Reader", "in chan")
+    @InlineData("Writer", "out chan")
+    func NativeChannelProjection_UsesGetterAndPreservesSymbolicNominalUpcast(view string, alias string) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Threading.Channels
+import UpcastControl
+struct Payload { var Value int32 }
+class Wrap : Channel[Payload] {}
+shared class Counts { var Receivers int32 = 0 }
+func Target(value chan[Payload]) chan[Payload] {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func View(value chan[Payload]) @ALIAS@[Payload] -> value
+func Up(value Wrap) chan[Payload] -> value
+func Main() {
+    let channel = Channel.CreateUnbounded[Payload]()
+    let view = View(Target(channel))
+    Console.Write(Object.ReferenceEquals(view, channel.@VIEW@))
+    Console.Write("|")
+    Console.Write(Counts.Receivers)
+    Console.Write("|")
+    @TRANSFER@
+    Console.Write(value.Value)
+    Console.Write("|")
+    let wrap = Wrap()
+    Console.Write(Object.ReferenceEquals(Up(wrap), wrap))
+    Console.Write("|")
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`.Replace(
+            "@ALIAS@",
+            alias
+        ).Replace(
+            "@VIEW@",
+            view
+        ).Replace(
+            "@TRANSFER@",
+            if view == "Reader" {
+                "Console.Write(channel.Writer.TryWrite(Payload{Value: 37}))\n    Console.Write(view.TryRead(out var value))"
+            } else {
+                "Console.Write(view.TryWrite(Payload{Value: 37}))\n    Console.Write(channel.Reader.TryRead(out var value))"
+            }
+        )
+        let oracle = `using System;
+using System.Threading.Channels;
+using UpcastControl;
+struct Payload { public int Value; }
+class Wrap : Channel<Payload> {}
+class Program {
+    static int receivers;
+    static Channel<Payload> Target(Channel<Payload> value) { receivers++; Console.Write("R"); return value; }
+    static Channel@VIEW@<Payload> View(Channel<Payload> value) => value.@VIEW@;
+    static Channel<Payload> Up(Wrap value) => value;
+    static void Main() {
+        var channel = Channel.CreateUnbounded<Payload>();
+        var view = View(Target(channel));
+        Console.Write(Object.ReferenceEquals(view, channel.@VIEW@));
+        Console.Write("|");
+        Console.Write(receivers);
+        Console.Write("|");
+        @TRANSFER@
+        Console.Write(value.Value);
+        Console.Write("|");
+        var wrap = new Wrap();
+        Console.Write(Object.ReferenceEquals(Up(wrap), wrap));
+        Console.Write("|");
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`.Replace("@VIEW@", view).Replace(
+            "@TRANSFER@",
+            if view == "Reader" {
+                "Console.Write(channel.Writer.TryWrite(new Payload {Value = 37}));\n        Console.Write(view.TryRead(out var value));"
+            } else {
+                "Console.Write(view.TryWrite(new Payload {Value = 37}));\n        Console.Write(channel.Reader.TryRead(out var value));"
+            }
+        )
+        Check(fixture, source, oracle, "RTrue|1|TrueTrue37|True|1", RuntimeReferences())
+    }
+
+    @Theory
+    @InlineData("Closed")
+    @InlineData("Middle")
+    func SourceClass_UpcastsThroughClosedImportedBase(parent string) {
+        using let fixture = CSharpFixture(ClosedContract, assemblyName: "ClosedContract", deterministic: true)
+        let source = `import System
+import ClosedControl
+class Derived : @PARENT@ {
+    override func Tag() int32 {
+        Console.Write("V")
+        return 9
+    }
+}
+shared class Counts { var Receivers int32 = 0 }
+func Target(value Derived) Derived {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func Up(value Derived) Base[int32] -> value
+func Main() {
+    let value = Derived()
+    let parent = Up(Target(value))
+    Console.Write(Base[int32].Read(parent))
+    Console.Write("|")
+    Console.Write(Counts.Receivers)
+    Console.Write("|")
+    Console.Write(Object.ReferenceEquals(parent, value))
+}
+`.Replace("@PARENT@", parent)
+        let oracle = `using System;
+using ClosedControl;
+class Derived : @PARENT@ {
+    public override int Tag() { Console.Write("V"); return 9; }
+}
+class Program {
+    static int receivers;
+    static Derived Target(Derived value) { receivers++; Console.Write("R"); return value; }
+    static Base<int> Up(Derived value) => value;
+    static void Main() {
+        var value = new Derived();
+        var parent = Up(Target(value));
+        Console.Write(Base<int>.Read(parent));
+        Console.Write("|");
+        Console.Write(receivers);
+        Console.Write("|");
+        Console.Write(Object.ReferenceEquals(parent, value));
+    }
+}
+`.Replace("@PARENT@", parent)
+        Check(fixture, source, oracle, "RV9|1|True", contractSource: ClosedContract)
+    }
+
+    @Theory
+    @InlineData("Closed", "string")
+    @InlineData("Middle", "uint32")
+    func ClosedImportedBase_RejectsMismatchedOwner(parent string, argument string) {
+        using let fixture = CSharpFixture(ClosedContract, assemblyName: "ClosedContract", deterministic: true)
+        output.WriteLine("Contract source:\n" + ClosedContract)
+        let declaration = "func Up(value Derived) Base[" + argument + "] -> "
+        let source = "import ClosedControl\nclass Derived : " +
+            parent +
+            " {}\n" +
+            declaration +
+            "value\nfunc Main() {}\n"
+        let result = Compile(fixture, source)
+        Assert.NotEqual(0, result.Code)
+        let errors = Regex.Matches(
+            Encoding.UTF8.GetString(result.Bytes) + result.Error,
+            `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+        )
+        let error = Assert.Single(errors)
+        Assert.Equal("GS0155", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal((declaration.Length + 1).ToString(), error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal((declaration.Length + 6).ToString(), error.Groups[4].Value)
+        for path in[]string{"Consumer.dll", "Consumer.ref.dll", "Consumer.pdb"} {
+            Assert.False(File.Exists(Path.Combine(fixture.DirectoryPath, path)))
+        }
+    }
+
+    @Fact
+    func RuntimeReferenceDiscovery_ExcludesUntrustedFiles() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let unmanaged = Path.Combine(fixture.DirectoryPath, "not-managed.dll")
+        File.WriteAllBytes(unmanaged, []uint8{0, 1, 2, 3})
+        Assert.NotEmpty(RuntimeReferences())
+        Assert.Contains(typeof(object).Assembly.Location, RuntimeReferences())
+        Assert.True(File.Exists(fixture.AssemblyPath))
+        Assert.True(File.Exists(unmanaged))
+        Assert.Empty(RuntimeReferences(fixture.DirectoryPath))
+    }
+
     private func Check(
         fixture CSharpFixture,
         source string,
         oracle string,
         expected string,
-        references IEnumerable[string]? = nil
+        references IEnumerable[string]? = nil,
+        contractSource string? = nil
     ) {
         Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
-        output.WriteLine("Contract source:\n" + Contract)
+        output.WriteLine("Contract source:\n" + (contractSource ?? Contract))
         output.WriteLine("Oracle source:\n" + oracle)
         let result = Compile(fixture, source, references)
         Assert.True(result.Code == 0, Encoding.UTF8.GetString(result.Bytes) + result.Error)
@@ -338,7 +527,7 @@ class Program {
         let missing = VerifyResult(image, nil)
         Assert.NotEqual(0, missing.Code)
         Assert.Contains(
-            "UpcastContract",
+            Path.GetFileNameWithoutExtension(fixture.AssemblyPath),
             Encoding.UTF8.GetString(missing.Bytes) + missing.Error,
             StringComparison.Ordinal
         )
@@ -409,8 +598,14 @@ class Program {
         }
         output.WriteLine("argv: dotnet " + string.Join(" ", arguments))
         output.WriteLine("cwd: " + Environment.CurrentDirectory)
-        for name in[]string{"PATH", "DOTNET_ROOT", "DOTNET_ROLL_FORWARD", "GSHARP_SKIP_ILVERIFY"} {
-            output.WriteLine("env " + name + "=" + Environment.GetEnvironmentVariable(name))
+        for name in start.Environment.Keys.OrderBy((name string) -> name, StringComparer.Ordinal) {
+            if name == "PATH" || name == "HOME" || name == "TMPDIR" || name.StartsWith(
+                "DOTNET_",
+                StringComparison.Ordinal
+            ) ||
+                name.StartsWith("GSHARP_", StringComparison.Ordinal) {
+                output.WriteLine("env " + name + "=" + start.Environment[name])
+            }
         }
         using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start dotnet.")
         using let stdout = MemoryStream()
@@ -437,10 +632,26 @@ class Program {
     )
 
     shared {
-        private func RuntimeReferences()[]string {
-            let runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
-            return Directory.GetFiles(runtime, "*.dll").OrderBy((path string) -> path, StringComparer.Ordinal).ToArray()
+        private func RuntimeReferences(runtime string? = nil)[]string {
+            let directory = runtime ?? Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+            return ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Where((path string) -> Path.GetDirectoryName(path) == directory)
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .ToArray()
         }
+
+        private const ClosedContract string = `#nullable enable
+namespace ClosedControl {
+    public class Base<T> {
+        public virtual int Tag() => 3;
+        public static int Read(Base<T> value) => value.Tag();
+    }
+    public class Closed : Base<int> {}
+    public class Reordered<A,B> : Base<B> {}
+    public class Middle : Reordered<string,int> {}
+}
+`
 
         private const Contract string = `#nullable disable
 namespace UpcastControl {
