@@ -4040,7 +4040,8 @@ partial class CSharpToGSharpTranslator {
             if declaringFunction == nil {
                 return false
             }
-            var closureAssigned = false
+            // A `ref` local names the storage of another variable, which a closure may assign.
+            var closureAssigned = symbol is ILocalSymbol{RefKind: not RefKind.None}
             for node in declaringFunction.DescendantNodes() {
                 if this.SyntaxNodeWritesSymbol(node, symbol) && NearestFunctionBoundary(node) != declaringFunction {
                     closureAssigned = true
@@ -4095,16 +4096,21 @@ partial class CSharpToGSharpTranslator {
         /// Whether a node may run source code in the emitted G#, which ends the narrowing of a
         /// closure-assigned local (ADR-0208 row R15; the compiler's `MayRunEscapedClosure` in
         /// src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs). The translator cannot
-        /// mirror that set exactly, because the emitted G# differs from the C# (lowered
-        /// properties, static initializer blocks, implicit disposal, interface slots), so it
-        /// answers for the whole class by a deliberate superset: a call or object creation of
-        /// any kind, a loop over a sequence, `using` and `await`, an indexer or element
-        /// binding, a user-defined operator or conversion, and any read or write of a member
-        /// that is not a plain local, parameter or constant (a property, a non-constant field
-        /// or an event). The superset can only add an `!!`, which the redundant-assertion pass
-        /// removes; a missed node leaves a bare read that gsc rejects. Locals that no closure
+        /// predict that set from the C#: the emitted G# lowers properties, static initializers,
+        /// disposal, locks, string concatenation, collection expressions and deconstruction to
+        /// calls that the C# does not show, and every review round found another. So the
+        /// predicate runs the other way round and is closed by construction: a node is call-free
+        /// only when it is on the short list in [`IsKnownCallFreeNode`](paramref), and every
+        /// other node counts as running source code. A wrong answer here can only add an `!!`
+        /// for a closure-assigned local, which the redundant-assertion pass removes if gsc still
+        /// narrows; a missed node leaves a bare read that gsc rejects. Locals that no closure
         /// assigns never reach this predicate.
         private func NodeMayRunEscapedClosure(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            return !this.IsKnownCallFreeNode(node)
+        }
+
+        private func IsKnownCallFreeNode(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            // A contextual user-defined conversion (`int n = token;`) runs source code at any expression.
             if node is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -4115,91 +4121,213 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetConversion(anyExpression)
                 .IsUserDefined {
+                return false
+            }
+            // The callee part of a call and its argument list run nothing themselves: the
+            // invocation node does, once its arguments are evaluated.
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArgumentListSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArgumentSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TupleExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DefaultExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TypeOfExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .IsPatternExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConstantPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .UnaryPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConditionalExpressionSyntax {
                 return true
             }
-            if node is InvocationExpressionSyntax ||
-                node is BaseObjectCreationExpressionSyntax ||
-                node is ForEachStatementSyntax ||
-                node is ForEachVariableStatementSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .UsingStatementSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AwaitExpressionSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ElementAccessExpressionSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ElementBindingExpressionSyntax {
-                return true
-            }
-            if node is LocalDeclarationStatementSyntax declaration && declaration.UsingKeyword.RawKind != 0 {
-                return true
-            }
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax interpolation {
-                return interpolation
-                    .Contents
-                    .OfType[InterpolationSyntax]()
-                    .Any(
-                    (hole InterpolationSyntax) -> this
-                        .context
-                        .GetTypeInfo(hole.Expression)
-                        .Type is {} holeType &&
-                        (
-                        holeType.SpecialType < SpecialType.System_Boolean ||
-                            holeType.SpecialType > SpecialType.System_UIntPtr
-                    )
-                )
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax memberAccess {
+                let accessed ISymbol? = this.context.GetSymbolInfo(memberAccess).Symbol
+                return accessed is IMethodSymbol or
+                    INamespaceSymbol or
+                    ITypeSymbol ||
+                    accessed is IFieldSymbol{IsConst: true}
             }
             if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .BinaryExpressionSyntax ||
+                .PostfixUnaryExpressionSyntax suppression &&
+                suppression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) {
+                return true
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BlockSyntax ||
                 node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .PrefixUnaryExpressionSyntax ||
+                .ExpressionStatementSyntax ||
                 node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .PostfixUnaryExpressionSyntax ||
+                .IfStatementSyntax ||
                 node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .CastExpressionSyntax {
-                return this
-                    .context
-                    .GetSymbolInfo(node)
-                    .Symbol is IMethodSymbol{
-                    MethodKind: Microsoft
-                        .CodeAnalysis
-                        .MethodKind
-                        .UserDefinedOperator or
-                        Microsoft
-                        .CodeAnalysis
-                        .MethodKind
-                        .Conversion
-                }
+                .ElseClauseSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ReturnStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BreakStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ContinueStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .EmptyStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .VariableDeclarationSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .VariableDeclaratorSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .EqualsValueClauseSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PredefinedTypeSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ThisExpressionSyntax {
+                return true
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.LocalDeclarationStatementSyntax declaration {
+                return declaration.UsingKeyword.RawKind == 0
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax {
+                return true
             }
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax {
-                let member ISymbol? = this.context.GetSymbolInfo(node).Symbol
-                return member is IPropertySymbol or IEventSymbol || member is IFieldSymbol{IsConst: false}
+                let symbol ISymbol? = this.context.GetSymbolInfo(node).Symbol
+                return symbol is ILocalSymbol or
+                    IParameterSymbol or
+                    ITypeSymbol or
+                    INamespaceSymbol or
+                    IMethodSymbol ||
+                    symbol is IFieldSymbol{IsConst: true}
+            }
+            // Arithmetic, comparison and assignment of built-in numeric values (or a comparison of
+            // any value with `null`) is a plain operation; anything else may be an operator call.
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary {
+                return (
+                    IsNullLiteral(binary.Left) ||
+                        IsNullLiteral(binary.Right) ||
+                        (this.IsBuiltInPrimitive(binary.Left) && this.IsBuiltInPrimitive(binary.Right))
+                ) &&
+                    !this.IsLoweredToCall(binary)
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment {
+                return this.IsBuiltInPrimitive(assignment.Left) && this.IsBuiltInPrimitive(assignment.Right) &&
+                    this
+                    .context
+                    .GetSymbolInfo(assignment.Left)
+                    .Symbol is ILocalSymbol or
+                    IParameterSymbol
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax prefix {
+                return this.IsBuiltInPrimitive(prefix.Operand)
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.PostfixUnaryExpressionSyntax postfix {
+                return this.IsBuiltInPrimitive(postfix.Operand)
             }
             return false
+        }
+
+        private func IsLoweredToCall(binary Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax) bool {
+            return this
+                .context
+                .GetSymbolInfo(binary)
+                .Symbol is IMethodSymbol{
+                MethodKind: Microsoft
+                    .CodeAnalysis
+                    .MethodKind
+                    .UserDefinedOperator or
+                    Microsoft
+                    .CodeAnalysis
+                    .MethodKind
+                    .Conversion
+            }
+        }
+
+        /// A bool, char, integer or floating-point value, whose operators are plain instructions.
+        /// A string, a decimal, an enum and every user type are not.
+        private func IsBuiltInPrimitive(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
+            let type ITypeSymbol? = this.context.GetTypeInfo(expression).Type
+            if type == nil || type.TypeKind == TypeKind.Enum {
+                return false
+            }
+            let kind = type.SpecialType
+            return (kind >= SpecialType.System_Boolean && kind <= SpecialType.System_UInt64) ||
+                kind == SpecialType.System_Single ||
+                kind == SpecialType.System_Double
         }
 
         private func NearestFunctionBoundary(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft

@@ -262,6 +262,165 @@ public class Demo
     }
 
     @Fact
+    func ClosureAssignedLocal_ReadAfterUserDefinedCompoundAssignment_IsAsserted() {
+        let printed = Translate(`
+using System.Collections.Generic;
+public struct Token
+{
+    public static Token operator +(Token a, Token b) => a;
+}
+public class Demo
+{
+    
+    public static int Run(Token token, int count, KeyValuePair<int, int> pair, object gate)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            token += token;
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterCollectionExpression_IsAsserted() {
+        let printed = Translate(`
+using System.Collections.Generic;
+public struct Token
+{
+    public static Token operator +(Token a, Token b) => a;
+}
+public class Demo
+{
+    
+    public static int Run(Token token, int count, KeyValuePair<int, int> pair, object gate)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            List<int> values = [];
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterLockStatement_IsAsserted() {
+        let printed = Translate(`
+using System.Collections.Generic;
+public struct Token
+{
+    public static Token operator +(Token a, Token b) => a;
+}
+public class Demo
+{
+    
+    public static int Run(Token token, int count, KeyValuePair<int, int> pair, object gate)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            lock (gate) { }
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterStringConcatenation_IsAsserted() {
+        let printed = Translate(`
+using System.Collections.Generic;
+public struct Token
+{
+    public static Token operator +(Token a, Token b) => a;
+}
+public class Demo
+{
+    
+    public static int Run(Token token, int count, KeyValuePair<int, int> pair, object gate)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var text = "" + count;
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterDeconstruction_IsAsserted() {
+        let printed = Translate(`
+using System.Collections.Generic;
+public struct Token
+{
+    public static Token operator +(Token a, Token b) => a;
+}
+public class Demo
+{
+    
+    public static int Run(Token token, int count, KeyValuePair<int, int> pair, object gate)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var (a, b) = pair;
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadThroughARefAlias_IsAsserted() {
+        let printed = Translate(`
+public class Demo
+{
+    static void Touch() { }
+
+    public static int Run()
+    {
+        string? current = "x";
+        ref string? alias = ref current;
+        void Reset() { current = null; }
+        if (alias != null)
+        {
+            Touch();
+            return alias.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("alias!!.Length", printed)
+    }
+
+    @Fact
     func ClosureAssignedLocal_ReadWithoutACallBetween_StaysBare() {
         let printed = Translate(`
 public class Demo
