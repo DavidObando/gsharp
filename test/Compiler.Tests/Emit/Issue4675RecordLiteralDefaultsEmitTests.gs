@@ -30,6 +30,70 @@ class Issue4675RecordLiteralDefaultsEmitTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ImportedDataClassLegacyPrimaryStorage_RejectsInheritedProperty(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let baseContract = fixture.CompileCSharp(`namespace LegacyStorage5425;
+public class Base {
+    public int Value { get; }
+    public Base(int value) { Value = value; }
+}`, "LegacyStorageBase5425")
+        let reference = System.IO.Path.Combine(fixture.Directory, "LegacyStorage5425.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Value:0")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|class|1|Value:0")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554436|class|1|Value:0")]
+namespace LegacyStorage5425;
+public class Box : Base {
+    public Box(int Value) : base(Value) { }
+}
+public class Own {
+    public int Value { get; }
+    public Own(int Value = 9) { this.Value = Value; }
+}
+public class OwnField {
+    public readonly int Value;
+    public OwnField(int Value = 9) { this.Value = Value; }
+}`, "LegacyStorage5425", reference, baseContract)
+        VerifyPrimaryShapeIl(baseContract)
+        VerifyPrimaryShapeIl(contract, []string{baseContract})
+        VerifyPrimaryShapeIl(reference, []string{baseContract})
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = System.IO.Path.Combine(fixture.Directory, "InheritedLegacy.ref.dll")
+        let pdb = System.IO.Path.Combine(fixture.Directory, "InheritedLegacy.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import LegacyStorage5425\nlet value = Box{}",
+            "InheritedLegacy",
+            true,
+            "/r:" + baseContract,
+            "/r:" + selected,
+            "/refout:" + rejectedReference,
+            "/debug:portable",
+            "/pdb:" + pdb
+        )
+        Assert.Equal(1, code)
+        Assert.Contains("InheritedLegacy.gs(2,13,2,16): error GS0267", output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "InheritedLegacy.dll")))
+        Assert.False(System.IO.File.Exists(rejectedReference))
+        Assert.False(System.IO.File.Exists(pdb))
+        let controls = fixture.Compile(`import LegacyStorage5425
+System.Console.WriteLine(Own{}.Value)
+System.Console.WriteLine(OwnField{}.Value)
+System.Console.WriteLine(Own{Value: 7}.Value)
+System.Console.WriteLine(OwnField{Value: 8}.Value)
+System.Console.WriteLine(Own().Value)
+System.Console.WriteLine(OwnField().Value)
+`, "LegacyOwnControls", true, "/r:" + baseContract, "/r:" + selected)
+        VerifyPrimaryShapeIl(controls, []string{baseContract, contract})
+        Assert.Equal("0\n0\n7\n8\n9\n9\n", fixture.Run(controls))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ImportedDataClassPrimaryStorage_UsesDeclaringModule(referenceAssembly bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let baseContract = fixture.Compile(`package StorageBase5425

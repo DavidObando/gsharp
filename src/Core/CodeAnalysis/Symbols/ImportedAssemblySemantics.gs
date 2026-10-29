@@ -110,7 +110,10 @@ internal shared class ImportedAssemblySemantics {
         return if field != nil {
             cast[MemberInfo](field)
         } else {
-            ClrTypeUtilities.SafeGetProperty(type, name, flags)
+            // Primary storage must not use a property lookup that walks base types.
+            ClrTypeUtilities.SafeGetProperties(type, flags).FirstOrDefault(
+                (candidate PropertyInfo) -> candidate.Name == name
+            )
         }
     }
 
