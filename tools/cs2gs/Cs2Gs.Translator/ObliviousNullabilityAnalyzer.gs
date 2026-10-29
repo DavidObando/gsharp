@@ -315,6 +315,36 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    // Issue #5508: one compilation's null-ARGUMENT evidence. `Seeds` are the
+    // declaration keys some call passes a `null` / `null!` literal into;
+    // `Incoming` maps a declaration key to the keys of the PARAMETERS whose
+    // value it receives unchanged (`Parent = parent`, `base(header, parent)`).
+    // `Forwarding` is filled on first request (see `EnsureForwardingEdges`).
+    private class NullArgumentGraph {
+        init(owner Compilation, seeds HashSet[string]) {
+            this.Owner = owner
+            this.Seeds = seeds
+            this.Incoming = Dictionary[string, List[string]](StringComparer.Ordinal)
+        }
+
+        prop Owner Compilation {
+            get;
+        }
+
+        prop Seeds HashSet[string] {
+            get;
+        }
+
+        prop Incoming Dictionary[string, List[string]] {
+            get;
+        }
+
+        prop ForwardingBuilt bool {
+            get;
+            set;
+        }
+    }
+
     private class SourceAssemblySet {
         init(currentAssembly string) {
             this.Names = HashSet[string](StringComparer.Ordinal){currentAssembly}
@@ -374,6 +404,15 @@ internal shared class ObliviousNullabilityAnalyzer {
     private let ForwardedTargets ConditionalWeakTable[Compilation, HashSet[string]] = ConditionalWeakTable[
         Compilation,
         HashSet[string]
+    ]()
+
+    // Issue #5508: per-compilation null-ARGUMENT evidence graph, cached like
+    // `NullTargets`. The seeds are cheap (a syntactic scan for `null` / `null!`
+    // arguments); the forwarding edges are built lazily, only once some
+    // compilation of the run actually has a seed.
+    private let NullArguments ConditionalWeakTable[Compilation, NullArgumentGraph] = ConditionalWeakTable[
+        Compilation,
+        NullArgumentGraph
     ]()
 
     // Issue #3848 (family B): per-compilation set of generated ARRAY-typed
@@ -492,6 +531,93 @@ internal shared class ObliviousNullabilityAnalyzer {
             for sibling in siblingCompilations {
                 if sibling != nil && NullAssignmentTargets(sibling).Contains(id) {
                     return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Issue #5508: whether [`symbol`](paramref) is a declaration that the
+    /// author's own code writes `null` into by way of an ARGUMENT — a call that
+    /// passes the literal `null` / `null!` (or `default`) to a parameter the C#
+    /// declares non-nullable, or a parameter, field or property that such a
+    /// parameter's value reaches unchanged.
+    ///
+    /// <b>Why the author's `null!` is evidence.</b> `Frame(Header header, Frame
+    /// parent)` called as `base(header, null!)` is the C# author saying "null
+    /// goes here": `!` silences exactly the CS8625 the compiler would have raised
+    /// for the unannotated slot. G# has one nullability per declaration and gsc
+    /// rejects `nil` at a non-nullable reference slot (#4316, GS0155/GS0154), so
+    /// the only rendering that still admits the call is `parent Frame?`.
+    ///
+    /// <b>Direct evidence plus pure forwarding only.</b> Like #3676's rule this
+    /// does not use #2113's transitive taint fixpoint (which over-promotes on an
+    /// annotated graph). A seed is a syntactic null argument; the promotion then
+    /// follows a value that is passed on UNCHANGED — `Parent = parent`,
+    /// `: base(header, parent)` — because a promoted parameter stored into a
+    /// slot that kept its non-null contract would be bridged with a `!!` that
+    /// throws on the very null the C# stores. A forwarded read through `q!`, a
+    /// local, or any expression is not forwarding: the author asserted or
+    /// changed it.
+    ///
+    /// <b>Signature-fixed declarations are left alone.</b> A parameter or
+    /// property of a virtual, abstract, overriding or interface-implementing
+    /// member does not own its nullability (repainting it is gsc's
+    /// GS0185/GS0386), so it keeps its declared type.
+    ///
+    /// The answer is the existential union over every compilation in the run,
+    /// so a declaration translates identically whichever project is emitted.
+    /// @param compilation The compilation being translated.
+    /// @param symbol The parameter, field or property to test.
+    /// @param siblingCompilations Other projects loaded in the same run, or `null`.
+    /// @returns `true` when `null` is passed into the declaration.
+    func IsNullArgumentTarget(
+        compilation CSharpCompilation?,
+        symbol ISymbol?,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?
+    ) bool {
+        if compilation == nil || !IsNullArgumentCandidate(symbol) || NullArgumentKey(symbol) is not{} key {
+            return false
+        }
+        // The compilation being translated first, then the siblings in the
+        // order the run supplied them: the answer is an existential OR, so the
+        // order cannot change it, and no hash order is ever iterated.
+        let graphs = List[NullArgumentGraph]()
+        graphs.Add(NullArguments.GetValue(compilation, ComputeNullArgumentSeeds))
+        if siblingCompilations != nil {
+            for sibling in siblingCompilations {
+                if sibling != nil && !object.ReferenceEquals(sibling, compilation) {
+                    graphs.Add(NullArguments.GetValue(sibling, ComputeNullArgumentSeeds))
+                }
+            }
+        }
+        if !graphs.Any((g NullArgumentGraph) -> g.Seeds.Count != 0) {
+            return false
+        }
+        if graphs.Any((g NullArgumentGraph) -> g.Seeds.Contains(key)) {
+            return true
+        }
+        // Some compilation has a null argument, so the forwarding edges can
+        // matter. They are built once per compilation and only now.
+        for graph in graphs {
+            EnsureNullArgumentForwarding(graph)
+        }
+        let visited = HashSet[string](StringComparer.Ordinal)
+        let pending = Stack[string]()
+        pending.Push(key)
+        while pending.Count != 0 {
+            let current = pending.Pop()
+            if !visited.Add(current) {
+                continue
+            }
+            for graph in graphs {
+                if graph.Seeds.Contains(current) {
+                    return true
+                }
+                if graph.Incoming.TryGetValue(current, out var sources) {
+                    for source in sources {
+                        pending.Push(source)
+                    }
                 }
             }
         }
@@ -1839,6 +1965,219 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         return targets
+    }
+
+    // Issue #5508: whether `symbol` may be repainted `T?` by null-argument
+    // evidence at all. The declaration must be emitted by this migration, own
+    // its signature (see `IsSignatureFixedByAnotherDeclaration`), and — for a
+    // member another declaration could override — not be virtual or abstract,
+    // because the overrides keep the base's type and would stop matching it.
+    private func IsNullArgumentCandidate(symbol ISymbol?) bool {
+        switch symbol {
+            case parameter is IParameterSymbol {
+                return parameter.Ordinal >= 0 &&
+                    parameter.RefKind == RefKind.None &&
+                    !parameter.IsParams &&
+                    parameter.ContainingSymbol is IMethodSymbol{
+                    MethodKind: MethodKind.Constructor or MethodKind.Ordinary
+                } method &&
+                    !method.IsVirtual &&
+                    !method.IsAbstract &&
+                    method
+                    .OriginalDefinition
+                    .DeclaringSyntaxReferences
+                    .Length != 0 &&
+                    !IsSignatureFixedByAnotherDeclaration(parameter)
+            }
+            case property is IPropertySymbol {
+                return !property.IsVirtual &&
+                    !property.IsAbstract &&
+                    property
+                    .OriginalDefinition
+                    .DeclaringSyntaxReferences
+                    .Length != 0 &&
+                    !IsSignatureFixedByAnotherDeclaration(property)
+            }
+            case field is IFieldSymbol {
+                return field.OriginalDefinition.DeclaringSyntaxReferences.Length != 0
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    // Issue #5508: the compilation-independent identity of a candidate. A
+    // parameter is its method's documentation id plus its ordinal, so the key
+    // for `Frame(Header, Frame)` is the same whether a sibling project sees the
+    // constructor as source or through its reference assembly.
+    private func NullArgumentKey(symbol ISymbol?) string? {
+        if symbol is IParameterSymbol{ContainingSymbol: IMethodSymbol method} parameter {
+            return if method.OriginalDefinition.GetDocumentationCommentId() is {} methodId {
+                "P:" + methodId + "#" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
+            } else {
+                default(string?)
+            }
+        }
+        return symbol?.OriginalDefinition.GetDocumentationCommentId()
+    }
+
+    // `null`, `null!`, `default`, a parenthesized form, or a conditional with
+    // such an arm: the argument shapes in which the AUTHOR writes null. Purely
+    // syntactic on purpose — a `T?`-typed local passed to a `T` parameter is
+    // the C# compiler's warning to act on, not an author's declaration.
+    private func ArgumentWritesNull(expression ExpressionSyntax?) bool {
+        switch expression {
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return ArgumentWritesNull(parenthesized.Expression)
+            }
+            case suppress is PostfixUnaryExpressionSyntax when suppress.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                return ArgumentWritesNull(suppress.Operand)
+            }
+            case conditional is ConditionalExpressionSyntax {
+                return ArgumentWritesNull(conditional.WhenTrue) || ArgumentWritesNull(conditional.WhenFalse)
+            }
+            case literal is LiteralExpressionSyntax {
+                return literal.IsKind(SyntaxKind.NullLiteralExpression) || literal.IsKind(
+                    SyntaxKind.DefaultLiteralExpression
+                )
+            }
+            case _ is DefaultExpressionSyntax {
+                return true
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func CallArgumentList(node SyntaxNode) ArgumentListSyntax? -> switch node {
+        case invocation is InvocationExpressionSyntax: invocation.ArgumentList
+        case creation is BaseObjectCreationExpressionSyntax: creation.ArgumentList
+        case initializer is ConstructorInitializerSyntax: initializer.ArgumentList
+        default: default(ArgumentListSyntax?)
+    }
+
+    // `GetCallArguments` answers a DEFAULT array (not an empty one) when the node
+    // binds to no call, and enumerating a default array throws.
+    private func CallArgumentOperations(node SyntaxNode, model SemanticModel) ImmutableArray[IArgumentOperation] {
+        let arguments = GetCallArguments(node, model)
+        return if arguments.IsDefault {
+            ImmutableArray[IArgumentOperation].Empty
+        } else {
+            arguments
+        }
+    }
+
+    // Pass 1 (cheap): the declarations some call passes a null literal into.
+    // The syntactic prefilter keeps `GetOperation` off every call that has no
+    // such argument.
+    private func ComputeNullArgumentSeeds(compilation Compilation) NullArgumentGraph {
+        let seeds = HashSet[string](StringComparer.Ordinal)
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for node in tree.GetRoot().DescendantNodes() {
+                let list = CallArgumentList(node)
+                if list == nil || !list.Arguments.Any(
+                    (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) && ArgumentWritesNull(a.Expression)
+                ) {
+                    continue
+                }
+                for argument in CallArgumentOperations(node, model) {
+                    if argument.Parameter is {} parameter &&
+                        argument
+                        .Value
+                        ?.Syntax is ExpressionSyntax value &&
+                        ArgumentWritesNull(value) &&
+                        IsNullArgumentCandidate(parameter) &&
+                        NullArgumentKey(parameter) is {} key {
+                        seeds.Add(key)
+                    }
+                }
+            }
+        }
+        return NullArgumentGraph(compilation, seeds)
+    }
+
+    // Pass 2: the pure-forwarding edges, built once per compilation, and only
+    // when some compilation of the run has a seed. An edge `target <- source`
+    // records that `source`, a PARAMETER, hands its value on unchanged to
+    // `target` (a parameter, field or property).
+    private func EnsureNullArgumentForwarding(graph NullArgumentGraph) {
+        if graph.ForwardingBuilt {
+            return
+        }
+        let owner = graph.Owner
+        graph.ForwardingBuilt = true
+        let AddEdge = func (target ISymbol?, source ISymbol?) {
+            if IsNullArgumentCandidate(target) &&
+                IsNullArgumentCandidate(source) &&
+                NullArgumentKey(target) is {} targetKey &&
+                NullArgumentKey(source) is {} sourceKey {
+                if !graph.Incoming.TryGetValue(targetKey, out var sources) {
+                    sources = List[string]()
+                    graph.Incoming[targetKey] = sources
+                }
+                if !sources.Contains(sourceKey) {
+                    sources.Add(sourceKey)
+                }
+            }
+        }
+        for tree in owner.SyntaxTrees {
+            let model = owner.GetSemanticModel(tree)
+            for node in tree.GetRoot().DescendantNodes() {
+                if node is AssignmentExpressionSyntax assignment && assignment.IsKind(
+                    SyntaxKind.SimpleAssignmentExpression
+                ) &&
+                    ReadsEnclosingParameterByName(assignment.Right) {
+                    let target ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
+                    if target is IFieldSymbol or IPropertySymbol {
+                        AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol)
+                    }
+                } else if CallArgumentList(node) is {} list && list.Arguments.Any(
+                    (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) &&
+                        ReadsEnclosingParameterByName(a.Expression)
+                ) {
+                    for argument in CallArgumentOperations(node, model) {
+                        if argument.Parameter is {} parameter &&
+                            argument
+                            .Value
+                            ?.Syntax is ExpressionSyntax value &&
+                            ReadsEnclosingParameterByName(value) {
+                            AddEdge(parameter, model.GetSymbolInfo(Unwrap(value)).Symbol)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The expression with its parentheses removed. A `q!` is NOT unwrapped: the
+    // author asserted `q` non-null there, so the value is no longer "the
+    // parameter unchanged".
+    private func Unwrap(expression ExpressionSyntax) ExpressionSyntax {
+        var current = expression
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        return current
+    }
+
+    // Syntactic prefilter for a forwarding edge: a bare identifier that names a
+    // parameter of the enclosing method or constructor. The semantic check that
+    // follows decides; this only keeps the semantic model off other nodes.
+    private func ReadsEnclosingParameterByName(expression ExpressionSyntax) bool {
+        if Unwrap(expression) is not IdentifierNameSyntax name {
+            return false
+        }
+        let method = name.Ancestors().OfType[BaseMethodDeclarationSyntax]().FirstOrDefault()
+        return method
+            ?.ParameterList
+            .Parameters
+            .Any((p ParameterSyntax) -> p.Identifier.ValueText == name.Identifier.ValueText) ??
+            false
     }
 
     // Issue #3848 (family B): every generated ARRAY-typed member of

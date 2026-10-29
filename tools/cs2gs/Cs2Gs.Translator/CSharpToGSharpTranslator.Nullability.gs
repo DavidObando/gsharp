@@ -1268,6 +1268,19 @@ partial class CSharpToGSharpTranslator {
             if ObliviousNullabilityAnalyzer.HasNullDataRowArgument(symbol) {
                 return true
             }
+            // Issue #5508: a call that passes the author's own `null` / `null!`
+            // into a parameter the C# declares non-nullable — and the slots that
+            // parameter's value reaches unchanged — is decided by that evidence,
+            // not by the annotation `!` was written to silence. Direct evidence
+            // and pure forwarding only, decided by the DECLARATION across every
+            // compilation of the run (see `IsNullArgumentTarget`).
+            if ObliviousNullabilityAnalyzer.IsNullArgumentTarget(
+                this.context.Compilation,
+                NormalizePositionalRecordProperty(symbol),
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
+                return true
+            }
             // EF Core treats reference properties from nullable-oblivious C#
             // entity types as optional. Preserve that model when translating
             // DbSet<T> entities; emitting a non-nullable G# property would make
