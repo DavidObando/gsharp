@@ -2181,6 +2181,10 @@ class Conversion {
                 !IsReferenceLikeTarget(target) {
                 return false
             }
+            // Symbolic imported owners must prove nominal inheritance, not a conversion that constructs a different reference.
+            if source is ImportedTypeSymbol && TryGetConstructedGenericShape(target, out _, out _) {
+                return TryClassifyConstructedImportedReferenceConversion(source, target)
+            }
             return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {
                 ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
             } else {
