@@ -2883,7 +2883,14 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             let flowNarrowedAnnotatedValue = this.IsFlowNarrowedAnnotatedReference(value)
-            let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(value) || flowNarrowedAnnotatedValue
+            // Issue #5254: control reached here, so the target stays non-null.
+            let inferredSink = this.SinkInfersTypeFromValue(targetSymbol, value)
+            let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(
+                value,
+                widenedSinkNeedsNonNull: true,
+                widenedSinkInfersType: inferredSink
+            ) ||
+                flowNarrowedAnnotatedValue
             // Issue #3676: promotion and forgiveness must stay symmetric. In a
             // nullable-ENABLED compilation the ONLY declaration this translator
             // repaints `T?` is a generated-code one with direct null evidence,
@@ -3446,7 +3453,7 @@ partial class CSharpToGSharpTranslator {
                 !this.IsImportedObliviousNullableMember(symbol) && !this.LocalInitializedFromImportedObliviousNullable(
                 symbol
             ) &&
-                (symbol == nil || !this.ShouldPromoteToNullableReference(symbol))
+                (symbol == nil || !this.IsTranslatorWidenedDeclaration(symbol))
         }
 
         private func TryGetInferredLocalStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
@@ -4985,7 +4992,8 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            if this.ReceiverNeedsNullForgiveness(value) {
+            // The caller proved that the indexer key stays non-null (issue #5254).
+            if this.ReceiverNeedsNullForgiveness(value, widenedSinkNeedsNonNull: true) {
                 return true
             }
             if this.NullableReferenceValueMayBeNull(value) {
@@ -5040,7 +5048,9 @@ partial class CSharpToGSharpTranslator {
         /// (cref:TranslateReceiverWithNullForgiveness)).
         private func ReceiverNeedsNullForgiveness(
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            isDereferenceReceiver bool = false
+            isDereferenceReceiver bool = false,
+            widenedSinkNeedsNonNull bool = false,
+            widenedSinkInfersType bool = false
         ) bool {
             if this.GSharpExpressionIsStaticallyNonNull(recv) || this.IsActivePatternBinding(recv) ||
                 this.IsGSharpFlowNarrowedLocal(recv) || this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv) {
@@ -5285,7 +5295,22 @@ partial class CSharpToGSharpTranslator {
             // dereference is asserted exactly as a flow-proven one is: C#
             // throws on a null here too.
             let flowState = this.context.GetTypeInfo(recv).Nullability.FlowState
-            let annotationsWithoutFlowAnalysis = isDereferenceReceiver &&
+            let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
+            // Issue #5254: in this context C# runs no flow analysis, so the
+            // declaration is the only contract C# states. A declaration that C#
+            // declares non-null and cs2gs widened only to bind a null write
+            // (see (cref:IsTranslatorWidenedDeclaration)) is therefore read as
+            // non-null at every read whose sink needs a non-null value, not only
+            // at a dereference. The caller that knows the sink says so with
+            // `widenedSinkNeedsNonNull`. A sink that accepts nil keeps the widened
+            // value, and so does a type argument that G# infers from the value
+            // (`widenedSinkInfersType`): without a flow state the value may be null.
+            // With a flow state (the tail below) the inferred type argument is the
+            // non-null one C# proved, so the argument is asserted there.
+            let annotationsWithoutFlowAnalysis = (
+                isDereferenceReceiver ||
+                    (widenedSinkNeedsNonNull && !widenedSinkInfersType && this.IsTranslatorWidenedDeclaration(symbol))
+            ) &&
                 flowState == Microsoft
                 .CodeAnalysis
                 .NullableFlowState
@@ -5304,7 +5329,6 @@ partial class CSharpToGSharpTranslator {
             if flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull && !annotationsWithoutFlowAnalysis {
                 return false
             }
-            let symbol ISymbol? = this.context.GetSymbolInfo(recv).Symbol
             // Static member access (`Type.StaticMember`) and namespace-qualified
             // names carry a type/namespace receiver, not a value: never assert.
             if symbol is ITypeSymbol || symbol is INamespaceSymbol || symbol == nil {
@@ -5349,8 +5373,14 @@ partial class CSharpToGSharpTranslator {
                 .IsNullableInitializer(implicitInitializer) {
                 return NullForgivenessTelemetry.Record("4500-annotations-context-nullable-local")
             }
-            if this.ShouldPromoteToNullableReference(symbol) {
-                return NullForgivenessTelemetry.Record("1072-flow-proven-promoted-nullable")
+            if this.IsTranslatorWidenedDeclaration(symbol) {
+                // Issue #5254: a value read of a widened declaration is forgiven
+                // only where the caller has proved the sink needs a non-null value
+                // (`widenedSinkNeedsNonNull`). A sink that accepts nil, or one that
+                // G# infers from the value, keeps the `T?` that C# writes into it.
+                return (isDereferenceReceiver || widenedSinkNeedsNonNull) && NullForgivenessTelemetry.Record(
+                    "1072-flow-proven-promoted-nullable"
+                )
             }
             return false
         }
@@ -7290,9 +7320,16 @@ partial class CSharpToGSharpTranslator {
                 callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             ) bool {
                 let declared = parameter.OriginalDefinition.Type
-                let generic = declared is ITypeParameterSymbol ||
+                // Only a METHOD type parameter is re-inferred from the argument. A
+                // containing-type parameter is already fixed by the receiver
+                // (`Box[C].Use(x)`), so its substituted type is the real target.
+                let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
+                    return candidate is ITypeParameterSymbol methodParameter &&
+                        methodParameter.TypeParameterKind == TypeParameterKind.Method
+                }
+                let generic = IsMethodTypeParameter(declared) ||
                     (
-                    parameter.IsParams && (declared is IArrayTypeSymbol && declared.ElementType is ITypeParameterSymbol)
+                    parameter.IsParams && (declared is IArrayTypeSymbol && IsMethodTypeParameter(declared.ElementType))
                 )
                 return generic && !CallHasExplicitTypeArguments(callSite)
             }
