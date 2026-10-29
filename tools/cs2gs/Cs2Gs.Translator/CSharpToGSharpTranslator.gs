@@ -95,6 +95,24 @@ partial class CSharpToGSharpTranslator {
     // source-generator host enables it; see GeneratedImplementingPartDefinition.
     private let emitGeneratedImplementingParts bool
 
+    // Issues #5252/#5253 (gsgen): the types the stub rendered abstract only
+    // semantically, keyed by (cref:SemanticAbstractTypeKey), each with
+    // whether the user declared it `open`. Null or empty for none.
+    private var semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]?
+
+    /// Gets or sets the types the gsgen stub rendered `abstract` only because they inherit
+    /// unimplemented abstract members (issues #5252/#5253), keyed by
+    /// (cref:SemanticAbstractTypeKey) and mapped to whether the user declared them
+    /// `open`. A generated part of such a type states neither `abstract` nor `open`
+    /// (the user's part states the shape, gsc unions the parts) and its members are
+    /// `open` only when the user declared the type `open`. `null` (default) for none.
+    /// A property rather than a constructor parameter, so the constructor's
+    /// signature (which already-compiled callers bind to) is unchanged.
+    prop SemanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? {
+        get -> semanticOnlyAbstractTypes
+        set -> semanticOnlyAbstractTypes = value
+    }
+
     // The translated project's directory, when known, so the translator applies
     // the loader's full generated-source rule (the obj/bin path half of
     // GeneratedSourceDetection) to a partial method's other part.
@@ -402,7 +420,8 @@ partial class CSharpToGSharpTranslator {
             this.emitPartialMethodPairs,
             suppressedPartialPairKeys,
             this.translatedFilePaths,
-            this.emitGeneratedImplementingParts
+            this.emitGeneratedImplementingParts,
+            this.semanticOnlyAbstractTypes
         )
         let fileAttributes = if this.includeFileAttributes {
             visitor.MapFileAttributes(
@@ -825,6 +844,9 @@ partial class CSharpToGSharpTranslator {
         // See `CSharpToGSharpTranslator.emitGeneratedImplementingParts`.
         private let emitGeneratedImplementingParts bool
 
+        // See `CSharpToGSharpTranslator.semanticOnlyAbstractTypes`.
+        private let semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]?
+
         // Pair keys the reconciliation loop demoted: those partial methods
         // translate as if emitPartialMethodPairs were off.
         private let suppressedPartialPairKeys IReadOnlyCollection[string]?
@@ -887,9 +909,11 @@ partial class CSharpToGSharpTranslator {
             emitPartialMethodPairs bool = false,
             suppressedPartialPairKeys IReadOnlyCollection[string]? = nil,
             translatedFilePaths HashSet[string]? = nil,
-            emitGeneratedImplementingParts bool = false
+            emitGeneratedImplementingParts bool = false,
+            semanticOnlyAbstractTypes IReadOnlyDictionary[string, bool]? = nil
         ) {
             this.emitGeneratedImplementingParts = emitGeneratedImplementingParts
+            this.semanticOnlyAbstractTypes = semanticOnlyAbstractTypes
             this.suppressedPartialPairKeys = suppressedPartialPairKeys
             this.translatedFilePaths = translatedFilePaths
             this.retainedFilePaths = retainedFilePaths
