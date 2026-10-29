@@ -1155,6 +1155,16 @@ partial class CSharpToGSharpTranslator {
             if IsVariadicCarrierParameter(symbol) {
                 return false
             }
+            // Nor a lambda parameter whose annotation would drive type inference (`MapLambdaParameter`).
+            if symbol is IParameterSymbol lambdaParameter &&
+                lambdaParameter.ContainingSymbol is IMethodSymbol{MethodKind: MethodKind.AnonymousFunction} &&
+                lambdaParameter
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is ParameterSyntax lambdaParameterSyntax &&
+                this.LambdaParameterAnnotationFeedsTypeInference(lambdaParameterSyntax) {
+                return false
+            }
             if this.ShouldPromoteToNullableReference(symbol) {
                 return true
             }
@@ -1179,6 +1189,20 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return false
+        }
+
+        /// Issue #5254: whether the call that [`argument`](paramref) belongs to returns into a sink that
+        /// accepts nil. A type argument that G# infers from the argument then forwards the null: the
+        /// result is `T?` and the sink takes it.
+        private func InferredCallResultAcceptsNil(
+            argument Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let invocation = argument?.Parent?.Parent?.Parent as InvocationExpressionSyntax
+            if argument?.Parent is not ArgumentSyntax || invocation == nil {
+                return false
+            }
+            let (resultType, resultSymbol) = this.FindContextualValueTarget(invocation)
+            return this.NullForgivingTargetAcceptsNil(resultType, resultSymbol)
         }
 
         /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds

@@ -2884,10 +2884,11 @@ partial class CSharpToGSharpTranslator {
             }
             let flowNarrowedAnnotatedValue = this.IsFlowNarrowedAnnotatedReference(value)
             // Issue #5254: control reached here, so the target stays non-null.
+            let inferredSink = this.SinkInfersTypeFromValue(targetSymbol, value)
             let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(
                 value,
-                widenedSinkNeedsNonNull: true,
-                widenedSinkInfersType: this.SinkInfersTypeFromValue(targetSymbol, value)
+                widenedSinkNeedsNonNull: !(inferredSink && this.InferredCallResultAcceptsNil(value)),
+                widenedSinkInfersType: inferredSink
             ) ||
                 flowNarrowedAnnotatedValue
             // Issue #3676: promotion and forgiveness must stay symmetric. In a

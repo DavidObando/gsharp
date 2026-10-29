@@ -1869,7 +1869,10 @@ partial class CSharpToGSharpTranslator {
                 this
                 .ReceiverNeedsNullForgiveness(
                 argument.Expression,
-                widenedSinkNeedsNonNull: true,
+                widenedSinkNeedsNonNull: !(
+                    this.SinkInfersTypeFromValue(targetParameter, argument.Expression) &&
+                        this.InferredCallResultAcceptsNil(argument.Expression)
+                ),
                 widenedSinkInfersType: this.SinkInfersTypeFromValue(targetParameter, argument.Expression)
             ) {
                 let unbridged GExpression? = this.TranslateExpression(argument.Expression)

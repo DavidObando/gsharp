@@ -39,9 +39,10 @@ import Xunit
 /// | 10 | argument whose parameter type G# infers | `Id(p)`, no `!!` |
 /// | 11 | argument to a non-null parameter | `Use(p!!)` |
 /// | 12 | argument to a receiver-fixed generic parameter (`Box[C].Use`) | `Use(p!!)` |
-/// | 13 | widened `out` local returned in a nil-accepting method, full flow | no `!!` |
+/// | 13 | widened `out` local returned, or forwarded through an inferred generic, in a nil-accepting method, full flow | no `!!` |
 /// | 16 | inferred generic argument whose result is consumed as non-null, full flow | `Id(p!!)` |
 /// | 17 | argument to a constrained generic parameter | `Use(p!!)` |
+/// | 18 | lambda parameter whose annotation drives inference | never widened, so no `!!` |
 /// | 14 | `params` carrier | never widened, so no `!!` |
 /// | 15 | indexer key of a widened parameter | binds (`m[key!!]` when the key stays non-null) |
 open class Issue5254ForgiveWidenedReadsTests {
@@ -269,9 +270,11 @@ public static class K {
   public static bool TryGet(out C c) { c = null; return false; }
   static T Id<T>(T x) => x;
   public static C? Ret() { TryGet(out C x); return x; }
+  public static C? Fwd() { TryGet(out C y); return Id(y); }
 }`)
         Assert.Contains("out c C?", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("x!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("y!!", printed, StringComparison.Ordinal)
     }
 
     @Fact
@@ -304,6 +307,19 @@ public static class K {
   public static int Read(C p) { var n = Use(p); if (p == null) { return 0; } return n; }
 }`)
             Assert.Equal(1, Count(printed, "Use(p!!)"))
+        }
+    }
+
+    @Fact
+    func Row18_LambdaParameterThatDrivesInference_IsNeverWidened() {
+        for annotationsOnly in[](bool){true, false} {
+            let printed = Translate(annotationsOnly, `using System;
+public class C { public int N; }
+public static class K {
+  static void Consume(C x) { }
+  public static void Run(C[] items) { Array.ForEach(items, p => { if (p == null) return; Consume(p); }); }
+}`)
+            Assert.DoesNotContain("Consume(p!!)", printed, StringComparison.Ordinal)
         }
     }
 
