@@ -1869,9 +1869,8 @@ partial class CSharpToGSharpTranslator {
                 this
                 .ReceiverNeedsNullForgiveness(
                 argument.Expression,
-                widenedSinkNeedsNonNull: !(
-                    targetParameter != nil && IsInferredGenericParameterTarget(targetParameter, argument.Expression)
-                )
+                widenedSinkNeedsNonNull: true,
+                widenedSinkInfersType: this.SinkInfersTypeFromValue(targetParameter, argument.Expression)
             ) {
                 let unbridged GExpression? = this.TranslateExpression(argument.Expression)
                 return this.ReportStoreBridge(

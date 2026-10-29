@@ -2884,12 +2884,10 @@ partial class CSharpToGSharpTranslator {
             }
             let flowNarrowedAnnotatedValue = this.IsFlowNarrowedAnnotatedReference(value)
             // Issue #5254: control reached here, so the target stays non-null.
-            // A parameter whose type G# infers from this value is no such sink.
-            let inferredGenericSink = targetSymbol is IParameterSymbol sinkParameter &&
-                IsInferredGenericParameterTarget(sinkParameter, value)
             let flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(
                 value,
-                widenedSinkNeedsNonNull: !inferredGenericSink
+                widenedSinkNeedsNonNull: true,
+                widenedSinkInfersType: this.SinkInfersTypeFromValue(targetSymbol, value)
             ) ||
                 flowNarrowedAnnotatedValue
             // Issue #3676: promotion and forgiveness must stay symmetric. In a
@@ -5050,7 +5048,8 @@ partial class CSharpToGSharpTranslator {
         private func ReceiverNeedsNullForgiveness(
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             isDereferenceReceiver bool = false,
-            widenedSinkNeedsNonNull bool = false
+            widenedSinkNeedsNonNull bool = false,
+            widenedSinkInfersType bool = false
         ) bool {
             if this.GSharpExpressionIsStaticallyNonNull(recv) || this.IsActivePatternBinding(recv) ||
                 this.IsGSharpFlowNarrowedLocal(recv) || this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv) {
@@ -5302,10 +5301,14 @@ partial class CSharpToGSharpTranslator {
             // (see (cref:IsTranslatorWidenedDeclaration)) is therefore read as
             // non-null at every read whose sink needs a non-null value, not only
             // at a dereference. The caller that knows the sink says so with
-            // `widenedSinkNeedsNonNull`; a sink that accepts nil, or that G#
-            // infers from the value, keeps the widened value.
+            // `widenedSinkNeedsNonNull`. A sink that accepts nil keeps the widened
+            // value, and so does a type argument that G# infers from the value
+            // (`widenedSinkInfersType`): without a flow state the value may be null.
+            // With a flow state (the tail below) the inferred type argument is the
+            // non-null one C# proved, so the argument is asserted there.
             let annotationsWithoutFlowAnalysis = (
-                isDereferenceReceiver || (widenedSinkNeedsNonNull && this.IsTranslatorWidenedDeclaration(symbol))
+                isDereferenceReceiver ||
+                    (widenedSinkNeedsNonNull && !widenedSinkInfersType && this.IsTranslatorWidenedDeclaration(symbol))
             ) &&
                 flowState == Microsoft
                 .CodeAnalysis

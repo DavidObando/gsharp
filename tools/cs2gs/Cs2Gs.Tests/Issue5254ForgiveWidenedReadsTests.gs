@@ -39,7 +39,9 @@ import Xunit
 /// | 10 | argument whose parameter type G# infers | `Id(p)`, no `!!` |
 /// | 11 | argument to a non-null parameter | `Use(p!!)` |
 /// | 12 | argument to a receiver-fixed generic parameter (`Box[C].Use`) | `Use(p!!)` |
-/// | 13 | widened `out` local returned or forwarded to an inferred generic, full flow | no `!!` |
+/// | 13 | widened `out` local returned in a nil-accepting method, full flow | no `!!` |
+/// | 16 | inferred generic argument whose result is consumed as non-null, full flow | `Id(p!!)` |
+/// | 17 | argument to a constrained generic parameter | `Use(p!!)` |
 /// | 14 | `params` carrier | never widened, so no `!!` |
 /// | 15 | indexer key of a widened parameter | binds (`m[key!!]` when the key stays non-null) |
 open class Issue5254ForgiveWidenedReadsTests {
@@ -261,17 +263,15 @@ public static class K {
     }
 
     @Fact
-    func Row13_NullableSinkInFullFlow_KeepsTheWidenedOutLocal() {
+    func Row13_NullableReturnInFullFlow_KeepsTheWidenedOutLocal() {
         let printed = Translate(false, `public class C { public int N; }
 public static class K {
   public static bool TryGet(out C c) { c = null; return false; }
   static T Id<T>(T x) => x;
   public static C? Ret() { TryGet(out C x); return x; }
-  public static C? Fwd() { TryGet(out C y); return Id(y); }
 }`)
         Assert.Contains("out c C?", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("x!!", printed, StringComparison.Ordinal)
-        Assert.DoesNotContain("y!!", printed, StringComparison.Ordinal)
     }
 
     @Fact
@@ -282,6 +282,28 @@ public static class K {
   public static C[] Echo(params C[] xs) { if (xs == null) throw new System.Exception(); return xs; }
 }`)
             Assert.DoesNotContain("xs!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Fact
+    func Row16_InferredGenericResultConsumedAsNonNull_FullFlow_IsForgiven() {
+        let printed = Translate(false, `public class C { public int N; }
+public static class K {
+  static T Id<T>(T x) => x;
+  public static C Read(C p) { var n = Id(p); if (p == null) { return new C(); } return n; }
+}`)
+        Assert.Equal(1, Count(printed, "Id(p!!)"))
+    }
+
+    @Fact
+    func Row17_ConstrainedGenericArgument_IsForgiven() {
+        for annotationsOnly in[](bool){true, false} {
+            let printed = Translate(annotationsOnly, `public class C { public int N; }
+public static class K {
+  static int Use<T>(T x) where T : class => 1;
+  public static int Read(C p) { var n = Use(p); if (p == null) { return 0; } return n; }
+}`)
+            Assert.Equal(1, Count(printed, "Use(p!!)"))
         }
     }
 

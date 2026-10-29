@@ -1181,6 +1181,26 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds
+        /// for a method type parameter that has no constraint a nullable type argument would break.
+        /// A constrained parameter keeps its non-null type argument, so its argument needs the `!!`.
+        private func SinkInfersTypeFromValue(
+            sink ISymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            if sink is not IParameterSymbol parameter || !IsInferredGenericParameterTarget(parameter, value) {
+                return false
+            }
+            let declared = parameter.OriginalDefinition.Type
+            let inferred ITypeSymbol? = if declared is IArrayTypeSymbol array {
+                array.ElementType
+            } else {
+                declared
+            }
+            return inferred is ITypeParameterSymbol typeParameter &&
+                !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter)
+        }
+
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
             let declared ITypeSymbol? = switch symbol {
                 case m is IMethodSymbol: m.ReturnType
