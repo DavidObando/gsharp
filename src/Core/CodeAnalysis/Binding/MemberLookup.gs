@@ -1721,13 +1721,11 @@ internal class MemberLookup {
             // Honour the symbolic argument first so the loop variable
             // recovers the member-bearing user `Shape` symbol.
             if type is ImportedTypeSymbol importedSym &&
-                importedSym.OpenDefinition != nil &&
+                importedSym.OpenDefinition is {} openDefinition &&
                 !importedSym
                 .TypeArguments
                 .IsDefaultOrEmpty {
-                if importedSym
-                    .OpenDefinition
-                    .FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
+                if openDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
                     importedSym
                     .TypeArguments
                     .Length == 1 {
@@ -1737,7 +1735,7 @@ internal class MemberLookup {
                 // The receiver may be a user/BCL type that implements
                 // `IAsyncEnumerable[Shape]`; probe the OpenDefinition for the
                 // interface and substitute the symbolic argument back.
-                for iface in EnumerateSelfAndInterfaces(importedSym.OpenDefinition) {
+                for iface in EnumerateSelfAndInterfaces(openDefinition) {
                     if iface.IsGenericType && !iface.IsGenericTypeDefinition && iface.GetGenericTypeDefinition()
                         .FullName == "System.Collections.Generic.IAsyncEnumerable`1" {
                         elementType = MapOpenClrTypeToSymbolicWithoutNullability(
@@ -1748,16 +1746,11 @@ internal class MemberLookup {
                         return true
                     }
                 }
-                if TryResolveClrPatternAsyncEnumerator(
-                    importedSym.OpenDefinition,
-                    out _,
-                    out _,
-                    out var openCurrentMember
-                ) &&
+                if TryResolveClrPatternAsyncEnumerator(openDefinition, out _, out _, out var openCurrentMember) &&
                     openCurrentMember != nil {
                     elementType = GetClrMemberValueTypeSymbol(
                         openCurrentMember,
-                        importedSym.OpenDefinition,
+                        openDefinition,
                         importedSym.TypeArguments
                     )
                     return true

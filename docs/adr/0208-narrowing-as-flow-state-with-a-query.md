@@ -847,6 +847,7 @@ compatibility note. "Probe" refers to section 4.
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
+| R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 
 Details per row:
 
@@ -946,6 +947,26 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R16 (#5231, maintainer decision: the stable-getter list).** The construct
+  table already lists `BoundClrPropertyAccessExpression` as `call`, but the
+  collector did not apply it: `AssignedRootsCollector.VisitExpression` killed
+  on a source getter with user code only. An imported getter can run user
+  code (`Lazy<T>.Value` runs the factory, an interface property runs the
+  implementation), so it follows R14, R11, R12 and R15: it removes every
+  member-bearing path, the facts on mutable globals, the facts behind
+  by-reference parameters and the facts on closure-assigned locals.
+  Marking every getter would drop facts after each `string.Length`, so
+  `StatementBinder.IsStableClrGetter` holds a short explicit list of getters
+  that read a field and call nothing (see the row). The list is the one
+  definition: `StatementBinder.ClrPropertyReadRunsUserCode` is the one
+  predicate that the straight-line pass, the loop collector (ADR-0213 R7 (e)),
+  the `finally` summaries and `NarrowingState.Kill` read, because they share
+  the collector. A property is added to the list only with the reason that its
+  getter calls nothing, and a corpus row that needs it. The group is
+  `BoundClrPropertyAccessExpression` with a `PropertyInfo`; a field is no getter.
+  Known limitation (follow-up issue): an imported setter or indexer that runs user code
+  (`ObservableCollection<T>` indexer set raising `CollectionChanged`) does not kill a closure-assigned
+  local either; that shape is not changed here. Corpus rows t01 to t11.
 - **R15 (#5237).** `AnalyzeCallableArguments` keeps a closure-assigned local
   across a call when the callee has no captures and receives no callable
   argument. A callee can still run a closure that an earlier statement

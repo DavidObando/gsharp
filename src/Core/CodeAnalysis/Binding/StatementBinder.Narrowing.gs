@@ -2073,6 +2073,10 @@ internal partial class StatementBinder {
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
+            // ADR-0208 R16 (#5231): an imported getter that is not on the stable list is a call, like a source getter.
+            if StatementBinder.ClrPropertyReadRunsUserCode(node) {
+                MarkMayMutateGlobalRoots()
+            }
             let sourceConstructionRunsUserCode = (
                 node is BoundConstructorCallExpression construction &&
                     (
@@ -4986,6 +4990,62 @@ internal partial class StatementBinder {
         internal func TypeInitializationRunsUserCode(type StructSymbol, atStaticMemberAccess bool) bool {
             let definition = type.Definition ?? type
             return definition.DeclaresStaticInitializerBlock && (atStaticMemberAccess || definition.IsClass)
+        }
+
+        /// ADR-0208 R14 and R16 (#5231): whether [`node`](paramref) reads an imported (CLR) property whose getter
+        /// can run user code. Such a read is a `call`: the one definition for the straight-line pass, the loop
+        /// collector and the `finally` summaries. A field is no getter. A property is stable (it runs no user
+        /// code) only when (cref:IsStableClrGetter) says so; an unlisted property is a call.
+        internal func ClrPropertyReadRunsUserCode(
+            node BoundExpression
+        ) bool -> node is BoundClrPropertyAccessExpression{Member: PropertyInfo property} &&
+            !IsStableClrGetter(property)
+
+        /// ADR-0208 R16 (#5231): the explicit list of imported getters that run no user code. A getter is stable
+        /// when the declaring type is in a core library assembly, the getter cannot be overridden (the type is
+        /// sealed or the accessor is not overridable: not virtual, or `final` as an interface implementation is, so
+        /// a call through an interface or an overridable member never qualifies), and the
+        /// property is in this list. The list is small on purpose: add a property only when its getter reads a
+        /// field and calls nothing, and name the corpus row that needs it.
+        internal func IsStableClrGetter(property PropertyInfo) bool {
+            let declaring = property.DeclaringType
+            let getter = property.GetMethod
+            if declaring == nil || getter == nil || (getter.IsVirtual && !getter.IsFinal && !declaring.IsSealed) {
+                return false
+            }
+            let assemblyName = declaring.Assembly.GetName().Name
+            if assemblyName != "System.Private.CoreLib" &&
+                assemblyName != "System.Runtime" &&
+                assemblyName != "System.Collections" &&
+                assemblyName != "netstandard" &&
+                assemblyName != "mscorlib" {
+                return false
+            }
+            let typeName = if declaring.IsGenericType {
+                declaring.GetGenericTypeDefinition().FullName
+            } else {
+                declaring.FullName
+            }
+            let name = property.Name
+            if name == "Length" {
+                return typeName is "System.String" or
+                    "System.Text.StringBuilder" or
+                    "System.Array" or
+                    "System.Span`1" or
+                    "System.ReadOnlySpan`1"
+            }
+            if name == "IsEmpty" {
+                return typeName is "System.Span`1" or "System.ReadOnlySpan`1"
+            }
+            if name == "Count" {
+                return typeName is "System.Collections.Generic.List`1" or
+                    "System.Collections.Generic.Dictionary`2" or
+                    "System.Collections.Generic.HashSet`1"
+            }
+            if name == "Key" || name == "Value" {
+                return typeName == "System.Collections.Generic.KeyValuePair`2"
+            }
+            return name == "HasValue" && typeName == "System.Nullable`1"
         }
 
         /// ADR-0208 R11 and R15 (#5504): whether [`node`](paramref) reads, writes or subscribes a static member

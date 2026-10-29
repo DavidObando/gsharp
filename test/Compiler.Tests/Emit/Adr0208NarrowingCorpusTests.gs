@@ -288,7 +288,18 @@ open class Adr0208NarrowingCorpusTests {
                 "s26_5504_generic_derived_reads_generic_base_field_R11",
                 "s26_5504_generic_derived_reads_generic_base_field_R15",
                 "s27_5504_field_initializer_only_call_constructed_R11",
-                "s27_5504_field_initializer_only_call_constructed_R15"
+                "s27_5504_field_initializer_only_call_constructed_R15",
+                "t01_5231_lazy_value_kills_a_by_reference_parameter_R16",
+                "t02_5231_lazy_value_kills_a_member_path_R16",
+                "t03_5231_string_length_keeps_a_member_path_R16",
+                "t04_5231_list_count_keeps_a_by_reference_parameter_R16",
+                "t05_5231_string_builder_length_keeps_a_closure_assigned_local_R16",
+                "t06_5231_lazy_value_runs_an_escaped_closure_R16",
+                "t07_5231_lazy_value_in_a_condition_R16",
+                "t08_5231_lazy_value_in_a_loop_R16",
+                "t09_5231_string_length_in_a_loop_R16",
+                "t10_5231_interface_count_kills_R16",
+                "t11_5231_static_getter_kills_R16"
             },
             names
         )
@@ -3485,6 +3496,248 @@ func Run(callback () -> void) int32 {
     return 2
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@34:22", "reject", "", "R15"}
+            yield[]object{"t01_5231_lazy_value_kills_a_by_reference_parameter_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(ref a C?, xs []C?) int32 {
+    let lazy = Lazy[int32](() -> {
+        xs[0] = nil
+        return 1
+    })
+    if a == nil { return 0 }
+    let n = lazy.Value
+    return a.Value + n
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))`, "GS0158@21:14", "reject", "", "R16"}
+            yield[]object{"t02_5231_lazy_value_kills_a_member_path_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box) string {
+    let lazy = Lazy[int32](() -> 1)
+    if b.Pet == nil { return "" }
+    let n = lazy.Value
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@18:18", "reject", "", "R16"}
+            yield[]object{"t03_5231_string_length_keeps_a_member_path_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box, s string) string {
+    if b.Pet == nil { return "" }
+    let n = s.Length
+    return b.Pet.Name + n.ToString()
+}
+Console.WriteLine(Run(Box(Animal()), "abc"))`, "", "run", "a3", "R16"}
+            yield[]object{"t04_5231_list_count_keeps_a_by_reference_parameter_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(ref a C?, xs []C?, list List[int32]) int32 {
+    if a == nil { return 0 }
+    let n = list.Count
+    return a.Value + n
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs, List[int32]{1, 2}))`, "", "run", "3", "R16"}
+            yield[]object{"t05_5231_string_builder_length_keeps_a_closure_assigned_local_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(sb StringBuilder) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let n = sb.Length
+    return x.Value + n
+}
+Console.WriteLine(Run(StringBuilder("ab")))`, "", "run", "3", "R16"}
+            yield[]object{"t06_5231_lazy_value_runs_an_escaped_closure_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run() int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    let n = lazy.Value
+    return x.Value + n
+}
+Console.WriteLine(Run())`, "GS0158@22:14", "reject", "", "R16"}
+            yield[]object{"t07_5231_lazy_value_in_a_condition_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run() int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    if lazy.Value > 0 {
+    }
+    return x.Value
+}
+Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R16"}
+            yield[]object{"t08_5231_lazy_value_in_a_loop_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(n int32) int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < n; i++ {
+        total = total + x.Value + lazy.Value
+    }
+    return total
+}
+Console.WriteLine(Run(2))`, "GS0158@23:27", "reject", "", "R16"}
+            yield[]object{"t09_5231_string_length_in_a_loop_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(s string) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + s.Length
+    }
+    return total
+}
+Console.WriteLine(Run("abc"))`, "", "run", "8", "R16"}
+            yield[]object{"t10_5231_interface_count_kills_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box, c ICollection[int32]) string {
+    if b.Pet == nil { return "" }
+    let n = c.Count
+    return b.Pet.Name + n.ToString()
+}
+Console.WriteLine(Run(Box(Animal()), List[int32]{1}))`, "GS0158@17:18", "reject", "", "R16"}
+            yield[]object{"t11_5231_static_getter_kills_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Environment.NewLine
+    return b.Pet.Name + n.ToString()
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@17:18", "reject", "", "R16"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

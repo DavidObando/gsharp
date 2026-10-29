@@ -195,7 +195,8 @@ a loop form:
   getter that runs user code is not a call for the alias class. Today's
   loop collector kills member paths on a source getter with user code
   (`AssignedRootsCollector.VisitExpression`, `:1751-1753`) but not on an
-  imported one.
+  imported one. Decided (ADR-0208 row R16): an imported getter is a call
+  unless it is on the stable list (`StatementBinder.IsStableClrGetter`).
 
 A single kill predicate (A2) closes both in loops the day it closes them
 in straight-line code; two predicates keep the pattern of paired fixes.
@@ -456,7 +457,7 @@ The rules, each an instance of the construct table and of the lower bound:
   classification of an unknown getter (A2; ADR-0208 row R14: a getter with
   user code is a call; the open decision of
   [#5231](https://github.com/DavidObando/gsharp/issues/5231) on imported
-  getters applies here the day it is made). The walker resolves nothing
+  getters is made: ADR-0208 row R16, one list, `StatementBinder.ClrPropertyReadRunsUserCode`). The walker resolves nothing
   about the member. This ADR defines **no exemption**, and the reason is a
   derivation, not a measurement: an exemption would need the walker to
   prove, before the region is bound, that the read binds to a member that
@@ -477,7 +478,7 @@ The rules, each an instance of the construct table and of the lower bound:
   | extension member | an instance member on the narrowed type shadows it, or the reverse |
   | member on a type parameter | dispatches through the constraint |
   | array element on a receiver whose declared type is an array | no code; but a receiver whose declared type is not an array (`object?` narrowed to `[]int32` inside the region) is not found as an array at the entry scope, and an indexer on any other receiver is a getter |
-  | imported member of any kind | #5231: the classification of imported getters is the shared predicate's open decision |
+  | imported member of any kind | #5231, decided in ADR-0208 row R16: a call unless the getter is on the stable list (`StatementBinder.IsStableClrGetter`) |
 
   The one row that is `none` under every column (an element of a
   receiver declared as an array) is not worth a second rule. If slice L0
