@@ -238,11 +238,11 @@ func F() {
             yield Row("control-struct", `func F() S -> nil`, "GS0155")
             yield Row("control-string-argument", `func Sink(s string) int32 -> 0
 func F() int32 -> Sink(nil)`, "GS0154")
-            // Unchanged rule: `??` refuses a `nil` right operand for every type.
-            yield Row("coalesce-nil-operand", `func F() {
+            // `x ?? nil` on a nullable reference is `x` (the join of `T?` and `nil` is `T?`).
+            yield Row("ok-coalesce-nil-operand", `func F() {
     let x Box? = Box()
     let y = x ?? nil
-}`, "GS0129")
+}`, "")
             // Accepted: the slot declares that it holds nil.
             yield Row("ok-nullable-return", `func F() Box? -> nil`, "")
             yield Row("ok-nullable-assignment", `func F() {
@@ -341,6 +341,17 @@ class H {
     let b = c ? Box() : nil
     if b != nil {
         let n = b.v
+    }
+}`, "")
+            yield Row("ok-coalesce-nil-in-field-initializer", `class H(value Box?) {
+    public var f Box? = value ?? nil
+}`, "")
+            yield Row("ok-dependent-bound-join", `class Fixture {
+    shared {
+        func F[A class, B A](c bool, value B) {
+            let x = c ? value : nil
+            let y B? = x
+        }
     }
 }`, "")
             yield Row("field-initializer-conditional-bare-field", `class Flags {

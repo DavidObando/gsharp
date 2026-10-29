@@ -330,7 +330,8 @@ internal partial class ExpressionBinder {
             }
             // Issue #1151: when a `nil` arm was present and the common type of the
             // remaining arms is a non-nullable value type `T`, unify to `T?`.
-            if common != nil && hasNullArm {
+            // A `T!` arm already admits `nil`, so the join stays `T!` (restored below) unless an arm is `T?`.
+            if common != nil && hasNullArm && (!hasPlatformArm || hasNullableArm) {
                 common = LiftForNilArm(common)
             }
             // Issue #2202: when at least one arm was itself a nullable `T?`, the

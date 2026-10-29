@@ -3076,7 +3076,8 @@ internal partial class ExpressionBinder {
             if type == nil || type is NullableTypeSymbol || type is PlatformTypeSymbol {
                 return type
             }
-            if type.ClrType is {IsValueType: true} || Conversion.IsReferenceLikeTarget(type) {
+            if type.ClrType is {IsValueType: true} || Conversion.IsReferenceLikeTarget(type) ||
+                type is TypeParameterSymbol{DependentBoundProvesReferenceType: true} {
                 return NullableTypeSymbol.Get(type)
             }
             return type
