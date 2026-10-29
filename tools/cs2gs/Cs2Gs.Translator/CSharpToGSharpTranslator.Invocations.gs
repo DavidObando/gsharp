@@ -1867,7 +1867,11 @@ partial class CSharpToGSharpTranslator {
                 !isFlowNarrowedLocal &&
                 this.GetUserDefinedConversionInputOperator(argument.Expression, targetType, out _) == nil &&
                 this
-                .ReceiverNeedsNullForgiveness(argument.Expression) {
+                .ReceiverNeedsNullForgiveness(
+                argument.Expression,
+                widenedSinkNeedsNonNull: true,
+                widenedSinkInfersType: this.SinkInfersTypeFromValue(targetParameter, argument.Expression)
+            ) {
                 let unbridged GExpression? = this.TranslateExpression(argument.Expression)
                 return this.ReportStoreBridge(
                     argument.Expression,

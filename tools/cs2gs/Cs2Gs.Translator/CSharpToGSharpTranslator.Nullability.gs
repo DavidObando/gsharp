@@ -1143,6 +1143,74 @@ partial class CSharpToGSharpTranslator {
         // `!!` insertion both route through this helper so a tainted interface/
         // implementation member, local/parameter/property/field, or method return
         // gets the same `T?`/forgiveness treatment everywhere.
+        /// Decides whether [`symbol`](paramref) is a declaration that the translator emits as `T?`
+        /// although C# declares it non-null: a parameter or `out` parameter that cs2gs widened, or a local
+        /// that an `out var` / `out T x` argument declares for such a parameter (G# infers the local's
+        /// type from the widened parameter).
+        /// @remarks This is the one place that names the declarations whose reads need a forgiving
+        /// `!!` when the C# flow state at the read is non-null (issue #5254). The flow-state rule
+        /// itself stays in `ReceiverNeedsNullForgiveness`.
+        private func IsTranslatorWidenedDeclaration(symbol ISymbol?) bool {
+            // The declaration side never widens a variadic carrier (`TranslateParameter`).
+            if IsVariadicCarrierParameter(symbol) {
+                return false
+            }
+            // Nor a lambda parameter whose annotation would drive type inference (`MapLambdaParameter`).
+            if symbol is IParameterSymbol lambdaParameter &&
+                lambdaParameter.ContainingSymbol is IMethodSymbol{MethodKind: MethodKind.AnonymousFunction} &&
+                lambdaParameter
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is ParameterSyntax lambdaParameterSyntax &&
+                this.LambdaParameterAnnotationFeedsTypeInference(lambdaParameterSyntax) {
+                return false
+            }
+            if this.ShouldPromoteToNullableReference(symbol) {
+                return true
+            }
+            if symbol is not ILocalSymbol local {
+                return false
+            }
+            for reference in local.DeclaringSyntaxReferences {
+                // `out var x` declares through a designation; `out T x` through a declaration expression.
+                let declaration SyntaxNode? = reference.GetSyntax()?.Parent
+                let argumentNode SyntaxNode? = if declaration is DeclarationExpressionSyntax {
+                    declaration.Parent
+                } else {
+                    default(SyntaxNode?)
+                }
+                if argumentNode is ArgumentSyntax argument && argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) &&
+                    this
+                    .context
+                    .SemanticModel
+                    .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                    this.ShouldPromoteToNullableReference(parameter.OriginalDefinition) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds
+        /// for a method type parameter that has no constraint a nullable type argument would break.
+        /// A constrained parameter keeps its non-null type argument, so its argument needs the `!!`.
+        private func SinkInfersTypeFromValue(
+            sink ISymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            if sink is not IParameterSymbol parameter || !IsInferredGenericParameterTarget(parameter, value) {
+                return false
+            }
+            let declared = parameter.OriginalDefinition.Type
+            let inferred ITypeSymbol? = if declared is IArrayTypeSymbol array {
+                array.ElementType
+            } else {
+                declared
+            }
+            return inferred is ITypeParameterSymbol typeParameter &&
+                !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter)
+        }
+
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
             let declared ITypeSymbol? = switch symbol {
                 case m is IMethodSymbol: m.ReturnType
@@ -1474,7 +1542,7 @@ partial class CSharpToGSharpTranslator {
             let targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
             ) == true
-            return !(targetDeclaredInThisCompilation && this.ShouldPromoteToNullableReference(targetSymbol))
+            return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
         }
 
         // Issue #4843: whether <paramref name="parameter"/> is declared as one of
