@@ -163,6 +163,105 @@ Reset();
     }
 
     @Fact
+    func ClosureAssignedLocal_ReadAfterUsingStatement_IsAsserted() {
+        let printed = Translate(`
+using System;
+public class Demo
+{
+    public static int Run(IDisposable resource)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            using (resource) { }
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterConditionalIndexer_IsAsserted() {
+        let printed = Translate(`
+public class Source
+{
+    public int this[int i] => i;
+}
+public class Demo
+{
+    public static int Run(Source? source)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var n = source?[0];
+            return (n ?? 0) + current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterStaticFieldWithInitializer_IsAsserted() {
+        let printed = Translate(`
+public static class State
+{
+    public static int Counter = System.Environment.TickCount;
+}
+public class Demo
+{
+    public static int Run()
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var n = State.Counter;
+            return n + current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
+    func ClosureAssignedLocal_ReadAfterGetOnlyAndInterfaceProperty_IsAsserted() {
+        let printed = Translate(`
+public interface IHolder
+{
+    int Value { get; }
+}
+public class Demo
+{
+    public int Size { get; }
+
+    public static int Run(IHolder holder, Demo demo)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var n = holder.Value + demo.Size;
+            return n + current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    @Fact
     func ClosureAssignedLocal_ReadWithoutACallBetween_StaysBare() {
         let printed = Translate(`
 public class Demo

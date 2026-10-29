@@ -4085,19 +4085,19 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        /// The translator's mirror of the compiler's `MayRunEscapedClosure` collector
-        /// (src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs, `VisitExpression`
-        /// of the mutation collector, ADR-0208 row R15): a node that runs source code
-        /// and so may run a closure that escaped. Calls of every kind (declared, base,
-        /// imported, constructor, function pointer, delegate invoke), object creation
-        /// (also `new T()` of a type parameter), foreach / await foreach, an
-        /// interpolation hole that is not a built-in value or a string, a computed
-        /// (non-auto) source property or indexer, an event subscription, and a user
-        /// defined operator or conversion. A delegate invoke is counted although gsc
-        /// classifies a call through a callable value by its own rule: the wider set can
-        /// only add an `!!` that the redundant-assertion pass removes, never miss one.
+        /// Whether a node may run source code in the emitted G#, which ends the narrowing of a
+        /// closure-assigned local (ADR-0208 row R15; the compiler's `MayRunEscapedClosure` in
+        /// src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs). The translator cannot
+        /// mirror that set exactly, because the emitted G# differs from the C# (lowered
+        /// properties, static initializer blocks, implicit disposal, interface slots), so it
+        /// answers for the whole class by a deliberate superset: a call or object creation of
+        /// any kind, a loop over a sequence, `using` and `await`, an indexer or element
+        /// binding, a user-defined operator or conversion, and any read or write of a member
+        /// that is not a plain local, parameter or constant (a property, a non-constant field
+        /// or an event). The superset can only add an `!!`, which the redundant-assertion pass
+        /// removes; a missed node leaves a bare read that gsc rejects. Locals that no closure
+        /// assigns never reach this predicate.
         private func NodeMayRunEscapedClosure(node Microsoft.CodeAnalysis.SyntaxNode) bool {
-            // A contextual user-defined conversion (`int n = token;`) runs source code at any expression.
             if node is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -4113,7 +4113,26 @@ partial class CSharpToGSharpTranslator {
             if node is InvocationExpressionSyntax ||
                 node is BaseObjectCreationExpressionSyntax ||
                 node is ForEachStatementSyntax ||
-                node is ForEachVariableStatementSyntax {
+                node is ForEachVariableStatementSyntax ||
+                node is Microsoft.CodeAnalysis.CSharp.Syntax.UsingStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AwaitExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ElementAccessExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ElementBindingExpressionSyntax {
+                return true
+            }
+            if node is LocalDeclarationStatementSyntax declaration && declaration.UsingKeyword.RawKind != 0 {
                 return true
             }
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax interpolation {
@@ -4130,11 +4149,6 @@ partial class CSharpToGSharpTranslator {
                             holeType.SpecialType > SpecialType.System_UIntPtr
                     )
                 )
-            }
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment {
-                let target ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
-                return target is IEventSymbol || this.IsComputedSourceMember(target) ||
-                    this.RunsUserOperatorOrConversion(assignment)
             }
             if node is Microsoft
                 .CodeAnalysis
@@ -4156,88 +4170,25 @@ partial class CSharpToGSharpTranslator {
                 .CSharp
                 .Syntax
                 .CastExpressionSyntax {
-                return this.RunsUserOperatorOrConversion(node)
+                return this
+                    .context
+                    .GetSymbolInfo(node)
+                    .Symbol is IMethodSymbol{
+                    MethodKind: Microsoft
+                        .CodeAnalysis
+                        .MethodKind
+                        .UserDefinedOperator or
+                        Microsoft
+                        .CodeAnalysis
+                        .MethodKind
+                        .Conversion
+                }
             }
-            if node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ElementAccessExpressionSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .IdentifierNameSyntax {
-                return this.IsComputedSourceMember(this.context.GetSymbolInfo(node).Symbol)
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax {
+                let member ISymbol? = this.context.GetSymbolInfo(node).Symbol
+                return member is IPropertySymbol or IEventSymbol || member is IFieldSymbol{IsConst: false}
             }
             return false
-        }
-
-        private func RunsUserOperatorOrConversion(node Microsoft.CodeAnalysis.SyntaxNode) bool {
-            if this
-                .context
-                .GetSymbolInfo(node)
-                .Symbol is IMethodSymbol{
-                MethodKind: Microsoft
-                    .CodeAnalysis
-                    .MethodKind
-                    .UserDefinedOperator or
-                    Microsoft
-                    .CodeAnalysis
-                    .MethodKind
-                    .Conversion
-            } {
-                return true
-            }
-            return node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ExpressionSyntax expression &&
-                this
-                .context
-                .SemanticModel
-                .GetConversion(expression)
-                .IsUserDefined
-        }
-
-        /// A property or indexer of the translated sources that has an accessor body,
-        /// the compiler's non-auto property (`IsAutoProperty == false`).
-        private func IsComputedSourceMember(symbol ISymbol?) bool {
-            if symbol is not IPropertySymbol property {
-                return false
-            }
-            return property
-                .DeclaringSyntaxReferences
-                .Select((reference SyntaxReference) -> reference.GetSyntax())
-                .Any(
-                (declaration Microsoft.CodeAnalysis.SyntaxNode) -> declaration is IndexerDeclarationSyntax ||
-                    (
-                    declaration is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .PropertyDeclarationSyntax propertyDeclaration &&
-                        (
-                        propertyDeclaration.ExpressionBody != nil ||
-                            // An initialized static auto-property lowers to a computed property over a backing
-                        // field (TryTranslateStaticInitializedAutoProperty).
-                        (
-                            propertyDeclaration.Initializer != nil && propertyDeclaration.Modifiers.Any(
-                                Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
-                            )
-                        ) ||
-                            (
-                            propertyDeclaration.AccessorList != nil && propertyDeclaration.AccessorList!!.Accessors.Any(
-                                (
-                                    accessor Microsoft.CodeAnalysis.CSharp.Syntax.AccessorDeclarationSyntax
-                                ) -> accessor.Body != nil ||
-                                    accessor.ExpressionBody != nil
-                            )
-                        )
-                    )
-                )
-            )
         }
 
         private func NearestFunctionBoundary(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
