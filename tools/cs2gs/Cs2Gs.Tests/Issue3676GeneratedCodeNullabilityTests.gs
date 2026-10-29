@@ -313,7 +313,7 @@ namespace Demo
     {
         public override Payload Read(string text)
         {
-            return null;
+            return default!;
         }
     }
 }`))
