@@ -4993,7 +4993,8 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            if this.ReceiverNeedsNullForgiveness(value) {
+            // The caller proved that the indexer key stays non-null (issue #5254).
+            if this.ReceiverNeedsNullForgiveness(value, widenedSinkNeedsNonNull: true) {
                 return true
             }
             if this.NullableReferenceValueMayBeNull(value) {
