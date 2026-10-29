@@ -9,6 +9,8 @@ import GSharp.Compiler.Tests
 import System
 import System.Diagnostics
 import System.IO
+import System.Text
+import System.Text.RegularExpressions
 import Xunit
 
 /// Issue #1144: end-to-end emit + execution tests proving a constant integer
@@ -18,6 +20,93 @@ import Xunit
 /// asserted — including an unsigned-arithmetic check to confirm the literal is
 /// emitted as the unsigned operand type (not int32).
 open class Issue1144LiteralIntAdaptEmitTests {
+    @Theory
+    @InlineData("Color.Green == 1", int32(25), int32(27))
+    @InlineData("1 == Color.Green", int32(15), int32(17))
+    @InlineData("Color.Green / 2", int32(25), int32(26))
+    @InlineData("2 / Color.Green", int32(15), int32(16))
+    func EnumLiteralOperands_RetainTheirStaticTypes(expression string, start int32, end int32) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = "package EnumLiteral\n" + "enum Color { Green = 1 }\n" + "func F() -> " + expression
+        let (code, diagnostics) = fixture.TryCompile(source, "EnumLiteral", false)
+        Assert.NotEqual(0, code)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "EnumLiteral.dll")))
+        let error = Assert.Single(Regex.Matches(diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0129", error.Groups[5].Value)
+        Assert.Equal("3", error.Groups[1].Value)
+        Assert.Equal(start.ToString(), error.Groups[2].Value)
+        Assert.Equal("3", error.Groups[3].Value)
+        Assert.Equal(end.ToString(), error.Groups[4].Value)
+    }
+
+    @Fact
+    func BothLiteralOperands_AdaptRepresentableValues_AndRejectInvalidConversions() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package LiteralPromotion
+import System
+func Sum() uint32 -> 4294967294 + 1
+func ReverseSum() uint32 -> 1 + 4294967294
+func WideSum() uint64 -> 18446744073709551614 + 1
+func ReverseWideSum() uint64 -> 1 + 18446744073709551614
+func SignedSum() int64 -> 9223372036854775806 + 1
+func Main() {
+    Console.WriteLine(Sum())
+    Console.WriteLine(ReverseSum())
+    Console.WriteLine(WideSum())
+    Console.WriteLine(ReverseWideSum())
+    Console.WriteLine(SignedSum())
+    Console.WriteLine(4294967294 - 1)
+    Console.WriteLine(4294967294 * 1)
+    Console.WriteLine(4294967294 / 2)
+    Console.WriteLine(4294967294 % 3)
+    Console.WriteLine(4294967294 | 1)
+    Console.WriteLine(4294967294 & 1)
+    Console.WriteLine(4294967294 ^ 1)
+    Console.WriteLine(4294967294 > 1)
+    Console.WriteLine(1 < 4294967294)
+    Console.WriteLine(4294967294 == 1)
+    Console.WriteLine(1 != 4294967294)
+}`
+        let dll = fixture.Compile(source, "LiteralPromotion", true, "/deterministic+", "/debug:none")
+        IlVerifier.Verify(dll)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                (
+                    "4294967295\n4294967295\n18446744073709551615\n18446744073709551615\n" +
+                        "9223372036854775807\n4294967293\n4294967294\n2147483647\n2\n" +
+                        "4294967295\n0\n4294967295\nTrue\nTrue\nFalse\nTrue\n"
+                ).Replace("\n", Environment.NewLine, StringComparison.Ordinal)
+            ),
+            fixture.RunBytes(dll)
+        )
+        let first = File.ReadAllBytes(dll)
+        fixture.Compile(source, "LiteralPromotion", true, "/deterministic+", "/debug:none")
+        Assert.Equal(first, File.ReadAllBytes(dll))
+
+        for expression in[]string{
+            "4294967294 + 0xffffffff",
+            "0xffffffff + 4294967294",
+            "18446744073709551615 + -1",
+            "4294967294 + value",
+            "value + 4294967294",
+            "small + 256",
+            "unsigned + -1"
+        } {
+            let declaration = "func F(value int32, small uint8, unsigned uint32) -> "
+            let rejected = "package Rejected\n" + declaration + expression
+            let (code, diagnostics) = fixture.TryCompile(rejected, "Rejected", false)
+            Assert.NotEqual(0, code)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            let error = Assert.Single(Regex.Matches(diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+            let column = declaration.Length + expression.IndexOf('+') + 1
+            Assert.Equal("GS0129", error.Groups[5].Value)
+            Assert.Equal("2", error.Groups[1].Value)
+            Assert.Equal(column.ToString(), error.Groups[2].Value)
+            Assert.Equal("2", error.Groups[3].Value)
+            Assert.Equal((column + 1).ToString(), error.Groups[4].Value)
+        }
+    }
+
     @Fact
     func UInt32Increment_LiteralAdapts_AndRuns() {
         let source = `package main
