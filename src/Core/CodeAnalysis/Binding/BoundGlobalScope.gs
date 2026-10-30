@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -177,6 +178,12 @@ class BoundGlobalScope {
         entryPoint FunctionSymbol?,
         statements ImmutableArray[BoundStatement]
     ) {
+        if previous != nil {
+            throw ArgumentException(
+                "Chaining a global scope through 'previous' is not supported; pass nil.",
+                "previous"
+            )
+        }
         Previous = previous
         Package = $package
         Packages = packages
@@ -266,14 +273,9 @@ class BoundGlobalScope {
         get;
     }
 
-    /// Gets the imports declared directly by <em>this</em> compilation's own
-    /// syntax trees — NOT the transitively-visible import set (issue #2101).
-    /// Mirrors (cref:Functions)/(cref:Variables), which have
-    /// always been per-level deltas rather than a cumulative snapshot. Callers
-    /// that need every import visible across a chained REPL session (e.g.
-    /// emit, which must see imports from every prior submission) should use
-    /// (cref:GetCumulativeImports) instead of reading this property
-    /// directly on a single link of the (cref:Previous) chain.
+    /// Gets the imports declared by this compilation's own syntax trees. A
+    /// global scope is never chained (ADR-0212 S8), so this is every import
+    /// visible to the compilation.
     prop Imports ImmutableArray[ImportSymbol] {
         get;
     }
@@ -503,27 +505,4 @@ class BoundGlobalScope {
     /// to one synthesized type, and the two passes cannot both emit
     /// `<>AnonymousType0`.
     internal prop AnonymousTypeCache AnonymousTypeCache?
-
-    /// Returns every import visible across the whole (cref:Previous)
-    /// chain, oldest submission first (issue #2101). This is the cumulative
-    /// view that (cref:Imports) itself used to provide directly —
-    /// moved here (an explicit, one-time O(chain length) walk) so that
-    /// per-level binding ((cref:Binder.BindGlobalScope(BoundGlobalScope, ImmutableArray{Syntax.SyntaxTree},
-    /// Symbols.ReferenceResolver, bool, ImmutableHashSet{string}, bool)))
-    /// no longer has to re-flatten (and get re-flattened by) the entire
-    /// history on every single chained submission.
-    /// @returns The cumulative imports, oldest-declared first.
-    func GetCumulativeImports() ImmutableArray[ImportSymbol] {
-        let chain = Stack[BoundGlobalScope]()
-        var current BoundGlobalScope? = this
-        while current != nil {
-            chain.Push(current)
-            current = current.Previous
-        }
-        let builder = ImmutableArray.CreateBuilder[ImportSymbol]()
-        while chain.Count > 0 {
-            builder.AddRange(chain.Pop().Imports)
-        }
-        return builder.ToImmutable()
-    }
 }

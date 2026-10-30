@@ -4,7 +4,6 @@
 
 package GSharp.LanguageServer
 
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -106,6 +105,54 @@ shared class BoundSemantics {
         case field is FieldSymbol: field.ImportedMember != nil
         case clrEvent is EventSymbol: clrEvent.ImportedMember != nil
         default: false
+    }
+
+    /// Tells whether [`symbol`](paramref) is an extension: an extension function declared in source, or an
+    /// imported static method marked with the extension attribute.
+    func IsExtensionMember(symbol Symbol?) bool -> switch symbol {
+        case function is ImportedFunctionSymbol: HasExtensionAttribute(function.Method)
+        case function is FunctionSymbol: function.IsExtension
+        default: false
+    }
+
+    /// Tells whether [`member`](paramref), as [`LookupMembers`](cref:LookupMembers) listed it for
+    /// [`receiver`](paramref), is an extension appended for the receiver, which a call writes on a value.
+    /// A static method of the receiver's own class that carries the extension attribute (`Enumerable.Select`
+    /// on `Enumerable`) is a static member of its type, not an extension of it.
+    func IsReceiverExtension(member Symbol?, receiver TypeSymbol) bool {
+        if !IsExtensionMember(member) {
+            return false
+        }
+        if member is ImportedFunctionSymbol imported {
+            var type = receiver
+            while type is NullableTypeSymbol or PlatformTypeSymbol {
+                type = if type is NullableTypeSymbol nullable {
+                    nullable.UnderlyingType
+                } else {
+                    cast[PlatformTypeSymbol](type).UnderlyingType
+                }
+            }
+            let owner = imported.Method.DeclaringType
+            let own = type.ClrType
+            return owner == nil || own == nil || !string.Equals(owner.FullName, own.FullName, StringComparison.Ordinal)
+        }
+        return true
+    }
+
+    // The attribute is read as metadata, by name: a method of a project's reference set comes from a
+    // MetadataLoadContext, where IsDefined is not supported (as in the compiler's own check).
+    private func HasExtensionAttribute(method MethodInfo) bool {
+        if !method.IsStatic {
+            return false
+        }
+        try {
+            return method.GetCustomAttributesData().Any(
+                (attribute CustomAttributeData) -> attribute.AttributeType.FullName ==
+                "System.Runtime.CompilerServices.ExtensionAttribute"
+            )
+        } catch (Exception) {
+            return false
+        }
     }
 
     /// Gets the reflected member behind an imported member symbol, for documentation and for
@@ -227,7 +274,7 @@ shared class BoundSemantics {
         let fileName = tree.Text?.FileName
         if !string.IsNullOrEmpty(fileName) {
             for candidate in compilation.SyntaxTrees {
-                if SourcePathIdentity.AreSame(candidate.Text?.FileName, fileName) &&
+                if ServerPathIdentity.AreSame(candidate.Text?.FileName, fileName) &&
                     candidate
                     .Text
                     .Length == tree

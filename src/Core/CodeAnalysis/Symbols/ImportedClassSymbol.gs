@@ -453,7 +453,7 @@ class ImportedClassSymbol : Symbol {
                     continue
                 }
                 if arguments[i].Type is StructSymbol{IsClass: true} ss {
-                    t = ss.ImportedBaseType?.ClrType ?? typeof(object)
+                    t = TypeMemberModel.GetNearestImportedBase(ss)?.ClrType ?? typeof(object)
                     hasUserClassArg = true
                 } else if arguments[i].Type is InterfaceSymbol || arguments[i].Type is DelegateTypeSymbol {
                     // Issue #1421 / ADR-0087 §3 R5: a user-defined G# interface or
@@ -868,7 +868,7 @@ class ImportedClassSymbol : Symbol {
                 return clrType
             }
             if type is StructSymbol{IsClass: true} userClass {
-                return userClass.ImportedBaseType?.ClrType ?? typeof(object)
+                return TypeMemberModel.GetNearestImportedBase(userClass)?.ClrType ?? typeof(object)
             }
             if type is EnumSymbol {
                 return typeof(int32)

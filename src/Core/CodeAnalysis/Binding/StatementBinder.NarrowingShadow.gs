@@ -280,11 +280,11 @@ internal partial class StatementBinder {
     private func ShadowApplyEffects(flow ShadowFlow, effects StatementEffects) {
         let before = flow.Current
         let kills = (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root)
-        flow.Current = before.Kill(effects, kills)
+        flow.Current = before.Kill(effects, kills, MayBeMutatedByEscapedClosure)
         if flow.DefaultExit >= 0 {
             // A guard bound after the default arm runs before it. It removes what the
             // default arm inherited, not what the arm wrote.
-            let removed = flow.DefaultIn.Kill(effects, kills)
+            let removed = flow.DefaultIn.Kill(effects, kills, MayBeMutatedByEscapedClosure)
             var exit = flow.Exits[flow.DefaultExit]
             for path in flow.DefaultIn.Paths {
                 if removed.NarrowedType(path) == nil && !flow.DefaultWritten.AssignsRoot(path.Root) {
@@ -405,7 +405,8 @@ internal partial class StatementBinder {
             collector.MayMutateAnyRoot,
             collector.MayMutateAnyRootViaPointer,
             collector.MayMutateGlobalRoots,
-            collector.MayMutateWritableReferenceRoots
+            collector.MayMutateWritableReferenceRoots,
+            collector.MayRunEscapedClosure
         )
     }
 
@@ -509,7 +510,8 @@ internal partial class StatementBinder {
             if binderCtx.ShadowOverlay.Count > 0 {
                 binderCtx.ShadowOverlay = binderCtx.ShadowOverlay.Kill(
                     ShadowEffectsOf(statement, binderCtx.ShadowOverlay),
-                    (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root)
+                    (root VariableSymbol) -> binderCtx.MayBeAssignedByClosure(root),
+                    MayBeMutatedByEscapedClosure
                 )
             }
             return

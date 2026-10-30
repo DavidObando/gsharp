@@ -11,7 +11,6 @@ import System.Linq
 import System.Reflection
 import System.Text
 import System.Threading
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols.Display
@@ -1440,11 +1439,13 @@ shared class CompletionComputer {
             return
         }
         for member in BoundSemantics.LookupMembers(compilation, content.SyntaxTree, offset, type) {
-            if receiver is EnumSymbol {
+            // The members of an enum are its constants, which belong to the type name; an extension appended
+            // for the enum is called on a value like any other.
+            if receiver is EnumSymbol && member is EnumMemberSymbol {
                 if !staticMembers {
                     continue
                 }
-            } else if MemberTokenResolver.IsStatic(member) != staticMembers {
+            } else if MemberTokenResolver.IsStatic(member, receiver) != staticMembers {
                 continue
             }
             if receiver is StructSymbol && member is EventSymbol {

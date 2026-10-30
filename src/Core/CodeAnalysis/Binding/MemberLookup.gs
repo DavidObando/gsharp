@@ -405,6 +405,29 @@ internal class MemberLookup {
         return result
     }
 
+    /// Enumerates every visible `static [Extension]` method of the imported extension-holding classes,
+    /// for the semantic model's member query (ADR-0212 question 12). Holders keep reference-set order and
+    /// the methods of a holder follow metadata order, so the answer does not depend on hash order.
+    /// @returns The visible extension methods, each once.
+    internal func CollectAllImportedExtensionMethods() List[MethodInfo] {
+        let result = List[MethodInfo]()
+        for type in this.GetImportedExtensionClasses() {
+            let metadata = importedExtensionIndexes.GetValue(type, BuildImportedExtensionIndex)
+            let seen = HashSet[MethodInfo]()
+            let methods = List[MethodInfo]()
+            for entry in metadata.Methods {
+                for method in entry.Value {
+                    if IsVisibleImportedMethod(method) && method.GetParameters().Length > 0 && seen.Add(method) {
+                        methods.Add(method)
+                    }
+                }
+            }
+            methods.Sort((left MethodInfo, right MethodInfo) -> left.MetadataToken.CompareTo(right.MetadataToken))
+            result.AddRange(methods)
+        }
+        return result
+    }
+
     /// A type declared in a namespace, with its position in the reference
     /// set's assembly and metadata order.
     private data class HolderCandidate(Candidate Type, Ordinal int32) { }
@@ -1449,6 +1472,60 @@ internal class MemberLookup {
             requireReadable
         ) as PropertyInfo
 
+        /// Retains the symbolic declaring interface for an inherited property.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The ordinary property name.
+        /// @param importedReceiver The imported owner with its source type arguments.
+        /// @param requireReadable Whether candidates require a getter.
+        /// @returns The selected property, or null.
+        internal func GetInterfaceImportedBaseInstanceProperty(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            out importedReceiver TypeSymbol?,
+            requireReadable bool = false
+        ) PropertyInfo? {
+            importedReceiver = nil
+            if !TypeMemberModel.GetMethods(interfaceSymbol, name, MemberQuery.Instance(MemberKinds.Method))
+                .IsDefaultOrEmpty {
+                return nil
+            }
+            let property = GetInterfaceImportedBaseInstanceDataMember(
+                interfaceSymbol,
+                name,
+                MemberKinds.Property,
+                out var declaringContext,
+                requireReadable
+            ) as PropertyInfo
+            if property == nil {
+                return nil
+            }
+            importedReceiver = GetClrMemberDeclaringTypeSymbol(declaringContext!!, property)
+            return property
+        }
+
+        /// Finds an imported event while retaining the source hierarchy's symbolic receiver.
+        /// @param interfaceSymbol The source interface receiver.
+        /// @param name The event name.
+        /// @param importedReceiver The imported base carrying the selected event's type arguments.
+        /// @returns The public instance event, or null.
+        internal func GetInterfaceImportedBaseInstanceEvent(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            out importedReceiver TypeSymbol?
+        ) EventInfo? {
+            for sourceInterface in interfaceSymbol.SelfAndAllBaseInterfaces() {
+                for importedBase in sourceInterface.BaseClrInterfaces {
+                    let eventInfo = SafeGetEventIncludingSelfAndInterfaces(importedBase.ClrType, name)
+                    if eventInfo != nil {
+                        importedReceiver = importedBase
+                        return eventInfo
+                    }
+                }
+            }
+            importedReceiver = nil
+            return nil
+        }
+
         /// Finds imported instance data members using the ordinary property and event readers.
         /// @param interfaceSymbol The source interface receiver.
         /// @param name The ordinary member name.
@@ -1460,8 +1537,25 @@ internal class MemberLookup {
             name string,
             kinds MemberKinds,
             requireReadableProperty bool = false
+        ) MemberInfo? -> GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol,
+            name,
+            kinds,
+            out _,
+            requireReadableProperty
+        )
+
+        private func GetInterfaceImportedBaseInstanceDataMember(
+            interfaceSymbol InterfaceSymbol,
+            name string,
+            kinds MemberKinds,
+            out declaringContext TypeSymbol?,
+            requireReadableProperty bool
         ) MemberInfo? {
-            for clrBase in GetTransitiveClrBaseInterfaces(interfaceSymbol) {
+            declaringContext = nil
+            let clrBases = ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceSymbol, out var contexts)
+            for var i = 0; i < clrBases.Count; i++ {
+                let clrBase = clrBases[i]
                 if (kinds & MemberKinds.Property) != 0 {
                     let property = ClrTypeUtilities.SafeGetProperty(
                         clrBase,
@@ -1471,12 +1565,14 @@ internal class MemberLookup {
                     if property != nil && property.GetIndexParameters()
                         .Length == 0 &&
                         (!requireReadableProperty || property.CanRead) {
+                        declaringContext = contexts[i]
                         return property
                     }
                 }
                 if (kinds & MemberKinds.Event) != 0 {
                     let eventInfo = SafeGetEventIncludingSelfAndInterfaces(clrBase, name)
                     if eventInfo != nil {
+                        declaringContext = contexts[i]
                         return eventInfo
                     }
                 }
@@ -1625,13 +1721,11 @@ internal class MemberLookup {
             // Honour the symbolic argument first so the loop variable
             // recovers the member-bearing user `Shape` symbol.
             if type is ImportedTypeSymbol importedSym &&
-                importedSym.OpenDefinition != nil &&
+                importedSym.OpenDefinition is {} openDefinition &&
                 !importedSym
                 .TypeArguments
                 .IsDefaultOrEmpty {
-                if importedSym
-                    .OpenDefinition
-                    .FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
+                if openDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1" &&
                     importedSym
                     .TypeArguments
                     .Length == 1 {
@@ -1641,7 +1735,7 @@ internal class MemberLookup {
                 // The receiver may be a user/BCL type that implements
                 // `IAsyncEnumerable[Shape]`; probe the OpenDefinition for the
                 // interface and substitute the symbolic argument back.
-                for iface in EnumerateSelfAndInterfaces(importedSym.OpenDefinition) {
+                for iface in EnumerateSelfAndInterfaces(openDefinition) {
                     if iface.IsGenericType && !iface.IsGenericTypeDefinition && iface.GetGenericTypeDefinition()
                         .FullName == "System.Collections.Generic.IAsyncEnumerable`1" {
                         elementType = MapOpenClrTypeToSymbolicWithoutNullability(
@@ -1652,16 +1746,11 @@ internal class MemberLookup {
                         return true
                     }
                 }
-                if TryResolveClrPatternAsyncEnumerator(
-                    importedSym.OpenDefinition,
-                    out _,
-                    out _,
-                    out var openCurrentMember
-                ) &&
+                if TryResolveClrPatternAsyncEnumerator(openDefinition, out _, out _, out var openCurrentMember) &&
                     openCurrentMember != nil {
                     elementType = GetClrMemberValueTypeSymbol(
                         openCurrentMember,
-                        importedSym.OpenDefinition,
+                        openDefinition,
                         importedSym.TypeArguments
                     )
                     return true
@@ -3741,7 +3830,7 @@ internal class MemberLookup {
                     // enough to pass the ClrType gate (mirroring the delegate-
                     // component eraser); the symbolic-argument recovery downstream
                     // re-derives the real element type for inference.
-                    erased = userClass.ImportedBaseType?.ClrType ?? typeof(object)
+                    erased = TypeMemberModel.GetNearestImportedBase(userClass)?.ClrType ?? typeof(object)
                     return true
                 }
                 case InterfaceSymbol {
@@ -5992,10 +6081,19 @@ internal class MemberLookup {
                 imp
                 .TypeArguments
                 .IsDefaultOrEmpty ||
-                closedMethod == nil {
+                closedMethod == nil ||
+                !TryGetSymbolicDeclaringContext(
+                imp,
+                closedMethod.DeclaringType,
+                out var openDefinition,
+                out var typeArguments
+            ) ||
+                openDefinition == nil ||
+                typeArguments.IsDefaultOrEmpty {
                 return nil
             }
-            let openMethod MethodInfo? = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod)
+            // Symbolic channel views and reflected methods can belong to different reflection contexts.
+            let openMethod MethodInfo? = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
             if openMethod == nil {
                 return nil
             }
@@ -6012,8 +6110,8 @@ internal class MemberLookup {
             // the call's bound type and every use of it reported GS0156.
             return GetClrOpenMethodReturnTypeSymbol(
                 openMethod,
-                imp.OpenDefinition,
-                imp.TypeArguments,
+                openDefinition,
+                typeArguments,
                 BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
             )
         }
@@ -6048,10 +6146,18 @@ internal class MemberLookup {
                 .TypeArguments
                 .IsDefaultOrEmpty ||
                 closedMethod == nil ||
-                paramIndex < 0 {
+                paramIndex < 0 ||
+                !TryGetSymbolicDeclaringContext(
+                imp,
+                closedMethod.DeclaringType,
+                out var openDefinition,
+                out var typeArguments
+            ) ||
+                openDefinition == nil ||
+                typeArguments.IsDefaultOrEmpty {
                 return nil
             }
-            let openMethod MethodInfo? = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod)
+            let openMethod MethodInfo? = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
             if openMethod == nil {
                 return nil
             }
@@ -6066,8 +6172,8 @@ internal class MemberLookup {
             // project to the open method type parameter.
             return GetClrOpenParameterPointeeTypeSymbol(
                 openParameters[paramIndex],
-                imp.OpenDefinition,
-                imp.TypeArguments,
+                openDefinition,
+                typeArguments,
                 openMethod,
                 BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
             )
@@ -6703,15 +6809,41 @@ internal class MemberLookup {
         ) bool {
             mappedArguments = default(ImmutableArray[TypeSymbol])
             foundProjection = false
+            for arguments in EnumerateConstructedTypeArgumentsThroughHierarchy(source, targetOpenDefinition) {
+                if !foundProjection {
+                    mappedArguments = arguments
+                    foundProjection = true
+                    continue
+                }
+                if mappedArguments.Length != arguments.Length || !mappedArguments.Zip(arguments).All(
+                    (pair(First TypeSymbol, Second TypeSymbol)) -> DeclarationBinder.TypeSignaturesEquivalent(
+                        pair.First,
+                        pair.Second
+                    )
+                ) {
+                    mappedArguments = default(ImmutableArray[TypeSymbol])
+                    return false
+                }
+            }
+            return foundProjection
+        }
+
+        /// Enumerates every matching owner vector without erasing source arguments or choosing an interface instantiation.
+        /// @param source The symbolic CLR-backed source.
+        /// @param targetOpenDefinition The requested generic definition.
+        /// @returns All matching symbolic argument vectors in hierarchy order.
+        internal func EnumerateConstructedTypeArgumentsThroughHierarchy(
+            source TypeSymbol,
+            targetOpenDefinition Type
+        ) sequence[ImmutableArray[TypeSymbol]] {
             if source.ClrType is {IsArray: true} sourceArray && sourceArray.GetArrayRank() == 1 &&
                 Conversion
                 .IsArrayElementInterface(targetOpenDefinition) {
                 let positions = source.GetElementPositions()
                 if positions.Length == 1 {
-                    mappedArguments = positions
-                    foundProjection = true
-                    return true
+                    yield positions
                 }
+                yield break
             }
             var sourceOpenDefinition Type?
             var sourceArguments ImmutableArray[TypeSymbol]
@@ -6726,18 +6858,7 @@ internal class MemberLookup {
                 }
                 sourceArguments = source.GetElementPositions()
             } else {
-                return false
-            }
-            let VectorsEquivalent = func (left ImmutableArray[TypeSymbol], right ImmutableArray[TypeSymbol]) bool {
-                if left.Length != right.Length {
-                    return false
-                }
-                for var i = 0; i < left.Length; i++ {
-                    if !DeclarationBinder.TypeSignaturesEquivalent(left[i], right[i]) {
-                        return false
-                    }
-                }
-                return true
+                yield break
             }
             for candidate in EnumerateOpenInterfacesAndBases(sourceOpenDefinition!!) {
                 var candidateDefinition Type
@@ -6773,18 +6894,8 @@ internal class MemberLookup {
                         )
                     )
                 }
-                let projectedArguments = builder.MoveToImmutable()
-                if !foundProjection {
-                    mappedArguments = projectedArguments
-                    foundProjection = true
-                    continue
-                }
-                if !VectorsEquivalent(mappedArguments, projectedArguments) {
-                    mappedArguments = default(ImmutableArray[TypeSymbol])
-                    return false
-                }
+                yield builder.MoveToImmutable()
             }
-            return foundProjection
         }
 
         internal func TryProjectConstructedHierarchyClrType(
@@ -9346,31 +9457,14 @@ internal class MemberLookup {
             if imp.OpenDefinition == nil {
                 return false
             }
-            // Walk the open definition's interfaces/base for an instantiation of
-            // targetOpenDef, then substitute the symbolic args back through.
-            for iface in EnumerateOpenInterfacesAndBases(imp.OpenDefinition) {
-                if !iface.IsGenericType || !ClrTypeUtilities.AreSame(iface.GetGenericTypeDefinition(), targetOpenDef) {
-                    continue
-                }
-                let openArgs = iface.GetGenericArguments()
-                let lifted = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
-                for oa in openArgs {
-                    lifted.Add(
-                        MapOpenClrTypeToSymbolicWithoutNullability(
-                            oa,
-                            imp.OpenDefinition,
-                            imp.TypeArguments,
-                            NullabilityFreeReason.TypeStructure
-                        )
-                    )
-                }
-                liftedArgs = lifted.MoveToImmutable()
+            for arguments in EnumerateConstructedTypeArgumentsThroughHierarchy(imp, targetOpenDef) {
+                liftedArgs = arguments
                 return true
             }
             return false
         }
 
-        private func EnumerateOpenInterfacesAndBases(openDef Type) sequence[Type] {
+        internal func EnumerateOpenInterfacesAndBases(openDef Type) sequence[Type] {
             // Issue #4559: sparse InterfaceImpl metadata (as G# emits it) lists only
             // the DIRECT interfaces of a type, so GetInterfaces() on a class or
             // interface omits interfaces inherited through them (IReadOnlyCollection<T>
@@ -9753,31 +9847,6 @@ internal class MemberLookup {
                 )
             }
             return builder.MoveToImmutable()
-        }
-
-        /// Locates the open-generic-definition counterpart of [`closedMethod`](paramref)
-        /// on [`openDefinition`](paramref). Match is by metadata token + module,
-        /// which is stable for methods on a constructed generic type (the
-        /// reflection layer reports the open token regardless of the closing).
-        /// @param openDefinition The open generic type definition.
-        /// @param closedMethod The closed method to project.
-        /// @returns The open method, or `null` when no match.
-        private func TryGetOpenInstanceMethod(openDefinition Type?, closedMethod MethodInfo?) MethodInfo? {
-            if openDefinition == nil || closedMethod == nil {
-                return nil
-            }
-            if ClrTypeUtilities.AreSame(closedMethod.DeclaringType, openDefinition) {
-                return closedMethod
-            }
-            let token = closedMethod.MetadataToken
-            let module = closedMethod.Module
-            let bindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
-            for candidate in openDefinition.GetMethods(bindingFlags) {
-                if candidate.MetadataToken == token && object.ReferenceEquals(candidate.Module, module) {
-                    return candidate
-                }
-            }
-            return nil
         }
     }
 }

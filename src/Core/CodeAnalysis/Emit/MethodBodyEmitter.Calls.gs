@@ -163,7 +163,7 @@ internal partial class MethodBodyEmitter {
         var methodHandle EntityHandle
         if genericOwner != nil {
             methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(genericOwner, call.Method)
-        } else if receiverIface != nil && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(receiverIface) {
+        } else if receiverIface != nil {
             let (slotIface, openMethod) = ResolveInterfaceSlotOwner(receiverIface, call.Method)
             methodHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(slotIface, openMethod)
         } else if call.Method.ReceiverType is StructSymbol importedReceiver && importedReceiver.ClrType != nil {
@@ -745,6 +745,15 @@ internal partial class MethodBodyEmitter {
             Interface InterfaceSymbol,
             Method FunctionSymbol
         ) {
+            // A non-generic receiver can inherit a slot from a constructed generic interface.
+            // Find the selected declaration before considering the signature fallback on another interface.
+            for candidate in receiverIface.SelfAndAllBaseInterfaces() {
+                if candidate.Methods.Contains(substitutedMethod) || candidate.PrivateMethods.Contains(
+                    substitutedMethod
+                ) {
+                    return (candidate, ResolveOpenInterfaceMethod(candidate, substitutedMethod))
+                }
+            }
             for candidate in receiverIface.SelfAndAllBaseInterfaces() {
                 let open_ = ResolveOpenInterfaceMethod(candidate, substitutedMethod)
                 if !object.ReferenceEquals(open_, substitutedMethod) {

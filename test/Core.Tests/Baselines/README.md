@@ -65,7 +65,7 @@ decomposition is complete). In that case:
 2. From the repo root, rerun the same gate with shared golden update mode:
    ```
    GSHARP_UPDATE_GOLDENS=1 \
-   dotnet test test/Core.Tests/Core.Tests.csproj \
+   dotnet test test/Core.Tests/Core.Tests.gsproj \
      --filter "FullyQualifiedName~Samples_EmittedPE_Match_Baseline" \
      --no-restore --nologo
    ```
@@ -88,6 +88,32 @@ adjust. Only the entry-point body and its local signature change; the other
 20 method bodies and their local signatures are identical. Genuine before/after
 images produce byte-identical stdout and pass unsuppressed ILVerify. The sample
 inventory, existing compile-failure entries, and hashing policy are unchanged.
+
+The approved #5425 metadata extension intentionally changes three sample hashes:
+
+- `PrimaryCtorVariadic.gs`: `Names` primary storage changes from
+  `prefix:0,items:0` to `prefix:67108867,items:67108868`.
+  Type `33554435` gains the existing collection marker
+  `33554435|<items>k__BackingField:slice`.
+  The existing `Ids` marker keeps its payload and moves one custom-attribute row.
+- `WebsiteData.gs`: `Point` primary storage changes from `X:0,Y:0` to
+  `X:67108865,Y:67108866`.
+- `WebsiteKotlin.gs`: `Developer` primary storage changes from `Name:0,Years:0`
+  to `Name:67108865,Years:67108866`.
+
+All 67 complete method bodies, signatures, parameters, fields, and properties
+remain identical. All non-attribute metadata tables and blob contents remain
+identical. String and user-string heaps remain identical.
+The GUID heaps remain identical after MVID normalization.
+Genuine base/current images pass unsuppressed ILVerify and produce identical
+stdout. Repeated old and new compilations preserve complete PE bytes.
+
+The existing table summary omits custom-attribute values.
+These changes therefore expose its diagnostic gap, not reference-set drift.
+Issue [#5515](https://github.com/DavidObando/gsharp/issues/5515) tracks that P2 gap
+separately. The complete emitted-content assertion and diagnostic assertions
+remain unchanged. Regeneration changes only these three hashes; the existing
+per-table snapshot remains byte-identical.
 
 The #5325 storage repair intentionally changes six samples: `AllowsRefStruct`,
 `AsyncLet`, `FanInMerge`, `Pipeline`, `ScopeAll`, and `WorkerPool`.

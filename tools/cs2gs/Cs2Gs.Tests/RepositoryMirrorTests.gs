@@ -8,12 +8,110 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Text
+import System.Threading.Tasks
 import System.Xml.Linq
 import Cs2Gs.Pipeline
 import Xunit
 
 /// Tests repository discovery and exact file mirroring.
 class RepositoryMirrorTests {
+    @Fact
+    async func Migrate_ExcludedSiblingKeepsIncludedProjectAndSource() {
+        using let scratch = RepositoryMirrorTests.ScratchDirectory()
+        let source = Path.Combine(scratch.Path, "source")
+        let shared = Path.Combine(source, "shared")
+        let destination = Path.Combine(scratch.Path, "destination")
+        Directory.CreateDirectory(shared)
+        GsharpTestProjectRunner.WriteIsolationBoundary(source)
+        let initialized = await ProcessRunner.RunAsync("git", []string{"init", "--quiet"}, source)
+        Assert.Equal(0, initialized.ExitCode)
+        for name in[]string{"Included", "Excluded"} {
+            File.WriteAllText(
+                Path.Combine(shared, name + ".csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework>" +
+                    "<EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>" +
+                    "<ItemGroup><Compile Include=\"" +
+                    name +
+                    ".cs\" /></ItemGroup></Project>"
+            )
+            File.WriteAllText(Path.Combine(shared, name + ".cs"), "public class " + name + " {}")
+        }
+        File.WriteAllBytes(Path.Combine(shared, "asset.bin"), []byte{0, 255, 13, 10})
+        // Use the loaded driver, not the C# source tree selected by CS2GS_TEST_SOURCE_ROOT.
+        let cli = typeof(Cs2Gs.Cli.Program).Assembly.Location
+        let compiler string? = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
+        Assert.NotNull(compiler)
+        let result = await ProcessRunner.RunAsync(
+            "dotnet",
+            []string{
+                cli,
+                "migrate",
+                "--corpus",
+                source,
+                "--out",
+                destination,
+                "--artifacts",
+                Path.Combine(scratch.Path, "artifacts"),
+                "--sdk-pin",
+                "global-json",
+                "--config",
+                "Release",
+                "--gsc",
+                compiler!!,
+                "--translate-only",
+                "--exclude",
+                "shared/Excluded.csproj"
+            },
+            source,
+            TimeSpan.FromMinutes(2)
+        )
+        Assert.False(result.TimedOut, result.Output)
+        Assert.True(result.ExitCode == 0, result.Output)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("open class Included { }\n"),
+            File.ReadAllBytes(Path.Combine(destination, "shared", "Included.gs"))
+        )
+        let project = "\uFEFF<?xml version=\"1.0\" encoding=\"utf-8\"?><Project Sdk=\"Gsharp.NET.Sdk\">" +
+            "<PropertyGroup><TargetFramework>net10.0</TargetFramework>" +
+            "<EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>" +
+            "<ItemGroup><Compile Include=\"Included.gs\" /></ItemGroup></Project>"
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(project),
+            File.ReadAllBytes(Path.Combine(destination, "shared", "Included.gsproj"))
+        )
+        Assert.Equal([]byte{0, 255, 13, 10}, File.ReadAllBytes(Path.Combine(destination, "shared", "asset.bin")))
+        Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.gsproj")))
+        Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.csproj")))
+        Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.gs")))
+        Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.cs")))
+    }
+
+    @Fact
+    func ValidateCompleted_ExcludedSiblingKeepsIncludedProjectRequiredAndRejectsUnownedProjects() {
+        using let scratch = RepositoryMirrorTests.ScratchDirectory()
+        let source = Path.Combine(scratch.Path, "source")
+        let destination = Path.Combine(scratch.Path, "destination")
+        let excluded = Path.Combine(source, "shared", "Excluded.csproj")
+        Directory.CreateDirectory(Path.GetDirectoryName(excluded)!!)
+        Directory.CreateDirectory(Path.Combine(destination, "shared"))
+        File.WriteAllText(excluded, "<Project />")
+        File.WriteAllText(Path.Combine(destination, "Product.slnx"), "<Solution />")
+        let files = []string{"Product.slnx", "shared/Excluded.csproj", "shared/Included.csproj"}
+        let scope_ = RepositoryExcludedScope.Compute(source, []string{excluded})
+        let missing = Assert.Throws[InvalidOperationException](
+            () -> RepositoryMirror.ValidateCompleted(source, destination, files, excludedScope: scope_)
+        )
+        Assert.Contains("expected file 'shared/Included.gsproj'", missing.Message, StringComparison.Ordinal)
+        File.WriteAllText(Path.Combine(destination, "shared", "Included.gsproj"), "<Project />")
+        RepositoryMirror.ValidateCompleted(source, destination, files, excludedScope: scope_)
+        File.WriteAllText(Path.Combine(destination, "shared", "Unowned.gsproj"), "<Project />")
+        let unexpected = Assert.Throws[InvalidOperationException](
+            () -> RepositoryMirror.ValidateCompleted(source, destination, files, excludedScope: scope_)
+        )
+        Assert.Equal("Repository migration produced unexpected file 'shared/Unowned.gsproj'.", unexpected.Message)
+    }
+
     @Fact
     func Prepare_CopiesAssetsAndExcludesBuildOutputs() {
         using let scratch = RepositoryMirrorTests.ScratchDirectory()

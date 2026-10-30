@@ -673,7 +673,34 @@ partial class CSharpToGSharpTranslator {
                 !inInterface &&
                 !symbol.IsSealed &&
                 (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
-                this.IsTypeEmittedOpen(symbol.ContainingType)
+                this.IsPrintedTypeOpen(symbol.ContainingType)
+        }
+
+        /// Issues #5252/#5253: whether the type a member is printed into is `open`,
+        /// the only openness a member's own `open` may depend on (GS0421: `open`
+        /// on a member of a class that is not open). For a type the gsgen stub
+        /// rendered abstract only semantically, the printed generated part states
+        /// neither `abstract` nor `open` (see (cref:TryGetSemanticOnlyAbstractType)), so
+        /// the type is open exactly when the user declared it `open`; every other
+        /// type answers (cref:IsTypeEmittedOpen).
+        private func IsPrintedTypeOpen(type INamedTypeSymbol?) bool {
+            if this.TryGetSemanticOnlyAbstractType(type, out var declaredOpen) {
+                return declaredOpen
+            }
+            return this.IsTypeEmittedOpen(type)
+        }
+
+        /// Issues #5252/#5253: whether [`type`](paramref) is one the gsgen stub rendered
+        /// `abstract` only because it inherits unimplemented abstract members.
+        /// @param type The type, or `null`.
+        /// @param declaredOpen Whether the user declared the type `open`.
+        /// @returns `true` for such a type.
+        private func TryGetSemanticOnlyAbstractType(type INamedTypeSymbol?, out declaredOpen bool) bool {
+            declaredOpen = false
+            if type == nil || this.semanticOnlyAbstractTypes == nil || this.semanticOnlyAbstractTypes.Count == 0 {
+                return false
+            }
+            return this.semanticOnlyAbstractTypes.TryGetValue(SemanticAbstractTypeKey.Of(type), out declaredOpen)
         }
 
         /// Collects the inline initializers of get-only/get+init auto-properties
@@ -1529,6 +1556,18 @@ partial class CSharpToGSharpTranslator {
             ) {
                 isAbstract = false
             }
+            // Issues #5252/#5253: a generated part of a type that is abstract only
+            // semantically states neither `abstract` (a generator mirrors the stub's
+            // modifiers, and gsc unions `abstract` across parts, which would make
+            // the user's class uninstantiable, GS0386) nor `open` (the user's part
+            // states it; a member's `open` follows it, IsPrintedTypeOpen). Even a
+            // generator-authored `abstract` is dropped: the declared shape is the
+            // user's alone.
+            var isPartOpen = isOpen
+            if this.TryGetSemanticOnlyAbstractType(symbol, out var unusedDeclaredOpen) {
+                isAbstract = false
+                isPartOpen = false
+            }
             // Issue #1910 (gap 1 & 2): a `partial` type's attributes/`unsafe`
             // modifier can legally sit on ANY part, not just the primary one
             // (Roslyn's `symbol.GetAttributes()` already merges them). Union in
@@ -1599,7 +1638,7 @@ partial class CSharpToGSharpTranslator {
                 interfaces: interfaces,
                 members: members,
                 visibility: MapVisibility(symbol, this.context, node),
-                isOpen: isOpen && !isAbstract,
+                isOpen: isPartOpen && !isAbstract,
                 isAbstract: isAbstract,
                 attributes: attributes,
                 isUnsafe: isUnsafe,

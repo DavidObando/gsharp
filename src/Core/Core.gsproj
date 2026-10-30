@@ -16,7 +16,6 @@
     <InternalsVisibleTo Include="GSharp.Core.Tests" />
     <InternalsVisibleTo Include="GSharp.Compiler.Tests" />
     <InternalsVisibleTo Include="GSharp.Interpreter.Tests" />
-    <InternalsVisibleTo Include="GSharp.LanguageServer" />
     <InternalsVisibleTo Include="gsc" />
     <InternalsVisibleTo Include="gsi" />
     <!-- ADR-0193 Phase 1: cs2gs calls NullabilityImportRule directly (ADR-0186

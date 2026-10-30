@@ -414,9 +414,13 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 
 ### Reference closure diagnostics (GS9100)
 
+`GS9100` remains advisory under global `/warnaserror` and SDK `TreatWarningsAsErrors`.
+Explicit `/warnaserror:GS9100` or `/gsdiag:GS9100=error` still rejects incomplete reference closure.
+Using unavailable types or members still produces ordinary binding errors.
+
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. Add the missing package/project reference (the SDK passes `@(ReferencePathWithRefAssemblies)`, MSBuild's full transitive closure, so this normally only appears with a hand-rolled `/r:` set). Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
+| GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. The SDK supplies selected compile references, resolved loose dependencies, and available runtime assets. Add the missing package/project reference when the program needs its metadata. Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
 
 ### Analyzer host diagnostics (GS9300–GS9319, reserved)
 

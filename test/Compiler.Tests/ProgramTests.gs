@@ -27,6 +27,7 @@ open class ProgramTests {
     @InlineData(false, false)
     @InlineData(false, true)
     @InlineData(true, false)
+    @InlineData(true, true)
     func Driver_TypeForwarders_RequireOnlyActualMetadataDependencies(required bool, useForwardedType bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dependency = fixture.CompileCSharp("public class Forwarded5420 { }", "Optional5420")
@@ -64,16 +65,14 @@ open class ProgramTests {
         )
         Assert.DoesNotContain("GS9998", diagnostics)
         if required {
-            Assert.Contains("$source(1,1,1,1): error GS9100:", diagnostics)
+            Assert.Contains("$source(1,1,1,1): warning GS9100:", diagnostics)
             Assert.Contains("Optional5420", diagnostics)
         } else {
             Assert.DoesNotContain("GS9100", diagnostics)
-            if useForwardedType {
-                let error = Assert.Single(Regex.Matches(diagnostics, `(?m)^.*\berror GS\d+:[^\r\n]*`))
-                Assert.Equal("$source(1,13,1,26): error GS0130: Function 'Forwarded5420' doesn't exist.", error.Value)
-            }
         }
-        if required || useForwardedType {
+        if useForwardedType {
+            let error = Assert.Single(Regex.Matches(diagnostics, `(?m)^.*\berror GS\d+:[^\r\n]*`))
+            Assert.Equal("$source(1,13,1,26): error GS0130: Function 'Forwarded5420' doesn't exist.", error.Value)
             Assert.NotEqual(0, exit)
             Assert.Contains("error GS", diagnostics)
             Assert.False(File.Exists(output))
@@ -831,8 +830,55 @@ func Main() {
     }
 
     @Theory
-    @InlineData("/warnaserror", "", "error")
-    @InlineData("/warnaserror+", "", "error")
+    @InlineData(false)
+    @InlineData(true)
+    func Driver_AdvisoryClosure_BindsOnlyAvailableMembers(unavailable bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dependency = fixture.CompileCSharp("public sealed class MissingMarker { }", "Missing5493")
+        let library = fixture.CompileCSharp(
+            "namespace Closure5493; public static class Contract { public static string Safe() => \"effect5493\"; public static void Accept(MissingMarker value) { } }",
+            "Contract5493",
+            dependency
+        )
+        let verifierDirectory = Path.Combine(fixture.Directory, "verifier-only")
+        Directory.CreateDirectory(verifierDirectory)
+        let verifierDependency = Path.Combine(verifierDirectory, Path.GetFileName(dependency))
+        File.Move(dependency, verifierDependency)
+        let source = Path.Combine(fixture.Directory, "Advisory.gs")
+        File.WriteAllText(
+            source,
+            "import Closure5493\n" + if unavailable {
+                "Contract.Accept(nil)\n"
+            } else {
+                "Console.Write(Contract.Safe())\n"
+            }
+        )
+        let image = Path.Combine(fixture.Directory, "Advisory.dll")
+        let options = []string{"/warnaserror+", "/deterministic+", "/out:" + image}
+        let (exit, diagnostics) = RunReferenceWarningDriver(fixture.Directory, source, library, options)
+        Assert.Contains("$source(1,1,1,1): warning GS9100:", diagnostics)
+        Assert.Contains("(Missing5493)", diagnostics)
+        Assert.DoesNotContain("GS9998", diagnostics)
+        if unavailable {
+            let error = Assert.Single(Regex.Matches(diagnostics, `(?m)^.*\berror GS\d+:[^\r\n]*`))
+            Assert.Equal("$source(2,10,2,21): error GS0159: Cannot find function Accept.", error.Value)
+            Assert.Equal(1, exit)
+            Assert.False(File.Exists(image))
+        } else {
+            Assert.True(exit == 0, diagnostics)
+            let bytes = File.ReadAllBytes(image)
+            Assert.NotEmpty(bytes)
+            IlVerifier.Verify(image, []string{library, verifierDependency})
+            Assert.Equal(Encoding.UTF8.GetBytes("effect5493"), fixture.RunBytes(image))
+            let (repeated, repeatedDiagnostics) = RunReferenceWarningDriver(fixture.Directory, source, library, options)
+            Assert.True(repeated == 0, repeatedDiagnostics)
+            Assert.Equal(bytes, File.ReadAllBytes(image))
+        }
+    }
+
+    @Theory
+    @InlineData("/warnaserror", "", "warning")
+    @InlineData("/warnaserror+", "", "warning")
     @InlineData("/warnaserror:GS9100", "", "error")
     @InlineData("/warnaserror+:GS9100", "", "error")
     @InlineData("/gsdiag:GS9100=error", "", "error")

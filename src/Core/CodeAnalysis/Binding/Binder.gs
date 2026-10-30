@@ -809,22 +809,20 @@ partial class Binder {
             // when binding the function body so that `T` resolves inside the
             // body to the TypeParameterSymbol. Issue #312: a method may carry
             // both the enclosing type's type parameters (when it is a member of
-            // a generic class) and its own method-level type parameters; seed
+            // a generic class or interface) and its own method-level type parameters; seed
             // the full enclosing type chain first, then the method's own so
             // each inner scope shadows outer names on collision.
-            let enclosingGenericOwner StructSymbol? = (
-                function.ReceiverType ?? function.StaticOwnerType
-            ) as StructSymbol
+            let enclosingGenericOwner = function.ReceiverType ?? function.StaticOwnerType
             let outerTypeParams = if enclosingGenericOwner == nil {
                 ImmutableArray[TypeParameterSymbol].Empty
             } else {
                 StructSymbol.CollectEnclosingTypeParameters(enclosingGenericOwner)
             }
-            let ownerTypeParams = enclosingGenericOwner
-                ?.Definition
-                ?.TypeParameters ??
-                enclosingGenericOwner?.TypeParameters ??
-                ImmutableArray[TypeParameterSymbol].Empty
+            let ownerTypeParams = switch enclosingGenericOwner {
+                case owner is StructSymbol: (owner.Definition ?? owner).TypeParameters
+                case owner is InterfaceSymbol: (owner.Definition ?? owner).TypeParameters
+                default: ImmutableArray[TypeParameterSymbol].Empty
+            }
             if !outerTypeParams.IsDefaultOrEmpty || !ownerTypeParams.IsDefaultOrEmpty || function.IsGeneric {
                 this.binderCtx.CurrentTypeParameters = Dictionary[string, TypeParameterSymbol]()
                 for tp in outerTypeParams {
@@ -6633,8 +6631,16 @@ partial class Binder {
             isLibrary bool,
             submission SubmissionBindingOptions?
         ) BoundGlobalScope {
+            // ADR-0212 Q2 / S8: chaining through `previous` is retired (no caller
+            // passed a non-nil value; the REPL chains through emitted metadata).
+            // The parameter stays on the public overloads and rejects a chain.
+            if previous != nil {
+                throw ArgumentException(
+                    "Chaining a global scope through 'previous' is not supported; pass nil.",
+                    "previous"
+                )
+            }
             var result = BindGlobalScopeCore(
-                previous,
                 syntaxTrees,
                 references,
                 implicitSystemImport,
@@ -6685,7 +6691,6 @@ partial class Binder {
                     return result
                 }
                 result = BindGlobalScopeCore(
-                    previous,
                     syntaxTrees,
                     references,
                     implicitSystemImport,
@@ -6698,7 +6703,6 @@ partial class Binder {
         }
 
         private func BindGlobalScopeCore(
-            previous BoundGlobalScope?,
             syntaxTrees ImmutableArray[SyntaxTree],
             references ReferenceResolver?,
             implicitSystemImport bool,
@@ -6707,13 +6711,8 @@ partial class Binder {
             submission SubmissionBindingOptions?,
             nativeCoverage ImmutableDictionary[string, bool]?
         ) BoundGlobalScope {
-            let parentScope = CreateParentScope(
-                previous,
-                references,
-                preprocessorSymbols,
-                preserveLatestImportSyntaxTrees: false,
-                submissionImports: submission?.Imports
-            )
+            let parentScope = CreateRootScope(references, preprocessorSymbols)
+            parentScope.SetSubmissionImports(submission?.Imports)
             let binder = Binder(parentScope, function: nil)
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
@@ -6733,7 +6732,7 @@ partial class Binder {
                     binder.$scope.TryImport(ImportSymbol(replayed.Name, replayed.Target, declaration: nil))
                 }
             }
-            if implicitSystemImport && previous == nil {
+            if implicitSystemImport {
                 // Seed an implicit `import System` so common BCL types (Console,
                 // String, Int32, ...) resolve without an explicit import. The user
                 // may still write `import System` redundantly; lookup short-circuits
@@ -6761,11 +6760,7 @@ partial class Binder {
             let defaultPackageName = submission?.DefaultPackageName ?? "Default"
             for tree in syntaxTrees {
                 let packageSyntax PackageSyntax? = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
-                let packageName = if packageSyntax != nil {
-                    string.Concat(packageSyntax.IdentifiersWithDots.Select((t SyntaxToken) -> t.ValueText))
-                } else {
-                    defaultPackageName
-                }
+                let packageName = PackageNameOfTree(tree, defaultPackageName)
                 if !packagesByName.TryGetValue(packageName, out var packageSymbol) {
                     packageSymbol = PackageSymbol(packageName, packageSyntax)
                     packagesByName[packageName] = packageSymbol
@@ -6953,9 +6948,11 @@ partial class Binder {
                         }
                     }
                 )
-                if structSymbol != nil {
-                    declaredStructs.Add((structSyntax, structSymbol))
-                    syntheticDeclToSymbol[structSyntax] = structSymbol
+                // ADR-0208 R15 (#5237): a closure assigns `structSymbol`, so a call kills its fact; a `let` keeps it.
+                let declaredStruct = structSymbol
+                if declaredStruct != nil {
+                    declaredStructs.Add((structSyntax, declaredStruct))
+                    syntheticDeclToSymbol[structSyntax] = declaredStruct
                 }
             }
             for (delegateSyntax, delegateSymbol) in declaredDelegates {
@@ -7495,10 +7492,7 @@ partial class Binder {
             // Issue #4453: top-level statements do not pass through
             // AnalyzeFunctionBody either; check their member accesses too.
             ProtectedReceiverDiagnostics.Report(topLevelBlock, synthesizedEntryPoint, binder.Diagnostics)
-            var diagnostics = binder.Diagnostics.ToImmutableArray()
-            if previous != nil {
-                diagnostics = diagnostics.InsertRange(0, previous.Diagnostics)
-            }
+            let diagnostics = binder.Diagnostics.ToImmutableArray()
             // Issue #3501 A2: synthesized ref-kind delegates (see
             // SynthesizedRefDelegateCache) join the declared named delegates so
             // the emitter stamps their TypeDefs through the same ADR-0059 path.
@@ -7507,7 +7501,7 @@ partial class Binder {
                 .GetDeclaredDelegates()
                 .AddRange(binder.$scope.GetSynthesizedRefDelegateCache().Symbols)
             var result = BoundGlobalScope(
-                previous,
+                nil,
                 entryPointPackage,
                 packagesInOrder.ToImmutable(),
                 diagnostics,
@@ -7523,16 +7517,8 @@ partial class Binder {
                 statements.ToImmutable()
             )
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
-            result.AssemblyAttributes = if previous == nil {
-                boundAssemblyAttributes
-            } else {
-                previous.AssemblyAttributes.AddRange(boundAssemblyAttributes)
-            }
-            result.ModuleAttributes = if previous == nil {
-                boundModuleAttributes
-            } else {
-                previous.ModuleAttributes.AddRange(boundModuleAttributes)
-            }
+            result.AssemblyAttributes = boundAssemblyAttributes
+            result.ModuleAttributes = boundModuleAttributes
             // Issue #2224: anonymous-class literals (`object { let ... }`) bound
             // anywhere during this pass — top-level statements included —
             // synthesize their backing StructSymbol into binder.scope's shared
@@ -7562,23 +7548,10 @@ partial class Binder {
             // was already snapshotted into `diagnostics`, so append here too.
             let friendDiagnostics = DiagnosticBag()
             let friendAssemblies = FriendAssemblyDeclarations.Collect(syntaxTrees, friendDiagnostics)
-            if previous == nil {
-                result.FriendAssemblies = friendAssemblies
-            } else {
-                let combinedFriends = ImmutableArray.CreateBuilder[string](
-                    previous.FriendAssemblies.Length + friendAssemblies.Length
-                )
-                combinedFriends.AddRange(previous.FriendAssemblies)
-                for friendAssembly in friendAssemblies {
-                    if !previous.FriendAssemblies.Contains(friendAssembly) {
-                        combinedFriends.Add(friendAssembly)
-                    }
-                }
-                result.FriendAssemblies = combinedFriends.ToImmutable()
-            }
+            result.FriendAssemblies = friendAssemblies
             if friendDiagnostics.Any() {
                 result = BoundGlobalScope(
-                    previous,
+                    nil,
                     entryPointPackage,
                     packagesInOrder.ToImmutable(),
                     diagnostics.AddRange(friendDiagnostics),
@@ -7945,36 +7918,32 @@ partial class Binder {
                 dirtyTrees,
                 workBudget
             )
-            var scope_ BoundGlobalScope? = globalScope
-            while scope_ != nil {
-                for function in scope_.Functions {
-                    if functionBodies.ContainsKey(function) {
-                        continue
-                    }
-                    if independentBodies.TryGetValue(function, out var independent) {
-                        functionBodies.Add(function, independent.Body)
-                        AppendBodyDiagnostics(diagnostics, independent.Diagnostics, function)
-                        continue
-                    }
-                    // ADR-0086 / issue #727: P/Invoke functions have no managed
-                    // body — the binder skips body binding and the emitter writes
-                    // a PinvokeImpl method with an ImplMap row instead. We still
-                    // register the function in functionBodies (with an empty
-                    // synthetic block) so the emitter's per-package method-row
-                    // planner produces a MethodDef handle for it.
-                    if function.IsPInvoke {
-                        functionBodies.Add(
-                            function,
-                            BoundBlockStatement(function.Declaration, ImmutableArray[BoundStatement].Empty)
-                        )
-                        continue
-                    }
+            for function in globalScope.Functions {
+                if functionBodies.ContainsKey(function) {
+                    continue
+                }
+                if independentBodies.TryGetValue(function, out var independent) {
+                    functionBodies.Add(function, independent.Body)
+                    AppendBodyDiagnostics(diagnostics, independent.Diagnostics, function)
+                    continue
+                }
+                // ADR-0086 / issue #727: P/Invoke functions have no managed
+                // body — the binder skips body binding and the emitter writes
+                // a PinvokeImpl method with an ImplMap row instead. We still
+                // register the function in functionBodies (with an empty
+                // synthetic block) so the emitter's per-package method-row
+                // planner produces a MethodDef handle for it.
+                if function.IsPInvoke {
                     functionBodies.Add(
                         function,
-                        BindDeclaredFunctionBody(cache, dirtyTrees, parentScope, function, owner: nil, diagnostics)
+                        BoundBlockStatement(function.Declaration, ImmutableArray[BoundStatement].Empty)
                     )
+                    continue
                 }
-                scope_ = scope_.Previous
+                functionBodies.Add(
+                    function,
+                    BindDeclaredFunctionBody(cache, dirtyTrees, parentScope, function, owner: nil, diagnostics)
+                )
             }
             // Phase 3.B.3 sub-step 2b: bind class method bodies. Methods are not
             // in globalScope.Functions (they're addressed via the dot operator),
@@ -8588,7 +8557,7 @@ partial class Binder {
                 allDelegates
             ){
                 OrderedFunctions = orderedFunctions,
-                Imports = globalScope.GetCumulativeImports(),
+                Imports = globalScope.Imports,
                 FriendAssemblies = globalScope.FriendAssemblies,
                 AssemblyAttributes = globalScope.AssemblyAttributes,
                 ModuleAttributes = globalScope.ModuleAttributes,
@@ -8802,12 +8771,8 @@ partial class Binder {
             (Function FunctionSymbol, Owner StructSymbol?)
         ] {
             let result = List[(Function FunctionSymbol, Owner StructSymbol?)]()
-            var declarations BoundGlobalScope? = globalScope
-            while declarations != nil {
-                for function in declarations.Functions {
-                    result.Add((function, default(StructSymbol?)))
-                }
-                declarations = declarations.Previous
+            for function in globalScope.Functions {
+                result.Add((function, default(StructSymbol?)))
             }
             for owner in globalScope.Structs {
                 for method in owner.Methods.Concat(owner.StaticMethods) {
@@ -8861,12 +8826,8 @@ partial class Binder {
                     largestBody = Math.Max(largestBody, function.Declaration!!.Body!!.Span.Length)
                 }
             }
-            var declarationsScope BoundGlobalScope? = globalScope
-            while declarationsScope != nil {
-                for function in declarationsScope.Functions {
-                    add(function, nil)
-                }
-                declarationsScope = declarationsScope.Previous
+            for function in globalScope.Functions {
+                add(function, nil)
             }
             for owner in globalScope.Structs {
                 for method in owner.Methods {
@@ -9338,6 +9299,119 @@ partial class Binder {
             } catch (Exception) {
                 // Speculation must never throw into the editor pipeline.
                 return nil
+            }
+        }
+
+        /// Gets the name of the package a tree belongs to: its `package` declaration, else the default package.
+        /// @param tree The tree.
+        /// @param defaultPackageName The name of the package of a tree that declares none.
+        /// @returns The package name.
+        internal func PackageNameOfTree(tree SyntaxTree, defaultPackageName string) string {
+            let packageSyntax PackageSyntax? = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
+            return if packageSyntax != nil {
+                string.Concat(packageSyntax.IdentifiersWithDots.Select((t SyntaxToken) -> t.ValueText))
+            } else {
+                defaultPackageName
+            }
+        }
+
+        /// Collects the extension functions and extension methods in scope at a file that a member access on
+        /// [`receiverType`](paramref) could name (ADR-0212 question 12). Source extensions go through the
+        /// scope's own lookup and imported ones through the import-aware holder index and
+        /// `ClrOverloadResolution.MayAcceptExtensionReceiver`, the rules a call applies. Nothing is bound.
+        /// @param globalScope The bound global scope of the compilation.
+        /// @param references The reference resolver supplying imported types.
+        /// @param containingFunction The function enclosing the position, or `null`.
+        /// @param receiverType The receiver type, without nullability wrappers.
+        /// @param name When given, only extensions of this name.
+        /// @param referencingTree The tree (file) whose imports apply.
+        /// @param defaultPackageName The package of a tree that declares none, for a position outside any function.
+        /// @returns The source extension functions and the imported extension methods, or empty arrays when the
+        /// lookup fails.
+        internal func CollectExtensionMembers(
+            globalScope BoundGlobalScope?,
+            references ReferenceResolver,
+            containingFunction FunctionSymbol?,
+            receiverType TypeSymbol,
+            name string?,
+            referencingTree SyntaxTree,
+            defaultPackageName string
+        )(Source ImmutableArray[FunctionSymbol], Imported ImmutableArray[MethodInfo]) {
+            if globalScope == nil {
+                return (ImmutableArray[FunctionSymbol].Empty, ImmutableArray[MethodInfo].Empty)
+            }
+            try {
+                let parentScope = CreateParentScope(
+                    globalScope,
+                    references,
+                    globalScope.PreprocessorSymbols,
+                    preserveLatestImportSyntaxTrees: true
+                )
+                let binder = Binder(parentScope, containingFunction)
+                // A top-level statement or an initializer has no function; its package is its file's.
+                let previousPackage = parentScope.SetCurrentDeclaringPackage(
+                    containingFunction?.Package?.Name ?? PackageNameOfTree(referencingTree, defaultPackageName)
+                )
+                let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
+                try {
+                    let source = if name == nil {
+                        binder.$scope.TryLookupAllExtensionFunctions(receiverType)
+                    } else {
+                        binder.$scope.TryLookupExtensionFunctions(receiverType, name)
+                    }
+                    let imported = ImmutableArray.CreateBuilder[MethodInfo]()
+                    let probe = ImportedExtensionProbeReceiver(receiverType)
+                    if probe != nil {
+                        let candidates = if name == nil {
+                            binder.memberLookup.CollectAllImportedExtensionMethods()
+                        } else {
+                            binder.memberLookup.CollectImportedExtensionMethods(name)
+                        }
+                        for candidate in candidates {
+                            // Whether a generic candidate's constraints hold is found by closing it, and a
+                            // closing that the runtime rejects (a `MemoryExtensions` overload over a
+                            // string, say) means the candidate does not apply. One such candidate must not
+                            // drop the others.
+                            try {
+                                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, probe, nil, nil) {
+                                    imported.Add(candidate)
+                                }
+                            } catch (ex Exception) when !(ex is OutOfMemoryException) {
+                                continue
+                            }
+                        }
+                    }
+                    return (source, imported.ToImmutable())
+                } finally {
+                    parentScope.SetCurrentDeclaringPackage(previousPackage)
+                    parentScope.SetCurrentReferencingSyntaxTree(previousTree)
+                }
+            } catch (Exception) {
+                // The query must never throw into the editor pipeline.
+                return (ImmutableArray[FunctionSymbol].Empty, ImmutableArray[MethodInfo].Empty)
+            }
+        }
+
+        // A receiver without a CLR shape of its own is probed through the shape a call projects it to (see
+        // `ExpressionBinder.TryBindImportedExtensionCall`): its erased CLR type, and for a declared class whose
+        // erasure is absent or `object`, the interface it implements.
+        private func ImportedExtensionProbeReceiver(receiverType TypeSymbol) TypeSymbol? {
+            if receiverType.ClrType != nil && !TypeSymbol.ContainsSameCompilationUserType(receiverType) {
+                return receiverType
+            }
+            var projected Type? = nil
+            if !MemberLookup.TryProjectErasedClrType(receiverType, out projected) {
+                projected = nil
+            }
+            if receiverType is StructSymbol{IsClass: true} userClass &&
+                (projected == nil || projected.IsSameAs(typeof(object))) &&
+                ExpressionBinder.TryProjectUserClassReceiverInterface(userClass, out var implemented) {
+                projected = implemented
+            }
+            return if projected == nil {
+                default(TypeSymbol?)
+            } else {
+                ImportedTypeSymbol.GetWithoutNullability(projected, NullabilityFreeReason.TypeStructure)
             }
         }
 
@@ -11338,76 +11412,50 @@ partial class Binder {
         }
 
         private func CreateParentScope(
-            previous BoundGlobalScope?,
+            globalScope BoundGlobalScope,
             references ReferenceResolver?,
             preprocessorSymbols ImmutableHashSet[string]?,
             preserveLatestImportSyntaxTrees bool
-        ) BoundScope -> CreateParentScope(
-            previous,
-            references,
-            preprocessorSymbols,
-            preserveLatestImportSyntaxTrees,
-            previous?.SubmissionImports
-        )
-
-        private func CreateParentScope(
-            previous BoundGlobalScope?,
-            references ReferenceResolver?,
-            preprocessorSymbols ImmutableHashSet[string]?,
-            preserveLatestImportSyntaxTrees bool,
-            submissionImports SubmissionImports?
         ) BoundScope {
-            var previous = previous
-            let stack = Stack[BoundGlobalScope]()
-            while previous != nil {
-                stack.Push(previous)
-                previous = previous.Previous
+            let parent = CreateRootScope(references, preprocessorSymbols)
+            parent.SetSubmissionImports(globalScope.SubmissionImports)
+            let scope_ = BoundScope(parent)
+            for package_ in globalScope.Packages {
+                if package_.IsExplicitlyDeclared {
+                    scope_.RegisterSourcePackage(package_.Name)
+                }
             }
-            var parent = CreateRootScope(references, preprocessorSymbols)
-            parent.SetSubmissionImports(submissionImports)
-            while stack.Count > 0 {
-                previous = stack.Pop()
-                let scope_ = BoundScope(parent)
-                let preserveImportSyntaxTrees = preserveLatestImportSyntaxTrees && stack.Count == 0
-                for package_ in previous.Packages {
-                    if package_.IsExplicitlyDeclared {
-                        scope_.RegisterSourcePackage(package_.Name)
+            for i in globalScope.Imports {
+                scope_.TryImport(
+                    if preserveLatestImportSyntaxTrees {
+                        i
+                    } else {
+                        ImportSymbol(i.Name, i.Target, declaration: nil)
                     }
-                }
-                for i in previous.Imports {
-                    scope_.TryImport(
-                        if preserveImportSyntaxTrees {
-                            i
-                        } else {
-                            ImportSymbol(i.Name, i.Target, declaration: nil)
-                        }
-                    )
-                }
-                for alias in previous.TypeAliases {
-                    scope_.TryRedeclareTypeAlias(alias.Key, alias.Value)
-                }
-                for f in previous.Functions {
-                    scope_.TryDeclareFunction(f)
-                    // Issue #1103: extension functions are flattened into
-                    // BoundGlobalScope.Functions (Binder.BindGlobalScope merges
-                    // GetDeclaredExtensionFunctions into Functions) so free-call
-                    // syntax resolves them as ordinary functions. When a follow-up
-                    // pass rehydrates the previous global scope (the body-binding
-                    // pass binds member/function bodies against this rebuilt
-                    // scope), the extension registry must be repopulated too —
-                    // otherwise member-syntax dispatch (`receiver.Ext()`) via
-                    // BoundScope.TryLookupExtensionFunction finds nothing and the
-                    // call reports GS0159 even though the free-call form binds.
-                    if f.IsExtension {
-                        scope_.TryDeclareExtensionFunction(f)
-                    }
-                }
-                for v in previous.Variables {
-                    scope_.TryDeclareVariable(v)
-                }
-                parent = scope_
+                )
             }
-            return parent
+            for alias in globalScope.TypeAliases {
+                scope_.TryRedeclareTypeAlias(alias.Key, alias.Value)
+            }
+            for f in globalScope.Functions {
+                scope_.TryDeclareFunction(f)
+                // Issue #1103: extension functions are flattened into
+                // BoundGlobalScope.Functions (Binder.BindGlobalScope merges
+                // GetDeclaredExtensionFunctions into Functions) so free-call
+                // syntax resolves them as ordinary functions. The body-binding
+                // pass binds member/function bodies against this rebuilt
+                // scope, so the extension registry must be repopulated too —
+                // otherwise member-syntax dispatch (`receiver.Ext()`) via
+                // BoundScope.TryLookupExtensionFunction finds nothing and the
+                // call reports GS0159 even though the free-call form binds.
+                if f.IsExtension {
+                    scope_.TryDeclareExtensionFunction(f)
+                }
+            }
+            for v in globalScope.Variables {
+                scope_.TryDeclareVariable(v)
+            }
+            return scope_
         }
 
         private func CreateRootScope(

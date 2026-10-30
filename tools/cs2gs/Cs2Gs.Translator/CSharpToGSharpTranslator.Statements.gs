@@ -4441,6 +4441,9 @@ partial class CSharpToGSharpTranslator {
                 return value
             }
             var promotionTarget ISymbol? = assignmentTarget
+            // Issue #5516: G# infers a `var` local from its initializer, so the storage is fixed
+            // non-null only when that initializer is not nullable by declaration.
+            var inferredStorageIsNonNull = false
             if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
                 inferredAssignmentLocal
                 .DeclaringSyntaxReferences
@@ -4468,13 +4471,15 @@ partial class CSharpToGSharpTranslator {
                 }
                 assignmentTargetType = this.context.GetTypeInfo(initializer).Type
                 promotionTarget = nil
+                inferredStorageIsNonNull = !this.IsNullableInitializer(initializer)
             }
             return this.ForgiveNullableReferenceValue(
                 assignment.Right,
                 value,
                 assignmentTargetType,
                 promotionTarget,
-                includePromotedValue: true
+                includePromotedValue: true,
+                fixedSink: inferredStorageIsNonNull
             )
         }
 

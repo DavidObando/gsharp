@@ -4,7 +4,6 @@
 
 package GSharp.LanguageServer
 
-import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -637,8 +636,9 @@ shared class SemanticLookup {
         var best SyntaxToken? = nil
         for token in EnumerateTokens(tree.Root) {
             // Issue #5277: a synthesized token is not written in source. It has a zero-width span at
-            // the end of the token before it, so it must not win the caret there.
-            if token.IsMissing || token.IsSynthesized {
+            // the end of the token before it, so it must not win the caret there. Such a token has
+            // text but a zero-width span; a token written in source spans exactly its text.
+            if token.IsMissing || (token.Span.Length == 0 && (token.Text?.Length ?? 0) > 0) {
                 continue
             }
             if token.Span.Start <= position && position <= token.Span.End {
@@ -1061,7 +1061,7 @@ shared class SemanticLookup {
                 )
             }
         }
-        for import_ in compilation.GlobalScope.GetCumulativeImports() {
+        for import_ in compilation.GlobalScope.Imports {
             if import_.Declaration?.AliasIdentifier is {} aliasIdentifier {
                 declarations[aliasIdentifier] = import_
             }

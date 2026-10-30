@@ -195,7 +195,8 @@ a loop form:
   getter that runs user code is not a call for the alias class. Today's
   loop collector kills member paths on a source getter with user code
   (`AssignedRootsCollector.VisitExpression`, `:1751-1753`) but not on an
-  imported one.
+  imported one. Decided (ADR-0208 row R16): an imported getter is a call
+  unless it is on the stable list (`StatementBinder.IsStableClrGetter`).
 
 A single kill predicate (A2) closes both in loops the day it closes them
 in straight-line code; two predicates keep the pattern of paired fixes.
@@ -456,7 +457,7 @@ The rules, each an instance of the construct table and of the lower bound:
   classification of an unknown getter (A2; ADR-0208 row R14: a getter with
   user code is a call; the open decision of
   [#5231](https://github.com/DavidObando/gsharp/issues/5231) on imported
-  getters applies here the day it is made). The walker resolves nothing
+  getters is made: ADR-0208 row R16, one list, `StatementBinder.ClrPropertyReadRunsUserCode`). The walker resolves nothing
   about the member. This ADR defines **no exemption**, and the reason is a
   derivation, not a measurement: an exemption would need the walker to
   prove, before the region is bound, that the read binds to a member that
@@ -477,7 +478,7 @@ The rules, each an instance of the construct table and of the lower bound:
   | extension member | an instance member on the narrowed type shadows it, or the reverse |
   | member on a type parameter | dispatches through the constraint |
   | array element on a receiver whose declared type is an array | no code; but a receiver whose declared type is not an array (`object?` narrowed to `[]int32` inside the region) is not found as an array at the entry scope, and an indexer on any other receiver is a getter |
-  | imported member of any kind | #5231: the classification of imported getters is the shared predicate's open decision |
+  | imported member of any kind | #5231, decided in ADR-0208 row R16: a call unless the getter is on the stable list (`StatementBinder.IsStableClrGetter`) |
 
   The one row that is `none` under every column (an element of a
   receiver declared as an array) is not worth a second rule. If slice L0
@@ -1264,6 +1265,13 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
 - *External callable aliases.* A function value that the region assigns, or that shares storage with one
   that it assigns, leaves the set at the loop entry; a region with a pointer write or an unknown syntax
   kind empties the set.
+- *R16 in loops (documented cost of row R7 (e)).* ADR-0208 R16 keeps a fact across a read of a stable imported
+  getter (`string.Length`) and a field read is no call, in straight-line code. The walker sees only syntax, so it
+  cannot tell them from a user getter, and Q7 (decided) allows no exemption: the corpus row
+  `t09_5231_string_length_in_a_loop_R16_loop_is_stricter` (`x.Value + s.Length` with a closure-assigned `x`) is
+  rejected in a loop. A resolved-member exemption (a plain-name receiver resolved at the entry scope whose member is
+  on the R16 list, or a field of a class whose hierarchy cannot hide it) is a later slice; it would accept q5c, q5d
+  would stay rejected, and it needs its own rows and mutants.
 - *A loop the walker cannot name* (the synthetic loop of a collection spread) removes every fact.
 
 **Measurements** (candidate compiler, the cells of slice L0, compare mode on). Facts of the loops that

@@ -15,9 +15,9 @@ import System.Collections.Immutable
 /// before its element subtrees are visited. Non-tuple composites (arrays,
 /// slices, maps, sequences, channels, nullable wrappers, generic
 /// instantiations, function types) contribute no entries of their own but are
-/// traversed, matching Roslyn's `TupleNamesEncoder`. Arity ≥ 8 tuples
-/// contribute their LOGICAL elements only — the CLR's synthesized
-/// `TRest` nesting is invisible, exactly as in C#. The attribute is
+/// traversed, matching Roslyn's `TupleNamesEncoder`. Each synthesized
+/// `TRest` node contributes unnamed positions before its element subtrees.
+/// The attribute is
 /// only emitted when at least one entry is non-null; (cref:Build)
 /// returns an empty array otherwise.
 internal shared class TupleElementNamesBuilder {
@@ -49,8 +49,14 @@ internal shared class TupleElementNamesBuilder {
                     builder.Add(name)
                     anyName |= name != nil
                 }
-                for element in tuple.ElementTypes {
-                    Append(element, builder, &anyName)
+                for var i = 0; i < tuple.Arity; i++ {
+                    if i > 0 && i % 7 == 0 {
+                        // Rest nodes have no declared names, but retain their logical arity.
+                        for var rest = i; rest < tuple.Arity; rest++ {
+                            builder.Add(nil)
+                        }
+                    }
+                    Append(tuple.ElementTypes[i], builder, &anyName)
                 }
             }
             case nullable is NullableTypeSymbol {

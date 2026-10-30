@@ -25,6 +25,14 @@ partial class SemanticModel {
     /// <item>Struct or class, declared or imported record: fields, properties, events and methods of the type
     /// and of its base classes, base classes last (instance members), then the static members of the type
     /// itself. A static member of a base class is not a member of the derived type.</item>
+    /// <item>Struct or class, then (issue #5441): the public instance members of the nearest imported base class
+    /// (reached through source base classes), or of `object` when there is none, read at that base, in
+    /// metadata order. A static or non-public member of the base is not listed. A member that the type
+    /// or a source base overrides is not listed: the override stands for the slot.</item>
+    /// <item>Struct or class, then (issue #5441): each default method of an interface the type or one of its
+    /// base classes implements, interfaces in declaration order and their base interfaces after them, when
+    /// neither the type nor a base class declares a method of that name (the rule of the call binder). A
+    /// private helper is listed only where the enclosing declaration may access it.</item>
     /// <item>Interface: the properties, events and methods of the interface and of its base interfaces
     /// (instance), the static members of the interface itself, then the members of each CLR interface the
     /// declared interfaces extend, nearest first.</item>
@@ -32,12 +40,31 @@ partial class SemanticModel {
     /// <item>Any other type that has a CLR type (imported types, arrays, maps, primitives): the public
     /// properties without index parameters, fields, methods that are not special names, then events, each in
     /// metadata order; instance and static members; types read through the ADR-0193 readers at the
-    /// receiver.</item>
+    /// receiver. For an interface, the members of the CLR interfaces it extends follow its own (issue #5441),
+    /// each in the same order, in the order of the guarded transitive interface list (cref:ClrTypeUtilities.SafeGetInterfaces).</item>
+    /// <item>A slice, array, map, channel or sequence with no CLR type, because its element is a source type
+    /// or a type parameter (issue #5441): the members of the type the call binder uses for the receiver
+    /// (`System.Array`, `Dictionary`, `Channel`, `ChannelReader`, `ChannelWriter`, `IEnumerable`), with member
+    /// types read at the receiver's type arguments. The list is the one the same collection of a primitive
+    /// has, extensions aside.</item>
     /// </list>
     /// A member that is private or protected is returned only when the enclosing declaration of
-    /// [`position`](paramref) may access it. Imported members are public ones. Extension methods are not
-    /// returned (ADR-0212 question 12). With [`name`](paramref), only members of that name: a method name
-    /// returns every overload, in declaration order.
+    /// [`position`](paramref) may access it. Imported members are public ones. With [`name`](paramref), only
+    /// members of that name: a method name returns every overload, in declaration order.
+    /// Extension members (ADR-0212 question 12), last and for every receiver type that is not an error:
+    /// <list type="table">
+    /// <item>Extension function declared in source: each one in scope whose receiver type can take the
+    /// receiver, found by the rule a call by that name uses, as the function symbol. Order: file path
+    /// (ordinal), then start position.</item>
+    /// <item>Extension method of an imported class: each `static [Extension]` method of the classes in the
+    /// namespaces the file imports whose first parameter can take the receiver, by the rule of the call
+    /// binder, as an imported function symbol whose parameters include the receiver. A receiver with no CLR
+    /// shape (a declared class) is probed as its imported base class, and through the interface it implements
+    /// when it has none or the base is `object`. Order: the
+    /// holder classes in reference order, then metadata order. Generic methods keep their open signature.</item>
+    /// </list>
+    /// An extension is listed even where a member of the same name hides it at a call, and the receiver
+    /// of a static access (a type name) gets the same extensions as an instance.
     /// @param position A character offset into this model's tree.
     /// @param type The receiver type.
     /// @param name When given, only the members of this name.
@@ -67,6 +94,11 @@ partial class SemanticModel {
                     access,
                     result
                 )
+                // A CLR-backed aggregate (an imported record) already holds the members it inherits.
+                if structure.ClrType == nil {
+                    AddImportedBaseMembers(structure, name, result)
+                }
+                AddDefaultInterfaceMethods(structure, name, access, result)
             }
             case declared is InterfaceSymbol {
                 AddSourceMembers(
@@ -78,9 +110,11 @@ partial class SemanticModel {
                     result
                 )
                 for clrInterface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared) {
-                    AddClrMembers(
+                    // The walk is already transitive, so each interface contributes only its own members.
+                    AddClrMembersOf(
                         ImportedTypeSymbol.GetWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure),
                         clrInterface,
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static,
                         name,
                         result
                     )
@@ -99,10 +133,233 @@ partial class SemanticModel {
             default {
                 if receiver.ClrType is {} clrType {
                     AddClrMembers(receiver, clrType, name, result)
+                } else if BuiltInView(receiver) is {} view && view.ClrType is {} viewClrType {
+                    AddClrMembers(view, viewClrType, name, result)
                 }
             }
         }
+        AddExtensionMembers(position, receiver, name, cancellationToken, result)
         return result.ToImmutable()
+    }
+
+    /// Adds the public instance members that a source class or struct inherits from its imported base class,
+    /// and from `object` when it has none, read at that base. A class reaches metadata through its nearest
+    /// imported base (cref:ExpressionBinder.GetInheritedClrBaseType), the rule the binder uses to bind an
+    /// inherited member.
+    private func AddImportedBaseMembers(structure StructSymbol, name string?, result ImmutableArray[Symbol].Builder) {
+        var baseType TypeSymbol? = nil
+        for current in structure.GetHierarchy() {
+            if current.ImportedBaseType is {} imported {
+                baseType = imported
+                break
+            }
+        }
+        let overridden = ExternalOverrides(structure)
+        if baseType == nil {
+            AddClrMembers(
+                ImportedTypeSymbol.GetWithoutNullability(typeof(object), NullabilityFreeReason.TypeStructure),
+                typeof(object),
+                name,
+                result,
+                includeStatic: false,
+                overridden
+            )
+        } else if baseType.ClrType is {} baseClr {
+            AddClrMembers(baseType, baseClr, name, result, includeStatic: false, overridden)
+        }
+    }
+
+    /// Returns the imported slots that the source members of [`structure`](paramref) and of its source bases
+    /// override. The override stands for the slot: the imported member is not listed again.
+    private func ExternalOverrides(structure StructSymbol) ImportedOverrides {
+        let overridden = ImportedOverrides()
+        for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Instance(MemberKinds.All)) {
+            switch member {
+                case function is FunctionSymbol {
+                    if function.ExternalOverriddenMethod != nil {
+                        overridden.AddSlot(function.ExternalOverriddenMethod)
+                    } else if function.IsOverride && function.OverriddenMethod == nil {
+                        // A compiler-owned override (the equality methods of a data type) names no slot.
+                        overridden.AddUnrecorded(function)
+                    }
+                }
+                case property is PropertySymbol {
+                    overridden.AddSlot(property.ExternalOverriddenGetter)
+                    overridden.AddSlot(property.ExternalOverriddenSetter)
+                }
+                case clrEvent is EventSymbol {
+                    overridden.AddSlot(clrEvent.ExternalOverriddenAddMethod)
+                    overridden.AddSlot(clrEvent.ExternalOverriddenRemoveMethod)
+                    overridden.AddSlot(clrEvent.ExternalOverriddenRaiseMethod)
+                }
+            }
+        }
+        return overridden
+    }
+
+    /// The imported methods that source members override: by the slot the binder recorded, or, for an override
+    /// the compiler synthesized, by name and parameter types.
+    private class ImportedOverrides {
+        private let slots List[MethodInfo] = List[MethodInfo]()
+        private let unrecorded List[FunctionSymbol] = List[FunctionSymbol]()
+
+        func AddSlot(method MethodInfo?) {
+            if method != nil {
+                slots.Add(method)
+            }
+        }
+
+        func AddUnrecorded(function FunctionSymbol) {
+            unrecorded.Add(function)
+        }
+
+        // The same slot: a reflected method is a different object per reflected type, but a method definition is
+        // named by the module that declares it (its version id, not its file name) and its token in that module.
+        // The override resolver records the slot on the open generic definition and the base is enumerated
+        // closed, or erased when an argument is a source type; all of them are one definition.
+        func Covers(accessor MethodInfo?) bool {
+            if accessor == nil {
+                return false
+            }
+            return slots.Any((o MethodInfo) -> SameDefinition(o, accessor)) || unrecorded.Any(
+                (f FunctionSymbol) -> Overrides(f, accessor)
+            )
+        }
+
+        private func SameDefinition(left MethodInfo, right MethodInfo) bool {
+            try {
+                return left.MetadataToken == right.MetadataToken &&
+                    left
+                    .Module
+                    .ModuleVersionId == right
+                    .Module
+                    .ModuleVersionId
+            } catch (Exception) {
+                return false
+            }
+        }
+
+        private func Overrides(function FunctionSymbol, method MethodInfo) bool {
+            if !ClrTypeUtilities.EmittedMemberNameMatches(method, function.Name) {
+                return false
+            }
+            let arity = if method.IsGenericMethod {
+                method.GetGenericArguments().Length
+            } else {
+                0
+            }
+            let sourceArity = if function.TypeParameters.IsDefaultOrEmpty {
+                0
+            } else {
+                function.TypeParameters.Length
+            }
+            if arity != sourceArity {
+                return false
+            }
+            let parameters = method.GetParameters()
+            if parameters.Length != function.Parameters.Length {
+                return false
+            }
+            for var i = 0; i < parameters.Length; i++ {
+                if function.Parameters[i].Type.ClrType is not{} sourceType || !ClrTypeInspector.IsSameAs(
+                    sourceType,
+                    parameters[i].ParameterType
+                ) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+
+    /// Adds the default methods of the interfaces that a class or struct implements, the ones it does not
+    /// declare a method of the same name for. The binder routes a call on the class to such a method
+    /// (`TryFindDefaultInterfaceMethod`); only the order is set here: classes of the hierarchy from the
+    /// receiver up, interfaces in declaration order.
+    private func AddDefaultInterfaceMethods(
+        structure StructSymbol,
+        name string?,
+        access MemberAccessContext,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        let seen = List[Symbol]()
+        for current in structure.GetHierarchy() {
+            for declared in current.Interfaces {
+                if declared == nil {
+                    continue
+                }
+                for member in TypeMemberModel.EnumerateMembers(declared, MemberQuery.Instance(MemberKinds.Method)) {
+                    if member is FunctionSymbol method && InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(
+                        method
+                    ) &&
+                        MemberLookup
+                        .CollectSourceInstanceMethods(structure, method.Name).IsEmpty {
+                        seen.Add(method)
+                        AddSourceMember(structure, method, name, access, result)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns the type whose CLR members a receiver without a loadable CLR type has: the view that the call
+    /// binder gives it (cref:ExpressionBinder.TryNormalizeSymbolicEnumerableReceiver), so the query and the
+    /// binder agree on `.Length` of a slice of a source class, `.Count` of a map of one, a channel and a
+    /// sequence.
+    private func BuiltInView(receiver TypeSymbol) ImportedTypeSymbol? {
+        if receiver.ClrType == nil && ExpressionBinder.TryNormalizeSymbolicEnumerableReceiver(receiver, out var view) {
+            return view as ImportedTypeSymbol
+        }
+        return nil
+    }
+
+    /// Adds the extension functions and extension methods in scope at [`position`](paramref) whose receiver
+    /// can take [`receiver`](paramref). The applicability rules are the binder's (see
+    /// `Binder.CollectExtensionMembers`); only the order is set here.
+    private func AddExtensionMembers(
+        position int32,
+        receiver TypeSymbol,
+        name string?,
+        cancellationToken CancellationToken,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        if object.ReferenceEquals(receiver, TypeSymbol.Error) || receiver == TypeSymbol.Void {
+            return
+        }
+        let function FunctionSymbol? = switch GetEnclosingSymbol(position, cancellationToken) {
+            case enclosing is FunctionSymbol: enclosing
+            case property is PropertySymbol: property.GetterSymbol ?? property.SetterSymbol
+            default: default(FunctionSymbol?)
+        }
+        using let nullabilityScope = NullabilityOptions.Enter(compilation.Nullability, compilation.PlatformNilChecks)
+        let found = Binder.CollectExtensionMembers(
+            compilation.GlobalScope,
+            compilation.References ?? ReferenceResolver.Default(),
+            function,
+            receiver,
+            name,
+            syntaxTree,
+            compilation.Submission?.DefaultPackageName ?? "Default"
+        )
+        // Declared extensions by file path (ordinal), then start, so the order does not depend on the order
+        // files were bound in. Imported ones keep holder order, then metadata order.
+        let declared = found
+            .Source
+            .Select(
+            (f FunctionSymbol) -> (
+                Function: f,
+                File: f.Declaration?.SyntaxTree.Text?.FileName ?? string.Empty,
+                Start: f.Declaration?.Span.Start ?? int32.MaxValue
+            )
+        )
+            .OrderBy((e(Function FunctionSymbol, File string, Start int32)) -> e.File, StringComparer.Ordinal)
+            .ThenBy((e(Function FunctionSymbol, File string, Start int32)) -> e.Start)
+        for entry in declared {
+            result.Add(entry.Function)
+        }
+        for method in found.Imported {
+            result.Add(ImportedMemberSymbol(default(TypeSymbol?), method))
+        }
     }
 
     /// Returns the candidates the call or the member name at [`node`](paramref) resolved among, from the
@@ -352,12 +609,44 @@ partial class SemanticModel {
         result.Add(member)
     }
 
-    private func AddClrMembers(receiver TypeSymbol, clrType Type, name string?, result ImmutableArray[Symbol].Builder) {
-        const flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+    private func AddClrMembers(
+        receiver TypeSymbol,
+        clrType Type,
+        name string?,
+        result ImmutableArray[Symbol].Builder,
+        includeStatic bool = true,
+        overridden ImportedOverrides? = nil
+    ) {
+        let flags = if includeStatic {
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+        } else {
+            BindingFlags.Public | BindingFlags.Instance
+        }
+        AddClrMembersOf(receiver, clrType, flags, name, result, overridden)
+        // An interface does not report the members of the interfaces it extends; they are its members too.
+        if clrType.IsInterface {
+            // The guarded, transitive walk: a missing reference assembly or a load context that reports only
+            // the direct interfaces does not fail the query.
+            for baseInterface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
+                AddClrMembersOf(receiver, baseInterface, flags, name, result, overridden)
+            }
+        }
+    }
+
+    private func AddClrMembersOf(
+        receiver TypeSymbol,
+        clrType Type,
+        flags BindingFlags,
+        name string?,
+        result ImmutableArray[Symbol].Builder,
+        overridden ImportedOverrides? = nil
+    ) {
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
             if property.GetIndexParameters()
                 .Length == 0 &&
-                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) {
+                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(property, name)) &&
+                !(overridden?.Covers(property.GetMethod) ?? false) &&
+                !(overridden?.Covers(property.SetMethod) ?? false) {
                 result.Add(ImportedMemberSymbol(receiver, property))
             }
         }
@@ -367,12 +656,15 @@ partial class SemanticModel {
             }
         }
         for method in ClrTypeUtilities.SafeGetMethods(clrType, flags) {
-            if !method.IsSpecialName && (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(method, name)) {
+            if !method.IsSpecialName &&
+                (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(method, name)) &&
+                !(overridden?.Covers(method) ?? false) {
                 result.Add(ImportedMemberSymbol(receiver, method))
             }
         }
         for clrEvent in ClrTypeUtilities.SafeGetEvents(clrType, flags) {
-            if name == nil || ClrTypeUtilities.EmittedMemberNameMatches(clrEvent, name) {
+            if (name == nil || ClrTypeUtilities.EmittedMemberNameMatches(clrEvent, name)) &&
+                !(overridden?.Covers(clrEvent.AddMethod) ?? false) {
                 result.Add(ImportedMemberSymbol(receiver, clrEvent))
             }
         }

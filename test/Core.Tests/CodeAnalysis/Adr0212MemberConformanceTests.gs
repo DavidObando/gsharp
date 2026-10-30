@@ -29,6 +29,8 @@ open class Adr0212MemberConformanceTests {
     func MemberQueries_AgreeWithTheBinder_OnTheSamples() {
         let mismatches = List[string]()
         var compared = 0
+        ExtensionsCompared = 0
+        RowsCompared.Clear()
         for file in Directory.GetFiles(Path.Combine(RepositoryRoot(), "samples"), "*.gs").OrderBy(
             (f string) -> f,
             StringComparer.Ordinal
@@ -37,12 +39,16 @@ open class Adr0212MemberConformanceTests {
             compared += CompareCompilation(Recording(Compilation(tree)), mismatches)
         }
         Assert.True(compared > 500, "compared ${compared} members")
+        Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
+        AssertRowsReached()
         AssertNoMismatches(mismatches)
     }
 
     @Fact
     func MemberQueries_AgreeWithTheBinder_OnTheLanguageServerSources() {
         let mismatches = List[string]()
+        ExtensionsCompared = 0
+        RowsCompared.Clear()
         let directory = Path.Combine(RepositoryRoot(), "src", "LanguageServer")
         let trees = Directory
             .GetFiles(directory, "*.gs")
@@ -51,10 +57,24 @@ open class Adr0212MemberConformanceTests {
             .ToArray()
         let compared = CompareCompilation(Recording(Compilation(trees)), mismatches)
         Assert.True(compared > 1000, "compared ${compared} members")
+        Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
         AssertNoMismatches(mismatches)
     }
 
     shared {
+        private var ExtensionsCompared int32 = 0
+        private const BuiltInRow string = "built-in"
+        private const ImportedBaseRow string = "imported base class"
+        private const InterfaceBaseRow string = "imported base interface"
+        private const DefaultMethodRow string = "default interface method"
+        private let RowsCompared Dictionary[string, int32] = Dictionary[string, int32]()
+
+        private func AssertRowsReached() {
+            for row in[]string{BuiltInRow, ImportedBaseRow, InterfaceBaseRow, DefaultMethodRow} {
+                Assert.True(RowsCompared.GetValueOrDefault(row) > 0, "the corpus reaches the row '${row}'")
+            }
+        }
+
         private func Recording(compilation Compilation) Compilation {
             compilation.RecordMemberGroups = true
             return compilation
@@ -159,8 +179,12 @@ open class Adr0212MemberConformanceTests {
             if receiverType == nil || receiverType is TypeParameterSymbol {
                 return 0
             }
-            if KnownGap(bound, receiverType) {
-                return 0
+            let row = RowOf(bound, receiverType)
+            if row != string.Empty {
+                RowsCompared[row] = RowsCompared.GetValueOrDefault(row) + 1
+            }
+            if IsExtension(bound) {
+                ExtensionsCompared++
             }
             let members = model.LookupMembers(token.Span.Start, receiverType, token.ValueText)
             let category = "member " + bound.GetType().Name + " of " + receiverType.GetType().Name
@@ -172,7 +196,8 @@ open class Adr0212MemberConformanceTests {
             return 1
         }
 
-        /// An extension function or method is not a member of its receiver type (ADR-0212 question 12).
+        /// A call through an extension is not in the member-group contract (the group holds the candidates of a
+        /// direct call); the members query holds the extension (ADR-0212 question 12).
         private func IsExtension(called Symbol) bool -> switch called {
             case function is ImportedFunctionSymbol: function.Method.IsDefined(
                 typeof(System.Runtime.CompilerServices.ExtensionAttribute),
@@ -182,34 +207,32 @@ open class Adr0212MemberConformanceTests {
             default: false
         }
 
-        /// The shapes that the query leaves out for now, each one also missing from the completion list that
-        /// the query replaces. Each has a follow-up issue; a shape that is not listed here must conform.
-        /// - A member of a base class, or of a base interface, that comes from an imported type.
-        /// - A default method of an interface, called on the class that implements it.
-        /// - The built-in members of the slice, array, map, channel and sequence types.
-        private func KnownGap(bound Symbol, receiverType TypeSymbol) bool {
-            if IsExtension(bound) {
-                return true
-            }
+        /// The contract row a member belongs to when it is one of the shapes that a type's own members do not
+        /// cover, or an empty string. Each row is compared like any other member; the counts only show that the
+        /// corpus reaches it.
+        private func RowOf(bound Symbol, receiverType TypeSymbol) string {
             if receiverType is SliceTypeSymbol or
                 ArrayTypeSymbol or
                 MapTypeSymbol or
                 ChannelTypeSymbol or
                 SequenceTypeSymbol {
-                return true
+                return BuiltInRow
             }
             if ImportedOf(bound) is {} imported {
                 if receiverType is StructSymbol {
-                    return true
+                    return ImportedBaseRow
                 }
                 if imported.DeclaringType is {} declaring &&
                     receiverType.ClrType is {} receiverClr &&
                     declaring.IsInterface &&
                     !declaring.IsEquivalentTo(receiverClr) {
-                    return true
+                    return InterfaceBaseRow
                 }
             }
-            return bound is FunctionSymbol && receiverType is StructSymbol && bound.ContainingType is InterfaceSymbol
+            if bound is FunctionSymbol && receiverType is StructSymbol && bound.ContainingType is InterfaceSymbol {
+                return DefaultMethodRow
+            }
+            return string.Empty
         }
 
         /// Two symbols are the same member when they have the same name and the same declaration: the

@@ -208,6 +208,23 @@ open class Adr0208NarrowingCorpusTests {
                 "o6_callback_run_through_another_callback",
                 "o7_root_never_assigned_by_a_closure_keeps_the_fact",
                 "out-alias_out_ref_alias",
+                "p10_5237_clr_constructor_enumerates_an_escaped_closure",
+                "p11_5237_type_parameter_construction_runs_a_constructor",
+                "p12_5237_function_pointer_call_runs_an_escaped_closure",
+                "p13_5237_interpolation_calls_to_string",
+                "p14_5237_condition_out_write_then_escaped_closure",
+                "p15_5237_condition_out_write_then_test_keeps_the_fact",
+                "p16_5237_condition_call_reads_the_root_after_the_test",
+                "p17_5237_assignment_after_the_call_keeps_its_own_fact",
+                "p1_5237_escaped_closure_run_by_declared_function",
+                "p2_5237_loop_form_escaped_closure",
+                "p3_5237_root_no_closure_assigns_keeps_the_fact",
+                "p4_5237_base_class_call",
+                "p5_5237_imported_call_runs_registered_callback",
+                "p6_5237_ref_local_alias_of_closure_assigned_local",
+                "p7_5237_iterator_runs_escaped_closure",
+                "p8_5237_call_replaces_a_closure_assigned_callable",
+                "p9_5237_explicit_invoke_of_an_external_callback_keeps_the_fact",
                 "q12_exit_gain",
                 "q13_exit_gain_bang",
                 "q14_enclosing_filter_reenters_loop",
@@ -225,7 +242,79 @@ open class Adr0208NarrowingCorpusTests {
                 "q5d_hidden_field_getter",
                 "q7_while_exit_state",
                 "q8_do_while",
-                "q9_loop_in_goto_span"
+                "q9_loop_in_goto_span",
+                "r10_5483_static_block_declared_after_the_use",
+                "r1_5482_ref_alias_of_closure_replaced_callable",
+                "r1_5483_static_block_only_construction",
+                "r2_5482_condition_call_replaces_the_aliased_callable",
+                "r2_5483_static_block_call_syntax",
+                "r3_5482_two_level_ref_alias_chain",
+                "r3_5483_static_block_in_base_class",
+                "r4_5482_ref_alias_without_a_call_keeps_the_fact",
+                "r4_5483_static_block_of_generic_definition",
+                "r5_5482_filter_runs_a_closure_that_replaces_the_aliased_callable",
+                "r5_5483_static_block_of_value_type_literal_is_initobj",
+                "r6_5482_plain_alias_keeps_the_fact_across_a_call",
+                "r6_5483_static_block_runs_a_mutable_global_writer",
+                "r7_5482_condition_call_replaces_the_aliased_callable_inside_the_body",
+                "r7_5483_shared_field_initializer_only_keeps_the_fact",
+                "r8_5483_type_without_initializers_keeps_the_fact",
+                "r9_5483_static_block_type_not_constructed_keeps_the_fact",
+                "s01_5504_issue_field_read_R11",
+                "s01_5504_issue_field_read_R15",
+                "s02_5504_field_write_R11",
+                "s02_5504_field_write_R15",
+                "s03_5504_field_increment_R15",
+                "s04_5504_auto_property_read_R11",
+                "s04_5504_auto_property_read_R15",
+                "s05_5504_auto_property_write_R15",
+                "s06_5504_static_method_call_R15",
+                "s07_5504_const_read_R15",
+                "s08_5504_derived_reads_base_field_R11",
+                "s08_5504_derived_reads_base_field_R15",
+                "s09_5504_derived_own_field_base_has_block_R11",
+                "s09_5504_derived_own_field_base_has_block_R15",
+                "s10_5504_generic_field_read_R15",
+                "s11_5504_field_initializer_only_literal_R11",
+                "s11_5504_field_initializer_only_literal_R15",
+                "s12_5504_field_initializer_only_call_R11",
+                "s12_5504_field_initializer_only_call_R15",
+                "s13_5504_struct_field_read_R11",
+                "s13_5504_struct_field_read_R15",
+                "s14_5504_nested_inner_has_block_R11",
+                "s14_5504_nested_inner_has_block_R15",
+                "s15_5504_nested_outer_has_block_only_R15",
+                "s16_5504_enum_member_R15",
+                "s17_5504_no_block_anywhere_R15",
+                "s18_5504_unrelated_type_with_block_R15",
+                "s19_5504_field_read_inside_condition_R15",
+                "s20_5504_field_read_in_loop_R15",
+                "s21_5504_static_event_subscription_R11",
+                "s21_5504_static_event_subscription_R15",
+                "s22_5504_derived_reads_base_property_R11",
+                "s22_5504_derived_reads_base_property_R15",
+                "s23_5504_derived_writes_base_field_R15",
+                "s24_5504_derived_subscribes_base_event_R11",
+                "s24_5504_derived_subscribes_base_event_R15",
+                "s25_5504_derived_hides_base_field_R11",
+                "s25_5504_derived_hides_base_field_R15",
+                "s26_5504_generic_derived_reads_generic_base_field_R11",
+                "s26_5504_generic_derived_reads_generic_base_field_R15",
+                "s27_5504_field_initializer_only_call_constructed_R11",
+                "s27_5504_field_initializer_only_call_constructed_R15",
+                "t01_5231_lazy_value_kills_a_by_reference_parameter_R16",
+                "t02_5231_lazy_value_kills_a_member_path_R16",
+                "t03_5231_string_length_keeps_a_member_path_R16",
+                "t04_5231_list_count_keeps_a_by_reference_parameter_R16",
+                "t05_5231_string_builder_length_keeps_a_closure_assigned_local_R16",
+                "t06_5231_lazy_value_runs_an_escaped_closure_R16",
+                "t07_5231_lazy_value_in_a_condition_R16",
+                "t08_5231_lazy_value_in_a_loop_R16",
+                "t09_5231_string_length_in_a_loop_R16_loop_is_stricter",
+                "t10_5231_interface_count_kills_R16",
+                "t11_5231_static_getter_kills_R16",
+                "t12_5231_lazy_value_in_a_property_pattern_R16",
+                "t13_5231_string_length_in_a_property_pattern_R16"
             },
             names
         )
@@ -1983,6 +2072,1963 @@ func Main() {
     f()
     Console.WriteLine(hit.Id)
 }`, "GS0158@16:27", "reject", "", ""}
+            yield[]object{"p1_5237_escaped_closure_run_by_declared_function", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    Wrapper(h)
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"p2_5237_loop_form_escaped_closure", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) { h.Callback() }
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        Console.WriteLine(x.Value)
+        total++
+        Wrapper(h)
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:29", "reject", "", "R15"}
+            yield[]object{"p3_5237_root_no_closure_assigns_keeps_the_fact", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run() int32 {
+    var x C? = C{}
+    var y C? = C{}
+    let h = Holder{}
+    h.Callback = func() { y = nil }
+    if x == nil { return 0 }
+    Wrapper(h)
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "R15"}
+            yield[]object{"p4_5237_base_class_call", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+open class Base {
+    func Wrapper(h Holder) {
+        h.Callback()
+    }
+}
+class Derived : Base {
+    func Run() int32 {
+        var x C? = C{}
+        let h = Holder{}
+        h.Callback = func() { x = nil }
+        if x == nil { return 0 }
+        base.Wrapper(h)
+        return x.Value
+    }
+}
+func Main() { Console.WriteLine(Derived().Run()) }`, "GS0158@21:18", "reject", "", "R15"}
+            yield[]object{"p5_5237_imported_call_runs_registered_callback", `import System
+import System.Threading
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    let cts = CancellationTokenSource()
+    cts.Token.Register(func() { x = nil })
+    if x == nil { return 0 }
+    cts.Cancel()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@13:14", "reject", "", "R15"}
+            yield[]object{"p6_5237_ref_local_alias_of_closure_assigned_local", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    let ref a C? = x
+    if a == nil { return 0 }
+    Wrapper(h)
+    return a.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@19:14", "reject", "", "R15"}
+            yield[]object{"p7_5237_iterator_runs_escaped_closure", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Items(h () -> void) sequence[int32] {
+    yield 1
+    h()
+    yield 2
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let items = Items(clear)
+    if x == nil { return 0 }
+    var total = 0
+    for v in items {
+        total += v
+    }
+    return x.Value + total
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@21:14", "reject", "", "R15"}
+            yield[]object{"p8_5237_call_replaces_a_closure_assigned_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    Wrapper(h)
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"p9_5237_explicit_invoke_of_an_external_callback_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    callback.Invoke()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1", "R15"}
+            yield[]object{"p10_5237_clr_constructor_enumerates_an_escaped_closure", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Items(h () -> void) sequence[int32] {
+    yield 1
+    h()
+    yield 2
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let items = Items(clear)
+    if x == nil { return 0 }
+    let list = List[int32](items)
+    return x.Value + list.Count
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"p11_5237_type_parameter_construction_runs_a_constructor", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Maker {
+    init() {
+        cleaner()
+    }
+}
+func Run[T class init()]() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let fresh = T{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run[Maker]())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"p12_5237_function_pointer_call_runs_an_escaped_closure", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Wrapper() {
+    cleaner()
+}
+unsafe func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let fp *func() = &Wrapper
+    fp()
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@15:14", "reject", "", "R15"}
+            yield[]object{"p13_5237_interpolation_calls_to_string", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Noisy {
+    override func ToString() string {
+        cleaner()
+        return "n"
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    let n = Noisy{}
+    if x == nil { return 0 }
+    let text = "${n}"
+    return x.Value + text.Length
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"p14_5237_condition_out_write_then_escaped_closure", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if !TryGet(out x) || x == nil || Wrapper(h) { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@22:14", "reject", "", "R15"}
+            yield[]object{"p15_5237_condition_out_write_then_test_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if !TryGet(out x) || x == nil { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "R15"}
+            yield[]object{"p16_5237_condition_call_reads_the_root_after_the_test", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder, c C?) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if !TryGet(out x) || x == nil || Wrapper(h, x) { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@22:14", "reject", "", "R15"}
+            yield[]object{"p17_5237_assignment_after_the_call_keeps_its_own_fact", `import System
+
+func Make() string { return "abc" }
+func Run() int32 {
+    var x string? = nil
+    let clear = func() { x = nil }
+    try {
+    } finally {
+        x = Make()
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "3", "R15"}
+            yield[]object{"r1_5483_static_block_only_construction", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"r2_5483_static_block_call_syntax", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger()
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"r3_5483_static_block_in_base_class", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        init { cleaner() }
+    }
+}
+class Trigger : Base {
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"r4_5483_static_block_of_generic_definition", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger[T] {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger[int32]{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R15"}
+            yield[]object{"r5_5483_static_block_of_value_type_literal_is_initobj", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r6_5483_static_block_runs_a_mutable_global_writer", `import System
+
+var text string? = nil
+class Trigger {
+    shared {
+        init { text = nil }
+    }
+}
+func Run() int32 {
+    text = "safe"
+    let t = Trigger{}
+    return text.Length
+}
+Console.WriteLine(Run())`, "GS0158@12:17 GS0286@14:1", "reject", "", "R11"}
+            yield[]object{"r7_5483_shared_field_initializer_only_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r8_5483_type_without_initializers_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r9_5483_static_block_type_not_constructed_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t Trigger? = nil
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r10_5483_static_block_declared_after_the_use", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+class Trigger {
+    shared {
+        init { cleaner() }
+    }
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@11:14", "reject", "", "R15"}
+            yield[]object{"s01_5504_issue_field_read_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Trigger.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R11"}
+            yield[]object{"s01_5504_issue_field_read_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s02_5504_field_write_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    Trigger.Count = 2
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R11"}
+            yield[]object{"s02_5504_field_write_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    Trigger.Count = 2
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s03_5504_field_increment_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    Trigger.Count++
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s04_5504_auto_property_read_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Trigger.Auto
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R11"}
+            yield[]object{"s04_5504_auto_property_read_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Auto
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s05_5504_auto_property_write_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    Trigger.Auto = 2
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s06_5504_static_method_call_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.M()
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s07_5504_const_read_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Max
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s08_5504_derived_reads_base_field_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Derived.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@19:14", "reject", "", "R11"}
+            yield[]object{"s08_5504_derived_reads_base_field_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Derived.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@21:14", "reject", "", "R15"}
+            yield[]object{"s09_5504_derived_own_field_base_has_block_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        init { cleaner() }
+    }
+}
+class Derived : Base {
+    shared {
+        var Own int32 = 0
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Derived.Own
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "", "run", "1", "R11"}
+            yield[]object{"s09_5504_derived_own_field_base_has_block_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        init { cleaner() }
+    }
+}
+class Derived : Base {
+    shared {
+        var Own int32 = 0
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Derived.Own
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s10_5504_generic_field_read_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger[T] {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger[int32].Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s11_5504_field_initializer_only_literal_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Trigger.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "", "run", "1", "R11"}
+            yield[]object{"s11_5504_field_initializer_only_literal_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s12_5504_field_initializer_only_call_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch() int32 {
+    cleaner()
+    return 5
+}
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Trigger.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "", "nre", "", "known limitation: a beforefieldinit field initializer is not classified, see #5520"}
+            yield[]object{"s12_5504_field_initializer_only_call_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch() int32 {
+    cleaner()
+    return 5
+}
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "nre", "", "known limitation: a beforefieldinit field initializer is not classified, see #5520"}
+            yield[]object{"s13_5504_struct_field_read_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Trigger.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R11"}
+            yield[]object{"s13_5504_struct_field_read_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s14_5504_nested_inner_has_block_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Outer {
+    class Inner {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Outer.Inner.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R11"}
+            yield[]object{"s14_5504_nested_inner_has_block_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Outer {
+    class Inner {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Outer.Inner.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@22:14", "reject", "", "R15"}
+            yield[]object{"s15_5504_nested_outer_has_block_only_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Outer {
+    shared {
+        init { cleaner() }
+    }
+    class Inner {
+        shared {
+            var Count int32 = 0
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Outer.Inner.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s16_5504_enum_member_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+enum Color { Red, Green }
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Color.Green
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s17_5504_no_block_anywhere_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Plain {
+    shared {
+        var Count int32 = 0
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Plain.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s18_5504_unrelated_type_with_block_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = 1
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s19_5504_field_read_inside_condition_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    if Trigger.Count == 7 { }
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"s20_5504_field_read_in_loop_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let n = Trigger.Count
+    }
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@22:14", "reject", "", "R15"}
+            yield[]object{"s21_5504_static_event_subscription_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        event Changed () -> void
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    Trigger.Changed += func() { }
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@15:14", "reject", "", "R11"}
+            yield[]object{"s21_5504_static_event_subscription_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        event Changed () -> void
+        init { cleaner() }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    Trigger.Changed += func() { }
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@17:14", "reject", "", "R15"}
+            yield[]object{"s22_5504_derived_reads_base_property_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Derived.Auto
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@19:14", "reject", "", "R11"}
+            yield[]object{"s22_5504_derived_reads_base_property_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Derived.Auto
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@21:14", "reject", "", "R15"}
+            yield[]object{"s23_5504_derived_writes_base_field_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    Derived.Count = 3
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@21:14", "reject", "", "R15"}
+            yield[]object{"s24_5504_derived_subscribes_base_event_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        event Changed () -> void
+        init { cleaner() }
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    if g == nil { return 0 }
+    Derived.Changed += func() { }
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@16:14", "reject", "", "R11"}
+            yield[]object{"s24_5504_derived_subscribes_base_event_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        event Changed () -> void
+        init { cleaner() }
+    }
+}
+class Derived : Base { }
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    Derived.Changed += func() { }
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R15"}
+            yield[]object{"s25_5504_derived_hides_base_field_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        init { cleaner() }
+    }
+}
+class Derived : Base {
+    shared {
+        var Count int32 = 1
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Derived.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "", "run", "1", "R11"}
+            yield[]object{"s25_5504_derived_hides_base_field_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    shared {
+        var Count int32 = 0
+        init { cleaner() }
+    }
+}
+class Derived : Base {
+    shared {
+        var Count int32 = 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Derived.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"s26_5504_generic_derived_reads_generic_base_field_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base[T] {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base[int32] { }
+func Run() int32 {
+    if g == nil { return 0 }
+    let n = Derived.Count
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "GS0158@19:14", "reject", "", "R11"}
+            yield[]object{"s26_5504_generic_derived_reads_generic_base_field_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base[T] {
+    shared {
+        var Count int32 = 0
+        const Max int32 = 3
+        prop Auto int32 { get; set }
+        init { cleaner() }
+        func M() int32 -> 1
+    }
+}
+class Derived : Base[int32] { }
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Derived.Count
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@21:14", "reject", "", "R15"}
+            yield[]object{"s27_5504_field_initializer_only_call_constructed_R11", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch() int32 {
+    cleaner()
+    return 5
+}
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    let t = Trigger{}
+    return g.Value
+}
+var g C? = C{}
+var cleaner () -> void = func() { g = nil }
+Console.WriteLine(Run())`, "", "run", "1", "R11"}
+            yield[]object{"s27_5504_field_initializer_only_call_constructed_R15", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch() int32 {
+    cleaner()
+    return 5
+}
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let t = Trigger{}
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"r1_5482_ref_alias_of_closure_replaced_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    Wrapper(h)
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@26:14", "reject", "", "R15"}
+            yield[]object{"r2_5482_condition_call_replaces_the_aliased_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    if Check(h) {
+    }
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", "", "R15"}
+            yield[]object{"r7_5482_condition_call_replaces_the_aliased_callable_inside_the_body", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    alias = callback
+    if Check(h) {
+        if x == nil { return 0 }
+        alias()
+        return x.Value
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@26:18", "reject", "", "R15"}
+            yield[]object{"r3_5482_two_level_ref_alias_chain", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref first = action
+    let ref second = first
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    second = callback
+    Wrapper(h)
+    if x == nil { return 0 }
+    second()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", "", "R15"}
+            yield[]object{"r4_5482_ref_alias_without_a_call_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let clear = func() { x = nil }
+    alias = callback
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1", "R15"}
+            yield[]object{"r6_5482_plain_alias_keeps_the_fact_across_a_call", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Touch() {
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var alias = callback
+    let clear = func() { x = nil }
+    Touch()
+    if x == nil { return 0 }
+    alias()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1", "R15"}
+            yield[]object{"r5_5482_filter_runs_a_closure_that_replaces_the_aliased_callable", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let ref alias = action
+    let clear = func() { x = nil }
+    let h = Holder{}
+    h.Callback = func() { action = clear }
+    alias = callback
+    if x == nil { return 0 }
+    try {
+        try {
+            try {
+                throw FormatException("f")
+            } finally {
+                throw InvalidOperationException("g")
+            }
+        } catch (InvalidOperationException) {
+            alias()
+            return x.Value
+        }
+    } catch (FormatException) when Check(h) {
+        return 0
+    }
+    return 2
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@34:22", "reject", "", "R15"}
+            yield[]object{"t01_5231_lazy_value_kills_a_by_reference_parameter_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(ref a C?, xs []C?) int32 {
+    let lazy = Lazy[int32](() -> {
+        xs[0] = nil
+        return 1
+    })
+    if a == nil { return 0 }
+    let n = lazy.Value
+    return a.Value + n
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))`, "GS0158@21:14", "reject", "", "R16"}
+            yield[]object{"t02_5231_lazy_value_kills_a_member_path_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box) string {
+    let lazy = Lazy[int32](() -> 1)
+    if b.Pet == nil { return "" }
+    let n = lazy.Value
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@18:18", "reject", "", "R16"}
+            yield[]object{"t03_5231_string_length_keeps_a_member_path_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box, s string) string {
+    if b.Pet == nil { return "" }
+    let n = s.Length
+    return b.Pet.Name + n.ToString()
+}
+Console.WriteLine(Run(Box(Animal()), "abc"))`, "", "run", "a3", "R16"}
+            yield[]object{"t04_5231_list_count_keeps_a_by_reference_parameter_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(ref a C?, xs []C?, list List[int32]) int32 {
+    if a == nil { return 0 }
+    let n = list.Count
+    return a.Value + n
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs, List[int32]{1, 2}))`, "", "run", "3", "R16"}
+            yield[]object{"t05_5231_string_builder_length_keeps_a_closure_assigned_local_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(sb StringBuilder) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let n = sb.Length
+    return x.Value + n
+}
+Console.WriteLine(Run(StringBuilder("ab")))`, "", "run", "3", "R16"}
+            yield[]object{"t06_5231_lazy_value_runs_an_escaped_closure_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run() int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    let n = lazy.Value
+    return x.Value + n
+}
+Console.WriteLine(Run())`, "GS0158@22:14", "reject", "", "R16"}
+            yield[]object{"t07_5231_lazy_value_in_a_condition_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run() int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    if lazy.Value > 0 {
+    }
+    return x.Value
+}
+Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R16"}
+            yield[]object{"t08_5231_lazy_value_in_a_loop_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(n int32) int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < n; i++ {
+        total = total + x.Value + lazy.Value
+    }
+    return total
+}
+Console.WriteLine(Run(2))`, "GS0158@23:27", "reject", "", "R16"}
+            yield[]object{"t09_5231_string_length_in_a_loop_R16_loop_is_stricter", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(s string) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + s.Length
+    }
+    return total
+}
+Console.WriteLine(Run("abc"))`, "GS0158@20:27", "reject", "", "ADR-0213 R7 (e) (L1): R16 is stricter in loops"}
+            yield[]object{"t10_5231_interface_count_kills_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box, c ICollection[int32]) string {
+    if b.Pet == nil { return "" }
+    let n = c.Count
+    return b.Pet.Name + n.ToString()
+}
+Console.WriteLine(Run(Box(Animal()), List[int32]{1}))`, "GS0158@17:18", "reject", "", "R16"}
+            yield[]object{"t11_5231_static_getter_kills_R16", `import System
+import System.Collections.Generic
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Environment.NewLine
+    return b.Pet.Name + n.ToString()
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@17:18", "reject", "", "R16"}
+            yield[]object{"t12_5231_lazy_value_in_a_property_pattern_R16", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, xs []C?) int32 {
+    let lazy = Lazy[int32](() -> {
+        xs[0] = nil
+        return 1
+    })
+    if a == nil { return 0 }
+    let matched = lazy is {Value: 1}
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))`, "GS0158@13:14", "reject", "", "R16"}
+            yield[]object{"t13_5231_string_length_in_a_property_pattern_R16", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, xs []C?, s string) int32 {
+    if a == nil { return 0 }
+    let matched = s is {Length: 3}
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs, "abc"))`, "", "run", "1", "R16"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

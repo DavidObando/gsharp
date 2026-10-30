@@ -3740,7 +3740,7 @@ internal partial class ExpressionBinder {
         /// @param receiverType The receiver's static type symbol.
         /// @param normalized The normalized receiver type, on success.
         /// @returns `true` when a normalized receiver type was produced.
-        private func TryNormalizeSymbolicEnumerableReceiver(
+        internal func TryNormalizeSymbolicEnumerableReceiver(
             receiverType TypeSymbol?,
             @NotNullWhen(true) out normalized TypeSymbol?
         ) bool {
