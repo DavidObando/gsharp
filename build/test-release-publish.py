@@ -9,6 +9,7 @@ HTTP server that answers the extensionquery request.
 from __future__ import annotations
 
 import http.server
+import io
 import json
 import os
 import stat
@@ -39,7 +40,7 @@ def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedPr
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=full_env, check=False)
 
 
-def write_zip(path: Path, files: dict[str, str]) -> None:
+def write_zip(path: Path, files: dict[str, str | bytes]) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         for name, text in files.items():
             archive.writestr(name, text)
@@ -77,6 +78,17 @@ def make_vsix(folder: Path, code_version: str = "0.5.212", studio_version: str =
         "ProjectTemplates/GSharp/1033/GSharpConsole/GSharpConsole.gsproj": f'<Project Sdk="{pin}"><PropertyGroup/></Project>',
         "ProjectTemplates/GSharp/1033/GSharpXunit/GSharpLibrary/GSharpLibrary.gsproj": f'<Project Sdk="{pin}"/>',
     })
+
+
+def make_zipped_template_vsix(folder: Path, pin: str) -> None:
+    """The layout of the VsGsharp.csproj source: one template zip per project template."""
+    make_vsix(folder, pin=pin)
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as template:
+        template.writestr("GSharpConsole.gsproj", f'<Project Sdk="{pin}"/>')
+    write_zip(folder / "GSharp.VisualStudio.vsix", {
+        "extension.vsixmanifest": vsix_manifest("0.5.212.9261"),
+        "ProjectTemplates/GSharp/1033/GSharpConsole.zip": inner.getvalue()})
 
 
 class TagKindTests(unittest.TestCase):
@@ -263,6 +275,19 @@ class VerifyTagTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"pins '{SDK}/0.3.159', expected {SDK}/0.5.212", result.stderr)
 
+    def test_zipped_templates_are_read(self) -> None:
+        make_packages(self.nupkgs)
+        make_zipped_template_vsix(self.vsix, f"{SDK}/0.5.212")
+        self.assertEqual(self.verify("v0.5.212").returncode, 0)
+        make_zipped_template_vsix(self.vsix, f"{SDK}/0.3.159")
+        self.assertIn("GSharpConsole.zip!GSharpConsole.gsproj pins", self.verify("v0.5.212").stderr)
+
+    def test_vsix_without_templates_fails(self) -> None:
+        make_packages(self.nupkgs)
+        make_vsix(self.vsix)
+        write_zip(self.vsix / "GSharp.VisualStudio.vsix", {"extension.vsixmanifest": vsix_manifest("0.5.212.9261")})
+        self.assertIn("has no project template", self.verify("v0.5.212").stderr)
+
     def test_missing_vsix_fails(self) -> None:
         make_packages(self.nupkgs)
         self.vsix.mkdir()
@@ -350,6 +375,14 @@ class NugetPushTests(unittest.TestCase):
         result = self.push("compiler")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.calls(), [])
+
+    def test_nonpositive_attempts_are_rejected(self) -> None:
+        for attempts in ("0", "-1"):
+            with self.subTest(attempts=attempts):
+                result = run("nuget-push", "--group", "sdk", "--nupkgs", str(self.nupkgs), "--dotnet", str(self.dotnet),
+                             "--attempts", attempts, env={"FAKE_LOG": str(self.log), "NUGET_API_KEY": "secret"})
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(self.calls(), [])
 
     def test_missing_api_key_pushes_nothing(self) -> None:
         result = run("nuget-push", "--group", "sdk", "--nupkgs", str(self.nupkgs), "--dotnet", str(self.dotnet),

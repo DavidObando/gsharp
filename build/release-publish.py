@@ -14,6 +14,7 @@ run is safe. The expected package list lives here, beside RIDS of check-rid-pack
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
@@ -171,8 +172,7 @@ def check_tag_and_vsix(nupkgs_version: str | None, tag: str, vsix: Path) -> list
     try:
         manifest = vsix_manifest(studio)
         with zipfile.ZipFile(studio) as archive:
-            templates = [n for n in archive.namelist() if n.startswith("ProjectTemplates/") and n.endswith(".gsproj")]
-            sdk_pins = {n: ET.fromstring(archive.read(n)).get("Sdk") for n in templates}
+            sdk_pins = template_sdk_pins(archive)
     except (OSError, KeyError, zipfile.BadZipFile, ET.ParseError) as error:
         errors.append(f"cannot read {studio}: {error}")
         return errors
@@ -180,12 +180,29 @@ def check_tag_and_vsix(nupkgs_version: str | None, tag: str, vsix: Path) -> list
     parts = found.split(".")
     if len(parts) != 4 or not all(p.isdigit() for p in parts) or ".".join(parts[:3]) != core:
         errors.append(f"{VISUAL_STUDIO_VSIX} has version {found!r}, expected four numeric parts starting with {core}")
-    if not templates:
+    if not sdk_pins:
         errors.append(f"{VISUAL_STUDIO_VSIX} has no project template")
     if nupkgs_version is not None:
         errors += [f"{VISUAL_STUDIO_VSIX}: {name} pins {pin!r}, expected Gsharp.NET.Sdk/{nupkgs_version}"
                    for name, pin in sorted(sdk_pins.items()) if pin != f"Gsharp.NET.Sdk/{nupkgs_version}"]
     return errors
+
+
+def template_sdk_pins(archive: zipfile.ZipFile) -> dict[str, str | None]:
+    """The Sdk attribute of every project template in a VSIX. VSIX packaging may leave a template as loose
+    files (the layout of v0.5.212) or keep the template zip, so both are read."""
+    pins: dict[str, str | None] = {}
+    for name in archive.namelist():
+        if not name.startswith("ProjectTemplates/"):
+            continue
+        if name.endswith(".gsproj"):
+            pins[name] = ET.fromstring(archive.read(name)).get("Sdk")
+        elif name.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(archive.read(name))) as template:
+                for inner in template.namelist():
+                    if inner.endswith(".gsproj"):
+                        pins[f"{name}!{inner}"] = ET.fromstring(template.read(inner)).get("Sdk")
+    return pins
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -281,6 +298,13 @@ def cmd_marketplace_version(args: argparse.Namespace, sleep=time.sleep, clock=ti
         sleep(args.interval)
 
 
+def positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -299,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     push.add_argument("--nupkgs", type=Path, required=True)
     push.add_argument("--source", default=NUGET_SOURCE)
     push.add_argument("--api-key-env", default="NUGET_API_KEY", help="environment variable that holds the API key")
-    push.add_argument("--attempts", type=int, default=3)
+    push.add_argument("--attempts", type=positive_int, default=3)
     push.add_argument("--pause", type=float, default=30, help="seconds between two attempts")
     push.add_argument("--dotnet", default="dotnet")
 
