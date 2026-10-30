@@ -4638,7 +4638,9 @@ partial class CSharpToGSharpTranslator {
             // Issue #5526: `await call` yields the type argument of the task, whose `?` is part of
             // the declared type and survives where the call's own annotation does not.
             if call is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaited {
-                return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) &&
+                return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) && !this.FlowsThroughUserDefinedConversion(
+                    value
+                ) &&
                     this
                     .context
                     .GetSymbolInfo(awaited.Expression)

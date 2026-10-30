@@ -38,6 +38,7 @@ import Xunit
 /// | 8 | `var w = Maybe(); Consume(w)` (nullable sink) | unchanged | no `!!` | sink check removed (M4) |
 /// | 9 | `var w = new C(); Take(w)` | unchanged | no `!!` | rule applies to every `var` local (M6) |
 /// | 10 | `var w = Maybe(); Id(w)` (G# infers the argument) | unchanged | no `!!` | inferred-argument exclusion removed (M7) |
+/// | 12 | `F = await MA()` into a `B` field with `implicit operator B(A?)` | no `!!` | unchanged (the conversion bridge decides) | conversion exclusion removed from the await read (M8) |
 /// | 11 | `var w = Maybe(); w = new C(); Take(w)` | `Take(w)` (GS0155) | `Take(w!!)` (G# does not narrow `w` by the write) | M5 |
 open class Issue5526AwaitAndInferredLocalTests {
     @Fact
@@ -169,6 +170,19 @@ public static class K {
 }`)
         // G# infers `C?` and does not narrow it by the write, so the read needs the `!!` C# proves safe.
         Assert.Equal(1, Count(printed, "Take(w!!)"))
+    }
+
+    @Fact
+    func Row12_AwaitedValueThroughUserDefinedConversion_IsLeftToTheConversionBridge() {
+        let printed = Translate(true, `using System.Threading.Tasks;
+public class A { }
+public class B { public static implicit operator B(A? a) => new B(); }
+public class Holder { public B F = new B(); }
+public static class K {
+  static Task<A?> MA() => Task.FromResult<A?>(null);
+  public static async Task M() { var h = new Holder { F = await MA() }; }
+}`, bind: false)
+        Assert.DoesNotContain("(await MA())!!", printed, StringComparison.Ordinal)
     }
 
     shared {
