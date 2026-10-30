@@ -2831,6 +2831,15 @@ internal partial class StatementBinder {
                 MayMutateReferenceStorage = true
             }
             MayMutateGlobalRoots = true
+            // No enclosing assignment: nothing is protected, so no set is built for every node.
+            if enclosingGlobalAssignments.Count == 0 {
+                if globalMutationProtectedRoots == nil {
+                    globalMutationProtectedRoots = HashSet[VariableSymbol]()
+                } else {
+                    globalMutationProtectedRoots!!.Clear()
+                }
+                return
+            }
             let protectedRoots = enclosingGlobalAssignments.ToHashSet()
             if globalMutationProtectedRoots == nil {
                 globalMutationProtectedRoots = protectedRoots
@@ -2841,6 +2850,14 @@ internal partial class StatementBinder {
 
         private func MarkRunsEscapedClosure() {
             MayRunEscapedClosure = true
+            if enclosingAssignments.Count == 0 {
+                if escapedClosureProtectedRoots == nil {
+                    escapedClosureProtectedRoots = HashSet[VariableSymbol]()
+                } else {
+                    escapedClosureProtectedRoots!!.Clear()
+                }
+                return
+            }
             let protectedRoots = enclosingAssignments.ToHashSet()
             if escapedClosureProtectedRoots == nil {
                 escapedClosureProtectedRoots = protectedRoots
@@ -5017,17 +5034,19 @@ internal partial class StatementBinder {
         /// property is in this list. The list is small on purpose: add a property only when its getter reads a
         /// field and calls nothing, and name the corpus row that needs it.
         internal func IsStableClrGetter(property PropertyInfo) bool {
-            let declaring = property.DeclaringType
-            let getter = property.GetMethod
-            if declaring == nil || getter == nil || (getter.IsVirtual && !getter.IsFinal && !declaring.IsSealed) {
+            // The name test comes first: it costs one string compare, and almost every imported property is not on the
+            // list. The reflection reads below run only for a name that is.
+            let name = property.Name
+            if name != "Length" &&
+                name != "IsEmpty" &&
+                name != "Count" &&
+                name != "Key" &&
+                name != "Value" &&
+                name != "HasValue" {
                 return false
             }
-            let assemblyName = declaring.Assembly.GetName().Name
-            if assemblyName != "System.Private.CoreLib" &&
-                assemblyName != "System.Runtime" &&
-                assemblyName != "System.Collections" &&
-                assemblyName != "netstandard" &&
-                assemblyName != "mscorlib" {
+            let declaring = property.DeclaringType
+            if declaring == nil {
                 return false
             }
             let typeName = if declaring.IsGenericType {
@@ -5035,26 +5054,37 @@ internal partial class StatementBinder {
             } else {
                 declaring.FullName
             }
-            let name = property.Name
+            var listed = false
             if name == "Length" {
-                return typeName is "System.String" or
+                listed = typeName is "System.String" or
                     "System.Text.StringBuilder" or
                     "System.Array" or
                     "System.Span`1" or
                     "System.ReadOnlySpan`1"
-            }
-            if name == "IsEmpty" {
-                return typeName is "System.Span`1" or "System.ReadOnlySpan`1"
-            }
-            if name == "Count" {
-                return typeName is "System.Collections.Generic.List`1" or
+            } else if name == "IsEmpty" {
+                listed = typeName is "System.Span`1" or "System.ReadOnlySpan`1"
+            } else if name == "Count" {
+                listed = typeName is "System.Collections.Generic.List`1" or
                     "System.Collections.Generic.Dictionary`2" or
                     "System.Collections.Generic.HashSet`1"
+            } else if name == "Key" || name == "Value" {
+                listed = typeName == "System.Collections.Generic.KeyValuePair`2"
+            } else {
+                listed = typeName == "System.Nullable`1"
             }
-            if name == "Key" || name == "Value" {
-                return typeName == "System.Collections.Generic.KeyValuePair`2"
+            if !listed {
+                return false
             }
-            return name == "HasValue" && typeName == "System.Nullable`1"
+            let getter = property.GetMethod
+            if getter == nil || (getter.IsVirtual && !getter.IsFinal && !declaring.IsSealed) {
+                return false
+            }
+            let assemblyName = declaring.Assembly.GetName().Name
+            return assemblyName == "System.Private.CoreLib" ||
+                assemblyName == "System.Runtime" ||
+                assemblyName == "System.Collections" ||
+                assemblyName == "netstandard" ||
+                assemblyName == "mscorlib"
         }
 
         /// ADR-0208 R11 and R15 (#5504): whether [`node`](paramref) reads, writes or subscribes a static member
