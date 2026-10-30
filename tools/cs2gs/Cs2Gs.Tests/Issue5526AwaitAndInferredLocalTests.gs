@@ -42,6 +42,7 @@ import Xunit
 /// | 13 | `var w = await MA(); Take(w)`, both | `Take(w)` (GS0155) | `Take(w!!)` | await case removed from `IsNullableInitializer` (M9) |
 /// | 14 | `await MA().ConfigureAwait(false)` of a `Task<C?>` and a `ValueTask<C?>`, into a parameter and a `var` local | no `!!` | `(await MA().ConfigureAwait(false))!!`, `Take(w!!)` | `ConfigureAwait` unwrap removed (M10) |
 /// | 15 | `var w = Maybe(); lookup[w]` with `implicit operator B(A?)` | no `!!` | unchanged (the conversion decides) | conversion exclusion removed from the inferred-local rule (M11) |
+/// | 16 | user-defined `ConfigureAwait` extension that returns a different result | no `!!` | unchanged | unwrap not restricted to `Task` and `ValueTask` (M12) |
 /// | 11 | `var w = Maybe(); w = new C(); Take(w)` | `Take(w)` (GS0155) | `Take(w!!)` (G# does not narrow `w` by the write) | M5 |
 open class Issue5526AwaitAndInferredLocalTests {
     @Fact
@@ -226,6 +227,18 @@ public static class K {
   public static int M(Lookup lookup) { var w = Maybe(); return lookup[w]; }
 }`, bind: false)
         Assert.DoesNotContain("w!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row16_UserDefinedConfigureAwait_IsNotUnwrapped() {
+        let printed = Translate(true, `using System.Threading.Tasks;
+public class C { public int N; }
+public static class Ext { public static Task<C> ConfigureAwait(this Task<C?> t, int n) => Task.FromResult(new C()); }
+public static class K {
+  static Task<C?> MA() => Task.FromResult<C?>(null);
+  public static async Task F(C p) { p = await MA().ConfigureAwait(1); }
+}`, bind: false)
+        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
     }
 
     shared {

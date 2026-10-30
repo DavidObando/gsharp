@@ -4633,7 +4633,15 @@ partial class CSharpToGSharpTranslator {
             var awaitedTask Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax = awaited.Expression
             if awaitedTask is InvocationExpressionSyntax{
                 Expression: MemberAccessExpressionSyntax{Name: {Identifier: {ValueText: "ConfigureAwait"}}} configured
-            } {
+            } &&
+                this
+                .context
+                .GetSymbolInfo(awaitedTask)
+                .Symbol is IMethodSymbol{
+                ContainingType: {ContainingNamespace: {} configuredNamespace} configuredOwner
+            } &&
+                configuredNamespace.ToDisplayString() == "System.Threading.Tasks" &&
+                (configuredOwner.Name == "Task" || configuredOwner.Name == "ValueTask") {
                 awaitedTask = configured.Expression
             }
             return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) &&
