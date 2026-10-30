@@ -11,8 +11,12 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Security.Cryptography
+import System.Text
+import System.Text.RegularExpressions
 import System.Threading
 import Xunit
+import Xunit.Abstractions
 
 /// Issue #4480: imported candidates are ranked on erased CLR shapes, but the
 /// winning argument must still obey ADR-0186 §3 rule 3 when rebound against
@@ -34,6 +38,12 @@ import Xunit
 /// canonical supertype projection—not CLR backing—is required there.
 @Collection("Issue4480Console")
 open class Issue4480ImportedCallConversionTests {
+    private let output ITestOutputHelper
+
+    init(output ITestOutputHelper) {
+        this.output = output
+    }
+
     /// Rule 3 is enforced equally at imported and G# callees.
     @Theory
     @MemberData("RejectedCases")
@@ -67,7 +77,7 @@ Console.WriteLine(Calls.GenericSequence(Ob.Strings()))`
         Assert.DoesNotContain("GS0159", log, StringComparison.Ordinal)
     }
 
-    /// An unrelated projected sibling keeps ordinary recovery.
+    /// An unrelated invariant owner is a type mismatch, not a nullability-only mismatch.
     @Fact
     func ProjectedUnrelatedSibling_DoesNotBecomeGs0154() {
         const source = `package P
@@ -87,8 +97,37 @@ class Repo[TFirst, TSecond] : IPair[TFirst, TSecond] {
 
 let count = GenericCalls[B].RequiredPair(Repo(Ob.Strings()[0], A()))`
         using let fixture = Issue4480ImportedCallConversionTests.Fixture("projected-unrelated")
-        let log = fixture.Compile(source)
-        Assert.True(File.Exists(fixture.AppPath), log)
+        const oracle = `using Issue4480.Library;
+class A {}
+class B {}
+class Repo<TFirst,TSecond> : IPair<TFirst,TSecond> {
+    TSecond second;
+    public Repo(TFirst first,TSecond second) { this.second=second; }
+    public TSecond GetSecond() => second;
+}
+class Program {
+    static void Main() {
+        GenericCalls<B>.RequiredPair(new Repo<string,A>(Ob.Strings()[0],new A()));
+    }
+}
+`
+        output.WriteLine("Contract source:\n" + LibrarySource)
+        output.WriteLine("Oracle source:\n" + oracle)
+        output.WriteLine("G# source:\n" + source)
+        output.WriteLine("SHA256 source: " + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))))
+        output.WriteLine(
+            "SHA256 Issue4480.Library.dll: " + Convert.ToHexString(
+                SHA256.HashData(File.ReadAllBytes(fixture.ContractPath))
+            )
+        )
+        fixture.RejectCSharp(oracle)
+        let log = fixture.Compile(source, emitArtifacts: true)
+        output.WriteLine(log)
+        Assert.False(File.Exists(fixture.AppPath), log)
+        Assert.False(File.Exists(Path.ChangeExtension(fixture.AppPath, "ref.dll")), log)
+        Assert.False(File.Exists(Path.ChangeExtension(fixture.AppPath, "pdb")), log)
+        Assert.Single(Regex.Matches(log, ": error GS\\d+:"))
+        Assert.Contains("App.gs(16,42,16,68): error GS0490:", log, StringComparison.Ordinal)
         Assert.DoesNotContain("GS0154", log, StringComparison.Ordinal)
         Assert.DoesNotContain("GS9998", log, StringComparison.Ordinal)
     }
@@ -125,7 +164,25 @@ class Derived : GenericBase[IEnumerable[string?]] {
             get;
         }
 
-        func Compile(source string) string {
+        prop ContractPath string -> libraryPath
+
+        func RejectCSharp(source string) {
+            let references = TrustedPlatformAssemblies().Append(libraryPath).Select(
+                (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
+            )
+            let compilation = CSharpCompilation.Create(
+                "Oracle",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
+                references,
+                CSharpCompilationOptions(OutputKind.ConsoleApplication)
+            )
+            using let stream = MemoryStream()
+            let result = compilation.Emit(stream)
+            Assert.False(result.Success)
+            Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "CS1503")
+        }
+
+        func Compile(source string, emitArtifacts bool = false) string {
             let sourcePath = Path.Combine(root, "App.gs")
             File.WriteAllText(sourcePath, source)
             let args = List[string]{
@@ -133,6 +190,10 @@ class Derived : GenericBase[IEnumerable[string?]] {
                 "/target:exe",
                 "/targetframework:net10.0",
                 "/reference:" + libraryPath
+            }
+            if emitArtifacts {
+                args.Add("/refout:" + Path.ChangeExtension(AppPath, "ref.dll"))
+                args.Add("/debug:portable")
             }
             args.AddRange(TrustedPlatformAssemblies().Select((path string) -> ("/reference:" + path)))
             args.Add(sourcePath)
@@ -175,9 +236,8 @@ class Derived : GenericBase[IEnumerable[string?]] {
                     "Issue4480.Library",
                     []SyntaxTree{CSharpSyntaxTree.ParseText(Issue4480ImportedCallConversionTests.LibrarySource)},
                     references,
-                    CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
-                        NullableContextOptions.Enable
-                    )
+                    CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithDeterministic(true)
+                        .WithNullableContextOptions(NullableContextOptions.Enable)
                 )
                 let path = Path.Combine(root, "Issue4480.Library.dll")
                 let result = compilation.Emit(path)
