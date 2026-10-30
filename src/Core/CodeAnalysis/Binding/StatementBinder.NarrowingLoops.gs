@@ -393,19 +393,44 @@ internal partial class StatementBinder {
             default {
                 if write.RightSideName != nil {
                     why = "variable"
-                    // Question 4: a pattern-bound name is immutable and non-null by its construct.
-                    if write.RightSideDeclaration == "pattern" || write.RightSideDeclaration == "binding" {
-                        why = "variable:pattern-bound"
-                    } else if write.RightSideDeclaration == nil {
+                    // Question 4 (decided for slice L1): a pattern-bound name is immutable and non-null by its
+                    // construct. Its type must convert to the root without a conversion operator.
+                    var patternType TypeSymbol? = nil
+                    var patternBound = false
+                    let declaration = write.RightSideDeclaration
+                    if declaration != nil && declaration.StartsWith("pattern|", StringComparison.Ordinal) {
+                        patternBound = true
+                        let typeName = declaration.Substring("pattern|".Length)
+                        patternType = ResolveConstructedType(typeName)
+                    } else if declaration == "pattern" || declaration == "binding" {
+                        patternBound = true
+                    } else if declaration == nil {
                         let symbol = $scope.TryLookupSymbol(write.RightSideName)
                         if symbol is VariableSymbol source &&
-                            source.DeclaringSyntax is {} declaration &&
+                            source.DeclaringSyntax is {} declaringSyntax &&
                             (
-                            declaration.Kind == SyntaxKind.TypePattern ||
-                                declaration.Kind == SyntaxKind.VarPattern ||
-                                declaration.Kind == SyntaxKind.IfLetBindingClause
+                            declaringSyntax.Kind == SyntaxKind.TypePattern ||
+                                declaringSyntax.Kind == SyntaxKind.VarPattern ||
+                                declaringSyntax.Kind == SyntaxKind.IfLetBindingClause
                         ) {
-                            why = "variable:pattern-bound"
+                            patternBound = true
+                            patternType = StripAllNullability(source.Type)
+                        }
+                    }
+                    if patternBound {
+                        why = "variable:pattern-bound"
+                        let declaredRoot = StripAllNullability(root.Type)
+                        if patternType != nil && declaredRoot != nil && Conversion.IsRepresentationPreservingImplicit(
+                            patternType,
+                            declaredRoot
+                        ) &&
+                            (
+                            factKind != "type-test" || Conversion.IsRepresentationPreservingImplicit(
+                                patternType,
+                                narrowedType
+                            )
+                        ) {
+                            return true
                         }
                     }
                 }

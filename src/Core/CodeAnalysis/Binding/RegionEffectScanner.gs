@@ -28,6 +28,8 @@ internal sealed class RegionEffectScanner {
     // The names that a pattern or a binding declared anywhere in the region so far. A pattern variable
     // of `if x is not T v { return }` is visible after the statement that declares it.
     private var patternNames HashSet[string] = HashSet[string]()
+    // The declaration kind of each pattern name of the region; a name declared twice with different kinds is plain.
+    private var patternKinds Dictionary[string, string] = Dictionary[string, string]()
     private var pendingReceiver ExpressionSyntax? = nil
     private var pendingReceiverIsRoot bool = false
 
@@ -133,11 +135,13 @@ internal sealed class RegionEffectScanner {
         let savedCurrent = current
         let savedClosure = closureDepth
         let savedPatterns = patternNames
+        let savedPatternKinds = patternKinds
         scopes = List[ScopeFrame]()
         scopes.Add(ScopeFrame())
         current = RegionEffects()
         closureDepth = 0
         patternNames = HashSet[string]()
+        patternKinds = Dictionary[string, string]()
         let before = NodesVisited
         VisitLoop(node, topLevel, iterationRunsUserCode)
         current.NodesVisited = NodesVisited - before
@@ -147,6 +151,7 @@ internal sealed class RegionEffectScanner {
         current = savedCurrent
         closureDepth = savedClosure
         patternNames = savedPatterns
+        patternKinds = savedPatternKinds
         return result
     }
 
@@ -170,6 +175,11 @@ internal sealed class RegionEffectScanner {
             scopes[scopes.Count - 1].Kinds[name] = declaration
             if declaration != "local" {
                 patternNames.Add(name)
+                if patternKinds.TryGetValue(name, out var earlier) && earlier != declaration {
+                    patternKinds[name] = "pattern"
+                } else {
+                    patternKinds[name] = declaration
+                }
             }
         }
     }
@@ -366,8 +376,14 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.TypePattern {
                 let pattern = cast[TypePatternSyntax](node)
-                Declare(pattern.Identifier, "pattern")
-                Declare(pattern.Designation, "pattern")
+                // The type of the pattern rides on the declaration kind (`pattern|Type`), for rule P7.
+                let kindText = if pattern.Type.IsArray || pattern.Type.Identifier == nil {
+                    "pattern"
+                } else {
+                    "pattern|" + pattern.Type.DottedName
+                }
+                Declare(pattern.Identifier, kindText)
+                Declare(pattern.Designation, kindText)
                 Visit(pattern.PropertyPattern)
             }
             case SyntaxKind.PropertyPattern {
@@ -986,7 +1002,8 @@ internal sealed class RegionEffectScanner {
         if rightName != nil {
             rightDeclaration = DeclarationKind(rightName)
             if rightDeclaration == nil && patternNames.Contains(rightName) {
-                rightDeclaration = "pattern"
+                // The scope of a pattern variable can reach past its declaring frame (a guard leaks it).
+                rightDeclaration = patternKinds[rightName]
             }
         }
         PlaceWrite(name, position, proof, typeName, rightName, rightDeclaration, viaCallArgument, false)

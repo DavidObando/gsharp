@@ -456,6 +456,77 @@ func Run(v V) int32 {
     }
     return t
 }`, "GS0158")
+            Add("pattern-variable-write-keeps-the-fact (Q4)", `package T
+import System
+class Node { var Next object? = nil
+    var V int32 = 1 }
+func Run(o object, n int32) int32 {
+    var access Node? = o as Node
+    if access == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = access.V
+        if access.Next is Node inner {
+            access = inner
+        }
+    }
+    return total
+}`, "")
+            Add("guard-pattern-variable-write-keeps-the-fact (Q4, Core access = inner)", `package T
+import System
+class Node { var Next object? = nil
+    var V int32 = 1 }
+func Get() Node? { return nil }
+func Run(o object, n int32) int32 {
+    var access Node? = o as Node
+    if access == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = access.V
+        if access.Next is not Node inner { return total }
+        access = inner
+    }
+    return total
+}`, "")
+            Add("while-header-pattern-variable-write-keeps-the-fact (Q4, translator Deconstruction shape)", `package T
+class Op { var Parent Op? = nil
+    var Name string = "a" }
+func Run(start Op, n int32) string {
+    var current Op? = start
+    if current == nil { return "" }
+    var last = ""
+    while current.Parent is Op parent {
+        last = current.Name
+        current = parent
+    }
+    return last
+}`, "")
+            Add("ordinary-let-copy-write-still-removes-the-fact (Q4)", `package T
+class Node { var V int32 = 1 }
+func Run(n int32, other Node) int32 {
+    var access Node? = other
+    if access == nil { return 0 }
+    let copy Node = other
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = access.V
+        access = copy
+    }
+    return total
+}`, "GS0158")
+            Add("mutable-var-copy-write-still-removes-the-fact (Q4)", `package T
+class Node { var V int32 = 1 }
+func Run(n int32, other Node) int32 {
+    var access Node? = other
+    if access == nil { return 0 }
+    var copy Node = other
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = access.V
+        access = copy
+    }
+    return total
+}`, "GS0158")
             return rows
         }
     }

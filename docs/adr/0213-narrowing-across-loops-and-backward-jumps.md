@@ -1394,7 +1394,17 @@ question is the one that first depends on it.
    (`is T name`, `if let`/`guard let`/`while let` binding, a `case T name`
    arm)?** Such a variable is immutable and non-null by the construct that
    bound it, and it is the one Core site R7 (b) rejects (`access = inner`).
-   Recommendation: **not in L1**, *provisional*: the site costs one `let`
+   **Decided for slice L1 (maintainer, 2026-10-30): add the clause.** The reason is the nightly's
+   `gsharp-csharp` leg, not Oahu: its frozen C# corpus translates to the same `access = inner` shape in Core
+   (`ExpressionBinder.Assignments.gs`) and in `Cs2Gs.Translator` (`CSharpToGSharpTranslator.Deconstruction.gs`),
+   and no restructuring of `src/Core` reaches that corpus, so without the clause 24 of the 58 apps went red.
+   The clause: a loop write whose right side is a pattern-bound variable (a `TypePattern` with a plain type
+   name, or an entry-scope variable declared by a `TypePattern`, `VarPattern` or `if let`/`guard let`/`while let`
+   binding) is a P7 proof when its type converts to the root's declared type (and to the fact's type for a
+   type-test fact) by `Conversion.IsRepresentationPreservingImplicit`, so no conversion operator runs. A
+   pattern variable that the region declares with a pattern the walker cannot type (`var`, `if let`) is still no
+   proof. An ordinary `let` or `var` copy is no proof. Original recommendation, superseded:
+   **not in L1**, *provisional*: the site costs one `let`
    copy; L0 reports how many such sites Oahu has; if L0 finds any, L1 adds
    the clause (the symbol must record that it was bound by a non-null
    producing pattern, which the slice confirms or adds) with a corpus row
