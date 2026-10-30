@@ -448,7 +448,7 @@ func Run(flag bool) int32 {
     clear()
     return 0
 }
-func Main() { Console.WriteLine(Run(false)) }`, "9|x|nullability|W5(unknown-write)|R7 e", "1/1/0")
+func Main() { Console.WriteLine(Run(true)) }`, "9|x|nullability|W5(unknown-write)|R7 e", "1/1/0")
             Add("q5d-hidden-field-getter", `import System
 class C {
     var Value int32 = 1
