@@ -4621,6 +4621,30 @@ partial class CSharpToGSharpTranslator {
                 (respectDeclaredCallResults && this.DeclaredCallResultIsAnnotatedNullable(value))
         }
 
+        /// Issues #5526 and #5527: whether [`awaited`](paramref) awaits a call whose `Task<T?>` or
+        /// `ValueTask<T?>` declares a nullable result, read where C# runs no flow analysis.
+        /// @remarks The `?` is on the task's type argument, which survives on the declared type where the
+        /// expression's own annotation does not. `IsNullableInitializer` asks this too, so a `var` local
+        /// initialized by such an await is `T?` for the rules that read it.
+        private func DeclaredAwaitedResultIsAnnotatedNullable(
+            awaited Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax
+        ) bool {
+            return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) &&
+                this
+                .context
+                .GetSymbolInfo(awaited.Expression)
+                .Symbol is IMethodSymbol{ReturnType: INamedTypeSymbol{TypeArguments: {Length: 1} typeArguments} task} &&
+                (task.OriginalDefinition.Name == "Task" || task.OriginalDefinition.Name == "ValueTask") &&
+                task
+                .ContainingNamespace
+                ?.ToDisplayString() == "System.Threading.Tasks" &&
+                typeArguments[0].IsReferenceType &&
+                typeArguments[0].NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
+        }
+
         /// Issue #5516: whether [`value`](paramref) is a call whose method declares a `T?` result,
         /// read where C# runs no flow analysis (see (cref:IsAnnotationsContextWithoutFlowAnalysis)).
         /// @remarks A field, property, local or parameter keeps its `T?` on the expression type there
@@ -4638,24 +4662,9 @@ partial class CSharpToGSharpTranslator {
             // Issue #5526: `await call` yields the type argument of the task, whose `?` is part of
             // the declared type and survives where the call's own annotation does not.
             if call is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaited {
-                return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) && !this.FlowsThroughUserDefinedConversion(
-                    value
-                ) &&
-                    this
-                    .context
-                    .GetSymbolInfo(awaited.Expression)
-                    .Symbol is IMethodSymbol{
-                    ReturnType: INamedTypeSymbol{TypeArguments: {Length: 1} typeArguments} task
-                } &&
-                    (task.OriginalDefinition.Name == "Task" || task.OriginalDefinition.Name == "ValueTask") &&
-                    task
-                    .ContainingNamespace
-                    ?.ToDisplayString() == "System.Threading.Tasks" &&
-                    typeArguments[0].IsReferenceType &&
-                    typeArguments[0].NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated
+                return !this.FlowsThroughUserDefinedConversion(value) && this.DeclaredAwaitedResultIsAnnotatedNullable(
+                    awaited
+                )
             }
             if !(call is InvocationExpressionSyntax) || !this.IsAnnotationsContextWithoutFlowAnalysis(call) ||
                 // A user-defined conversion has its own input and result contracts, which

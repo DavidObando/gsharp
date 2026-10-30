@@ -39,6 +39,7 @@ import Xunit
 /// | 9 | `var w = new C(); Take(w)` | unchanged | no `!!` | rule applies to every `var` local (M6) |
 /// | 10 | `var w = Maybe(); Id(w)` (G# infers the argument) | unchanged | no `!!` | inferred-argument exclusion removed (M7) |
 /// | 12 | `F = await MA()` into a `B` field with `implicit operator B(A?)` | no `!!` | unchanged (the conversion bridge decides) | conversion exclusion removed from the await read (M8) |
+/// | 13 | `var w = await MA(); Take(w)`, both | `Take(w)` (GS0155) | `Take(w!!)` | await case removed from `IsNullableInitializer` (M9) |
 /// | 11 | `var w = Maybe(); w = new C(); Take(w)` | `Take(w)` (GS0155) | `Take(w!!)` (G# does not narrow `w` by the write) | M5 |
 open class Issue5526AwaitAndInferredLocalTests {
     @Fact
@@ -183,6 +184,18 @@ public static class K {
   public static async Task M() { var h = new Holder { F = await MA() }; }
 }`, bind: false)
         Assert.DoesNotContain("(await MA())!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row13_InferredLocalFromAwaitedNullableTask_IsAsserted() {
+        let printed = AssertSameInBothContexts(`using System.Threading.Tasks;
+public class C { public int N; }
+public static class K {
+  static Task<C?> MA() => Task.FromResult<C?>(null);
+  static void Take(C x) { }
+  public static async Task F() { var w = await MA(); Take(w); }
+}`)
+        Assert.Equal(1, Count(printed, "Take(w!!)"))
     }
 
     shared {
