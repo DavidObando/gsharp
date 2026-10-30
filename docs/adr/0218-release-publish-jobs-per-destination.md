@@ -69,7 +69,7 @@ holds twelve `.nupkg` and five `.snupkg`.
 | "Re-run failed jobs" also runs the jobs that were skipped because they needed a failed job. | Not stated in the documentation that was read. The runbook assumes it. Migration step 2 observes it. | **Unverified** |
 | A job with `needs` is skipped when a prerequisite fails or is skipped, unless its `if` uses `always()` or `!cancelled()`. `always()` is also true in a cancelled run. | GitHub documentation | Verified (docs) |
 | `needs.<job>.result` of a matrix job is one value for all legs. The jobs API lists the legs by display name, `r2r-compiler-smoke (<rid>)`. | `build.yml:1046`; `gh run view --json jobs` | Verified |
-| A `v*-rc1` tag runs `publish` with a prerelease version `<number>-g<sha>`, because `publicReleaseRefSpec` matches only `^refs/tags/v\d+(?:\.\d+)*$`. The VSIX versions carry no suffix (`SimpleVersion`). | `version.json`, runbook, `build.yml:737-747` | Verified |
+| A `v*-rc1` tag runs `publish` with a prerelease version `<number>-g<sha>`, because `publicReleaseRefSpec` matches only `^refs/tags/v\d+(?:\.\d+)*$`. The VSIX versions carry no suffix (`SimpleVersion`). | `version.json`, runbook, `build.yml:738-748` | Verified |
 | A job on a hosted runner label that no longer exists fails, or waits in the queue. | Not checked. | **Unverified** |
 | Repository secrets are not available to workflow runs from forks. | GitHub documentation, from memory. | Not re-read |
 | nuget.org, the VS Code Marketplace and the Visual Studio Marketplace accept GitHub OIDC trusted publishing. | NuGet, vsce and Visual Studio documentation | Verified (docs); out of scope |
@@ -129,7 +129,7 @@ says otherwise, downloads the artifacts of the same run with
 
 | Job | Runner | `needs` | Permissions | Does |
 | --- | --- | --- | --- | --- |
-| `publish-verify` | ubuntu | `ci` | `actions: read` | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` for a prerelease tag) and `unverified_rids` (section 2). |
+| `publish-verify` | ubuntu | `ci` | default (`contents: read`) | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` for a prerelease tag) and `unverified_rids` (section 2). |
 | `publish-github-release` | ubuntu | `publish-verify` | `contents: write` | `gh release view \|\| gh release create --draft --generate-notes`, with `--prerelease` when `prerelease` is `true`. `gh release upload --clobber` of every `.nupkg`, `.snupkg` and `.vsix`. The release stays a draft until `publish-finalize`. |
 | `publish-nuget-compiler` | ubuntu | `publish-verify` | none | `release-publish.py nuget-push --group compiler`: the six RID packages, then `check-rid-packages.py --wait-minutes 30`. |
 | `publish-nuget-sdk` | ubuntu | `publish-verify`, `publish-nuget-compiler` | none | `check-rid-packages.py` (no wait) as a precondition, then `nuget-push --group sdk`: `Gsharp.NET.Sdk` and the remaining packages with their `.snupkg`, then `check-rid-packages.py --require-sdk --wait-minutes 15`. |
@@ -153,7 +153,12 @@ Rules:
   repository secrets do not reach fork pull requests. An environment would
   repeat the tag condition as a deployment policy and add a moving part.
 - `contents: write` is given to the two jobs that touch the release. The
-  other jobs keep `contents: read`.
+  other publish jobs set no `permissions` key and keep the repository default,
+  which is `read` (`gh api .../actions/permissions/workflow`). Same-run
+  `download-artifact` needs no `GITHUB_TOKEN` scope; today's `publish` job
+  downloads with `contents: write` only. A job-level `permissions` key
+  replaces the defaults, so a job that names one scope must name every scope
+  it needs.
 - The order of the two NuGet groups is enforced twice: by the `needs` edge
   and by the feed check at the start of `publish-nuget-sdk`. The second guard
   matters because ADR-0207 result 6 makes a missing RID package a restore
@@ -184,7 +189,9 @@ legs and knows their result. The check script gets an advisory rule:
   repos/{repo}/actions/runs/{run_id}/jobs`, display names
   `r2r-compiler-smoke (<rid>)`), writes them to the step summary, and sets the
   job output `unverified_rids` (for example `osx-x64`). `ci` declares that
-  output; `publish-verify` forwards it.
+  output; `publish-verify` forwards it. The jobs API needs `actions: read`,
+  which the repository default token (`read`) does not include, so `ci` gets
+  `permissions: { contents: read, actions: read }`.
 - `publish-finalize` appends a section to the GitHub release body:
   "Unverified platforms: `osx-x64`. The ReadyToRun compiler smoke did not run
   or did not pass on this platform (ADR-0207). The IL compiler is the
@@ -257,10 +264,12 @@ has no pre-release channel, so its users receive the version as an update.
 
 The VSIX versions carry no suffix. A prerelease tag and the following release
 tag must therefore sit on different commits, so that the NBGV height differs
-and the marketplace versions differ. A release run whose `marketplace-version`
-pre-query finds the VS Code version present as a pre-release (the version
-property `Microsoft.VisualStudio.Code.PreRelease`, name unverified) fails in
-`publish-verify` with a collision message instead of skipping. The Visual
+and the marketplace versions differ. The pre-query of
+`publish-vscode-marketplace` reads the pre-release flag of a present version
+(the version property `Microsoft.VisualStudio.Code.PreRelease`, name
+unverified). Present with the same flag as this run: skip, as after a
+post-upload timeout. Present with the other flag: fail with a collision
+message, because an rc tag and a release tag share the commit. The Visual
 Studio version has a per-build fourth part, so it does not collide.
 
 ### 6. Failure matrix proposed
