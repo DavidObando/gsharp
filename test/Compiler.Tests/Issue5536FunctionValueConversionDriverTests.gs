@@ -1,0 +1,462 @@
+package GSharp.Compiler.Tests
+
+import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.Tests
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import System.Linq
+import System.Security.Cryptography
+import System.Text
+import System.Text.RegularExpressions
+import Xunit
+import Xunit.Abstractions
+
+/// Issue #5536: a function value or method group keeps its delegate. It converts to a function or delegate target
+/// only when each parameter and the result keep their reference (natural `Func`/`Action` variance, ADR-0108).
+/// A function literal still converts its result value, because it binds its body to the target.
+class Issue5536FunctionValueConversionDriverTests {
+    private let output ITestOutputHelper
+
+    init(output ITestOutputHelper) {
+        this.output = output
+    }
+
+    @Fact
+    func NumericResult_OfFunctionValue_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+func C(x () -> int32) () -> int64 -> x
+func Main() {}
+`, `using System;
+class Program {
+    static Func<long> C(Func<int> x) => x;
+    static void Main() {}
+}
+`, "CS0029", line: 2, column: 38, length: 1)
+    }
+
+    @Fact
+    func ChannelReaderResult_OfFunctionValue_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System.Threading.Channels
+func A(x () -> Channel[int32]) () -> ChannelReader[int32] -> x
+func Main() {}
+`, `using System;
+using System.Threading.Channels;
+class Program {
+    static Func<ChannelReader<int>> A(Func<Channel<int>> x) => x;
+    static void Main() {}
+}
+`, "CS0029", line: 2, column: 62, length: 1)
+    }
+
+    @Fact
+    func NumericResult_ToSourceNamedDelegate_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+delegate D64() int64;
+func N(x () -> int32) D64 -> x
+func Main() {}
+`, `using System;
+delegate long D64();
+class Program {
+    static D64 N(Func<int> x) => x;
+    static void Main() {}
+}
+`, "CS0029", line: 3, column: 30, length: 1)
+    }
+
+    @Fact
+    func NumericResult_ToImportedDelegates_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import FunctionControl
+func W(x () -> int32) Wide -> x
+func Main() {}
+`, `using System;
+using FunctionControl;
+class Program {
+    static Wide W(Func<int> x) => x;
+    static void Main() {}
+}
+`, "CS0029", line: 2, column: 31, length: 1)
+        Reject(fixture, `import System
+func F(x () -> int32) Func[int64] -> x
+func Main() {}
+`, `using System;
+class Program {
+    static Func<long> F(Func<int> x) => x;
+    static void Main() {}
+}
+`, "CS0029", line: 2, column: 38, length: 1)
+    }
+
+    @Fact
+    func NumericResult_OfMethodGroup_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+func G() int32 { return 7 }
+func M() () -> int64 -> G
+func Main() {}
+`, `using System;
+class Program {
+    static int G() => 7;
+    static Func<long> M() => G;
+    static void Main() {}
+}
+`, "CS0407", line: 3, column: 25, length: 1)
+    }
+
+    @Fact
+    func NumericResult_OfFunctionValueArgument_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+func Take(f () -> int64) int64 -> f()
+func Main() {
+    let x () -> int32 = () -> 1
+    Take(x)
+}
+`, `using System;
+class Program {
+    static long Take(Func<long> f) => f();
+    static void Main() {
+        Func<int> x = () => 1;
+        Take(x);
+    }
+}
+`, "CS1503", line: 5, column: 10, length: 1, diagnostic: "GS0154")
+    }
+
+    @Fact
+    func OverloadResolution_SkipsFunctionValueThatNeedsAConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+func M(f () -> int64) { Console.Write("F") }
+func M(o object) { Console.Write("O") }
+func Main() {
+    let x () -> int32 = () -> 1
+    M(x)
+    M(() -> 1)
+}
+`, `using System;
+class Program {
+    static void M(Func<long> f) { Console.Write("F"); }
+    static void M(object o) { Console.Write("O"); }
+    static void Main() {
+        Func<int> x = () => 1;
+        M(x);
+        M(() => 1);
+    }
+}
+`, "OF")
+    }
+
+    @Fact
+    func ContravariantParameter_KeepsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func U(x (Animal) -> void) (Dog) -> void -> x
+func N(x ((Animal) -> void)?) ((Dog) -> void)? -> x
+func Main() {
+    let a = (value Animal) -> Console.Write("A")
+    let f = U(a)
+    f(Dog())
+    Console.Write(Object.ReferenceEquals(a, f))
+    Console.Write(Object.ReferenceEquals(a, N(a)))
+    Console.Write(N(nil) == nil)
+}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static Action<Dog> U(Action<Animal> x) => x;
+    static Action<Dog>? N(Action<Animal>? x) => x;
+    static void Main() {
+        Action<Animal> a = value => Console.Write("A");
+        var f = U(a);
+        f(new Dog());
+        Console.Write(Object.ReferenceEquals(a, f));
+        Console.Write(Object.ReferenceEquals(a, N(a)));
+        Console.Write(N(null) == null);
+    }
+}
+`, "ATrueTrueTrue")
+    }
+
+    @Fact
+    func CovariantResult_KeepsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func R(x () -> Dog) () -> Animal -> x
+func S(x () -> string) () -> object -> x
+func Main() {
+    let r = () -> Dog()
+    let s = () -> "s"
+    Console.Write(Object.ReferenceEquals(r, R(r)))
+    Console.Write(Object.ReferenceEquals(s, S(s)))
+    Console.Write(S(s)())
+}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static Func<Animal> R(Func<Dog> x) => x;
+    static Func<object> S(Func<string> x) => x;
+    static void Main() {
+        Func<Dog> r = () => new Dog();
+        Func<string> s = () => "s";
+        Console.Write(Object.ReferenceEquals(r, R(r)));
+        Console.Write(Object.ReferenceEquals(s, S(s)));
+        Console.Write(S(s)());
+    }
+}
+`, "TrueTrues")
+    }
+
+    @Fact
+    func DelegateRebindingAndLiteralResults_StillConvert() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+open class Animal {}
+class Dog : Animal {}
+delegate MakeAnimal() Animal;
+func ToNamed(x () -> Dog) MakeAnimal -> x
+func ToImported(x () -> string) Make -> x
+func Widen() () -> int64 -> func() int32 { return 7 }
+func Abs() (int32) -> int64 -> Math.Abs
+func Main() {
+    Console.Write(ToNamed(() -> Dog())() is Dog)
+    Console.Write(ToImported(() -> "m")())
+    Console.Write(Widen()())
+    Console.Write(Abs()(-4))
+}
+`, `using System;
+using FunctionControl;
+class Animal {}
+class Dog : Animal {}
+delegate Animal MakeAnimal();
+class Program {
+    static MakeAnimal ToNamed(Func<Dog> x) => new MakeAnimal(x);
+    static Make ToImported(Func<string> x) => new Make(x);
+    static Func<long> Widen() => () => { int value = 7; return value; };
+    static Func<int, long> Abs() => value => Math.Abs(value);
+    static void Main() {
+        Console.Write(ToNamed(() => new Dog())() is Dog);
+        Console.Write(ToImported(() => "m")());
+        Console.Write(Widen()());
+        Console.Write(Abs()(-4));
+    }
+}
+`, "Truem74")
+    }
+
+    private func Reject(
+        fixture CSharpFixture,
+        source string,
+        oracle string,
+        oracleDiagnostic string,
+        line int32,
+        column int32,
+        length int32,
+        diagnostic string = "GS0155"
+    ) {
+        output.WriteLine("Contract source:\n" + Contract)
+        output.WriteLine("Oracle source:\n" + oracle)
+        let compilation = CSharpCompilation.Create(
+            "RejectedOracle",
+            []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
+            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
+                (path string) -> MetadataReference.CreateFromFile(path)
+            ),
+            CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable
+            )
+        )
+        using let stream = MemoryStream()
+        let emitted = compilation.Emit(stream)
+        Assert.False(emitted.Success)
+        let oracleError = Assert.Single(
+            emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+        )
+        Assert.Equal(oracleDiagnostic, oracleError.Id)
+        output.WriteLine("Oracle diagnostic: " + oracleError.ToString())
+        for path in OutputPaths(fixture) {
+            File.Delete(path)
+        }
+        let result = Compile(fixture, source)
+        Assert.NotEqual(0, result.Code)
+        let errors = Regex.Matches(
+            Encoding.UTF8.GetString(result.Bytes) + result.Error,
+            `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+        )
+        let error = Assert.Single(errors)
+        Assert.Equal(diagnostic, error.Groups[5].Value)
+        Assert.Equal(line.ToString(), error.Groups[1].Value)
+        Assert.Equal(column.ToString(), error.Groups[2].Value)
+        Assert.Equal(line.ToString(), error.Groups[3].Value)
+        Assert.Equal((column + length).ToString(), error.Groups[4].Value)
+        for path in OutputPaths(fixture) {
+            Assert.False(File.Exists(path))
+        }
+    }
+
+    private func Check(fixture CSharpFixture, source string, oracle string, expected string) {
+        Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
+        output.WriteLine("Contract source:\n" + Contract)
+        output.WriteLine("Oracle source:\n" + oracle)
+        let result = Compile(fixture, source)
+        Assert.True(result.Code == 0, Encoding.UTF8.GetString(result.Bytes) + result.Error)
+        Assert.Empty(result.Error)
+        let paths = OutputPaths(fixture)
+        let bytes = paths.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        for content in bytes {
+            Assert.NotEmpty(content)
+        }
+        let repeat = Compile(fixture, source)
+        Assert.Equal(0, repeat.Code)
+        Assert.Equal(result.Bytes, repeat.Bytes)
+        Assert.Equal(result.Error, repeat.Error)
+        for var index = 0; index < paths.Length; index++ {
+            Assert.Equal(bytes[index], File.ReadAllBytes(paths[index]))
+        }
+        let image = paths[0]
+        let oraclePath = Path.Combine(fixture.DirectoryPath, "Oracle.dll")
+        let compilation = CSharpCompilation.Create(
+            "Oracle",
+            []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
+            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
+                (path string) -> MetadataReference.CreateFromFile(path)
+            ),
+            CSharpCompilationOptions(
+                OutputKind.ConsoleApplication,
+                nullableContextOptions: NullableContextOptions.Enable,
+                deterministic: true
+            )
+        )
+        let emitted = compilation.Emit(oraclePath)
+        Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics))
+        for path in paths.Concat([]string{oraclePath}) {
+            RecordArtifact(path)
+        }
+        File.Copy(
+            Path.ChangeExtension(image, ".runtimeconfig.json"),
+            Path.ChangeExtension(oraclePath, ".runtimeconfig.json")
+        )
+        // Strict verification with every reference runs before any image executes.
+        Verify(fixture.AssemblyPath, nil)
+        Verify(image, fixture.AssemblyPath)
+        Verify(oraclePath, fixture.AssemblyPath)
+        for executable in[]string{image, oraclePath} {
+            let executed = Run([]string{executable})
+            Assert.Equal(0, executed.Code)
+            Assert.Empty(executed.Error)
+            Assert.Equal(Encoding.UTF8.GetBytes(expected), executed.Bytes)
+        }
+    }
+
+    private func Compile(fixture CSharpFixture, source string)(Code int32, Bytes[]uint8, Error string) {
+        let path = Path.Combine(fixture.DirectoryPath, "Consumer.gs")
+        File.WriteAllText(path, source)
+        output.WriteLine("G# source:\n" + source)
+        RecordArtifact(fixture.AssemblyPath)
+        RecordArtifact(typeof(Issue5536FunctionValueConversionDriverTests).Assembly.Location)
+        RecordArtifact(typeof(Program).Assembly.Location)
+        RecordArtifact(Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!!, "GSharp.Core.dll"))
+        return Run(
+            []string{
+                typeof(Program).Assembly.Location,
+                path,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/deterministic+",
+                "/debug:portable",
+                "/out:" + Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
+                "/refout:" + Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
+                "/reference:" + fixture.AssemblyPath
+            }
+        )
+    }
+
+    private func Verify(image string, contract string?) {
+        let arguments = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}
+        for path in RuntimeReferences() {
+            arguments.Add("-r")
+            arguments.Add(path)
+        }
+        if contract != nil {
+            arguments.Add("-r")
+            arguments.Add(contract)
+        }
+        let verified = Run(arguments)
+        Assert.True(verified.Code == 0, Encoding.UTF8.GetString(verified.Bytes) + verified.Error)
+        Assert.Empty(verified.Error)
+    }
+
+    private func Run(arguments IEnumerable[string])(Code int32, Bytes[]uint8, Error string) {
+        let start = ProcessStartInfo("dotnet"){
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }
+        for argument in arguments {
+            start.ArgumentList.Add(argument)
+        }
+        output.WriteLine("argv: dotnet " + string.Join(" ", arguments))
+        using let process = Process.Start(start) ?? throw InvalidOperationException("Could not start dotnet.")
+        using let stdout = MemoryStream()
+        let read = process.StandardOutput.BaseStream.CopyToAsync(stdout)
+        let error = process.StandardError.ReadToEndAsync()
+        let exited = process.WaitForExit(30_000)
+        if !exited {
+            process.Kill(entireProcessTree: true)
+        }
+        process.WaitForExit()
+        read.GetAwaiter().GetResult()
+        let stderr = error.GetAwaiter().GetResult()
+        output.WriteLine(
+            "exit: " + process.ExitCode.ToString() + "; stdout: " + Encoding.UTF8.GetString(stdout.ToArray()) +
+                "; stderr: " +
+                stderr
+        )
+        Assert.True(exited, "Function conversion driver exceeded 30 seconds.")
+        return (process.ExitCode, stdout.ToArray(), stderr)
+    }
+
+    private func RecordArtifact(path string) -> output.WriteLine(
+        "SHA256 " + path + ": " + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
+    )
+
+    shared {
+        private func OutputPaths(fixture CSharpFixture)[]string -> []string{
+            Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
+            Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
+            Path.Combine(fixture.DirectoryPath, "Consumer.pdb")
+        }
+
+        private func RuntimeReferences()[]string {
+            let directory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+            return ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Where((path string) -> Path.GetDirectoryName(path) == directory)
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .ToArray()
+        }
+
+        private const Contract string = `#nullable enable
+namespace FunctionControl {
+    public delegate long Wide();
+    public delegate object Make();
+}
+`
+    }
+}

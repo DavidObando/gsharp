@@ -177,6 +177,20 @@ internal class ConversionClassifier {
         return Conversion.Classify(source, target)
     }
 
+    /// Issue #5536: classifies an argument with the function-value rule of (cref:BindConversion), so overload
+    /// resolution does not select a candidate that the argument conversion then rejects.
+    /// @param argument The bound argument.
+    /// @param target The parameter type.
+    /// @returns The conversion, or (cref:Conversion.None) when a function value cannot keep its delegate.
+    internal func ClassifyArgumentConversion(argument BoundExpression, target TypeSymbol) Conversion {
+        let conversion = ClassifyArgumentConversion(argument.Type, target)
+        return if conversion.Exists && !conversion.IsIdentity && !KeepsConvertedDelegate(argument, target) {
+            Conversion.None
+        } else {
+            conversion
+        }
+    }
+
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
 
     // ----- Core conversion entry points -----
@@ -696,6 +710,11 @@ internal class ConversionClassifier {
         var conversion = Conversion.Classify(expression.Type, type!!)
         if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) {
             conversion = Conversion.Explicit
+        }
+        // Issue #5536: the literal arms above give a function literal a body of the target shape. Any other
+        // function value keeps its delegate, so a conversion that needs a new body does not exist for it.
+        if conversion.Exists && !conversion.IsIdentity && !KeepsConvertedDelegate(expression, type!!) {
+            conversion = Conversion.None
         }
         // Issue #1183: C# §10.2.11 implicit constant expression conversion.
         // A *constant* integer expression (an integer literal, or unary +/-
@@ -4920,6 +4939,14 @@ internal class ConversionClassifier {
             }
             return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn)
         }
+
+        /// Issue #5536: a function literal binds its body to the target shape, so it can convert its result. Every
+        /// other function value keeps its delegate, which emission can reuse or bind again but cannot convert.
+        /// @param expression The converted expression.
+        /// @param target The conversion target.
+        /// @returns `false` when the conversion needs a new function body.
+        internal func KeepsConvertedDelegate(expression BoundExpression, target TypeSymbol) bool ->
+        expression is BoundFunctionLiteralExpression || Conversion.KeepsFunctionValueDelegate(expression.Type, target)
 
         /// Issue #3505: true when [`from`](paramref) and [`to`](paramref)
         /// share an arity and differ in at least one slot by a strict implicit

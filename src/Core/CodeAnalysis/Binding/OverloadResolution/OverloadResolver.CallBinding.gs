@@ -2589,12 +2589,18 @@ internal partial class OverloadResolver {
                     )
                 )
             ) &&
-                !Conversion
-                .Classify(
-                argument.Type,
-                Invariant.Required(expectedType, "an argument conversion has a target type", expression: "expectedType")
-            )
-                .IsImplicit {
+                (
+                !Conversion.Classify(
+                    argument.Type,
+                    Invariant.Required(
+                        expectedType,
+                        "an argument conversion has a target type",
+                        expression: "expectedType"
+                    )
+                )
+                    .IsImplicit ||
+                    !ConversionClassifier.KeepsConvertedDelegate(argument, expectedType!!)
+            ) {
                 // Issue #889: arrow/func literal → void-returning delegate.
                 let voidDelegateLoc = if i < parameterSyntax.Length {
                     Invariant.Required(
