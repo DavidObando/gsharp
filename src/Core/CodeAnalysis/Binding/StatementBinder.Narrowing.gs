@@ -1794,6 +1794,17 @@ internal partial class StatementBinder {
         return before
     }
 
+    /// ADR-0208 section 9 and row R18 (#5534): the effects of a branching condition apply to the narrowing facts
+    /// before either branch is bound. The condition runs first, so a call, a getter or an assignment in it can end a
+    /// fact that the branches would otherwise read. The same rule as a catch filter (row R10) and the one rule of
+    /// (cref:InvalidateNarrowingsForAssignedVariables). The facts that the condition itself proves are classified
+    /// after this call, so a test after the effect (`Check(h) && x != nil`) still narrows its branch.
+    private func ApplyConditionEffectsToNarrowings(syntax SyntaxNode, condition BoundExpression) {
+        if HasAnyActiveNarrowings() {
+            InvalidateNarrowingsForAssignedVariables(syntax, BoundExpressionStatement(nil, condition))
+        }
+    }
+
     private func EnsureClosureAssignedNames(anchor SyntaxNode) -> binderCtx.EnsureClosureAssignedNames(
         () -> ComputeClosureAssignedNames(anchor)
     )

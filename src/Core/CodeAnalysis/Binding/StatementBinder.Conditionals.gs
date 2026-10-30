@@ -47,6 +47,7 @@ internal partial class StatementBinder {
         if syntax.Initializer == nil {
             let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             ApplyHeaderCallableEffects(condition)
+            ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
             let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition)
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
@@ -120,6 +121,7 @@ internal partial class StatementBinder {
         }
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         ApplyHeaderCallableEffects(initCondition)
+        ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
         let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()

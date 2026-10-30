@@ -848,6 +848,7 @@ compatibility note. "Probe" refers to section 4.
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
+| R18 | The effects of the condition of an `if` statement (a call, a getter with user code, an assignment) apply to the narrowing facts before either branch is bound, as section 9 says and as a catch filter already does (R10). `var x C? = C{}; let lazy = Lazy[int32](() -> { x = nil; return 1 }); if x == nil { return 0 }; if lazy.Value > 0 { return x.Value }` (bug [#5534](https://github.com/DavidObando/gsharp/issues/5534); the same with a plain call or a source getter). The facts that the condition proves are added after its effects, so `if Check(h) && x != nil { return x.Value }` still narrows | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact in either branch | less permissive (soundness) |
 
 Details per row:
 
@@ -947,6 +948,16 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
+  bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
+  an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
+  already removed: the old statement check follows the syntax of calls). `ApplyConditionEffectsToNarrowings`
+  runs `InvalidateNarrowingsForAssignedVariables` on the bound condition right after it is bound, for the `if`
+  statement and for `if init; cond`, before the condition's own narrowing is classified. This is the ordering
+  decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
+  tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
+  `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
+  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows v01 to v09.
 - **R16 (#5231, maintainer decision: the stable-getter list).** The construct
   table already lists `BoundClrPropertyAccessExpression` as `call`, but the
   collector did not apply it: `AssignedRootsCollector.VisitExpression` killed
