@@ -2073,6 +2073,10 @@ internal partial class StatementBinder {
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
+            // ADR-0208 R16 (#5231): an imported getter that is not on the stable list is a call, like a source getter.
+            if StatementBinder.ClrPropertyReadRunsUserCode(node) {
+                MarkMayMutateGlobalRoots()
+            }
             let sourceConstructionRunsUserCode = (
                 node is BoundConstructorCallExpression construction &&
                     (
@@ -2412,6 +2416,10 @@ internal partial class StatementBinder {
             for field in node.Fields {
                 // A computed property of a pattern runs its getter.
                 if field.Property is {} property && !property.IsAutoProperty {
+                    MarkMayMutateGlobalRoots()
+                }
+                // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
+                if StatementBinder.ClrMemberReadRunsUserCode(field.ClrMember) {
                     MarkMayMutateGlobalRoots()
                 }
                 VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
@@ -2823,6 +2831,15 @@ internal partial class StatementBinder {
                 MayMutateReferenceStorage = true
             }
             MayMutateGlobalRoots = true
+            // No enclosing assignment: nothing is protected, so no set is built for every node.
+            if enclosingGlobalAssignments.Count == 0 {
+                if globalMutationProtectedRoots == nil {
+                    globalMutationProtectedRoots = HashSet[VariableSymbol]()
+                } else {
+                    globalMutationProtectedRoots!!.Clear()
+                }
+                return
+            }
             let protectedRoots = enclosingGlobalAssignments.ToHashSet()
             if globalMutationProtectedRoots == nil {
                 globalMutationProtectedRoots = protectedRoots
@@ -2833,6 +2850,14 @@ internal partial class StatementBinder {
 
         private func MarkRunsEscapedClosure() {
             MayRunEscapedClosure = true
+            if enclosingAssignments.Count == 0 {
+                if escapedClosureProtectedRoots == nil {
+                    escapedClosureProtectedRoots = HashSet[VariableSymbol]()
+                } else {
+                    escapedClosureProtectedRoots!!.Clear()
+                }
+                return
+            }
             let protectedRoots = enclosingAssignments.ToHashSet()
             if escapedClosureProtectedRoots == nil {
                 escapedClosureProtectedRoots = protectedRoots
@@ -3420,8 +3445,15 @@ internal partial class StatementBinder {
             // exists).
             variableType = type ?? TypeSymbol.Error
             channelSlotWithoutInitializer = MagicCollectionZeroValue.RequiresExplicitInitializer(variableType)
-            convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, variableType) ??
+            convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(
+                syntax,
+                variableType,
+                out var missingDeclarationShape
+            ) ??
                 BoundDefaultExpression(syntax, variableType)
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(syntax.Location, variableType.ToString())
+            }
         } else {
             // ADR-0055 Tier 4: an interpolated-string initializer whose declared
             // type is IFormattable/FormattableString lowers to
@@ -4986,6 +5018,80 @@ internal partial class StatementBinder {
         internal func TypeInitializationRunsUserCode(type StructSymbol, atStaticMemberAccess bool) bool {
             let definition = type.Definition ?? type
             return definition.DeclaresStaticInitializerBlock && (atStaticMemberAccess || definition.IsClass)
+        }
+
+        /// ADR-0208 R14 and R16 (#5231): whether [`node`](paramref) reads an imported (CLR) property whose getter
+        /// can run user code. Such a read is a `call`: the one definition for the straight-line pass, the loop
+        /// collector and the `finally` summaries. A field is no getter. A property is stable (it runs no user
+        /// code) only when (cref:IsStableClrGetter) says so; an unlisted property is a call.
+        internal func ClrPropertyReadRunsUserCode(
+            node BoundExpression
+        ) bool -> node is BoundClrPropertyAccessExpression{Member: var member} &&
+            ClrMemberReadRunsUserCode(member)
+
+        /// ADR-0208 R16 (#5231): the same decision for a member that is read without an access node, such as the
+        /// member of an imported property pattern (`lazy is { Value: 1 }`).
+        internal func ClrMemberReadRunsUserCode(member MemberInfo?) bool -> member is PropertyInfo property &&
+            !IsStableClrGetter(property)
+
+        /// ADR-0208 R16 (#5231): the explicit list of imported getters that run no user code. A getter is stable
+        /// when the declaring type is in a core library assembly, the getter cannot be overridden (the type is
+        /// sealed or the accessor is not overridable: not virtual, or `final` as an interface implementation is, so
+        /// a call through an interface or an overridable member never qualifies), and the
+        /// property is in this list. The list is small on purpose: add a property only when its getter reads a
+        /// field and calls nothing, and name the corpus row that needs it.
+        internal func IsStableClrGetter(property PropertyInfo) bool {
+            // The name test comes first: it costs one string compare, and almost every imported property is not on the
+            // list. The reflection reads below run only for a name that is.
+            let name = property.Name
+            if name != "Length" &&
+                name != "IsEmpty" &&
+                name != "Count" &&
+                name != "Key" &&
+                name != "Value" &&
+                name != "HasValue" {
+                return false
+            }
+            let declaring = property.DeclaringType
+            if declaring == nil {
+                return false
+            }
+            let typeName = if declaring.IsGenericType {
+                declaring.GetGenericTypeDefinition().FullName
+            } else {
+                declaring.FullName
+            }
+            var listed = false
+            if name == "Length" {
+                listed = typeName is "System.String" or
+                    "System.Text.StringBuilder" or
+                    "System.Array" or
+                    "System.Span`1" or
+                    "System.ReadOnlySpan`1"
+            } else if name == "IsEmpty" {
+                listed = typeName is "System.Span`1" or "System.ReadOnlySpan`1"
+            } else if name == "Count" {
+                listed = typeName is "System.Collections.Generic.List`1" or
+                    "System.Collections.Generic.Dictionary`2" or
+                    "System.Collections.Generic.HashSet`1"
+            } else if name == "Key" || name == "Value" {
+                listed = typeName == "System.Collections.Generic.KeyValuePair`2"
+            } else {
+                listed = typeName == "System.Nullable`1"
+            }
+            if !listed {
+                return false
+            }
+            let getter = property.GetMethod
+            if getter == nil || (getter.IsVirtual && !getter.IsFinal && !declaring.IsSealed) {
+                return false
+            }
+            let assemblyName = declaring.Assembly.GetName().Name
+            return assemblyName == "System.Private.CoreLib" ||
+                assemblyName == "System.Runtime" ||
+                assemblyName == "System.Collections" ||
+                assemblyName == "netstandard" ||
+                assemblyName == "mscorlib"
         }
 
         /// ADR-0208 R11 and R15 (#5504): whether [`node`](paramref) reads, writes or subscribes a static member

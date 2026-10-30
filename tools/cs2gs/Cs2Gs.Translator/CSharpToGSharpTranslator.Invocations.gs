@@ -3163,7 +3163,9 @@ partial class CSharpToGSharpTranslator {
                 this.PlatformTypedImportNeedsNoBridge(valueExpression) || !this.TargetWillRemainNonNullableReference(
                 targetType,
                 targetSymbolForPromotionCheck
-            ) {
+            ) ||
+                // A member whose arms are already asserted (issue #5516) is non-null as a whole.
+            this.GSharpExpressionIsStaticallyNonNull(valueExpression, translatedValue) {
                 return translatedValue
             }
             // Issue #3676: in a nullable-ENABLED compilation the promoted value
@@ -3175,7 +3177,7 @@ partial class CSharpToGSharpTranslator {
             // C# accepted the initializer only by trusting the generated
             // annotation, so asserting restores the contract it assumed.
             return if (
-                this.NullableReferenceValueMayBeNull(valueExpression) ||
+                this.NullableReferenceValueMayBeNull(valueExpression, respectDeclaredCallResults: true) ||
                     (
                     if this.IsObliviousCompilation() {
                         this.IsNullablePromotedValue(valueExpression)
@@ -3191,6 +3193,9 @@ partial class CSharpToGSharpTranslator {
                     targetSymbolForPromotionCheck,
                     targetType
                 )
+            } else if this.IsClosureAssignedVariable(this.context.GetSymbolInfo(valueExpression).Symbol) &&
+                this.IsFlowNarrowedInCSharpOnly(valueExpression, translatedValue) {
+                EnsureNonNullAssertion(translatedValue)
             } else {
                 translatedValue
             }

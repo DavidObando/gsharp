@@ -4173,37 +4173,74 @@ internal partial class ExpressionBinder {
         )
             .IsImplicit
 
-        internal func MakeDelegateRefKindArgumentCheck(
+        /// Issue #5536: the delegate-parameter callback that every imported overload resolution with bound
+        /// arguments registers, for methods, constructors and base constructors.
+        /// @param boundArguments The bound call arguments.
+        /// @param receiver The receiver of a reduced extension call. When present, it is resolver slot 0 and the
+        /// call arguments follow it, so the receiver's `this` parameter gets the same check.
+        /// @returns A callback that answers (cref:ClrOverloadResolution.ImplicitConversionKind.None) when a
+        /// function value cannot keep its delegate, and
+        /// (cref:ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch) for different ref kinds.
+        internal func MakeDelegateArgumentCheck(
             boundArguments IReadOnlyList[BoundExpression]?,
-            argumentOffset int32 = 0
-        )((int32, Type) -> bool?)? {
+            receiver BoundExpression? = nil
+        )((int32, Type) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             if boundArguments == nil {
                 return nil
             }
+            let argumentOffset = if receiver != nil {
+                1
+            } else {
+                0
+            }
             return (index int32, clrParameterType Type?) -> {
                 let argIndex = index - argumentOffset
-                if argIndex < 0 ||
-                    argIndex >= boundArguments.Count ||
-                    clrParameterType == nil ||
-                    !ClrTypeUtilities.IsDelegateType(clrParameterType) {
+                if argIndex >= boundArguments.Count || clrParameterType == nil {
                     return nil
                 }
-                if !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
-                    boundArguments[argIndex],
+                let argument BoundExpression? = if argIndex >= 0 {
+                    boundArguments[argIndex]
+                } else if index == 0 {
+                    receiver
+                } else {
+                    nil
+                }
+                if argument == nil {
+                    return nil
+                }
+                // An ordinary argument at an `in` parameter is passed by readonly reference to its pointee. An
+                // explicit address keeps the exact-storage rules of the resolver.
+                var delegateType Type = clrParameterType
+                if delegateType.IsByRef &&
+                    !(argument is BoundAddressOfExpression or BoundConditionalAddressExpression) {
+                    delegateType = delegateType.GetElementType() ?? delegateType
+                }
+                if !ClrTypeUtilities.IsDelegateType(delegateType) {
+                    return nil
+                }
+                // Issue #5536: a function value keeps its delegate, so a parameter that needs a new body is not
+                // applicable. A function literal binds its body to the parameter and keeps return adaptation.
+                if !ConversionClassifier.KeepsConvertedDelegate(
+                    argument,
+                    TypeSymbol.FromClrTypeWithoutNullability(delegateType, NullabilityFreeReason.IdentityComparison)
+                ) {
+                    return ClrOverloadResolution.ImplicitConversionKind.None
+                }
+                if clrParameterType.IsByRef || !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
+                    argument,
                     out var sourceRefKinds
                 ) {
                     return nil
                 }
-                let targetInvoke MethodInfo? = clrParameterType.GetMethodSafe("Invoke")
+                let targetInvoke MethodInfo? = delegateType.GetMethodSafe("Invoke")
                 if targetInvoke == nil {
                     return nil
                 }
                 let targetRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(targetInvoke)
-                return if sourceRefKinds.Length == targetRefKinds.Length {
-                    sourceRefKinds.SequenceEqual(targetRefKinds)
-                } else {
-                    nil
+                if sourceRefKinds.Length == targetRefKinds.Length && !sourceRefKinds.SequenceEqual(targetRefKinds) {
+                    return ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch
                 }
+                return nil
             }
         }
     }

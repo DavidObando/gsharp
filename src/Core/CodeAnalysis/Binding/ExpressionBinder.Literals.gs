@@ -1999,6 +1999,14 @@ internal partial class ExpressionBinder {
                 $scope.References!!.MapClrTypeToReferences
             )
         }
+        // Issue #5425: an imported data class uses the CLR constructor path.
+        // Validate type arguments above first, so that every spelling gets the same arity check.
+        if structSymbol!!.IsClass &&
+            structSymbol!!.ClrType is {} importedClass &&
+            ImportedAssemblySemantics
+            .TryGetTypeSemantics(importedClass, out _) {
+            return BindImportedTypeLiteralExpression(syntax, importedClass, resolveTypeOnly: resolveTypeOnly)
+        }
         if resolveTypeOnly {
             return BoundDefaultExpression(syntax, structSymbol!!)
         }
@@ -2304,6 +2312,8 @@ internal partial class ExpressionBinder {
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
                     inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
                     seenFieldNames.Add(field.Name)
+                } else if structSymbol!!.ClrType != nil {
+                    let _ = GetStructFieldZeroValue(syntax, structSymbol!!, field)
                 }
             }
         }
@@ -2752,7 +2762,7 @@ internal partial class ExpressionBinder {
                     parameterType,
                     constructor
                 )
-                if missingDeclarationShape && parameterType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
                     return BoundErrorExpression(syntax)
                 }
@@ -2935,19 +2945,22 @@ internal partial class ExpressionBinder {
             }
             for var i = 0; i < parameters.Length; i++ {
                 let type = MemberLookup.GetClrMethodParameterTypeSymbol(resultType, constructor!!, i)
-                arguments.Add(
-                    if supplied.TryGetValue(parameters[i].Name, out var value) {
-                        value
-                    } else {
-                        MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
-                            syntax,
-                            aggregate!!,
-                            parameters[i],
-                            type
-                        ) ??
-                            BoundDefaultExpression(syntax, type)
-                    }
+                if supplied.TryGetValue(parameters[i].Name, out var value) {
+                    arguments.Add(value)
+                    continue
+                }
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    syntax,
+                    aggregate!!,
+                    parameters[i],
+                    out var missingDeclarationShape,
+                    type
                 )
+                if missingDeclarationShape {
+                    Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate!!.Name)
+                    return BoundErrorExpression(syntax)
+                }
+                arguments.Add(zero ?? BoundDefaultExpression(syntax, type))
             }
         }
         let construction BoundExpression = if constructor != nil {
@@ -3146,6 +3159,43 @@ internal partial class ExpressionBinder {
         return BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr)
     }
 
+    private func GetStructFieldZeroValue(syntax SyntaxNode, type StructSymbol, field FieldSymbol) BoundExpression? {
+        let location = if syntax is StructLiteralExpressionSyntax literal {
+            literal.TypeIdentifier.Location
+        } else {
+            syntax.Location
+        }
+        let clrType = type.ClrType
+        if clrType == nil {
+            let zero = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(
+                syntax,
+                field.Type,
+                out var missingDeclarationShape
+            )
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(location, type.Name)
+            }
+            return zero
+        }
+        // Imported declaration initializers are not mandatory collection zero values.
+        if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
+            field.Name,
+            out var kind
+        ) {
+            let zero = MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
+                clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                kind,
+                out var missingDeclarationShape,
+                field.Type
+            )
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(location, type.Name)
+            }
+            return zero
+        }
+        return nil
+    }
+
     private func AppendImportedStructZeroInitializers(
         syntax SyntaxNode,
         clrType Type,
@@ -3161,14 +3211,20 @@ internal partial class ExpressionBinder {
                 continue
             }
             let field FieldInfo? = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance)
+            var missingDeclarationShape = field == nil
             let zeroValue BoundExpression? = if field != nil {
                 MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
                     field,
                     kind,
+                    out missingDeclarationShape,
                     MemberLookup.GetClrFieldTypeSymbol(receiver.Type, field)
                 )
             } else {
                 nil
+            }
+            if missingDeclarationShape {
+                Diagnostics.ReportNoApplicableOverload(syntax.Location, clrType.Name)
+                continue
             }
             if field == nil ||
                 zeroValue == nil ||
@@ -4302,25 +4358,6 @@ internal partial class ExpressionBinder {
                 if constructor.GetParameters().Length == 0 {
                     return constructor
                 }
-            }
-            return nil
-        }
-
-        private func GetStructFieldZeroValue(syntax SyntaxNode, type StructSymbol, field FieldSymbol) BoundExpression? {
-            let clrType = type.ClrType
-            if clrType == nil {
-                return MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
-            }
-            // Imported declaration initializers are not mandatory collection zero values.
-            if ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var kinds) && kinds!!.TryGetValue(
-                field.Name,
-                out var kind
-            ) {
-                return MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(
-                    clrType.GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
-                    kind,
-                    field.Type
-                )
             }
             return nil
         }

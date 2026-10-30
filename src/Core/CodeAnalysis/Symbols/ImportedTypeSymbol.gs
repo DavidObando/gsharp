@@ -573,7 +573,6 @@ class ImportedTypeSymbol : TypeSymbol {
                 }
             )
             let fieldBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
-            let fieldByToken = Dictionary[int32, FieldSymbol]()
             for field in dataMembers.OfType[FieldInfo]() {
                 let fieldSymbol = FieldSymbol(
                     field.Name,
@@ -583,7 +582,6 @@ class ImportedTypeSymbol : TypeSymbol {
                 )
                 fieldSymbol.ImportedMember = field
                 fieldBuilder.Add(fieldSymbol)
-                fieldByToken[field.MetadataToken] = fieldSymbol
             }
             let propertyBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
             for property in dataMembers.OfType[PropertyInfo]() {
@@ -611,13 +609,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 propertySymbol.ImportedMember = property
                 propertyBuilder.Add(propertySymbol)
             }
-            let primaryConstructorParameters = BuildPrimaryConstructorParameters(
-                type,
-                fieldBuilder.ToImmutable(),
-                propertyBuilder.ToImmutable(),
-                fieldByToken,
-                semantics!!
-            )
+            let primaryConstructorParameters = BuildPrimaryConstructorParameters(type, semantics!!)
             ApplyPrimaryConstructorDefaults(type, primaryConstructorParameters)
             let aggregate = StructSymbol(
                 name: BuildAggregateDisplayName(type),
@@ -708,19 +700,12 @@ class ImportedTypeSymbol : TypeSymbol {
             }
         }
 
-        private func BuildPrimaryConstructorParameters(
-            type Type,
-            fields ImmutableArray[FieldSymbol],
-            properties ImmutableArray[PropertySymbol],
-            fieldByToken Dictionary[int32, FieldSymbol]?,
-            semantics ImportedTypeSemantics
-        ) ImmutableArray[ParameterSymbol] {
+        private func BuildPrimaryConstructorParameters(type Type, semantics ImportedTypeSemantics) ImmutableArray[
+            ParameterSymbol
+        ] {
             if semantics.PrimaryConstructorParameterNames.IsDefaultOrEmpty {
                 return ImmutableArray[ParameterSymbol].Empty
             }
-            let fieldMap = fields.ToDictionary((f FieldSymbol) -> f.Name, StringComparer.Ordinal)
-            let propertyMap = properties.ToDictionary((p PropertySymbol) -> p.Name, StringComparer.Ordinal)
-            let tokens = semantics.PrimaryConstructorParameterFieldTokens
             let builder = ImmutableArray.CreateBuilder[ParameterSymbol](
                 semantics.PrimaryConstructorParameterNames.Length
             )
@@ -742,21 +727,16 @@ class ImportedTypeSymbol : TypeSymbol {
                     if selectedProperty != nil {
                         parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(selectedProperty))
                     }
-                } else if !tokens.IsDefaultOrEmpty &&
-                    i < tokens.Length &&
-                    tokens[i] != 0 &&
-                    fieldByToken != nil &&
-                    fieldByToken.TryGetValue(tokens[i], out var tokenField) {
-                    parameter = ParameterSymbol(name, tokenField.Type)
-                } else if fieldMap.TryGetValue(name, out var field) {
-                    parameter = ParameterSymbol(name, field.Type)
-                } else if propertyMap.TryGetValue(name, out var property) {
-                    parameter = ParameterSymbol(name, property.Type)
+                } else {
+                    let member = ImportedAssemblySemantics.GetPrimaryConstructorMember(type, i)
+                    if member is FieldInfo field {
+                        parameter = ParameterSymbol(name, ClrNullability.GetFieldTypeSymbol(field))
+                    } else if member is PropertyInfo property {
+                        parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(property))
+                    }
                 }
-                if parameter == nil {
-                    continue
-                }
-                builder.Add(parameter)
+                // Preserve malformed slots so construction cannot select a parameterless fallback.
+                builder.Add(parameter ?? ParameterSymbol(name, TypeSymbol.Error))
             }
             return builder.ToImmutable()
         }
@@ -787,10 +767,6 @@ class ImportedTypeSymbol : TypeSymbol {
             if semantics is not ImportedTypeSemantics shape {
                 return nil
             }
-            let fields = ClrTypeUtilities.SafeGetFields(
-                definition,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-            )
             for constructor in ClrTypeUtilities.SafeGetConstructors(
                 definition,
                 BindingFlags.Public | BindingFlags.Instance
@@ -814,20 +790,7 @@ class ImportedTypeSymbol : TypeSymbol {
                         .Length {
                         member = shape.PrimaryConstructorProperties[i]
                     } else {
-                        let tokens = shape.PrimaryConstructorParameterFieldTokens
-                        let field = if !tokens.IsDefaultOrEmpty && i < tokens.Length && tokens[i] != 0 {
-                            fields.FirstOrDefault((candidate FieldInfo) -> candidate.MetadataToken == tokens[i])
-                        } else {
-                            fields.FirstOrDefault((candidate FieldInfo) -> candidate.Name == primaryParameters[i].Name)
-                        }
-                        member = if field != nil {
-                            field
-                        } else {
-                            definition.GetProperty(
-                                primaryParameters[i].Name,
-                                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                            )
-                        }
+                        member = ImportedAssemblySemantics.GetPrimaryConstructorMember(definition, i)
                     }
                     if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
                         ClrNullability.GetSignatureType(member)
