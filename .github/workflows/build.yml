@@ -145,6 +145,15 @@ jobs:
         # String.Split(char, StringSplitOptions) fails on .NET Framework MSBuild.
         run: python3 build/check-netstandard-member-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg
 
+      - name: Test the release publish script
+        run: python3 build/test-release-publish.py
+
+      - name: Verify the packed NuGet packages
+        # ADR-0218: the package inventory (six RID compiler packages, six other
+        # packages, five symbol packages), one version across them, and the SDK's
+        # PackageDownload version. The tag run checks the same list before it pushes.
+        run: python3 build/release-publish.py verify --nuget-only --nupkgs out/bin/Release/nupkgs
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v5
         with:

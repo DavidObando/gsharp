@@ -1,6 +1,6 @@
 # ADR-0218: Release publish jobs per destination with safe re-run
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-29
 - **Phase**: Release engineering
 - **Related**: [#5530](https://github.com/DavidObando/gsharp/issues/5530),
@@ -493,3 +493,16 @@ The maintainer decided these points on 2026-10-29:
 9. Trusted publishing and assembly signing are a separate issue.
 
 No question remains open.
+
+## Implementation notes
+
+- Step 1 (`build/release-publish.py`): `verify` takes `--nupkgs <dir>` and `--vsix <dir>`
+  (the two download folders), not one `--artifacts` folder. With `--tag` and `GITHUB_OUTPUT`
+  set it writes `version` and `prerelease`.
+- The `PackageDownload` check reads `build/Gsharp.NET.Sdk.props` in the SDK package. That file
+  does not hold a stamped version: it asks for `[$(GsharpSdkVersion)]`, and the props file
+  derives that value from the name of the SDK's own folder, which is the SDK package version.
+  The check therefore requires the expression `[$(GsharpSdkVersion)]` or a literal equal to the
+  package version, and the single-version check ties the SDK version to the six RID packages.
+- `marketplace-version <id> --version V [--kind release|prerelease|any]` exits 0 when the
+  version is published with the same flag, 1 when absent, 3 on a flag collision.
