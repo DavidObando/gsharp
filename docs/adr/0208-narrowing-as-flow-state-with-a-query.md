@@ -848,6 +848,7 @@ compatibility note. "Probe" refers to section 4.
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
+| R17 | A write or read of an imported (CLR) property setter or indexer is a `call` too, unless the accessor is on the stable list (`IsStableClrAccessor`): the `List<T>` indexer (get and set) and `List<T>.Capacity` set, the `Span<T>` indexer, the `ReadOnlySpan<T>` indexer get, the `string` indexer get, the `StringBuilder` indexer (get and set) and `StringBuilder.Length` set. The same conditions as R16 apply (core library, not overridable). `Dictionary<K,V>` indexers are not stable: they call `GetHashCode` and `Equals` of the key. `var x C? = C{}; let oc = ObservableCollection[int32](); oc.Add(1); oc.CollectionChanged += (s, e) -> { x = nil }; if x == nil { return 0 }; oc[0] = 5; return x.Value` (bug [#5532](https://github.com/DavidObando/gsharp/issues/5532)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 
 Details per row:
 
@@ -947,6 +948,16 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
+  `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
+  `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only
+  (member paths and by-reference storage) and the indexer read as nothing, so a closure-assigned local
+  or a mutable global kept its fact across an `ObservableCollection<T>` indexer set that raises
+  `CollectionChanged`. `StatementBinder.ClrAccessRunsUserCode` is now the one predicate for the four
+  node kinds; it calls `IsStableClrAccessor(property, isSetter)`, which is `IsStableClrGetter`
+  generalised to setters and indexers with the same list discipline. The ordering of a condition's
+  effects before its branches (#5534) is a different decision and is not part of this row.
+  Corpus rows u01 to u08.
 - **R16 (#5231, maintainer decision: the stable-getter list).** The construct
   table already lists `BoundClrPropertyAccessExpression` as `call`, but the
   collector did not apply it: `AssignedRootsCollector.VisitExpression` killed

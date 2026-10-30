@@ -301,7 +301,14 @@ open class Adr0208NarrowingCorpusTests {
                 "t10_5231_interface_count_kills_R16",
                 "t11_5231_static_getter_kills_R16",
                 "t12_5231_lazy_value_in_a_property_pattern_R16",
-                "t13_5231_string_length_in_a_property_pattern_R16"
+                "t13_5231_string_length_in_a_property_pattern_R16",
+                "u01_5532_observable_collection_indexer_set_kills_a_closure_assigned_local_R17",
+                "u02_5532_list_indexer_set_keeps_a_closure_assigned_local_R17",
+                "u04_5532_dictionary_indexer_get_runs_the_key_code_R17",
+                "u05_5532_string_indexer_keeps_a_closure_assigned_local_R17",
+                "u06_5532_string_builder_length_set_keeps_a_closure_assigned_local_R17",
+                "u07_5532_string_builder_capacity_set_kills_R17",
+                "u08_5532_indexer_set_in_a_loop_R17"
             },
             names
         )
@@ -3768,6 +3775,313 @@ func Run(ref a C?, xs []C?, s string) int32 {
 }
 var xs = []C?{C{}}
 Console.WriteLine(Run(ref xs[0], xs, "abc"))`, "", "run", "1", "R16"}
+            yield[]object{"u01_5532_observable_collection_indexer_set_kills_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let oc = ObservableCollection[int32]()
+    oc.Add(1)
+    oc.CollectionChanged += (s, e) -> { x = nil }
+    if x == nil { return 0 }
+    oc[0] = 5
+    return x.Value
+}
+Console.WriteLine(Run())`, "GS0158@41:14", "reject", "", "R17"}
+            yield[]object{"u02_5532_list_indexer_set_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let list = List[int32]{1, 2}
+    if x == nil { return 0 }
+    list[0] = 5
+    return x.Value + list[0]
+}
+Console.WriteLine(Run())`, "", "run", "6", "R17"}
+            yield[]object{"u04_5532_dictionary_indexer_get_runs_the_key_code_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class Key {
+    var Hook () -> void = func() { }
+    override func GetHashCode() int32 {
+        Hook()
+        return 1
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run() int32 {
+    var x C? = C{}
+    let key = Key()
+    let d = Dictionary[Key, int32]()
+    d[key] = 7
+    key.Hook = func() { x = nil }
+    if x == nil { return 0 }
+    let v = d[key]
+    return x.Value + v
+}
+Console.WriteLine(Run())`, "GS0158@50:14", "reject", "", "R17"}
+            yield[]object{"u05_5532_string_indexer_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(s string) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let c = s[0]
+    return x.Value + cast[int32](c)
+}
+Console.WriteLine(Run("a"))`, "", "run", "98", "R17"}
+            yield[]object{"u06_5532_string_builder_length_set_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(sb StringBuilder) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    sb.Length = 1
+    return x.Value + sb.Length
+}
+Console.WriteLine(Run(StringBuilder("ab")))`, "", "run", "2", "R17"}
+            yield[]object{"u07_5532_string_builder_capacity_set_kills_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(sb StringBuilder) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    sb.Capacity = 64
+    return x.Value
+}
+Console.WriteLine(Run(StringBuilder("ab")))`, "GS0158@39:14", "reject", "", "R17"}
+            yield[]object{"u08_5532_indexer_set_in_a_loop_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(n int32) int32 {
+    var x C? = C{}
+    let oc = ObservableCollection[int32]()
+    oc.Add(1)
+    oc.CollectionChanged += (s, e) -> { x = nil }
+    if x == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < n; i++ {
+        oc[0] = i
+        total = total + x.Value
+    }
+    return total
+}
+Console.WriteLine(Run(2))`, "GS0158@43:27", "reject", "", "R17"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
