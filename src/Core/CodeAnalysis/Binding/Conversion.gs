@@ -2158,6 +2158,12 @@ class Conversion {
                 ProvesNominalReference(referenceFrom, referenceTo)
         }
 
+        // The non-recursive reference-shape guard of (cref:IsImplicitReferenceVariantSlot).
+        private func IsReferenceLikeSlot(type TypeSymbol) bool {
+            let reference TypeSymbol? = UnwrapPlatformAndNullable(UnwrapReferenceNullable(type))
+            return type != TypeSymbol.Void && reference != nil && IsReferenceLikeTarget(reference)
+        }
+
         internal func IsRepresentationPreservingImplicit(source TypeSymbol, target TypeSymbol) bool {
             let conversion = Classify(source, target)
             if conversion.IsIdentity {
@@ -3691,12 +3697,17 @@ class Conversion {
             // apply rule 3 there. Only the illegal direction is decided here;
             // a legal pair falls through to the rules below, unchanged.
             // This projection does not apply to function shapes or value-type containers.
+            // A projection onto the source's own definition that yields the same argument pairs
+            // as the same-shape comparison below is decided there, so each pair is related once.
             if !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) &&
                 TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
-                (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) {
+                (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) &&
+                !IsSameShapeComparison(from, to, projected, supertypeArguments) {
                 var hasIllegalProjection = false
                 var hasIncompatibleProjection = false
                 var hasUnrelatedProjection = false
+                var allProjectionsLegal = true
+                var widensProjection = false
                 for var i = 0; i < projected.Length; i++ {
                     let directionalEscape = IsVariantPlatformEscape(projected[i], supertypeArguments[i])
                     if IsProjectedPlatformArgumentIllegal(
@@ -3706,7 +3717,8 @@ class Conversion {
                         i,
                         out var projectedRejectsImported,
                         out var projectedIsUnrelated,
-                        out var projectedIsIncompatible
+                        out var projectedIsIncompatible,
+                        out var projectedRelation
                     ) ||
                         IsCovariantPlatformEscape(projected[i], supertypeArguments[i]) {
                         hasIllegalProjection = true
@@ -3715,6 +3727,9 @@ class Conversion {
                         hasUnrelatedProjection |= projectedIsUnrelated
                     }
                     hasIncompatibleProjection |= projectedIsIncompatible
+                    widensProjection |= projectedRelation == PlatformArgumentRelation.Widening
+                    allProjectionsLegal &= projectedRelation is PlatformArgumentRelation.Same or
+                        PlatformArgumentRelation.Widening
                 }
                 if hasIncompatibleProjection {
                     return true
@@ -3724,6 +3739,15 @@ class Conversion {
                     return false
                 }
                 if hasIllegalProjection {
+                    return true
+                }
+                // Each position is the same or a proven widening of the supertype view, so the
+                // relation is decided here. The ordinary upcast rules would classify each
+                // variant position again (#5413). The outer nullability guard is the one below.
+                if allProjectionsLegal &&
+                    widensProjection &&
+                    !(from is NullableTypeSymbol && !(to is NullableTypeSymbol)) {
+                    conversion = Conversion.Implicit
                     return true
                 }
             }
@@ -4429,6 +4453,86 @@ class Conversion {
             return false
         }
 
+        // CLR reference assignability that also admits a variant view of an implemented
+        // interface or base type, at every nesting level: `IReadOnlyList<IReadOnlyList<string>>`
+        // is an `IEnumerable<IEnumerable<string>>` reference.
+        private func IsClrReferenceViewAssignable(target Type, source Type) bool {
+            if ClrTypeUtilities.IsAssignableByName(target, source) {
+                return true
+            }
+            if !target.IsGenericType || target.IsGenericTypeDefinition || source.IsValueType {
+                return false
+            }
+            let definition = target.GetGenericTypeDefinition()
+            if source.IsGenericType && ClrTypeUtilities.AreSame(source.GetGenericTypeDefinition(), definition) &&
+                AreClrVariantArgumentsAssignable(target, source) {
+                return true
+            }
+            for implemented in ClrTypeUtilities.SafeGetInterfaces(source) {
+                if implemented.IsGenericType && ClrTypeUtilities.AreSame(
+                    implemented.GetGenericTypeDefinition(),
+                    definition
+                ) &&
+                    AreClrVariantArgumentsAssignable(target, implemented) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func AreClrVariantArgumentsAssignable(target Type, source Type) bool {
+            let parameters = target.GetGenericTypeDefinition().GetGenericArguments()
+            let targetArguments = target.GetGenericArguments()
+            let sourceArguments = source.GetGenericArguments()
+            if parameters.Length != targetArguments.Length || targetArguments.Length != sourceArguments.Length {
+                return false
+            }
+            for var i = 0; i < parameters.Length; i++ {
+                if ClrTypeUtilities.AreSame(targetArguments[i], sourceArguments[i]) {
+                    continue
+                }
+                if targetArguments[i].IsValueType || sourceArguments[i].IsValueType {
+                    return false
+                }
+                let variance = parameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                if variance == GenericParameterAttributes.Covariant &&
+                    IsClrReferenceViewAssignable(targetArguments[i], sourceArguments[i]) {
+                    continue
+                }
+                if variance == GenericParameterAttributes.Contravariant &&
+                    IsClrReferenceViewAssignable(sourceArguments[i], targetArguments[i]) {
+                    continue
+                }
+                return false
+            }
+            return true
+        }
+
+        // Whether the same-shape comparison of (cref:TryClassifyPlatformTypeArgumentMismatch)
+        // relates exactly these argument pairs, so the supertype projection adds no decision.
+        private func IsSameShapeComparison(
+            from TypeSymbol,
+            to TypeSymbol,
+            projected ImmutableArray[TypeSymbol],
+            supertypeArguments ImmutableArray[TypeSymbol]
+        ) bool {
+            if !TryGetPlatformArgumentPairs(from, to, out var fromArguments, out var toArguments) ||
+                fromArguments.Length != projected.Length ||
+                toArguments.Length != supertypeArguments.Length {
+                return false
+            }
+            for var i = 0; i < projected.Length; i++ {
+                if !IsSameArgumentContract(fromArguments[i], projected[i]) ||
+                    !IsSameArgumentContract(toArguments[i], supertypeArguments[i]) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func IsSameArgumentContract(a TypeSymbol, b TypeSymbol) bool -> object.ReferenceEquals(a, b) ||
+            HaveIdenticalTypeArgumentContracts(a, b)
+
         private func IsProjectedPlatformArgumentIllegal(
             projected TypeSymbol,
             target TypeSymbol,
@@ -4436,9 +4540,10 @@ class Conversion {
             index int32,
             out rejectsImportedParameter bool,
             out isUnrelated bool,
-            out isIncompatible bool
+            out isIncompatible bool,
+            out relation PlatformArgumentRelation
         ) bool {
-            let relation = RelatePlatformViewArgument(container, index, projected, target)
+            relation = RelatePlatformViewArgument(container, index, projected, target)
             isUnrelated = relation == PlatformArgumentRelation.Unrelated
             isIncompatible = relation == PlatformArgumentRelation.Incompatible
             rejectsImportedParameter = relation == PlatformArgumentRelation.IllegalFromPlatform ||
@@ -4508,11 +4613,13 @@ class Conversion {
                             to.ClrType is {} targetClr &&
                             !sourceClr.IsGenericTypeDefinition &&
                             !targetClr.IsGenericTypeDefinition &&
-                            !ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr) {
+                            !IsClrReferenceViewAssignable(targetClr, sourceClr) {
                             return PlatformArgumentRelation.Incompatible
                         }
+                        // One classification and nominal proof decide the variant slot.
                         if IsVarianceArgumentCompatible(from, to, allowPlatformNilCheck: false) &&
-                            IsImplicitReferenceVariantSlot(from, to) {
+                            IsReferenceLikeSlot(from) &&
+                            IsReferenceLikeSlot(to) {
                             return PlatformArgumentRelation.Widening
                         }
                         return PlatformArgumentRelation.Incompatible

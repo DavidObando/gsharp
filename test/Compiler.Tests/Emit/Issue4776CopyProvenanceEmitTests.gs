@@ -214,6 +214,142 @@ public static class Probe {
         }
     }
 
+    /// Each argument pair of a nested platform view is related once per conversion query. Before, the
+    /// variant slot classified each child twice, the same-shape projection repeated the direct
+    /// comparison, and a proven supertype projection was classified again by the ordinary upcast
+    /// rules, so a depth-24 view did not finish compiling. The CLR guard of a variant position also
+    /// admits a variant view of an implemented interface (`IReadOnlyList` to `IEnumerable`).
+    @Fact
+    func DeepPlatformCovariantViews_RelateEachArgumentPairOnce() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        const depth = 24
+        let csharpView = Nest("System.Collections.Generic.IReadOnlyList<", depth, "string", ">")
+        let csharpInner = Nest("System.Collections.Generic.IReadOnlyList<", depth - 1, "string", ">")
+        let values = string.Concat(Enumerable.Repeat("One(", depth)) + "(string)null" + string.Concat(
+            Enumerable.Repeat(")", depth)
+        )
+        let inner = string.Concat(Enumerable.Repeat("One(", depth - 1)) + "(string)null" + string.Concat(
+            Enumerable.Repeat(")", depth - 1)
+        )
+        let contract = fixture.CompileCSharp(
+            "#nullable disable\nusing System.Collections.Generic;\nnamespace DeepView5413;\n" +
+                "public static class Api {\n" +
+                "    private static IReadOnlyList<T> One<T>(T value) => new List<T> { value };\n" +
+                "    public static readonly $csharpView Value = $values;\n" +
+                "    public static readonly List<$csharpInner> Items = new() { $inner };\n" +
+                "    public static $csharpView View() => Value;\n" +
+                "    public static List<$csharpInner> List() => Items;\n" +
+                "}",
+            "DeepView"
+        )
+        let view = NullableView(depth, "IReadOnlyList", "string?")
+        let enumerable = NullableView(depth, "IEnumerable", "string?")
+        let source = "package DeepViewApi5413\nimport System.Collections.Generic\nimport DeepView5413\n" +
+            "public class Exports {\n    shared {\n" +
+            "        public func View() $view -> Api.View()\n" +
+            "        public func List() $view -> Api.List()\n" +
+            "        public func Sequence() $enumerable -> Api.View()\n" +
+            "        public func ListSequence() $enumerable -> Api.List()\n" +
+            "    }\n}"
+        let api = fixture.Compile(
+            source,
+            "DeepViewApi",
+            executable: false,
+            []string{"/assemblyname:DeepViewApi", "/r:" + contract}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let caller = fixture.CompileCSharp(
+            "#nullable disable\nusing System.Collections;\nusing DeepView5413;\nusing DeepViewApi5413;\n" +
+                "public static class Probe {\n" +
+                "    private static object Leaf(object value, int depth) {\n" +
+                "        for (var i = 0; i < depth; i++) value = ((IList)value)[0];\n" +
+                "        return value;\n" +
+                "    }\n" +
+                "    public static string Run() {\n" +
+                "        if (!ReferenceEquals(Exports.View(), Api.Value) || !ReferenceEquals(Exports.List(), Api.Items)\n" +
+                "            || !ReferenceEquals(Exports.Sequence(), Api.Value) || !ReferenceEquals(Exports.ListSequence(), Api.Items))\n" +
+                "            throw new System.Exception(\"The view changed storage.\");\n" +
+                "        if (Leaf(Exports.View(), $depth) != null || Leaf(Exports.List(), $depth) != null\n" +
+                "            || Leaf(Exports.Sequence(), $depth) != null || Leaf(Exports.ListSequence(), $depth) != null)\n" +
+                "            throw new System.Exception(\"The view lost the null leaf.\");\n" +
+                "        return \"same|null\";\n" +
+                "    }\n" +
+                "}",
+            "DeepViewCaller",
+            contract,
+            api
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal("same|null", assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        // The non-null leaf is still rejected at the same depth, in either view.
+        for container in[]string{"IReadOnlyList", "IEnumerable"} {
+            let rejected = NullableView(depth, container, "string")
+            let rejectedReference = Path.Combine(fixture.Directory, "DeepRejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "DeepRejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import System.Collections.Generic\nimport DeepView5413\npublic func Rejected() $rejected -> Api.View()\n",
+                "DeepRejected",
+                executable: false,
+                []string{"/r:" + contract, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            let start = 28 + rejected.Length
+            let end = start + "Api.View()".Length
+            Assert.NotEqual(0, code)
+            Assert.Contains("DeepRejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "DeepRejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
+    // `prefix` applied `depth` times around `leaf`, closed by `suffix`.
+    private func Nest(prefix string, depth int32, leaf string, suffix string) string -> string.Concat(
+        Enumerable.Repeat(prefix, depth)
+    ) +
+        leaf +
+        string.Concat(Enumerable.Repeat(suffix, depth))
+
+    // A G# view of `depth` levels of `container`; every nested level is nullable, the outermost is not.
+    private func NullableView(depth int32, container string, leaf string) string {
+        var view = leaf
+        for var level = 1; level <= depth; level++ {
+            view = container +
+                "[" +
+                view +
+                "]" +
+                (
+                if level < depth {
+                    "?"
+                } else {
+                    ""
+                }
+            )
+        }
+        return view
+    }
+
     private const ReviewContract5413 string = `#nullable enable
 using System;
 using System.Collections.Generic;
