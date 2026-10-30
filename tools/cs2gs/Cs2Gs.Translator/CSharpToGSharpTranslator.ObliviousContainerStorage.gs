@@ -68,6 +68,24 @@ partial class CSharpToGSharpTranslator {
             return PromoteNestedPositions(type, StorageType(symbol!!.OriginalDefinition), positions, "")
         }
 
+        /// Issue #5537: a `params` array spelled as its element (`...T`) states the
+        /// same nullable element position as other oblivious container storage.
+        /// @param type The mapped element type of the variadic parameter.
+        /// @param parameter The `params` parameter.
+        /// @returns The variadic type to emit.
+        private func PromoteObliviousParamsElement(type GTypeReference?, parameter IParameterSymbol) GTypeReference? {
+            let positions = this.ObliviousContainerPositions(parameter)
+            if type == nil || positions == nil || parameter.OriginalDefinition.Type is not IArrayTypeSymbol arrayType {
+                return type
+            }
+            let element = PromoteNestedPositions(type, arrayType.ElementType, positions, "0.")!!
+            return if positions.Contains("0") && !element.IsNullable {
+                MakeNullable(element)
+            } else {
+                element
+            }
+        }
+
         /// Issue #5537: a construction stored in oblivious container storage spells the
         /// same nullable positions as the storage, so no conversion changes them.
         /// @param type The mapped constructed type.
@@ -248,7 +266,8 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     if source != nil {
-                        if SameContainerShape(StorageType(source), StorageType(original)) {
+                        if SameContainerShape(StorageType(source), StorageType(original)) ||
+                            ImplementedContainerArguments(StorageType(source), StorageType(original)) != nil {
                             flows.Add((source, original))
                         }
                         continue
@@ -282,9 +301,12 @@ partial class CSharpToGSharpTranslator {
                 for (source, destination) in flows {
                     if destinations.TryGetValue(source, out var positions) {
                         let carried = HashSet[string](System.StringComparer.Ordinal)
+                        let sourceType ITypeSymbol? = StorageType(source)
                         let destinationType ITypeSymbol? = StorageType(destination)
-                        for position in positions {
-                            if PositionType(destinationType, position) is {} positionType &&
+                        for sourcePosition in positions {
+                            let position string? = MapContainerPosition(sourceType, destinationType, sourcePosition)
+                            if position != nil &&
+                                PositionType(destinationType, position) is {} positionType &&
                                 IsNonNullReferencePosition(positionType) {
                                 carried.Add(position)
                             }
@@ -352,6 +374,104 @@ partial class CSharpToGSharpTranslator {
                 .Default
                 .Equals(symbol.ContainingAssembly, compilation.Assembly) &&
                 HasNonNullNestedReferencePosition(StorageType(symbol.OriginalDefinition))
+
+            // The destination position of a source position. The destination is the same
+            // container, or a generic interface that the source container implements,
+            // such as `IEnumerable[T]` for `[]T` or `List[T]`. Then a top-level source
+            // position maps to the interface argument that the source position fills.
+            private func MapContainerPosition(
+                sourceType ITypeSymbol?,
+                destinationType ITypeSymbol?,
+                position string
+            ) string? {
+                if SameContainerShape(sourceType, destinationType) {
+                    return position
+                }
+                let arguments = ImplementedContainerArguments(sourceType, destinationType)
+                if arguments == nil {
+                    return nil
+                }
+                let separator = position.IndexOf('.')
+                let head = if separator < 0 {
+                    position
+                } else {
+                    position.Substring(0, separator)
+                }
+                let tail = if separator < 0 {
+                    ""
+                } else {
+                    position.Substring(separator)
+                }
+                for var i = 0; i < arguments.Count; i++ {
+                    if arguments[i] == head {
+                        return i.ToString(System.Globalization.CultureInfo.InvariantCulture) + tail
+                    }
+                }
+                return nil
+            }
+
+            // For a destination that is a generic interface the source container
+            // implements, the source position (`0` for an array element, the type
+            // parameter ordinal for a generic type) that fills each interface argument.
+            // An argument that is not one source position maps to nil. Returns nil when
+            // the destination is not such an interface.
+            private func ImplementedContainerArguments(sourceType ITypeSymbol?, destinationType ITypeSymbol?) List[
+                string?
+            ]? {
+                // A separate kind comparison, not an enum property pattern (#4153).
+                if destinationType is not INamedTypeSymbol destination ||
+                    destination.TypeKind != TypeKind.Interface ||
+                    !destination.IsGenericType {
+                    return nil
+                }
+                if sourceType is IArrayTypeSymbol array && array.Rank == 1 {
+                    for implemented in array.AllInterfaces {
+                        if SymbolEqualityComparer.Default.Equals(
+                            implemented.OriginalDefinition,
+                            destination.OriginalDefinition
+                        ) {
+                            return implemented
+                                .TypeArguments
+                                .Select(
+                                (argument ITypeSymbol) -> if SymbolEqualityComparer.Default.Equals(
+                                    argument,
+                                    array.ElementType
+                                ) {
+                                    "0"
+                                } else {
+                                    default(string?)
+                                }
+                            )
+                                .ToList()
+                        }
+                    }
+                    return nil
+                }
+                if sourceType is not INamedTypeSymbol{IsGenericType: true} named {
+                    return nil
+                }
+                for implemented in named.OriginalDefinition.AllInterfaces {
+                    if SymbolEqualityComparer.Default.Equals(
+                        implemented.OriginalDefinition,
+                        destination.OriginalDefinition
+                    ) {
+                        return implemented
+                            .TypeArguments
+                            .Select(
+                            (argument ITypeSymbol) -> if argument is ITypeParameterSymbol parameter &&
+                                SymbolEqualityComparer
+                                .Default
+                                .Equals(parameter.DeclaringType, named.OriginalDefinition) {
+                                parameter.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            } else {
+                                default(string?)
+                            }
+                        )
+                            .ToList()
+                    }
+                }
+                return nil
+            }
 
             // The type at a dotted position below the top level of [`type`](paramref).
             private func PositionType(type ITypeSymbol?, position string) ITypeSymbol? {

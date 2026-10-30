@@ -141,7 +141,10 @@ public static class Use
     /// the producer's platform positions change: a type-argument position keeps the
     /// contract of the argument, and an array element that is a type parameter of the
     /// call stays `[]T`. An array member is not an element read, and an inferred
-    /// local keeps its outer nullability. A non-null element dereference, return, or argument gets
+    /// local keeps its outer nullability. A `params` array, spelled `...T`, and a
+    /// generic interface that the container implements, such as `IEnumerable[T]`,
+    /// state the same nullable element, so stored arrays flow there without an
+    /// unchecked conversion. A non-null element dereference, return, or argument gets
     /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
     /// element throws (cref:NullReferenceException) at the same use as in C#. The
     /// emitted image has no diagnostics and passes strict ILVerify before it runs.
@@ -306,6 +309,75 @@ public static class Use
         return items == null ? 2 : -1;
     }
 
+    private static int Nils(params string[] values)
+    {
+        int count = 0;
+        foreach (var value in values)
+        {
+            if (value == null) { count++; }
+        }
+        return count;
+    }
+
+    private static int SecondLength(params string[] values)
+    {
+        return values[1].Length;
+    }
+
+    public static int ParamsDirect(string p)
+    {
+        return Nils(Node.Holes(p));
+    }
+
+    public static int ParamsForward(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return Nils(lines);
+    }
+
+    public static int ParamsExpanded(string p)
+    {
+        return Nils("a", "b");
+    }
+
+    public static int ParamsElementThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        try
+        {
+            return SecondLength(lines);
+        }
+        catch (System.NullReferenceException)
+        {
+            return -1;
+        }
+    }
+
+    private static int CountNils(IReadOnlyList<string> values)
+    {
+        int count = 0;
+        foreach (var value in values)
+        {
+            if (value == null) { count++; }
+        }
+        return count;
+    }
+
+    public static int InterfaceView(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        IEnumerable<string> view = lines;
+        int count = 0;
+        foreach (var value in view)
+        {
+            if (value == null) { count++; }
+        }
+        return count + CountNils(lines);
+    }
+
     public static int NilElementIsNotUsed(string p)
     {
         string[] lines;
@@ -346,6 +418,11 @@ public static class Use
         Assert.Equal(4, Invoke(consumer, "MemberResult", "ab"))
         Assert.Equal(1, Invoke(consumer, "ArrayMember", "ab"))
         Assert.Equal(2, Invoke(consumer, "NullableInferredLocal", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsDirect", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsForward", "ab"))
+        Assert.Equal(0, Invoke(consumer, "ParamsExpanded", "ab"))
+        Assert.Equal(-1, Invoke(consumer, "ParamsElementThrows", "ab"))
+        Assert.Equal(2, Invoke(consumer, "InterfaceView", "ab"))
         Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
         Assert.Equal(-1, Invoke(consumer, "NilElementThrows", "ab"))
         let normalized = printed.Replace("\r\n", "\n")
@@ -385,7 +462,14 @@ public static class Use
             "var box Box[string?]",
             "return box.Value!!.Length + box.Get()!!.Length",
             "return lines.Length.ToString().Length",
-            "var items List[string?]? = List[string?]()"
+            "var items List[string?]? = List[string?]()",
+            "private func Nils(values ...string?) int32 {",
+            "private func SecondLength(values ...string?) int32 {",
+            "return values[1]!!.Length",
+            "return Nils(Node.Holes(p)!!)",
+            "return Nils(lines)",
+            "private func CountNils(values IReadOnlyList[string?]) int32 {",
+            "IEnumerable[string?] = lines"
         } {
             Assert.Contains(expected, normalized, StringComparison.Ordinal)
         }
