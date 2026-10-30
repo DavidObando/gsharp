@@ -5119,7 +5119,9 @@ internal partial class StatementBinder {
             if !listed {
                 return false
             }
-            let accessor = if isSetter {
+            // A `Span<T>` indexer has no setter: a write goes through the ref-returning getter, so the accessor
+            // that runs is the getter.
+            let accessor = if isSetter && property.SetMethod != nil {
                 property.SetMethod
             } else {
                 property.GetMethod

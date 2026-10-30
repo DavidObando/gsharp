@@ -308,7 +308,8 @@ open class Adr0208NarrowingCorpusTests {
                 "u05_5532_string_indexer_keeps_a_closure_assigned_local_R17",
                 "u06_5532_string_builder_length_set_keeps_a_closure_assigned_local_R17",
                 "u07_5532_string_builder_capacity_set_kills_R17",
-                "u08_5532_indexer_set_in_a_loop_R17"
+                "u08_5532_indexer_set_in_a_loop_R17",
+                "u09_5532_span_indexer_write_goes_through_the_ref_getter_R17"
             },
             names
         )
@@ -4082,6 +4083,49 @@ func Run(n int32) int32 {
     return total
 }
 Console.WriteLine(Run(2))`, "GS0158@43:27", "reject", "", "R17"}
+            yield[]object{"u09_5532_span_indexer_write_goes_through_the_ref_getter_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var arr = []int32{1, 2}
+    let span = Span[int32](arr)
+    if x == nil { return 0 }
+    span[0] = 5
+    return x.Value + arr[0]
+}
+Console.WriteLine(Run())`, "", "run", "6", "R17"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
