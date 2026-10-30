@@ -301,6 +301,87 @@ class AggregateTests(unittest.TestCase):
                     ci.check_results(plan, missing, workflow)
 
 
+class AdvisorySmokeTests(unittest.TestCase):
+    """ADR-0218: r2r-compiler-smoke is advisory on a release tag and required everywhere else."""
+    TAG = "refs/tags/v0.5.300"
+    ADVISORY = frozenset({"r2r-compiler-smoke"})
+
+    def setUp(self):
+        self.plan = selection("src/Core/Lexer.gs")
+        self.assertIn("r2r-compiler-smoke", self.plan["jobs"])
+        self.needs = {name: {"result": "success"} for name in [*self.plan["jobs"], "select"]}
+
+    def check(self, needs, ref, legs=None):
+        return ci.check_results(self.plan, needs, "build", ref, self.ADVISORY, lambda: legs or {})
+
+    def test_failed_smoke_passes_on_a_tag_and_names_the_failed_legs(self):
+        self.needs["r2r-compiler-smoke"] = {"result": "failure"}
+        legs = {rid: "success" for rid in ci.SMOKE_RIDS}
+        legs["osx-x64"] = "failure"
+        legs["win-arm64"] = "cancelled"
+        self.assertEqual(self.check(self.needs, self.TAG, legs), ["win-arm64", "osx-x64"])
+
+    def test_every_non_success_result_passes_on_a_tag(self):
+        for bad in ("failure", "cancelled", "skipped"):
+            with self.subTest(result=bad):
+                self.needs["r2r-compiler-smoke"] = {"result": bad}
+                self.assertEqual(self.check(self.needs, self.TAG), list(ci.SMOKE_RIDS))
+
+    def test_successful_smoke_has_no_unverified_platform_and_reads_no_legs(self):
+        def forbidden():
+            raise AssertionError("the jobs API must not be read when the smoke passed")
+        self.assertEqual(ci.check_results(self.plan, self.needs, "build", self.TAG, self.ADVISORY, forbidden), [])
+
+    def test_failed_smoke_fails_on_pull_requests_main_and_other_tags(self):
+        self.needs["r2r-compiler-smoke"] = {"result": "failure"}
+        for ref in ("refs/pull/5/merge", "refs/heads/main", "refs/tags/release-1", ""):
+            with self.subTest(ref=ref):
+                with self.assertRaises(ValueError):
+                    self.check(self.needs, ref)
+
+    def test_other_failed_jobs_fail_on_a_tag(self):
+        for name in self.plan["jobs"]:
+            if name == "r2r-compiler-smoke":
+                continue
+            with self.subTest(job=name):
+                broken = copy.deepcopy(self.needs)
+                broken[name] = {"result": "failure"}
+                with self.assertRaises(ValueError):
+                    self.check(broken, self.TAG)
+
+    def test_without_an_advisory_list_a_tag_still_requires_the_smoke(self):
+        self.needs["r2r-compiler-smoke"] = {"result": "failure"}
+        with self.assertRaises(ValueError):
+            ci.check_results(self.plan, self.needs, "build", self.TAG)
+
+    def test_legs_come_from_the_jobs_api_of_the_current_run(self):
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            out = "r2r-compiler-smoke (linux-x64)\tsuccess\nr2r-compiler-smoke (osx-x64)\tfailure\nbuild\tsuccess\n"
+            return subprocess.CompletedProcess(command, 0, out, "")
+
+        legs = ci.smoke_legs("owner/repo", "42", fake)
+        self.assertEqual(legs, {"linux-x64": "success", "osx-x64": "failure"})
+        self.assertIn("repos/owner/repo/actions/runs/42/jobs", calls[0])
+        broken = lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", "HTTP 403")
+        self.assertEqual(ci.smoke_legs("owner/repo", "42", broken), {})
+
+    def test_rids_match_the_workflow_matrix_and_the_package_check(self):
+        text = (ROOT / ".github/workflows/build.yml").read_text()
+        rids = re.findall(r"\{ rid: ([a-z0-9-]+), os:", job(text, "r2r-compiler-smoke"))
+        self.assertEqual(sorted(rids), sorted(ci.SMOKE_RIDS))
+        self.assertEqual(sorted(load("check-rid-packages").RIDS), sorted(ci.SMOKE_RIDS))
+
+    def test_ci_job_passes_the_advisory_rule_and_has_the_actions_read_permission(self):
+        block = job((ROOT / ".github/workflows/build.yml").read_text(), "ci")
+        self.assertIn("ADVISORY_JOBS: r2r-compiler-smoke", block)
+        self.assertRegex(block, r"permissions:\n\s+#.*\n\s+contents: read\n\s+actions: read")
+        self.assertIn("unverified_rids: ${{ steps.check.outputs.unverified_rids }}", block)
+        self.assertIn("id: check", block)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_partition_pipeline_propagates_failed_verification(self):
         text = (ROOT / ".github/workflows/build.yml").read_text()

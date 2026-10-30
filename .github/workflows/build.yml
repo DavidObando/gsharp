@@ -1101,14 +1101,24 @@ jobs:
 
   ci:
     if: always()
+    permissions:
+      # actions: read lets ci-selection.py list the smoke legs of this run through the jobs API.
+      contents: read
+      actions: read
+    outputs:
+      unverified_rids: ${{ steps.check.outputs.unverified_rids }}
     needs: [select, build, discover-tests, tests, test-partition, harness, format, e2e, ilverify, release-version-refs, cs2gs-corpus, vscode-extension, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke, go2gs, go2gs-windows, go2gs-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Require every selected build job to succeed
+        id: check
         env:
           PLAN: ${{ needs.select.outputs.plan }}
           NEEDS: ${{ toJSON(needs) }}
+          # ADR-0218: advisory only on a release tag; PRs and main still require it.
+          ADVISORY_JOBS: r2r-compiler-smoke
+          GH_TOKEN: ${{ github.token }}
         run: python3 build/ci-selection.py --check build
 
   publish:

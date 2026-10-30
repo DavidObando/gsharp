@@ -217,19 +217,57 @@ def select(paths, event, projects=None, go_exists=None):
     }
 
 
-def check_results(plan, needs, workflow):
+# ADR-0218: on a release tag the ReadyToRun smoke is advisory. The release names a platform whose leg did
+# not pass instead of blocking. On pull requests and on main the smoke stays required.
+SMOKE_JOB = "r2r-compiler-smoke"
+SMOKE_RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64")
+
+
+def advisory_applies(ref, job, advisory):
+    return job in advisory and ref.startswith("refs/tags/v")
+
+
+def smoke_legs(repository, run_id, run=subprocess.run):
+    """Conclusion of each smoke leg of the current run, from the jobs API. Empty when the API cannot be read."""
+    result = run(["gh", "api", "--paginate", f"repos/{repository}/actions/runs/{run_id}/jobs",
+                  "--jq", ".jobs[] | [.name, .conclusion] | @tsv"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        print(f"warning: cannot read the jobs of run {run_id}: {result.stderr.strip()}")
+        return {}
+    legs = {}
+    for line in result.stdout.splitlines():
+        name, _, conclusion = line.partition("\t")
+        if name.startswith(f"{SMOKE_JOB} (") and name.endswith(")"):
+            legs[name[len(SMOKE_JOB) + 2:-1]] = conclusion
+    return legs
+
+
+def check_results(plan, needs, workflow, ref="", advisory=frozenset(), legs=lambda: {}):
+    """Raise ValueError when a selected job did not succeed. Return the smoke RIDs that did not pass.
+
+    A job in `advisory` may fail, be cancelled or be skipped on a refs/tags/v* ref. The RIDs of the smoke
+    legs whose conclusion is not success are returned, so the release can name them. A leg that the jobs
+    API does not list counts as not passed.
+    """
     selected = set(plan["docs_jobs" if workflow == "docs" else "jobs"])
     required = selected | {"select"}
     failures = []
-    for job in sorted(required):
+    unverified = []
+    for job in sorted(set(needs) | required):
         result = needs.get(job, {}).get("result")
-        if result != "success":
-            failures.append(f"{job}: expected success, got {result!r}")
-    for job, details in needs.items():
-        if job not in required and details.get("result") not in {"success", "skipped"}:
-            failures.append(f"{job}: unselected job {details.get('result')!r}")
+        if advisory_applies(ref, job, advisory):
+            if result != "success" and job == SMOKE_JOB:
+                seen = legs()
+                unverified = [rid for rid in SMOKE_RIDS if seen.get(rid) != "success"]
+            continue
+        if job in required:
+            if result != "success":
+                failures.append(f"{job}: expected success, got {result!r}")
+        elif result not in {"success", "skipped"}:
+            failures.append(f"{job}: unselected job {result!r}")
     if failures:
         raise ValueError("\n".join(failures))
+    return unverified
 
 
 def main():
@@ -237,7 +275,19 @@ def main():
     parser.add_argument("--check", choices=["build", "docs"])
     args = parser.parse_args()
     if args.check:
-        check_results(json.loads(os.environ["PLAN"]), json.loads(os.environ["NEEDS"]), args.check)
+        ref = os.environ.get("GITHUB_REF", "")
+        advisory = frozenset(filter(None, os.environ.get("ADVISORY_JOBS", "").split(",")))
+        legs = lambda: smoke_legs(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"])
+        unverified = check_results(json.loads(os.environ["PLAN"]), json.loads(os.environ["NEEDS"]),
+                                   args.check, ref, advisory, legs)
+        names = " ".join(unverified)
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as handle:
+                handle.write(f"unverified_rids={names}\n")
+        if unverified and os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
+                handle.write(f"## Unverified platforms\n\n`{names}`: the ReadyToRun compiler smoke did not pass "
+                             "(advisory on a release tag, ADR-0218).\n")
         return
     event = os.environ["GITHUB_EVENT_NAME"]
     paths = []
