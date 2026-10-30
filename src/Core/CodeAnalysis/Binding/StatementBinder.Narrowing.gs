@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import System
+import System.Collections
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
@@ -5042,26 +5043,31 @@ internal partial class StatementBinder {
                 !IsStableClrAccessor(setter, isSetter: true)
         ) ||
             (
-            node is BoundClrIndexExpression{Indexer: var getter, Target: var target} &&
-                (!IsStableClrAccessor(getter, isSetter: false) || ClrIndexIsErasedGeneric(target.Type))
+            node is BoundClrIndexExpression{Indexer: var getter} indexRead &&
+                (!IsStableClrAccessor(getter, isSetter: false) || ClrIndexReadIsErasedInterfaceCall(indexRead))
         ) ||
             (
-            node is BoundClrIndexAssignmentExpression{
-                Indexer: var indexer,
-                TargetExpression: var targetExpression,
-                Target: var targetVariable
-            } &&
-                (
-                !IsStableClrAccessor(indexer, isSetter: true) ||
-                    ClrIndexIsErasedGeneric(targetExpression?.Type ?? targetVariable?.Type)
-            )
+            node is BoundClrIndexAssignmentExpression{Indexer: var indexer} &&
+                !IsStableClrAccessor(indexer, isSetter: true)
         )
 
-        /// ADR-0208 R17 (#5532): an index access on a receiver of an erased generic type (`List[T]` over a type
+        /// ADR-0208 R17 (#5532): an index read on a receiver of an erased generic type (`List[T]` over a type
         /// parameter) is emitted as a call through the non-generic `IList` or `IDictionary` interface, which a
-        /// subclass can reimplement. The listed accessor is then not the one that runs.
-        private func ClrIndexIsErasedGeneric(receiverType TypeSymbol?) bool -> receiverType is ImportedTypeSymbol{
-            HasTypeParameterArgument: true
+        /// subclass can reimplement. The listed accessor is then not the one that runs. This mirrors the test of
+        /// `EmitClrIndex`: only a read, only a type that satisfies `IList` (with an `int32` index) or `IDictionary`
+        /// (so not a `Span<T>`), and only one index argument. A write is always emitted on the concrete setter.
+        private func ClrIndexReadIsErasedInterfaceCall(node BoundClrIndexExpression) bool {
+            if node
+                .Target
+                .Type is not ImportedTypeSymbol{HasTypeParameterArgument: true} erased ||
+                erased.ClrType is not{} clrType ||
+                node
+                .Arguments
+                .Length != 1 {
+                return false
+            }
+            return (ClrLoadContext.Satisfies(clrType, typeof(IList)) && node.Arguments[0].Type == TypeSymbol.Int32) ||
+                ClrLoadContext.Satisfies(clrType, typeof(IDictionary))
         }
 
         /// ADR-0208 R16 (#5231): the same decision for a member that is read without an access node, such as the
