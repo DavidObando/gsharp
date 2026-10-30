@@ -1,4 +1,4 @@
-# ADR-0218: Release publish jobs per destination with safe retry
+# ADR-0218: Release publish jobs per destination with safe re-run
 
 - **Status**: Proposed
 - **Date**: 2026-10-29
@@ -10,9 +10,9 @@
   [ADR-0200](0200-component-aware-pr-validation.md),
   [release runbook](../release/final-csharp-release.md)
 
-This ADR is a design proposal. It changes no workflow. An implementation PR
-follows maintainer sign-off. File and line references name `main` at
-`97929ec08`.
+This ADR is a design. It changes no workflow. The maintainer decided the open
+points on 2026-10-29 (see "Decisions"). An implementation PR follows. File and
+line references name `main` at `97929ec08`.
 
 ## Context
 
@@ -39,39 +39,40 @@ after eleven gate jobs. One more job, `publish-visual-studio-extension`
 The gate set of `publish` is `build, tests, test-partition, harness, e2e,
 ilverify, cs2gs-corpus, vsix, visual-studio-extension,
 desktop-msbuild-sdk-smoke, r2r-compiler-smoke` (`build.yml:1104`). The `ci`
-aggregate (`build.yml:1090-1100`) requires more jobs: `format`,
-`release-version-refs`, `vscode-extension`, `discover-tests` and the three
-`go2gs` jobs. `publish` does not need `ci`.
+aggregate (`build.yml:1090-1100`) needs every job, runs with `if: always()`,
+and runs `build/ci-selection.py --check build`, which fails when a selected
+job did not succeed. `publish` does not need `ci`.
 
-### Facts this proposal rests on
+The artifact `nuget-packages` of v0.5.212 held eleven packages: six `.nupkg`
+(`Gsharp.NET.Sdk`, `Gsharp.Templates`, `Gsharp.Repl`, `Gsharp.Gsfmt`,
+`Gsharp.Cs2Gs`, `GSharp.CodeAnalysis.Analyzers.Testing`) and five `.snupkg`.
+`Gsharp.Templates` has no symbols (`Gsharp.Templates.gsproj:10`). Since #5198
+the artifact also holds the six RID packages, which set
+`IncludeSymbols=false` (`Gsharp.NET.Sdk.Compiler.gsproj:12`). So a release
+holds twelve `.nupkg` and five `.snupkg`.
+
+### Facts this design rests on
 
 | Fact | How it was checked | Status |
 | --- | --- | --- |
-| No tag run has ever published a `Gsharp.NET.Sdk.Compiler.<rid>` package. The flat container returns 404 for `gsharp.net.sdk.compiler.linux-x64` and `win-x64`. The latest release is v0.5.212 (2026-10-22). The RID publish steps landed in #5198 on 2026-10-23. | `curl` of `api.nuget.org/v3-flatcontainer`, `gh release list`, `git log -S check-rid-packages` | Verified |
+| No tag run has published a `Gsharp.NET.Sdk.Compiler.<rid>` package. The flat container returns 404 for `gsharp.net.sdk.compiler.linux-x64` and `win-x64`. The latest release is v0.5.212 (2026-10-22). The RID publish steps landed in #5198 on 2026-10-23. | `curl` of `api.nuget.org/v3-flatcontainer`, `gh release list`, `git log -S check-rid-packages` | Verified |
 | The five 0.5 tag runs (v0.5.7 to v0.5.212) succeeded on attempt 1. No run among the last 200 of this repository has a second attempt. | `gh api .../actions/runs` | Verified |
 | In the 0.4 line, the VS Code step failed on a transient Marketplace error in three releases. `publish-visual-studio-extension` was skipped each time, and no run was re-run. The extensions stayed at 0.4.1 until a manual publish. | #4640, runbook "Marketplace state" | Verified (history) |
 | Both marketplaces are at 0.5.212 (`gsharplang.vscode-gsharp` 0.5.212, `gsharplang.GSharp-VisualStudio` 0.5.212.9261). The Visual Studio version has four parts. | Marketplace `extensionquery` API | Verified |
-| `dotnet nuget push --skip-duplicate` treats a 409 Conflict as a warning. It does not hide a 401 or 403. | .NET CLI documentation | Verified (docs) |
-| `@vscode/vsce` 3.9.2 has `publish --skip-duplicate` ("fail silently if version already exists"), `verify-pat [publisher]`, `show <extensionid> --json`, and `publish --oidc`. | `npx @vscode/vsce@3.9.2 --help`; vsce README | Verified (`--help`) |
-| `VsixPublisher.exe publish` of a version that already exists overwrites it. It also supports `-oidc` (trusted publishing). | Visual Studio documentation | Verified (docs); not exercised |
+| `dotnet nuget push --skip-duplicate` treats a 409 Conflict as a warning. It does not hide a 401 or 403. A `.snupkg` beside the `.nupkg` is pushed with it. | .NET CLI documentation; runbook (v0.4.591 logged 5 + 4 pushes) | Verified (docs) |
+| Whether the symbol server also answers 409 for an existing `.snupkg`, and whether `--skip-duplicate` still pushes the `.snupkg` after the `.nupkg` got 409. | Not checked. The prerelease rehearsal (migration step 5) answers it. | **Unverified** |
+| `@vscode/vsce` 3.9.2 (the `devDependencies` version) has `publish --skip-duplicate` ("fail silently if version already exists"), `publish --pre-release`, `show <extensionid> --json`. | `npx @vscode/vsce@3.9.2 --help` | Verified (`--help`) |
+| `VsixPublisher.exe publish` of a version that already exists overwrites it. | Visual Studio documentation | Verified (docs); not exercised |
 | `gh release upload --clobber` replaces an asset of the same name. `gh release view \|\| create` is a no-op when the release exists. | Runbook, current workflow | Verified (used in releases) |
 | "Re-run failed jobs" keeps `GITHUB_SHA` and `GITHUB_REF`. A run can be re-run for 30 days, at most 50 times. | GitHub documentation | Verified (docs) |
-| Artifacts of attempt 1 are available to jobs in attempt 2 of the same run. | Not stated in the documentation that was read; no re-run exists in this repository to observe it. | **Unverified** |
-| "Re-run failed jobs" also runs the jobs that were skipped because they needed a failed job. | Not stated in the documentation that was read. The runbook assumes it. | **Unverified** |
-| A job with `needs` is skipped when a prerequisite fails or is skipped, unless its `if` uses `always()`. | GitHub documentation | Verified (docs) |
-| `actions/download-artifact@v5` downloads from another run with `run-id` and `github-token` (`actions: read`). | Action README | Verified (docs) |
-| Run artifacts of a tag run expire after 90 days. The v0.4.591 run 34300319345 was created 2026-09-09 and its artifacts expired 2026-12-08. | `gh api .../runs/34300319345`, #4640 comment | Verified (one observation) |
-| The REST `workflow_dispatch` `ref` "can be a branch or tag name". The workflow file must exist on the default branch for the event to be offered. A dispatch uses the workflow file at `ref`. | GitHub documentation | Verified (docs) |
-| A job-level `concurrency` group is repository-wide, so it serializes the same job across two runs. `cancel-in-progress: false` keeps a running job. | GitHub documentation | Verified (docs) |
-| Environments with protection rules work on public repositories under GitHub Free. Deployment policies accept tag name patterns. Environment secrets reach only jobs that name the environment, after its rules pass. The repository is public and has environments `copilot` and `github-pages` only. | GitHub documentation; `gh api .../environments`; `gh repo view` | Verified (docs and API) |
-| `jobs.<id>.environment` accepts an expression for its name. | Not re-read. | **Unverified** |
-| nuget.org trusted publishing binds a policy to repository owner, repository, workflow file name and an optional GitHub environment. Scopes select "new packages" versus "new versions" by glob. | NuGet documentation | Verified (docs) |
-| `build/ci-selection.py` treats `workflow_dispatch` as full validation (`build/test-ci-selection.py:141-144`). | Source | Verified |
-| A `uses:` job that calls a reusable workflow accepts `needs`, `if`, `permissions` and `secrets: inherit`. | GitHub documentation on reusable workflows, from memory. Not re-read. | **Unverified** |
-| A job inside a called workflow can declare `environment` and `concurrency`, and `secrets: inherit` resolves the environment secrets of the environment that the called job names. | Not re-read. | **Unverified** |
-| "Re-run failed jobs" re-runs individual jobs inside a called workflow, not the whole call. | Not re-read. | **Unverified** |
-| `actions/upload-artifact@v4` and later reject a second upload of the same name in one run unless `overwrite: true`. | Action README, from memory. | **Unverified** |
-| A `v*-rc1` tag still runs `publish`, with a prerelease `-g<sha>` version. | Runbook, `version.json` | Verified (runbook) |
+| Artifacts of attempt 1 are available to jobs in attempt 2 of the same run. | Not stated in the documentation that was read; no re-run exists in this repository to observe it. Migration step 2 observes it. | **Unverified** |
+| "Re-run failed jobs" also runs the jobs that were skipped because they needed a failed job. | Not stated in the documentation that was read. The runbook assumes it. Migration step 2 observes it. | **Unverified** |
+| A job with `needs` is skipped when a prerequisite fails or is skipped, unless its `if` uses `always()` or `!cancelled()`. `always()` is also true in a cancelled run. | GitHub documentation | Verified (docs) |
+| `needs.<job>.result` of a matrix job is one value for all legs. The jobs API lists the legs by display name, `r2r-compiler-smoke (<rid>)`. | `build.yml:1046`; `gh run view --json jobs` | Verified |
+| A `v*-rc1` tag runs `publish` with a prerelease version `<number>-g<sha>`, because `publicReleaseRefSpec` matches only `^refs/tags/v\d+(?:\.\d+)*$`. The VSIX versions carry no suffix (`SimpleVersion`). | `version.json`, runbook, `build.yml:737-747` | Verified |
+| A job on a hosted runner label that no longer exists fails, or waits in the queue. | Not checked. | **Unverified** |
+| Repository secrets are not available to workflow runs from forks. | GitHub documentation, from memory. | Not re-read |
+| nuget.org, the VS Code Marketplace and the Visual Studio Marketplace accept GitHub OIDC trusted publishing. | NuGet, vsce and Visual Studio documentation | Verified (docs); out of scope |
 
 ### Where a partial failure leaves things today
 
@@ -87,11 +88,12 @@ aggregate (`build.yml:1090-1100`) requires more jobs: `format`,
    timeout after the upload was accepted leaves exactly that state (#4640).
 4. **The Visual Studio job is coupled.** It needs `publish`, so any failure in
    steps 1 to 6 skips it, although its artifact and credentials are fine.
-5. **No retry outside the tag run.** After 30 days or 50 attempts, or when the
-   tag's workflow file lacks a fix, nothing publishes without a new tag. The
-   runbook then asks for a manual publish from a workstation with the PAT.
+5. **Extensions before the SDK.** Both extensions can reach the marketplaces
+   while the SDK push is still failing. The Visual Studio templates pin the
+   exact SDK version, so a user who installs early gets a template that cannot
+   restore.
 6. **No pre-flight.** Nothing checks the tag name against the package version
-   (#4639), the artifact inventory, or the credentials before the first push.
+   (#4639) or the artifact inventory before the first push.
 7. **Gate against ADR-0207.** ADR-0207 says a RID whose smoke cannot run must
    not block the release. `publish` needs all six legs of
    `r2r-compiler-smoke`. If a hosted label such as `macos-15-intel` disappears,
@@ -103,7 +105,7 @@ aggregate (`build.yml:1090-1100`) requires more jobs: `format`,
 | --- | --- | --- |
 | A gate job | Nothing | Re-runs the gate, then `publish`. If the cause is a missing runner label, the tag is stuck. |
 | 1 GitHub release | Nothing, or a release with some assets | Safe: `view \|\| create`, `--clobber`. |
-| 2 RID pushes (for example 403 from an API key that does not cover the six new ids) | Public release; zero to five RID packages; no SDK; no marketplaces | Safe for NuGet (`--skip-duplicate`). The cause (key scope) needs a new key, which a re-run cannot supply. |
+| 2 RID pushes | Public release; zero to five RID packages; no SDK; no marketplaces | Safe for NuGet (`--skip-duplicate`). |
 | 3 RID wait (30 min) | Public release; six RID packages on the way | Safe. |
 | 4 Remaining packages (one attempt each) | Public release; RID packages; SDK and some tools | Safe. A failed SDK push with RID packages present leaves a consistent feed. |
 | 5 Post-check | Everything on NuGet | Safe. |
@@ -113,344 +115,289 @@ aggregate (`build.yml:1090-1100`) requires more jobs: `format`,
 
 ## Decision
 
-### 1. One job per destination behind one verified artifact set
+### 1. One job per destination, inline in `build.yml`
 
-The release path becomes a reusable workflow,
-`.github/workflows/release-publish.yml` (`on: workflow_call`). `build.yml`
-calls it on a `v*` tag. A new `release-retry.yml` (`on: workflow_dispatch`)
-calls it for a retry. The reusable workflow holds one job per destination.
-Every job downloads the artifacts of one source run. No job builds anything.
+The `publish` and `publish-visual-studio-extension` jobs are replaced by seven
+jobs in `build.yml`. There is no new workflow file, no reusable workflow, no
+`workflow_dispatch`, no environment and no concurrency group. The only retry
+tool is "Re-run failed jobs" on the tag run. The split exists so that this
+button is safe and re-runs only what failed.
 
-Inputs of the reusable workflow: `run_id` (the run whose artifacts to publish),
-`tag`, `destination` (`all` or one job name below) and `dry_run` (boolean).
+Every job has `if: startsWith(github.ref, 'refs/tags/v')` unless the table
+says otherwise, downloads the artifacts of the same run with
+`actions/download-artifact@v5`, and builds nothing.
 
-| Job | Runner | `needs` | Environment | Permissions | Does |
-| --- | --- | --- | --- | --- | --- |
-| `publish-verify` | ubuntu | none | none | `actions: read` | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix` from `run_id`. Runs `release-publish.py verify` (section 3). Uploads the verified set as artifact `release-set` with a `manifest.json` of SHA-256 digests. Outputs `version`. |
-| `publish-github-release` | ubuntu | `publish-verify` | `release` | `contents: write` | `gh release view \|\| gh release create --draft --generate-notes`; `gh release upload --clobber` of all assets. The release stays a draft until `publish-finalize`. |
-| `publish-nuget-compiler` | ubuntu | `publish-verify` | `release` | none | Pushes the six `Gsharp.NET.Sdk.Compiler.<rid>` packages with retry, then `check-rid-packages.py --wait-minutes 30`. |
-| `publish-nuget-sdk` | ubuntu | `publish-verify`, `publish-nuget-compiler` (see the `if` below) | `release` | none | Runs `check-rid-packages.py` (no wait) as a precondition. Pushes `Gsharp.NET.Sdk` and the remaining packages with retry. Runs `check-rid-packages.py --require-sdk --wait-minutes 15`. |
-| `publish-vscode-marketplace` | ubuntu | `publish-verify` | `release` | none | Reads the version inside the VSIX. Queries the Marketplace. Skips when present. Else `npx @vscode/vsce@<pinned> publish --packagePath ... --skip-duplicate`. Confirms presence after the publish. |
-| `publish-visual-studio-marketplace` | windows | `publish-verify` (open question 3 adds `publish-nuget-sdk`) | `release` | none | Reads `Identity/@Version` from `extension.vsixmanifest` in the VSIX. Queries the Marketplace. Skips when present. Else `VsixPublisher.exe publish`. Confirms presence. |
-| `publish-finalize` | ubuntu | `publish-verify` and all five publish jobs, `if: !cancelled()` | `release` | `contents: write` | Reads `toJSON(needs)`. Queries every destination (section 4). When every destination has the version, `gh release edit --draft=false` and a summary table. Else fails and names the destinations to retry. |
+| Job | Runner | `needs` | Permissions | Does |
+| --- | --- | --- | --- | --- |
+| `publish-verify` | ubuntu | `ci` | `actions: read` | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` for a prerelease tag) and `unverified_rids` (section 2). |
+| `publish-github-release` | ubuntu | `publish-verify` | `contents: write` | `gh release view \|\| gh release create --draft --generate-notes`, with `--prerelease` when `prerelease` is `true`. `gh release upload --clobber` of every `.nupkg`, `.snupkg` and `.vsix`. The release stays a draft until `publish-finalize`. |
+| `publish-nuget-compiler` | ubuntu | `publish-verify` | none | `release-publish.py nuget-push --group compiler`: the six RID packages, then `check-rid-packages.py --wait-minutes 30`. |
+| `publish-nuget-sdk` | ubuntu | `publish-verify`, `publish-nuget-compiler` | none | `check-rid-packages.py` (no wait) as a precondition, then `nuget-push --group sdk`: `Gsharp.NET.Sdk` and the remaining packages with their `.snupkg`, then `check-rid-packages.py --require-sdk --wait-minutes 15`. |
+| `publish-vscode-marketplace` | ubuntu | `publish-verify`, `publish-nuget-sdk` | none | Reads `extension/package.json` `version` from the VSIX. `release-publish.py marketplace-version gsharplang.vscode-gsharp`. Skips when present. Else `npx --yes @vscode/vsce@3.9.2 publish --packagePath ... --skip-duplicate`, plus `--pre-release` when `prerelease` is `true`. Queries again and fails when the version is still absent. |
+| `publish-visual-studio-marketplace` | windows | `publish-verify`, `publish-nuget-sdk` | none | Reads `Identity/@Version` from `extension.vsixmanifest` in the VSIX. `marketplace-version gsharplang.GSharp-VisualStudio`. Skips when present. Else `VsixPublisher.exe publish` as today. Queries again. |
+| `publish-finalize` | ubuntu | `publish-verify`, `publish-github-release`, `publish-vscode-marketplace`, `publish-visual-studio-marketplace`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success'` | `contents: write` | Requires the result of the other three prerequisites to be `success` (a skipped extension job means the SDK chain failed). Queries the flat container for the twelve packages, both marketplaces and the release assets. When every destination has the version: appends "Unverified platforms" (section 2) to the release body and runs `gh release edit --draft=false`. Else fails and names the destinations to re-run. Writes a summary table either way. |
 
-Rules for every publish job:
+The dependency chain is: six RID packages, then the SDK and tools, then both
+extensions, then finalize. The GitHub release draft runs beside the chain.
+Rules:
 
-- `if: !cancelled() && needs.publish-verify.result == 'success' && (inputs.destination == 'all' || inputs.destination == '<this job>')`.
-  Not `always()`: `always()` is true in a cancelled run, so a cancelled tag
-  run would still push. `!cancelled()` runs the job after a failed or skipped
-  prerequisite, but not after a cancel. A job that is not selected is skipped,
-  not failed, so `publish-finalize` can tell the two apart.
-- The `needs` context holds direct prerequisites only. Every job that reads
-  `needs.publish-verify.result` or its `version` output lists `publish-verify`
-  in its own `needs`.
-- `publish-nuget-sdk` adds `&& (needs.publish-nuget-compiler.result == 'success' || inputs.destination == 'publish-nuget-sdk')`.
-  The topology edge is not the only guard. The feed check inside the job is
-  the guard that matters, because ADR-0207 result 6 makes a missing RID
-  package a restore failure.
-- `concurrency: { group: release-<job>, cancel-in-progress: false }`. Two
-  tags, or a tag run and a retry, never publish to one destination at once.
-- Inputs reach shell only through `env:`. No `${{ inputs.* }}` inside `run:`.
-- Every destination step calls `build/release-publish.py <destination>` with
-  `--artifacts`, `--tag`, `--version` and, when `inputs.dry_run`, `--dry-run`.
-  The workflow holds no publish logic of its own.
+- Default `needs` semantics do the gating. A job whose prerequisite failed is
+  skipped. Only `publish-finalize` uses `!cancelled()`, so that it reports
+  the state after a failure. It does not use `always()`, because `always()`
+  also runs in a cancelled run, and a cancelled release must not be
+  finalized. The `needs` context holds direct prerequisites only, so every job
+  that reads `needs.publish-verify.outputs.*` lists `publish-verify`.
+- Secrets stay repository secrets (`NUGET_API_KEY`, `VSCE_PAT`,
+  `GITHUB_TOKEN`), as today. No environment is needed for them: the publish
+  jobs run only on `v*` tag refs, which only the maintainer pushes, and
+  repository secrets do not reach fork pull requests. An environment would
+  repeat the tag condition as a deployment policy and add a moving part.
+- `contents: write` is given to the two jobs that touch the release. The
+  other jobs keep `contents: read`.
+- The order of the two NuGet groups is enforced twice: by the `needs` edge
+  and by the feed check at the start of `publish-nuget-sdk`. The second guard
+  matters because ADR-0207 result 6 makes a missing RID package a restore
+  failure on that RID.
+- Both extension jobs wait for the SDK. Users who get an extension update
+  then find the SDK that its templates pin.
+- Two tag runs do not conflict: every destination is keyed by version, and
+  the RID-to-SDK order is inside one run.
 
-### 2. Gate set and the two callers
+### 2. The gate is `ci`; `r2r-compiler-smoke` is advisory for a tag
 
-`build.yml` keeps one job for the tag path:
+`publish-verify` needs `ci` and nothing else. `ci` already needs every job and
+runs `build/ci-selection.py --check build`, so the gate set has one source and
+cannot drift from the aggregate. Compared with today, `format`,
+`release-version-refs`, `vscode-extension`, `discover-tests` and the three
+`go2gs` jobs join the gate.
 
-```yaml
-  publish:
-    needs: [build, tests, test-partition, harness, e2e, ilverify, cs2gs-corpus,
-            vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke]
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions: { contents: write, actions: read, id-token: write }
-    uses: ./.github/workflows/release-publish.yml
-    with: { run_id: '${{ github.run_id }}', tag: '${{ github.ref_name }}', destination: all, dry_run: false }
-    secrets: inherit
-```
+`r2r-compiler-smoke` stays in the `needs` of `ci`, so `ci` waits for all six
+legs and knows their result. The check script gets an advisory rule:
 
-The gate list is the one that `publish` has today. Open question 1 asks
-whether it becomes `needs: [ci]`. `build/release-publish.py gate-jobs` prints
-the list, and a test asserts that `build.yml` names the same jobs, in the style
-of `build/test-ci-selection.py`. The retry caller checks the same list.
+- `ci` passes `ADVISORY_JOBS=r2r-compiler-smoke` and `GITHUB_REF` to the
+  script. The rule applies only when `GITHUB_REF` starts with `refs/tags/v`.
+  On pull requests and on `main` pushes the smoke stays required, so a
+  regression is caught before a tag.
+- On a tag, a `failure`, `cancelled` or `skipped` result of an advisory job
+  does not fail the check. The script lists the legs whose conclusion is not
+  `success` through the jobs API of the current run (`gh api
+  repos/{repo}/actions/runs/{run_id}/jobs`, display names
+  `r2r-compiler-smoke (<rid>)`), writes them to the step summary, and sets the
+  job output `unverified_rids` (for example `osx-x64`). `ci` declares that
+  output; `publish-verify` forwards it.
+- `publish-finalize` appends a section to the GitHub release body:
+  "Unverified platforms: `osx-x64`. The ReadyToRun compiler smoke did not run
+  or did not pass on this platform (ADR-0207). The IL compiler is the
+  fallback." The post-release documentation PR copies the sentence into
+  `website/docs/release-notes.md`, and the runbook says so. This keeps the
+  ADR-0207 rule that an unverified platform is named in the release notes,
+  without a hand step in the tag run.
+- `osx-x64` is therefore never a gate, and no RID is. A smoke failure on a tag
+  is visible in `ci`'s summary, in the release body and in the run's job list.
 
-`release-retry.yml` runs on `workflow_dispatch` from `main` with inputs `tag`
-(string), `destination` (choice) and `dry_run` (boolean, default `true`).
-Its first job, `resolve`, runs `release-publish.py resolve --tag <tag>`:
-
-1. Rejects a tag that does not match `^v\d+(\.\d+)*$` or that does not exist
-   (`GET /repos/{owner}/{repo}/git/ref/tags/{tag}`).
-2. Finds the `build` workflow run of that tag (`event=push`, `branch=<tag>`).
-3. Requires every gate job of that run to have conclusion `success` (jobs API,
-   `filter=latest`). The job names come from `gate-jobs`.
-4. Outputs the run id and the tag commit.
-
-Then it calls `release-publish.yml` with that run id. The retry never rebuilds.
-It works while the artifacts of the tag run exist (about 90 days). After that,
-a new tag is the only path, which this ADR accepts.
-
-"Re-run failed jobs" on the tag run stays the first retry tool. With one job
-per destination, it re-runs only the failed destinations and `publish-finalize`.
+Residual: a leg whose runner label no longer exists may wait in the queue
+instead of failing (unverified). Then `ci` waits too. If a single leg cannot
+be cancelled by hand, the fallback is a PR that removes the label from the
+matrix and a new tag. `build/test-ci-selection.py` gets cases for the advisory
+rule: a failed advisory job passes on a tag ref and fails on a pull request
+ref; a failed non-advisory job fails on both (ADR-0154 mutants: a rule that
+ignores the ref, and one that ignores the job name).
 
 ### 3. Verify before the first push
 
-`release-publish.py verify` runs in `publish-verify` and fails the whole
-release before any push when:
+`release-publish.py verify --artifacts <dir> --tag <tag>` runs in
+`publish-verify` and fails the release before any push when:
 
-- the three artifacts are missing or the inventory is wrong: six RID packages,
-  `Gsharp.NET.Sdk`, every other `IsPackable` package of the build, their
-  `.snupkg` files, and both VSIX files;
+- the inventory is wrong. Expected: six `Gsharp.NET.Sdk.Compiler.<rid>.nupkg`
+  (no symbols), six other `.nupkg` (`Gsharp.NET.Sdk`, `Gsharp.Templates`,
+  `Gsharp.Repl`, `Gsharp.Gsfmt`, `Gsharp.Cs2Gs`,
+  `GSharp.CodeAnalysis.Analyzers.Testing`), five `.snupkg` (all of those but
+  `Gsharp.Templates`), `vscode-gsharp.vsix` and `GSharp.VisualStudio.vsix`.
+  The list lives in the script, next to `RIDS` of `check-rid-packages.py`;
 - the packages carry more than one version;
-- the tag is not `v<NuGetPackageVersion>` (this closes #4639; open question 6
-  decides the rule for a prerelease tag);
+- the tag does not match the version. A release tag `^v\d+(\.\d+)*$` must
+  equal `v<version>`. A prerelease tag `^v\d+(\.\d+)*-[0-9A-Za-z.-]+$` must
+  have a package version `<number>-g<sha>` whose `<number>` equals the tag's
+  number. Any other tag fails. This closes #4639;
 - the `PackageDownload` version inside `Gsharp.NET.Sdk.props` of the SDK
   package is not the version of the six RID packages;
-- the VS Code VSIX version is not `SimpleVersion` of the tag, or the Visual
+- the VS Code VSIX version is not the `<number>` of the tag, or the Visual
   Studio VSIX version does not start with it;
 - the project templates inside the Visual Studio VSIX do not pin
   `Gsharp.NET.Sdk/<version>`.
 
-The job writes `manifest.json` with the SHA-256 of every file and uploads the
-set as `release-set` with `overwrite: true`, because artifacts v4 are
-immutable per run and "Re-run all jobs" uploads the name a second time. Every
-publish job downloads `release-set` and checks the digests. The runbook's stage-2 section wanted a digest-bound manifest; this is
-the small version of it.
+The NuGet part of the same check (`verify --nuget-only`, the first four
+points without the tag) also runs as a step of the `build` job on every push,
+right after the existing `check-netstandard-*` steps, against
+`out/bin/Release/nupkgs`. That step would have shown, on every `main` push
+since 2026-10-23, that the build produces a seven-package SDK set that the
+publish code has never consumed. It costs one script call and no secrets.
 
 ### 4. Idempotency per destination
 
-"Already published at this version" is success. Each destination has a
-read-only query that runs before and after the write.
+"Already published at this version" is success.
 
-| Destination | Query | Write | Idempotent today | Idempotent proposed |
-| --- | --- | --- | --- | --- |
-| nuget.org | Flat container `/<id>/<version>/<id>.nuspec` (`check-rid-packages.py` has it). | `dotnet nuget push --skip-duplicate`, three attempts with a pause. | Yes (409 is a warning). The remaining-packages loop has no retry. | Yes. The script skips a package that the query finds, so a re-run pushes only the missing ones and reports them. 401 and 403 still fail. |
-| GitHub release | `gh release view <tag> --json assets`. | `view \|\| create --draft`; `upload --clobber`. | Yes. | Yes. The script uploads only assets whose digest differs from `manifest.json`. One job owns `create`, so two jobs never race on it. |
-| VS Code Marketplace | `extensionquery` REST, or `vsce show gsharplang.vscode-gsharp --json`, compared with `extension/package.json` `version` inside the VSIX. | `vsce publish --packagePath --skip-duplicate`, pinned to the `devDependencies` version (3.9.2). | **No.** | Yes. The pre-query skips a present version. `--skip-duplicate` covers the window between query and publish. Whether `--skip-duplicate` also tolerates the post-upload error after a timeout is unverified; the post-query decides, not the exit code of vsce. |
-| Visual Studio Marketplace | `extensionquery` for `gsharplang.GSharp-VisualStudio`, compared with `Identity/@Version` of `extension.vsixmanifest` inside the VSIX. The comparison uses the full four-part version from the artifact, not the tag. | `VsixPublisher.exe publish`. | Yes by overwrite (documented, not exercised). | Yes. The pre-query skips a present version. An overwrite of the same version is accepted as a no-op. |
-
-The Marketplace queries and the flat container are public and need no
-credentials. They can run from any job, including the dry run on `main`.
-
-### 5. `workflow_dispatch` retry and its safety
-
-- **Only existing tags.** `resolve` rejects a malformed tag, an unknown tag, a
-  tag whose run did not pass the gates, and a run without artifacts.
-- **No rebuild.** The retry publishes the bytes of the tag run, checked against
-  `manifest.json`.
-- **Environment.** The tag path uses environment `release`, with deployment
-  policy "Selected branches and tags: `v*`" and no reviewers, so pushing the
-  tag stays the approval. The retry runs on `main`, so it uses environment
-  `release-retry`, with branch policy `main` and a required reviewer (the
-  maintainer, with "prevent self-review" off). The job sets the environment
-  name by expression (unverified; the fallback is two copies of the publish
-  jobs, which this ADR does not want).
-- **Secrets.** `NUGET_API_KEY` and `VSCE_PAT` move from repository secrets to
-  environment secrets of both environments. No new secret. Jobs outside the two
-  environments cannot read them. `GITHUB_TOKEN` gets `contents: write` only in
-  the two jobs that touch the release.
-- **Inputs.** `destination` is a `choice`. `tag` is validated by regex before
-  any use and never interpolated into a `run:` script.
-- **Default dry run.** `dry_run` defaults to `true`. A real retry needs an
-  explicit `false` and the reviewer's approval.
-- **Serialization.** The concurrency groups of section 1 stop a retry from
-  overlapping a tag run of the same destination.
-
-### 6. Dry-run mode
-
-`release-publish.py <destination> --dry-run` runs the same code as the real
-publish, up to the write. It downloads nothing from secrets. It:
-
-1. runs `verify` (section 3);
-2. queries each destination and prints a plan: "push" for an absent version,
-   "skip" for a present one, with the file names and digests;
-3. exercises `dotnet nuget push` against a local folder source
-   (`--source <temp dir>`) for every package, in the real order, so the loop,
-   the retry and the count logic run;
-4. checks credentials where a read-only check exists: `vsce verify-pat
-   gsharplang` for the shared PAT (both marketplaces use the `gsharplang`
-   publisher), and `gh api repos/{owner}/{repo}/releases` for the token. nuget.org
-   offers no key check without a push; with trusted publishing (section 8),
-   `NuGet/login` obtains the temporary key without a push and so verifies the
-   policy;
-5. prints the same summary table as `publish-finalize`.
-
-A job `publish-dry-run` runs on every push to `main`, needs `build`, `vsix` and
-`visual-studio-extension`, and has no environment and no secrets, so step 4 is
-skipped there. Credential checks run only in the environments: in the retry
-with `dry_run: true`, and in a tag run as the first step of each destination
-job, before that job's first write. `publish-verify` has no environment and
-runs no credential check.
-
-This is the check that would have caught the current gap. Since #5198 every
-`main` run packs seven NuGet packages that no publish code has ever consumed.
-A dry run on `main` would have run the inventory, the version agreement
-between SDK and RID packages, the push order and the local-folder push on
-every commit since 2026-10-23. A real tag then runs code that `main` has
-exercised. The gap that no dry run closes is the acceptance of a new package id
-by nuget.org, which depends on the scope of `NUGET_API_KEY`
-(open question 7).
-
-### 7. Failure matrix proposed
-
-"Re-run" means "Re-run failed jobs" on the tag run. "Dispatch" means
-`release-retry.yml` with the named destination.
-
-| Failing job | What stays published | Re-run or dispatch | Result |
+| Destination | Mechanism | Idempotent today | Idempotent proposed |
 | --- | --- | --- | --- |
-| A gate job | Nothing | Re-run the gate. If a runner label is gone, see open question 2. | The reusable workflow runs after the gate passes. |
-| `publish-verify` | Nothing | Fix is a new tag. The inventory is wrong by construction. | No destination is touched. |
-| `publish-github-release` | Draft release with some assets; every other destination proceeds | Re-run or dispatch `publish-github-release` | Uploads only the assets whose digest differs. `publish-finalize` un-drafts. |
-| `publish-nuget-compiler` | Zero to six RID packages; SDK not pushed; marketplaces and draft release proceed | Re-run or dispatch `publish-nuget-compiler`, then `publish-nuget-sdk` runs | Pushes only the missing RID packages. The SDK job waits for the feed check. |
-| `publish-nuget-sdk` | Six RID packages; some of SDK and tools | Re-run or dispatch `publish-nuget-sdk` | The precondition check passes; pushes only the missing packages. |
-| `publish-vscode-marketplace` (timeout after upload) | Everything else | Re-run or dispatch `publish-vscode-marketplace` | The pre-query finds the version and the job succeeds. The Visual Studio job was never blocked. |
-| `publish-visual-studio-marketplace` | Everything else | Re-run or dispatch | Pre-query, else overwrite publish. |
-| `publish-finalize` (a destination failed) | Everything that succeeded; release stays draft | Fix the failed destination; `publish-finalize` re-runs with it | Un-drafts only when every query returns the version. |
-| Tag run older than 30 days or re-run 50 times | As above | Dispatch | Same scripts, same artifacts, reviewer approval. |
-| Artifacts expired (about 90 days) | As above | None | New tag. Out of scope. |
+| nuget.org | `dotnet nuget push <pkg>.nupkg --skip-duplicate`, three attempts with a pause, in the fixed order. Then, when `<pkg>.snupkg` exists, `dotnet nuget push <pkg>.snupkg --skip-duplicate` explicitly, so a symbol package whose first upload failed after the primary succeeded is retried on a re-run. No flat-container pre-query decides a skip: the feed proves the primary only, not the symbols. | Yes (409 is a warning). The remaining-packages loop has no retry. | Yes, with retry on both groups. 401 and 403 still fail. |
+| GitHub release | `view \|\| create --draft [--prerelease]`; `upload --clobber`. One job owns `create`. | Yes. | Yes. |
+| VS Code Marketplace | Pre-query (`marketplace-version`, the `extensionquery` REST). Present: skip. Absent: `vsce publish --skip-duplicate [--pre-release]`. Post-query decides success, not the vsce exit code, because `--skip-duplicate` after a post-upload timeout is unverified. vsce pinned to 3.9.2. | **No.** | Yes. |
+| Visual Studio Marketplace | Pre-query on the four-part version from `extension.vsixmanifest`. Present: skip. Absent: `VsixPublisher.exe publish` (documented overwrite). Post-query. | Yes by overwrite (not exercised). | Yes. |
 
-### 8. Trusted publishing (follow-up, not required)
+The flat container and the `extensionquery` API are public. The queries need
+no credentials.
 
-nuget.org, the VS Code Marketplace (`vsce publish --oidc`) and the Visual
-Studio Marketplace (`VsixPublisher.exe publish -oidc`) accept GitHub OIDC
-tokens. A policy binds the repository, the workflow file and, for nuget.org,
-an optional environment. This removes `NUGET_API_KEY` and `VSCE_PAT` and their
-expiry. It is independent of the job split and goes into its own issue. Note
-for that issue: for a reusable workflow the OIDC token carries both
-`workflow_ref` (caller) and `job_workflow_ref` (called); which one nuget.org
-matches against "Workflow File" is unverified.
+### 5. Prerelease tags
+
+A prerelease tag such as `v0.5.300-rc1` publishes. The GitHub release is
+created with `--prerelease` and stays so after finalize. NuGet receives the
+prerelease versions `<number>-g<sha>` that the build already produces. The VS
+Code extension is published with `--pre-release`. The Visual Studio Marketplace
+has no pre-release channel, so its users receive the version as an update.
+
+The VSIX versions carry no suffix. A prerelease tag and the following release
+tag must therefore sit on different commits, so that the NBGV height differs
+and the marketplace versions differ. A release run whose `marketplace-version`
+pre-query finds the VS Code version present as a pre-release (the version
+property `Microsoft.VisualStudio.Code.PreRelease`, name unverified) fails in
+`publish-verify` with a collision message instead of skipping. The Visual
+Studio version has a per-build fourth part, so it does not collide.
+
+### 6. Failure matrix proposed
+
+"Re-run" means "Re-run failed jobs" on the tag run.
+
+| Failing job | What stays published | After "Re-run failed jobs" |
+| --- | --- | --- |
+| A gate job (any job that `ci` requires) | Nothing | The gate re-runs, then `ci`, then the chain. |
+| `r2r-compiler-smoke` leg on a tag | Everything; the release body names the RID | Nothing to re-run. The maintainer may re-run the leg; `ci` and `publish-finalize` re-run after it and the release body is rewritten without the RID. |
+| `publish-verify` | Nothing | The inventory or the tag is wrong by construction. Fix is a new tag. |
+| `publish-github-release` | Draft release with some assets; the NuGet chain and the extensions proceed; finalize fails | Uploads with `--clobber`; finalize un-drafts. |
+| `publish-nuget-compiler` | Zero to six RID packages; SDK, extensions and finalize skipped or failed; draft release | Pushes with `--skip-duplicate`; the chain continues to finalize. |
+| `publish-nuget-sdk` | Six RID packages; some of SDK and tools; extensions skipped; draft release | The precondition check passes; pushes the rest; the chain continues. |
+| `publish-vscode-marketplace` (timeout after upload) | Everything but Visual Studio and finalize | The pre-query finds the version; the job succeeds; finalize un-drafts. The Visual Studio job was never blocked by it. |
+| `publish-visual-studio-marketplace` | Everything but finalize | Pre-query, else overwrite publish; finalize un-drafts. |
+| `publish-finalize` (network) | Everything; release stays draft | Re-runs the queries and un-drafts. |
+| Tag run older than 30 days or re-run 50 times | As above | No re-run. The runbook's manual publish stays the last resort. |
 
 ## Consequences
 
 Positive:
 
-- A failed destination is re-run alone. A re-run pushes only what is missing.
+- A failed destination is re-run alone. NuGet pushes only what is missing;
+  the marketplaces skip a present version.
 - The Visual Studio job no longer depends on the VS Code job.
-- The six-RID publish path runs on every `main` push in dry-run mode before a
-  tag depends on it.
+- Both extensions reach users after the SDK they pin.
 - The GitHub release becomes public only when every destination has the
-  version.
-- The tag check of #4639 and a digest-bound artifact set come with the verify
-  step.
-- Secrets move into environments. The retry needs a reviewer.
+  version, and it names an unverified platform.
+- The six-RID inventory is checked on every push, and the tag check of #4639
+  comes with the verify step.
+- One gate list (`ci`), one advisory rule in one tested script.
 
 Negative:
 
-- Two more workflow files and one more script with tests.
+- Seven jobs per tag run instead of two. Each is short.
 - The release page appears later than today (after `publish-finalize`).
-- More jobs per tag run (seven instead of two). Each is short.
-- The `environment` expression and the cross-attempt artifact behavior are
-  unverified until migration step 2 observes them.
+- One more script with tests, and the advisory rule in `ci-selection.py`.
+- Two GitHub Actions behaviors are unverified until migration step 2 observes
+  them: artifacts across attempts, and re-run of skipped dependents.
 
 Neutral:
 
-- The gate set is unchanged unless open question 1 changes it.
+- `format`, `release-version-refs`, `vscode-extension`, `discover-tests` and
+  the `go2gs` jobs join the gate (decision 1).
 - The runbook's manual-publish section stays as the last resort.
 
 ## Migration plan
 
-Each step is a PR. The first is the least risky. Nothing before step 5 changes
-the publish topology.
+Each step is a PR. The first is the least risky.
 
 1. **Script and tests, no workflow change.** Add `build/release-publish.py`
-   with subcommands `verify`, `gate-jobs`, `resolve`, one per destination, and
-   `--dry-run`. Add `build/test-release-publish.py` with a fake flat container,
-   a fake Marketplace and fake artifacts. Mutants (ADR-0154): a script that
-   pushes the SDK before the six RID packages, one that skips the count, one
-   that compares the Visual Studio version to the tag instead of the manifest,
-   and one that accepts a `v0.5.1-rc1` tag as a release. Verifiable on PR CI.
-2. **Observe the two unverified semantics.** A PR adds a throwaway workflow
+   with `verify [--nuget-only]`, `nuget-push --group compiler|sdk` and
+   `marketplace-version <id>`. Add `build/test-release-publish.py` with fake
+   artifacts and a fake flat container. Mutants (ADR-0154): a push order that
+   puts the SDK before the RID packages; an inventory that accepts five RID
+   packages; a tag rule that accepts `v0.5.1-rc1` as a release tag; a symbol
+   push that is skipped when the primary exists. Add the `verify --nuget-only`
+   step to `build`. Verifiable on PR CI and on the next `main` push.
+2. **Observe the two unverified behaviors.** A PR adds a throwaway workflow
    `rerun-probe.yml` (`on: pull_request`): job A uploads an artifact; job B
    fails when `github.run_attempt == 1`; job C needs B and downloads the
    artifact. Re-run failed jobs. Record whether C ran and whether the download
-   found the attempt-1 artifact. Job A also uploads its artifact with
-   `overwrite: true` on attempt 2. The same PR tries `environment: ${{ ... }}`
-   against a throwaway environment, and calls a throwaway reusable workflow
-   whose jobs declare `environment` and `concurrency`, to observe `secrets:
-   inherit`, per-job re-run inside the call, and `needs` on the `uses:` job.
-   The PR is closed without merge; the findings go into this ADR's fact table.
-3. **Dry run on `main`.** Add `publish-dry-run` to `build.yml`. Register the
-   new paths in `build/ci-selection.py` so a PR that changes them runs it.
-   Verifiable on the next `main` push.
-4. **Harden the existing job.** In the current `publish` job: pin vsce, add
-   `--skip-duplicate`, call the script for each step (pre-query, retry on the
-   remaining packages, move the six count before the pushes). Change
-   `publish-visual-studio-extension` to need the gate set instead of
-   `publish`. Verifiable: the next tag runs the same code as the dry run.
-5. **Split.** Add `release-publish.yml`, replace the two jobs with the caller
-   job. Create environment `release` with the `v*` tag policy, move the two
-   secrets. Verifiable before a tag: the dry-run job runs the same scripts;
-   the workflow syntax is checked with `actionlint` locally. The first real
-   exercise is the next tag.
-6. **Retry.** Add `release-retry.yml` and environment `release-retry` with the
-   reviewer. Verifiable without a release: dispatch with `dry_run: true` for
-   an existing tag such as `v0.5.212`. Expected plan: every destination
-   "skip" (already published), credentials verified.
-7. **Trusted publishing.** Separate issue.
-
-Update `docs/release/final-csharp-release.md` ("Watch the tag run" and the
-manual-publish section) in step 5 and step 6.
+   found the attempt-1 artifact. The PR is closed without merge; the findings
+   go into the fact table.
+3. **Advisory smoke.** Add the advisory rule and the `unverified_rids` output
+   to `ci-selection.py --check build` and `ci`, with the tests of section 2.
+   Verifiable on PR CI (the rule is inert off tags) and by the script tests.
+4. **Split.** Replace the two publish jobs with the seven jobs of section 1,
+   `needs: [ci]`, draft-then-finalize, prerelease handling, pinned vsce,
+   `--skip-duplicate`, both extensions after the SDK. Update the runbook
+   ("Watch the tag run", "Post-publish docs PR" for the unverified-platform
+   sentence, manual publish as last resort). Verifiable before a tag only by
+   the script tests and `actionlint`; the real exercise is step 5.
+5. **Rehearsal: one real prerelease.** The maintainer tags `v0.5.N-rc1` on a
+   `main` commit and approves that run. It exercises every job, the six-RID
+   publish, the symbol pushes, both marketplaces with a pre-release VS Code
+   version, the draft and the finalize. The run also answers the unverified
+   symbol-server and `--skip-duplicate` rows. Nothing in this ADR triggers it.
+6. **Follow-ups out of scope.** Trusted publishing (OIDC) for the three
+   destinations and assembly signing are a separate issue that the maintainer
+   files. This ADR only notes that all three destinations support OIDC.
 
 ## Alternatives considered
 
 1. **Keep one job and add `--skip-duplicate` to vsce.** Fixes the known failure
    but keeps the Visual Studio coupling, the public-release-before-feed order
-   and the single re-run unit. Step 4 of the migration takes the cheap part.
-2. **Dispatch inside `build.yml`.** One file, and the nuget.org OIDC policy
-   names `build.yml`. Rejected because `ci-selection.py` treats a dispatch as
-   full validation, so every CI job would run on `main` for a retry, or the
-   selection contract would need a release-retry exception. Every publish job
-   would also carry a dual `if`. The reusable workflow keeps the job
-   definitions in one place without that.
-3. **Rebuild on retry.** A dispatch that checks out the tag and builds again.
-   Rejected: the retry would publish bytes that differ from the release assets
-   and from what the gates tested. The repository keeps emitted output
-   deterministic, but package timestamps and signatures are not.
-4. **`continue-on-error` on the Marketplace steps.** Hides a failure as
+   and the single re-run unit. Rejected.
+2. **A `workflow_dispatch` retry workflow with a reviewer-protected
+   environment.** Rejected by the maintainer: it adds a workflow, an
+   environment, a reviewer step and a resolver for the tag's run. "Re-run
+   failed jobs" covers the retry when the jobs are idempotent, which is the
+   point of the split.
+3. **A reusable workflow for the publish jobs.** Fine in itself, but with one
+   caller it adds a file and an indirection for nothing. Rejected for inline
+   jobs.
+4. **A dry-run job on `main` with mocked pushes and credential checks.**
+   Rejected: it needs a mock feed, a local push loop and credential probes
+   that do not exist for nuget.org, and it still cannot prove acceptance by
+   the real destinations. The `verify --nuget-only` step in `build` keeps the
+   part that would have caught the six-RID gap, and the prerelease rehearsal
+   proves the rest end to end.
+5. **Environments with a `v*` tag policy for the secrets.** Rejected: the
+   publish jobs already run only on tag refs, and repository secrets do not
+   reach fork pull requests. An environment would repeat the condition.
+6. **Concurrency groups per destination.** Rejected: destinations are keyed by
+   version, two tag runs do not conflict, and the default queue cancels a
+   pending job, which would leave a release incomplete.
+7. **Rebuild on retry.** Rejected: the retry would publish bytes that differ
+   from the release assets and from what the gates tested.
+8. **`continue-on-error` on the Marketplace steps.** Hides a failure as
    success. Rejected.
-5. **A matrix over destinations.** One job definition, but the runners differ,
-   the RID-to-SDK edge cannot be expressed inside a matrix, and `fail-fast`
-   semantics do not fit. Rejected.
-6. **Use the GitHub release as the artifact store for retries.** A draft
-   release is not public, assets can be replaced, and the window is not longer
-   than the run artifacts in practice. Rejected in favor of run artifacts with
-   `manifest.json`.
-7. **A release workflow on the `release: published` event.** The release
-   would be created by hand and the gates would not be bound to it. Rejected.
-8. **Public release at once, as today.** Rejected in favor of draft-then-finalize,
-   because a public release page for a version that no feed serves misleads
-   users. Open question 4 lets the maintainer keep today's behavior.
+9. **A matrix over destinations.** The runners differ, and the RID-to-SDK and
+   SDK-to-extension edges cannot be expressed inside a matrix. Rejected.
+10. **Remove `r2r-compiler-smoke` from the `needs` of `ci`.** Then `ci` would
+    not know the legs' results, and the unverified platform could not be
+    named. Rejected for the advisory rule in the check script.
+11. **Public release at once, as today.** Rejected by the maintainer in
+    favor of draft-then-finalize.
 
-## Open questions
+## Decisions
 
-1. **Gate set.** Keep the eleven-job list, or `needs: [ci]`? `ci` adds
-   `format`, `release-version-refs`, `vscode-extension`, `discover-tests` and
-   the three `go2gs` jobs to the gate. It removes the drift between the two
-   lists.
-2. **`r2r-compiler-smoke` as a hard gate.** ADR-0207 says a RID that the smoke
-   cannot verify may ship, named in the release notes. Today `publish` needs
-   all six legs. Options: keep the hard gate; gate on the five hosted
-   x64/arm64 legs and make `osx-x64` advisory; or make the whole smoke
-   advisory with a release-notes requirement that `verify` enforces.
-3. **Visual Studio extension after the SDK.** The VSIX project templates pin
-   `Gsharp.NET.Sdk/<version>`. A user who installs the extension before the SDK
-   is on the feed gets a template that fails to restore. Add `needs:
-   publish-nuget-sdk` to `publish-visual-studio-marketplace`, or accept the
-   window? The VS Code extension has no such pin.
-4. **Draft release until finalize.** Accept that the release page appears a
-   few minutes later, or keep the public release at the start?
-5. **Two environments and a required reviewer on the retry.** Accept the
-   reviewer step (the maintainer approves their own dispatch), or use one
-   environment with tag policy `v*` plus branch `main` and no reviewer?
-6. **Prerelease tags.** `verify` requires `v<NuGetPackageVersion>`. A
-   `v0.5.300-rc1` tag publishes `0.5.300-g<sha>` today. Reject such tags, or
-   allow them and mark the GitHub release as a prerelease?
-7. **`NUGET_API_KEY` scope.** The key was updated 2026-05-29. The six
-   `Gsharp.NET.Sdk.Compiler.<rid>` ids are new. The key must allow "push new
-   packages" for the glob that covers them, or the first RID push fails with
-   403 and no retry helps. This is a check before the next tag, not a design
-   choice, but only the maintainer can do it.
-8. **Reusable workflow versus one file.** Section 2 recommends the reusable
-   workflow. Alternative 2 lists the cost of one file.
-9. **Trusted publishing.** Open an issue for section 8 now, or after the split
-   has run in one release?
+The maintainer decided these points on 2026-10-29:
+
+1. The gate is `needs: [ci]`.
+2. Publishing is not gated on any RID. `r2r-compiler-smoke` is advisory for a
+   tag, and an unverified platform is named in the release notes (ADR-0207).
+3. Both extensions wait for `publish-nuget-sdk`. The chain is RID packages,
+   SDK, extensions, finalize.
+4. The GitHub release stays a draft until finalize.
+5. The only retry is "Re-run failed jobs". No dispatch workflow, no
+   environment, no reviewer. Repository secrets stay as they are.
+6. Prerelease tags publish, with the GitHub release marked as a prerelease. One
+   real prerelease rehearses the flow (migration step 5).
+7. `NUGET_API_KEY` can push any package id. Precondition met; no action.
+8. Prefer the simplest graph with per-destination re-run: inline jobs, no
+   dry-run job, one verify step in `build`.
+9. Trusted publishing and assembly signing are a separate issue.
+
+No question remains open.
