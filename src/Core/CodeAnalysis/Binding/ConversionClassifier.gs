@@ -177,6 +177,14 @@ internal class ConversionClassifier {
         return Conversion.Classify(source, target)
     }
 
+    /// Issue #5536: classifies an argument with the function-value rule of (cref:BindConversion), so overload
+    /// resolution does not select a candidate that the argument conversion then rejects.
+    /// @param argument The bound argument.
+    /// @param target The parameter type.
+    /// @returns The conversion, or (cref:Conversion.None) when a function value cannot keep its delegate.
+    internal func ClassifyArgumentConversion(argument BoundExpression, target TypeSymbol) Conversion ->
+    ClassifyConvertedDelegate(argument, target, ClassifyArgumentConversion(argument.Type, target))
+
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
 
     // ----- Core conversion entry points -----
@@ -694,7 +702,9 @@ internal class ConversionClassifier {
             return BoundClrConversionCallExpression(nil, expression, liftedMethod!!, liftedOwner, type!!)
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
-        if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) {
+        conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
+        if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
+            Conversion.ChecksFunctionValueDelegate(expression.Type, type!!) {
             conversion = Conversion.Explicit
         }
         // Issue #1183: C# §10.2.11 implicit constant expression conversion.
@@ -4919,6 +4929,39 @@ internal class ConversionClassifier {
                 return invokeVoid && methodVoid
             }
             return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn)
+        }
+
+        /// Issue #5536: a function literal binds its body to the target shape, so it can convert its result. Every
+        /// other function value keeps its delegate, which emission can reuse or bind again but cannot convert.
+        /// @param expression The converted expression.
+        /// @param target The conversion target.
+        /// @returns `false` when the conversion needs a new function body.
+        internal func KeepsConvertedDelegate(expression BoundExpression, target TypeSymbol) bool ->
+        expression is BoundFunctionLiteralExpression || Conversion.KeepsFunctionValueDelegate(expression.Type, target)
+
+        /// Issue #5536: adjusts the type-pair classification of [`expression`](paramref) for a function value
+        /// that keeps its delegate. An implicit conversion that needs a new body does not exist for a function
+        /// value. An explicit one exists only as a checked `castclass` downcast
+        /// ((cref:Conversion.ChecksFunctionValueDelegate)), so an implicit use reports the cast-required
+        /// diagnostic.
+        /// @param expression The converted expression.
+        /// @param target The conversion target.
+        /// @param conversion The type-pair classification.
+        /// @returns The classification that binding and overload applicability use.
+        internal func ClassifyConvertedDelegate(
+            expression BoundExpression,
+            target TypeSymbol,
+            conversion Conversion
+        ) Conversion {
+            if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
+                return conversion
+            }
+            return if Conversion.HasCheckedReferenceConversion(expression.Type, target) &&
+                Conversion.ChecksFunctionValueDelegate(expression.Type, target) {
+                Conversion.Explicit
+            } else {
+                Conversion.None
+            }
         }
 
         /// Issue #3505: true when [`from`](paramref) and [`to`](paramref)
