@@ -2919,9 +2919,9 @@ partial class CSharpToGSharpTranslator {
             // Issue #5516: where C# runs no flow analysis a call result keeps its
             // declared `T?` only on the method. A local or a generic parameter
             // that G# infers from the value takes that `T?` itself, so only a
-            // declared sink asks for it.
-            let declaredSink = targetSymbol != nil &&
-                !inferredSink &&
+            // declared sink asks for it. A nil symbol is a sink stated by its type alone
+            // (the write to a `var` local whose initializer fixed a non-null type).
+            let declaredSink = !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
                 value,
@@ -4622,16 +4622,10 @@ partial class CSharpToGSharpTranslator {
             while call is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 call = parenthesized.Expression
             }
+            // `IsNullableInitializer` is the translator's one reading of a declared `T?`: it also
+            // follows `[return: NotNullIfNotNull]` to the argument, as `Path.GetFileName(path)` needs.
             return call is InvocationExpressionSyntax && this.IsAnnotationsContextWithoutFlowAnalysis(call) &&
-                this
-                .context
-                .GetSymbolInfo(call)
-                .Symbol is IMethodSymbol{ReturnType: {} returnType} &&
-                returnType.IsReferenceType &&
-                returnType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
+                this.IsNullableInitializer(call)
         }
 
         private func IsImportedObliviousCollectionElement(

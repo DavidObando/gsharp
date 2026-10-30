@@ -39,6 +39,9 @@ import Xunit
 /// | 10 | call as argument of a nullable parameter | `Consume(Maybe())` | unchanged | call result asserted without the sink check |
 /// | 11 | `#nullable disable` region calling a `T?` method | no `!!` | unchanged | annotations gate removed |
 /// | 12 | call as argument of an unconstrained generic parameter G# infers | `Count(Maybe())` | unchanged | inferred sink treated as declared |
+/// | 14 | reassignment of a `var` local whose initializer fixed a non-null type | `v = Maybe()` (GS0155) | `v = Maybe()!!` | declared sink required a symbol (M10) |
+/// | 15 | object-initializer members and a collection-initializer element | no `!!` (GS0155) | `Holder{F: Maybe()!!, ...}`, `List[C]{ Maybe()!! }` | initializer path ignores the flag (M11) |
+/// | 16 | `Path.GetFileName(path)` with a non-null and a nullable argument | `Name` and `Name2` no `!!` | `Name` unchanged, `Name2` `!!` | declared `?` read without `NotNullIfNotNull` (M9) |
 /// | 13 | call as argument of a `where T : class` generic parameter | no `!!` (GS0155 or throw) | `Use(Maybe()!!)` | declared call result ignored |
 open class Issue5516MaybeNullAssignTests {
     @Fact
@@ -206,6 +209,45 @@ public static class K {
   public static int M() { return Use(Maybe()); }
 }`)
         Assert.Equal(1, Count(printed, "Use(Maybe()!!)"))
+    }
+
+    @Fact
+    func Row14_ReassignedInferredLocalWithNonNullInitializer_IsAsserted() {
+        let printed = AssertSameInBothContexts(`public class C { public int N; }
+public static class K {
+  static C? Maybe() => null;
+  public static void A() { var v = new C(); v = Maybe(); }
+}`)
+        Assert.Equal(1, Count(printed, "v = Maybe()!!"))
+    }
+
+    @Fact
+    func Row15_InitializerMembersAndElements_AreAsserted() {
+        let printed = AssertSameInBothContexts(`using System.Collections.Generic;
+public class C { public int N; }
+public class Holder { public C F = new C(); public C P { get; set; } = new C(); }
+public static class K {
+  static C? Maybe() => null;
+  public static void M() { var h = new Holder { F = Maybe(), P = Maybe() }; var l = new List<C> { Maybe() }; }
+}`)
+        Assert.Equal(1, Count(printed, "F: Maybe()!!"))
+        Assert.Equal(1, Count(printed, "P: Maybe()!!"))
+        Assert.Equal(1, Count(printed, "List[C]{ Maybe()!! }"))
+    }
+
+    @Fact
+    func Row16_NotNullIfNotNullResult_FollowsItsArgument() {
+        let printed = Translate(true, `using System.IO;
+public static class K {
+  public static string Name(string path) => Path.GetFileName(path);
+  public static string Name2(string? path) => Path.GetFileName(path);
+}`)
+        Assert.Contains(
+            "func Name(path string) string -> Path.GetFileName(path)\n",
+            printed.Replace("\r\n", "\n"),
+            StringComparison.Ordinal
+        )
+        Assert.Equal(1, Count(printed, "Path.GetFileName(path)!!"))
     }
 
     shared {

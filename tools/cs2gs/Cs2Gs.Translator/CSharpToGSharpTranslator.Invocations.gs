@@ -3175,7 +3175,7 @@ partial class CSharpToGSharpTranslator {
             // C# accepted the initializer only by trusting the generated
             // annotation, so asserting restores the contract it assumed.
             return if (
-                this.NullableReferenceValueMayBeNull(valueExpression) ||
+                this.NullableReferenceValueMayBeNull(valueExpression, respectDeclaredCallResults: true) ||
                     (
                     if this.IsObliviousCompilation() {
                         this.IsNullablePromotedValue(valueExpression)
