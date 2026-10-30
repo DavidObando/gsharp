@@ -584,6 +584,22 @@ class Program {
         "CS0266",
         "GS0156"
     )
+    @InlineData(
+        "sequence[(Item) -> void]",
+        "sequence[(object) -> void]",
+        "IEnumerable<System.Action<Item>>",
+        "IEnumerable<System.Action<object>>",
+        "CS0266",
+        "GS0156"
+    )
+    @InlineData(
+        "sequence[(ChannelReader[int32]) -> void]",
+        "sequence[(Channel[int32]) -> void]",
+        "IEnumerable<System.Action<ChannelReader<int>>>",
+        "IEnumerable<System.Action<Channel<int>>>",
+        "CS0266",
+        "GS0156"
+    )
     func NominalVariance_RejectsWrongOwnerValueTypesAndNestedProjections(
         from string,
         to string,
@@ -725,6 +741,102 @@ class Program {
 }
 `
         Check(fixture, source, oracle, "112TrueTrueTrue1")
+    }
+
+    @Fact
+    func ArrowFunctionVariance_UsesNaturalDelegateVariance() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+open class Animal {}
+class Dog : Animal {}
+class Item {}
+shared class Counts { var Calls int32 = 0 }
+func Results(x sequence[(int32) -> string]) sequence[(int32) -> object] -> x
+func Mixed(x sequence[() -> Item]) sequence[Func[object]] -> x
+func Sinks(x sequence[(Animal, ...int32) -> void]) sequence[(Dog, ...int32) -> void] -> x
+func Nested(x sequence[sequence[(Animal) -> Dog]]) sequence[sequence[(Dog) -> Animal]] -> x
+func Text(n int32) string -> n.ToString()
+func Make() Item -> Item()
+func Adopt(a Animal) Dog -> Dog()
+func ResultsOf() sequence[(int32) -> string] {
+    let f (int32) -> string = Text
+    yield f
+}
+func MakersOf() sequence[() -> Item] {
+    let f () -> Item = Make
+    yield f
+}
+func SinksOf() sequence[(Animal, ...int32) -> void] {
+    let f (Animal, ...int32) -> void = (a Animal, values []int32) -> { Counts.Calls += values.Length }
+    yield f
+}
+func InnerOf() sequence[(Animal) -> Dog] {
+    let f (Animal) -> Dog = Adopt
+    yield f
+}
+func NestedOf() sequence[sequence[(Animal) -> Dog]] {
+    yield InnerOf()
+}
+func Main() {
+    let results = ResultsOf()
+    let makers = MakersOf()
+    let sinks = SinksOf()
+    let nested = NestedOf()
+    var count = 0
+    for r in Results(results) { if r(42) is string text { count += text.Length } }
+    for m in Mixed(makers) { if m() is Item { count += 10 } }
+    for s in Sinks(sinks) { s(Dog(), 1, 2, 3) }
+    for inner in Nested(nested) {
+        for f in inner { if f(Dog()) is Dog { count += 1000 } }
+    }
+    Console.Write(count + Counts.Calls * 100)
+    Console.Write(Object.ReferenceEquals(results, Results(results)))
+    Console.Write(Object.ReferenceEquals(makers, Mixed(makers)))
+    Console.Write(Object.ReferenceEquals(sinks, Sinks(sinks)))
+    Console.Write(Object.ReferenceEquals(nested, Nested(nested)))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using System.Collections.Generic;
+using UpcastControl;
+class Animal {}
+class Dog : Animal {}
+class Item {}
+class Program {
+    static int calls;
+    static IEnumerable<Func<int, object>> Results(IEnumerable<Func<int, string>> x) => x;
+    static IEnumerable<Func<object>> Mixed(IEnumerable<Func<Item>> x) => x;
+    static IEnumerable<Action<Dog, int[]>> Sinks(IEnumerable<Action<Animal, int[]>> x) => x;
+    static IEnumerable<IEnumerable<Func<Dog, Animal>>> Nested(IEnumerable<IEnumerable<Func<Animal, Dog>>> x) => x;
+    static IEnumerable<Func<int, string>> ResultsOf() { Func<int, string> f = n => n.ToString(); yield return f; }
+    static IEnumerable<Func<Item>> MakersOf() { Func<Item> f = () => new Item(); yield return f; }
+    static IEnumerable<Action<Animal, int[]>> SinksOf() { Action<Animal, int[]> f = (a, values) => calls += values.Length; yield return f; }
+    static IEnumerable<Func<Animal, Dog>> InnerOf() { Func<Animal, Dog> f = a => new Dog(); yield return f; }
+    static IEnumerable<IEnumerable<Func<Animal, Dog>>> NestedOf() { yield return InnerOf(); }
+    static void Main() {
+        var results = ResultsOf();
+        var makers = MakersOf();
+        var sinks = SinksOf();
+        var nested = NestedOf();
+        var count = 0;
+        foreach (var r in Results(results)) { if (r(42) is string text) count += text.Length; }
+        foreach (var m in Mixed(makers)) { if (m() is Item) count += 10; }
+        foreach (var s in Sinks(sinks)) { s(new Dog(), new[] { 1, 2, 3 }); }
+        foreach (var inner in Nested(nested)) {
+            foreach (var f in inner) { if (f(new Dog()) is Dog) count += 1000; }
+        }
+        Console.Write(count + calls * 100);
+        Console.Write(Object.ReferenceEquals(results, Results(results)));
+        Console.Write(Object.ReferenceEquals(makers, Mixed(makers)));
+        Console.Write(Object.ReferenceEquals(sinks, Sinks(sinks)));
+        Console.Write(Object.ReferenceEquals(nested, Nested(nested)));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "1312TrueTrueTrueTrue1")
     }
 
     @Fact

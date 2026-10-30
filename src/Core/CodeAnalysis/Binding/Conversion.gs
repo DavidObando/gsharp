@@ -2281,30 +2281,17 @@ class Conversion {
             ) {
                 return true
             }
-            // A `Func`/`Action` keeps its parameters and only widens a reference result, as CLR delegate variance does.
-            if sourceShape is FunctionTypeSymbol sourceFunction && targetShape is FunctionTypeSymbol targetFunction {
-                if sourceFunction.Arity != targetFunction.Arity {
-                    return false
-                }
-                for var i = 0; i < sourceFunction.Arity; i++ {
-                    if sourceFunction.IsVariadic[i] != targetFunction.IsVariadic[i] ||
-                        !TypeSymbol
-                        .AreRuntimeEquivalentIgnoringReferenceNullability(
-                        sourceFunction.ParameterTypes[i],
-                        targetFunction.ParameterTypes[i]
-                    ) {
-                        return false
-                    }
-                }
-                return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    sourceFunction.ReturnType,
-                    targetFunction.ReturnType
-                ) ||
-                    IsVariantArgumentRelated(
-                    sourceFunction.ReturnType,
-                    targetFunction.ReturnType,
-                    nominalOnly: true,
-                    allowPlatformNilCheck: false
+            // An arrow function is its natural `Func`/`Action`, so it shares that delegate's declaration-site variance.
+            if (sourceShape is FunctionTypeSymbol || targetShape is FunctionTypeSymbol) &&
+                TryGetNaturalDelegateShape(sourceShape, out var sourceDelegate, out var sourceDelegateArguments) &&
+                TryGetNaturalDelegateShape(targetShape, out var targetDelegate, out var targetDelegateArguments) {
+                return ClrTypeUtilities.AreSame(sourceDelegate, targetDelegate) &&
+                    AreConstructedReferenceArgumentsCompatible(
+                    sourceDelegateArguments,
+                    targetDelegateArguments,
+                    targetDelegate!!,
+                    clrArgumentBoundary: false,
+                    nominalOnly: true
                 )
             }
             // IEnumerable<T> derives from the non-generic IEnumerable (#3566).
@@ -2342,6 +2329,48 @@ class Conversion {
             return IsReferenceTypeArgument(source) &&
                 IsReferenceTypeArgument(target) &&
                 ProvesNominalReference(source, target)
+        }
+
+        /// The delegate definition and arguments of an arrow function's natural `Func`/`Action` (the CLR shape
+        /// (cref:FunctionTypeSymbol) builds), or of a constructed delegate.
+        /// @param type The function or delegate type.
+        /// @param definition The open (or non-generic) delegate definition.
+        /// @param arguments The parameters followed by a non-void result.
+        /// @returns `true` when the type has such a shape.
+        private func TryGetNaturalDelegateShape(
+            type TypeSymbol,
+            @NotNullWhen(true) out definition Type?,
+            out arguments ImmutableArray[TypeSymbol]
+        ) bool {
+            if type is not FunctionTypeSymbol function {
+                return TryGetConstructedGenericShape(type, out definition, out arguments)
+            }
+            let isVoid = FunctionTypeSymbol.IsVoidReturn(function.ReturnType)
+            // Source slots have no CLR type yet; the definition depends only on the arity and on a void result.
+            let erased = ImmutableArray.CreateBuilder[TypeSymbol](function.Arity)
+            for var i = 0; i < function.Arity; i++ {
+                erased.Add(TypeSymbol.Object)
+            }
+            let natural Type? = function.ClrType ?? FunctionTypeSymbol.Get(
+                erased.MoveToImmutable(),
+                if isVoid {
+                    TypeSymbol.Void
+                } else {
+                    TypeSymbol.Object
+                }
+            )
+                .ClrType
+            definition = if natural is {IsGenericType: true} generic {
+                generic.GetGenericTypeDefinition()
+            } else {
+                natural
+            }
+            arguments = if isVoid {
+                function.ParameterTypes
+            } else {
+                function.ParameterTypes.Add(function.ReturnType)
+            }
+            return definition != nil
         }
 
         /// True when [`type`](paramref) is a reference-capable type for
