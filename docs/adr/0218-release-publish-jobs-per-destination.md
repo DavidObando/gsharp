@@ -66,8 +66,8 @@ holds twelve `.nupkg` and five `.snupkg`.
 | `VsixPublisher.exe publish` of a version that already exists overwrites it. | Visual Studio documentation | Verified (docs); not exercised |
 | `gh release upload --clobber` replaces an asset of the same name. `gh release view \|\| create` is a no-op when the release exists. | Runbook, current workflow | Verified (used in releases) |
 | "Re-run failed jobs" keeps `GITHUB_SHA` and `GITHUB_REF`. A run can be re-run for 30 days, at most 50 times. | GitHub documentation | Verified (docs) |
-| Artifacts of attempt 1 are available to jobs in attempt 2 of the same run. | Not stated in the documentation that was read; no re-run exists in this repository to observe it. Migration step 2 observes it. | **Unverified** |
-| "Re-run failed jobs" also runs the jobs that were skipped because they needed a failed job. | Not stated in the documentation that was read. The runbook assumes it. Migration step 2 observes it. | **Unverified** |
+| Artifacts of attempt 1 are available to jobs in attempt 2 of the same run. | Probe run 41130582950 (PR #5553, closed): a job that needed a re-run failed job downloaded an artifact whose content said it was uploaded by attempt 1. | Verified (observed) |
+| "Re-run failed jobs" also runs the jobs that were skipped because they needed a failed job. | Same probe run: the job skipped in attempt 1 ran in attempt 2 after its prerequisite passed. | Verified (observed) |
 | A job with `needs` is skipped when a prerequisite fails or is skipped, unless its `if` uses `always()` or `!cancelled()`. `always()` is also true in a cancelled run. | GitHub documentation | Verified (docs) |
 | `needs.<job>.result` of a matrix job is one value for all legs. The jobs API lists the legs by display name, `r2r-compiler-smoke (<rid>)`. | `build.yml:1046`; `gh run view --json jobs` | Verified |
 | A `v*-rc1` tag runs `publish` with a prerelease version `<number>-g<sha>`, because `publicReleaseRefSpec` matches only `^refs/tags/v\d+(?:\.\d+)*$`. The VSIX versions carry no suffix (`SimpleVersion`). | `version.json`, runbook, `build.yml:738-748` | Verified |
@@ -155,8 +155,8 @@ Rules:
   'success'`, not `always()`, because `always()` also runs in a cancelled run,
   and a cancelled release must not publish or finalize. Whether a job with no
   status function runs after a prerequisite that succeeded under `always()`
-  is a question for the probe (migration step 2). If the probe shows that the
-  implicit `success()` looks past the direct prerequisite, every job in the
+  is answered by the probe (migration step 2, see "Implementation notes"): the
+  implicit `success()` looks past the direct prerequisite, so every job in the
   chain gets the explicit form. The `needs` context holds direct prerequisites
   only, so every job that reads `needs.publish-verify.outputs.*` lists
   `publish-verify`.
@@ -506,3 +506,20 @@ No question remains open.
   package version, and the single-version check ties the SDK version to the six RID packages.
 - `marketplace-version <id> --version V [--kind release|prerelease|any]` exits 0 when the
   version is published with the same flag, 1 when absent, 3 on a flag collision.
+
+### Step 2: the re-run probe
+
+A throwaway workflow ran on PR #5553 (closed without merge, so it never reached `main`). It used
+`on: pull_request`, no secrets, no publishing. Run 41130582950, attempts 1 and 2 (the second by
+`gh run rerun --failed`):
+
+| Question | Observed | Effect on the design |
+| --- | --- | --- |
+| Is an attempt-1 artifact available in attempt 2? | Yes. The job downloaded `probe` and read "uploaded by attempt 1". | None. The design stands. |
+| Does "Re-run failed jobs" run jobs skipped because a prerequisite failed? | Yes. The dependent was skipped in attempt 1 and ran in attempt 2. | None. The design stands. |
+| After `D` (`if: always()`, needs a job that fails on every attempt, itself succeeds), does `E` (needs `D`, no status function) run? | **No.** `E` was skipped in both attempts. The implicit `success()` also checks the failed ancestor, not only the direct prerequisite. | Step 4 must give every chain job the explicit `!cancelled() && needs.<prerequisite>.result == 'success'` form. This matters on a tag: `ci` runs after a failed advisory `r2r-compiler-smoke` leg, so a default `needs: publish-verify` job would be skipped. |
+| Does the explicit form run in that shape? | Yes, in both attempts. | Confirms the form. |
+
+Not observed by the probe: a missing hosted runner label, the symbol-server answer for a duplicate
+`.snupkg`, and the `vsce` pre-release marker. They stay unverified; the first needs a tag run, the
+others wait for the step-5 rehearsal.
