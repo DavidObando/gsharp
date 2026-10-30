@@ -310,7 +310,9 @@ open class Adr0208NarrowingCorpusTests {
                 "u07_5532_string_builder_capacity_set_kills_R17",
                 "u08_5532_indexer_set_in_a_loop_R17",
                 "u09_5532_span_indexer_write_goes_through_the_ref_getter_R17",
-                "u10_5532_erased_generic_list_indexer_goes_through_the_interface_R17"
+                "u10_5532_erased_generic_list_indexer_goes_through_the_interface_R17",
+                "u11_5532_generic_span_read_keeps_the_fact_R17",
+                "u12_5532_generic_list_write_keeps_the_fact_R17"
             },
             names
         )
@@ -4168,6 +4170,89 @@ func Run[T](items List[T]) int32 {
     return x.Value
 }
 Console.WriteLine(Run[int32](List[int32]{1}))`, "GS0158@39:14", "reject", "", "R17"}
+            yield[]object{"u11_5532_generic_span_read_keeps_the_fact_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run[T](items Span[T]) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let first = items[0]
+    return x.Value
+}
+var arr = []int32{1, 2}
+Console.WriteLine(Run[int32](Span[int32](arr)))`, "", "run", "1", "R17"}
+            yield[]object{"u12_5532_generic_list_write_keeps_the_fact_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run[T](items List[T], value T) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    items[0] = value
+    return x.Value
+}
+Console.WriteLine(Run[int32](List[int32]{1}, 5))`, "", "run", "1", "R17"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
