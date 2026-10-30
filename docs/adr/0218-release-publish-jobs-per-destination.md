@@ -130,13 +130,13 @@ says otherwise, downloads the artifacts of the same run with
 
 | Job | Runner | `needs` | Permissions | Does |
 | --- | --- | --- | --- | --- |
-| `publish-verify` | ubuntu | `ci`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.ci.result == 'success'` | default (`contents: read`) | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` for a prerelease tag) and `unverified_rids` (section 2). |
+| `publish-verify` | ubuntu | `ci`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.ci.result == 'success'` | default (`contents: read`) | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` when `tag-kind` is `prerelease`, section 3) and `unverified_rids` (section 2). |
 | `publish-github-release` | ubuntu | `publish-verify` | `contents: write` | `gh release view \|\| gh release create --draft --generate-notes`, with `--prerelease` when `prerelease` is `true`. `gh release upload --clobber` of every `.nupkg`, `.snupkg` and `.vsix`. The release stays a draft until `publish-finalize`. |
 | `publish-nuget-compiler` | ubuntu | `publish-verify` | none | `release-publish.py nuget-push --group compiler`: the six RID packages, then `check-rid-packages.py --wait-minutes 30`. |
 | `publish-nuget-sdk` | ubuntu | `publish-verify`, `publish-nuget-compiler` | none | `check-rid-packages.py` (no wait) as a precondition, then `nuget-push --group sdk`: `Gsharp.NET.Sdk` and the remaining packages with their `.snupkg`, then `check-rid-packages.py --require-sdk --wait-minutes 15`. |
 | `publish-vscode-marketplace` | ubuntu | `publish-verify`, `publish-nuget-sdk` | none | Reads `extension/package.json` `version` from the VSIX. `release-publish.py marketplace-version gsharplang.vscode-gsharp`. Skips when present. Else `npx --yes @vscode/vsce@3.9.2 publish --packagePath ... --skip-duplicate`. The pre-release marker is already inside the VSIX (section 5). Queries again and fails when the version is still absent. |
-| `publish-visual-studio-marketplace` | windows | `publish-verify`, `publish-nuget-sdk` | none | Reads `Identity/@Version` from `extension.vsixmanifest` in the VSIX. `marketplace-version gsharplang.GSharp-VisualStudio`. Skips when present. Else `VsixPublisher.exe publish` as today. Queries again. |
-| `publish-finalize` | ubuntu | `publish-verify`, `publish-github-release`, `publish-vscode-marketplace`, `publish-visual-studio-marketplace`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success'` | `contents: write` | Requires the result of the other three prerequisites to be `success` (a skipped extension job means the SDK chain failed). Queries the flat container for the twelve packages, both marketplaces and the release assets. When every destination has the version: rewrites the marker-bounded "Unverified platforms" section of the release body (section 2) and runs `gh release edit --draft=false`. Else fails and names the destinations to re-run. Writes a summary table either way. |
+| `publish-visual-studio-marketplace` | windows | `publish-verify`, `publish-nuget-sdk`; `if: needs.publish-verify.outputs.prerelease != 'true'` (skipped for a prerelease tag, section 5) | none | Reads `Identity/@Version` from `extension.vsixmanifest` in the VSIX. `marketplace-version gsharplang.GSharp-VisualStudio`. Skips when present. Else `VsixPublisher.exe publish` as today. Queries again. |
+| `publish-finalize` | ubuntu | `publish-verify`, `publish-github-release`, `publish-vscode-marketplace`, `publish-visual-studio-marketplace`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success'` | `contents: write` | Requires `publish-github-release` and `publish-vscode-marketplace` to be `success`, and `publish-visual-studio-marketplace` to be `success`, or `skipped` while `prerelease` is `true` (a skipped VS Code job, or a skipped Visual Studio job on a release tag, means the SDK chain failed). Queries the flat container for the twelve packages, the VS Code Marketplace, the Visual Studio Marketplace (release only) and the release assets. When every required destination has the version: rewrites the marker-bounded "Publication notes" section of the release body (section 2) and runs `gh release edit --draft=false`. Else fails and names the destinations to re-run. Writes a summary table either way. |
 
 The dependency chain is: six RID packages, then the SDK and tools, then both
 extensions, then finalize. The GitHub release draft runs beside the chain.
@@ -202,14 +202,17 @@ legs and knows their result. The check script gets an advisory rule:
   which the repository default token (`read`) does not include, so `ci` gets
   `permissions: { contents: read, actions: read }`.
 - `publish-finalize` owns one section of the GitHub release body, bounded by
-  the markers `<!-- unverified-platforms -->` and
-  `<!-- /unverified-platforms -->`. It replaces the text between the markers
-  with the current list: "Unverified platforms: `osx-x64`. The ReadyToRun
-  compiler smoke did not run or did not pass on this platform (ADR-0207). The
-  IL compiler is the fallback." When the list is empty, it removes the section.
-  The rest of the body is kept. So a re-run after a body update whose un-draft
-  failed writes the section once, and a re-run after a successful smoke leg
-  removes the RID. The post-release documentation PR copies the sentence into
+  the markers `<!-- publish-notes -->` and `<!-- /publish-notes -->`. It
+  replaces the text between the markers with the current notes, at most two
+  lines: "Unverified platforms: `osx-x64`. The ReadyToRun compiler smoke did
+  not run or did not pass on this platform (ADR-0207). The IL compiler is the
+  fallback." when `unverified_rids` is not empty; and "Not published to the
+  Visual Studio Marketplace: prerelease tags publish to NuGet, GitHub and the
+  VS Code Marketplace (pre-release) only." when `prerelease` is `true`
+  (section 5). When both are empty, it removes the section. The rest of the
+  body is kept. So a re-run after a body update whose un-draft failed writes
+  the section once, and a re-run after a successful smoke leg removes the RID.
+  The post-release documentation PR copies the notes into
   `website/docs/release-notes.md`, and the runbook says so. This keeps the
   ADR-0207 rule that an unverified platform is named in the release notes,
   without a hand step in the tag run.
@@ -224,7 +227,29 @@ rule: a failed advisory job passes on a tag ref and fails on a pull request
 ref; a failed non-advisory job fails on both (ADR-0154 mutants: a rule that
 ignores the ref, and one that ignores the job name).
 
-### 3. Verify before the first push
+### 3. Tag kinds, and verify before the first push
+
+One function, `tag_kind(ref_name)` in `release-publish.py`, exposed as
+`release-publish.py tag-kind <ref name>`, defines what a release and a
+prerelease are. Every consumer calls it; no workflow expression repeats the
+rule.
+
+| Tag | Kind | Example |
+| --- | --- | --- |
+| `^v\d+\.\d+\.\d+$` | `release` | `v0.5.212` |
+| `^v\d+\.\d+\.\d+-[0-9A-Za-z.-]+$` (a SemVer prerelease suffix, any text: `-rc1`, `-beta.2`, `-alpha`, ...) | `prerelease` | `v0.5.300-rc1` |
+| Anything else, including a non-tag ref | `none` | `main`, `v1`, `v0.5.300+build` |
+
+The consumers are: `verify` (a tag run with kind `none` fails); the `vsix` job
+(`--pre-release` package flag for `prerelease`); `publish-github-release`
+(`--prerelease` for `prerelease`); `publish-visual-studio-marketplace` (runs
+for `release` only); `publish-finalize` (accepts the skipped Visual Studio job
+for `prerelease`). `publish-verify` outputs `prerelease` as `true` or `false`
+from the same call, and the downstream jobs read that output. The `vsix` job
+runs before `ci`, so it calls `tag-kind` itself with `github.ref_name`.
+`build/test-release-publish.py` covers the three kinds and the examples above,
+with a mutant that accepts `v0.5.300+build` and one that treats `v0.5.300-rc1`
+as `release`.
 
 `release-publish.py verify --artifacts <dir> --tag <tag>` runs in
 `publish-verify` and fails the release before any push when:
@@ -236,10 +261,13 @@ ignores the ref, and one that ignores the job name).
   `Gsharp.Templates`), `vscode-gsharp.vsix` and `GSharp.VisualStudio.vsix`.
   The list lives in the script, next to `RIDS` of `check-rid-packages.py`;
 - the packages carry more than one version;
-- the tag does not match the version. A release tag `^v\d+(\.\d+)*$` must
-  equal `v<version>`. A prerelease tag `^v\d+(\.\d+)*-[0-9A-Za-z.-]+$` must
-  have a package version `<number>-g<sha>` whose `<number>` equals the tag's
-  number. Any other tag fails. This closes #4639;
+- the tag does not match the version. Kind `release`: the package version must
+  equal the tag without `v`. Kind `prerelease`: the package version must be
+  `<number>-g<sha>` whose `<number>` equals the tag's number. Kind `none`
+  fails. This closes #4639;
+- the VS Code VSIX pre-release marker (`Microsoft.VisualStudio.Code.PreRelease`
+  in `extension.vsixmanifest`) is present for kind `release` or absent for
+  kind `prerelease`;
 - the `PackageDownload` version inside `Gsharp.NET.Sdk.props` of the SDK
   package is not the version of the six RID packages;
 - the VS Code VSIX version is not the `<number>` of the tag, or the Visual
@@ -270,19 +298,22 @@ no credentials.
 
 ### 5. Prerelease tags
 
-A prerelease tag such as `v0.5.300-rc1` publishes. The GitHub release is
-created with `--prerelease` and stays so after finalize. NuGet receives the
-prerelease versions `<number>-g<sha>` that the build already produces. The VS
-Code extension is published as a pre-release. The marker lives in the VSIX
-manifest, not in the publish command: the `vsix` job packages with
-`vsce package --pre-release` when the ref is a prerelease tag
-(`${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') && '--pre-release' || '' }}`),
-and `verify` reads `Microsoft.VisualStudio.Code.PreRelease` from
-`extension.vsixmanifest` and fails when the marker does not match the tag
-kind. Whether `vsce publish --packagePath` can add the marker to an already
-packaged VSIX is unverified, so the design does not rely on it. The Visual
-Studio Marketplace has no pre-release channel, so its users receive the
-version as an update.
+A tag of kind `prerelease` (section 3: any SemVer prerelease suffix, not only
+`-rc`) publishes to three destinations and skips the fourth:
+
+| Destination | Kind `release` | Kind `prerelease` |
+| --- | --- | --- |
+| nuget.org | `<number>` | `<number>-g<sha>`, the prerelease version that the build already produces |
+| GitHub release | draft, then public | draft with `--prerelease`, then public and still marked prerelease |
+| VS Code Marketplace | release version | pre-release version: the `vsix` job packages with `vsce package --pre-release` when `tag-kind` says `prerelease`, so the marker is inside the VSIX; `verify` checks the marker against the kind; the publish step passes no flag. Whether `vsce publish --packagePath` can add the marker to an already packaged VSIX is unverified, so the design does not rely on it. |
+| Visual Studio Marketplace | published | **not published.** The Marketplace has no pre-release channel, so a prerelease would reach every Visual Studio user as an update. `publish-visual-studio-marketplace` is skipped by its `if`. |
+
+`publish-finalize` finalizes a prerelease without the Visual Studio job: it
+accepts the result `skipped` for that job only when `prerelease` is `true`,
+does not query the Visual Studio Marketplace, and writes the "Not published to
+the Visual Studio Marketplace" note into the release body (section 2). The
+post-release documentation PR copies that note into the release notes. Only a
+plain `v<major>.<minor>.<patch>` tag publishes to Visual Studio.
 
 The VSIX versions carry no suffix. A prerelease tag and the following release
 tag must therefore sit on different commits, so that the NBGV height differs
@@ -307,7 +338,8 @@ Studio version has a per-build fourth part, so it does not collide.
 | `publish-nuget-compiler` | Zero to six RID packages; SDK, extensions and finalize skipped or failed; draft release | Pushes with `--skip-duplicate`; the chain continues to finalize. |
 | `publish-nuget-sdk` | Six RID packages; some of SDK and tools; extensions skipped; draft release | The precondition check passes; pushes the rest; the chain continues. |
 | `publish-vscode-marketplace` (timeout after upload) | Everything but Visual Studio and finalize | The pre-query finds the version; the job succeeds; finalize un-drafts. The Visual Studio job was never blocked by it. |
-| `publish-visual-studio-marketplace` | Everything but finalize | Pre-query, else overwrite publish; finalize un-drafts. |
+| `publish-visual-studio-marketplace` (release tag) | Everything but finalize | Pre-query, else overwrite publish; finalize un-drafts. |
+| `publish-visual-studio-marketplace` skipped (prerelease tag) | Not a failure. NuGet, GitHub and VS Code publish; finalize un-drafts and the release body says Visual Studio was not published | Nothing to re-run. |
 | `publish-finalize` (network) | Everything; release stays draft | Re-runs the queries and un-drafts. |
 | Tag run older than 30 days or re-run 50 times | As above | No re-run. The runbook's manual publish stays the last resort. |
 
@@ -337,6 +369,8 @@ Neutral:
 
 - `format`, `release-version-refs`, `vscode-extension`, `discover-tests` and
   the `go2gs` jobs join the gate (decision 1).
+- A prerelease never reaches the Visual Studio Marketplace (decision 10).
+  Visual Studio users see only plain `v<major>.<minor>.<patch>` releases.
 - The runbook's manual-publish section stays as the last resort.
 
 ## Migration plan
@@ -364,16 +398,18 @@ Each step is a PR. The first is the least risky.
    to `ci-selection.py --check build` and `ci`, with the tests of section 2.
    Verifiable on PR CI (the rule is inert off tags) and by the script tests.
 4. **Split.** Replace the two publish jobs with the seven jobs of section 1,
-   `needs: [ci]`, draft-then-finalize, prerelease handling (including the
-   `--pre-release` package flag in `vsix`), pinned vsce, `--skip-duplicate`,
-   both extensions after the SDK. Update the runbook
+   `needs: [ci]`, draft-then-finalize, prerelease handling (`tag-kind` in
+   `vsix` and the publish jobs, the `--pre-release` package flag, the skipped
+   Visual Studio job), pinned vsce, `--skip-duplicate`, both extensions after
+   the SDK. Update the runbook
    ("Watch the tag run", "Post-publish docs PR" for the unverified-platform
    sentence, manual publish as last resort). Verifiable before a tag only by
    the script tests and `actionlint`; the real exercise is step 5.
 5. **Rehearsal: one real prerelease.** The maintainer tags `v0.5.N-rc1` on a
    `main` commit and approves that run. It exercises every job, the six-RID
-   publish, the symbol pushes, both marketplaces with a pre-release VS Code
-   version, the draft and the finalize. The run also answers the unverified
+   publish, the symbol pushes, the VS Code Marketplace with a pre-release
+   version, the skipped Visual Studio job, the draft and the finalize. The
+   Visual Studio publish path is first exercised by the next release tag. The run also answers the unverified
    symbol-server and `--skip-duplicate` rows. Nothing in this ADR triggers it.
 6. **Follow-ups out of scope.** Trusted publishing (OIDC) for the three
    destinations and assembly signing are a separate issue that the maintainer
@@ -430,6 +466,12 @@ The maintainer decided these points on 2026-10-29:
    environment, no reviewer. Repository secrets stay as they are.
 6. Prerelease tags publish, with the GitHub release marked as a prerelease. One
    real prerelease rehearses the flow (migration step 5).
+10. (2026-10-29, later) A prerelease is any tag with a SemVer prerelease
+    suffix, `v<major>.<minor>.<patch>-<anything>`, defined once by
+    `tag-kind` (section 3). Every prerelease skips
+    `publish-visual-studio-marketplace`; only a plain `v<major>.<minor>.<patch>`
+    tag publishes to Visual Studio. Finalize accepts the skipped job for a
+    prerelease and the release body names the omission.
 7. `NUGET_API_KEY` can push any package id. Precondition met; no action.
 8. Prefer the simplest graph with per-destination re-run: inline jobs, no
    dry-run job, one verify step in `build`.
