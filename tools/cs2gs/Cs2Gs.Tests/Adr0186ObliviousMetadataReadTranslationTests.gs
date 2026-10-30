@@ -140,7 +140,8 @@ public static class Use
     /// the container's type parameter is an element read. Only
     /// the producer's platform positions change: a type-argument position keeps the
     /// contract of the argument, and an array element that is a type parameter of the
-    /// call stays `[]T`. A non-null element dereference, return, or argument gets
+    /// call stays `[]T`. An array member is not an element read, and an inferred
+    /// local keeps its outer nullability. A non-null element dereference, return, or argument gets
     /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
     /// element throws (cref:NullReferenceException) at the same use as in C#. The
     /// emitted image has no diagnostics and passes strict ILVerify before it runs.
@@ -290,6 +291,21 @@ public static class Use
         return box.Value.Length + box.Get().Length;
     }
 
+    public static int ArrayMember(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        return lines.Length.ToString().Length;
+    }
+
+    public static int NullableInferredLocal(string p)
+    {
+        var items = new List<string>();
+        items = Node.Items(p);
+        items = null;
+        return items == null ? 2 : -1;
+    }
+
     public static int NilElementIsNotUsed(string p)
     {
         string[] lines;
@@ -328,6 +344,8 @@ public static class Use
         Assert.Equal(2, Invoke(consumer, "NestedTypeArgument", "ab"))
         Assert.Equal(2, Invoke(consumer, "Alias", "ab"))
         Assert.Equal(4, Invoke(consumer, "MemberResult", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ArrayMember", "ab"))
+        Assert.Equal(2, Invoke(consumer, "NullableInferredLocal", "ab"))
         Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
         Assert.Equal(-1, Invoke(consumer, "NilElementThrows", "ab"))
         let normalized = printed.Replace("\r\n", "\n")
@@ -365,7 +383,9 @@ public static class Use
             "let alias []string? = lines",
             "return alias[0]!!.Length",
             "var box Box[string?]",
-            "return box.Value!!.Length + box.Get()!!.Length"
+            "return box.Value!!.Length + box.Get()!!.Length",
+            "return lines.Length.ToString().Length",
+            "var items List[string?]? = List[string?]()"
         } {
             Assert.Contains(expected, normalized, StringComparison.Ordinal)
         }

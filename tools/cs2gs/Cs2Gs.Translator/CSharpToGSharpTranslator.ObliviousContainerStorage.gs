@@ -160,8 +160,10 @@ partial class CSharpToGSharpTranslator {
             if positions == nil {
                 return false
             }
+            // An array has no member typed by its element. Only an element access or a
+            // `foreach` (no member) reads the element.
             if StorageType(container!!.OriginalDefinition) is IArrayTypeSymbol {
-                return positions.Contains("0")
+                return member == nil && positions.Contains("0")
             }
             // A separate kind comparison, not an enum property pattern (#4153).
             let memberType ITypeSymbol? = StorageType(member?.OriginalDefinition)

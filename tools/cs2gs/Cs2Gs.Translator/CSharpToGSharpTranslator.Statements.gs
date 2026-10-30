@@ -253,6 +253,10 @@ partial class CSharpToGSharpTranslator {
                         this.typeMapper.MapExplicitType(storedType, this.context, declaration!!.Type.GetLocation()),
                         containerLocal
                     )
+                    // The outer nullability keeps the existing inferred-local decision.
+                    if this.InferredLocalDeclarationIsNullable(containerLocal) {
+                        type = MakeNullable(type)
+                    }
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
                 ) is ILocalSymbol inferredLocal &&
