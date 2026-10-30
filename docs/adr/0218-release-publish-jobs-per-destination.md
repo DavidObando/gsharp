@@ -62,6 +62,7 @@ holds twelve `.nupkg` and five `.snupkg`.
 | `dotnet nuget push --skip-duplicate` treats a 409 Conflict as a warning. It does not hide a 401 or 403. A `.snupkg` beside the `.nupkg` is pushed with it. | .NET CLI documentation; runbook (v0.4.591 logged 5 + 4 pushes) | Verified (docs) |
 | Whether the symbol server also answers 409 for an existing `.snupkg`, and whether `--skip-duplicate` still pushes the `.snupkg` after the `.nupkg` got 409. | Not checked. The prerelease rehearsal (migration step 5) answers it. | **Unverified** |
 | `@vscode/vsce` 3.9.2 (the `devDependencies` version) has `publish --skip-duplicate` ("fail silently if version already exists"), `publish --pre-release`, `show <extensionid> --json`. | `npx @vscode/vsce@3.9.2 --help` | Verified (`--help`) |
+| `vsce package --pre-release` writes the marker `Microsoft.VisualStudio.Code.PreRelease` into the VSIX manifest. Whether `vsce publish --packagePath --pre-release` can add it to an existing VSIX. The `vsix` job packages without the flag today (`build.yml:751`). | vsce `--help`; `build.yml` | Package flag verified (`--help`); publish-time marker **unverified** |
 | `VsixPublisher.exe publish` of a version that already exists overwrites it. | Visual Studio documentation | Verified (docs); not exercised |
 | `gh release upload --clobber` replaces an asset of the same name. `gh release view \|\| create` is a no-op when the release exists. | Runbook, current workflow | Verified (used in releases) |
 | "Re-run failed jobs" keeps `GITHUB_SHA` and `GITHUB_REF`. A run can be re-run for 30 days, at most 50 times. | GitHub documentation | Verified (docs) |
@@ -129,24 +130,32 @@ says otherwise, downloads the artifacts of the same run with
 
 | Job | Runner | `needs` | Permissions | Does |
 | --- | --- | --- | --- | --- |
-| `publish-verify` | ubuntu | `ci` | default (`contents: read`) | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` for a prerelease tag) and `unverified_rids` (section 2). |
+| `publish-verify` | ubuntu | `ci`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.ci.result == 'success'` | default (`contents: read`) | Downloads `nuget-packages`, `vscode-gsharp-vsix`, `visual-studio-gsharp-vsix`. Runs `release-publish.py verify` (section 3). Outputs `version`, `prerelease` (`true` for a prerelease tag) and `unverified_rids` (section 2). |
 | `publish-github-release` | ubuntu | `publish-verify` | `contents: write` | `gh release view \|\| gh release create --draft --generate-notes`, with `--prerelease` when `prerelease` is `true`. `gh release upload --clobber` of every `.nupkg`, `.snupkg` and `.vsix`. The release stays a draft until `publish-finalize`. |
 | `publish-nuget-compiler` | ubuntu | `publish-verify` | none | `release-publish.py nuget-push --group compiler`: the six RID packages, then `check-rid-packages.py --wait-minutes 30`. |
 | `publish-nuget-sdk` | ubuntu | `publish-verify`, `publish-nuget-compiler` | none | `check-rid-packages.py` (no wait) as a precondition, then `nuget-push --group sdk`: `Gsharp.NET.Sdk` and the remaining packages with their `.snupkg`, then `check-rid-packages.py --require-sdk --wait-minutes 15`. |
-| `publish-vscode-marketplace` | ubuntu | `publish-verify`, `publish-nuget-sdk` | none | Reads `extension/package.json` `version` from the VSIX. `release-publish.py marketplace-version gsharplang.vscode-gsharp`. Skips when present. Else `npx --yes @vscode/vsce@3.9.2 publish --packagePath ... --skip-duplicate`, plus `--pre-release` when `prerelease` is `true`. Queries again and fails when the version is still absent. |
+| `publish-vscode-marketplace` | ubuntu | `publish-verify`, `publish-nuget-sdk` | none | Reads `extension/package.json` `version` from the VSIX. `release-publish.py marketplace-version gsharplang.vscode-gsharp`. Skips when present. Else `npx --yes @vscode/vsce@3.9.2 publish --packagePath ... --skip-duplicate`. The pre-release marker is already inside the VSIX (section 5). Queries again and fails when the version is still absent. |
 | `publish-visual-studio-marketplace` | windows | `publish-verify`, `publish-nuget-sdk` | none | Reads `Identity/@Version` from `extension.vsixmanifest` in the VSIX. `marketplace-version gsharplang.GSharp-VisualStudio`. Skips when present. Else `VsixPublisher.exe publish` as today. Queries again. |
-| `publish-finalize` | ubuntu | `publish-verify`, `publish-github-release`, `publish-vscode-marketplace`, `publish-visual-studio-marketplace`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success'` | `contents: write` | Requires the result of the other three prerequisites to be `success` (a skipped extension job means the SDK chain failed). Queries the flat container for the twelve packages, both marketplaces and the release assets. When every destination has the version: appends "Unverified platforms" (section 2) to the release body and runs `gh release edit --draft=false`. Else fails and names the destinations to re-run. Writes a summary table either way. |
+| `publish-finalize` | ubuntu | `publish-verify`, `publish-github-release`, `publish-vscode-marketplace`, `publish-visual-studio-marketplace`; `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success'` | `contents: write` | Requires the result of the other three prerequisites to be `success` (a skipped extension job means the SDK chain failed). Queries the flat container for the twelve packages, both marketplaces and the release assets. When every destination has the version: rewrites the marker-bounded "Unverified platforms" section of the release body (section 2) and runs `gh release edit --draft=false`. Else fails and names the destinations to re-run. Writes a summary table either way. |
 
 The dependency chain is: six RID packages, then the SDK and tools, then both
 extensions, then finalize. The GitHub release draft runs beside the chain.
 Rules:
 
-- Default `needs` semantics do the gating. A job whose prerequisite failed is
-  skipped. Only `publish-finalize` uses `!cancelled()`, so that it reports
-  the state after a failure. It does not use `always()`, because `always()`
-  also runs in a cancelled run, and a cancelled release must not be
-  finalized. The `needs` context holds direct prerequisites only, so every job
-  that reads `needs.publish-verify.outputs.*` lists `publish-verify`.
+- Default `needs` semantics do the gating inside the chain. A job whose
+  prerequisite failed is skipped. Two jobs state their condition in full:
+  `publish-verify`, because its prerequisite `ci` runs with `always()` after
+  failed jobs, and the ADR relies on `ci`'s own result (`success`) and not on
+  the jobs behind it; and `publish-finalize`, so that it reports the state
+  after a failure. Both use `!cancelled()` and `needs.<job>.result ==
+  'success'`, not `always()`, because `always()` also runs in a cancelled run,
+  and a cancelled release must not publish or finalize. Whether a job with no
+  status function runs after a prerequisite that succeeded under `always()`
+  is a question for the probe (migration step 2). If the probe shows that the
+  implicit `success()` looks past the direct prerequisite, every job in the
+  chain gets the explicit form. The `needs` context holds direct prerequisites
+  only, so every job that reads `needs.publish-verify.outputs.*` lists
+  `publish-verify`.
 - Secrets stay repository secrets (`NUGET_API_KEY`, `VSCE_PAT`,
   `GITHUB_TOKEN`), as today. No environment is needed for them: the publish
   jobs run only on `v*` tag refs, which only the maintainer pushes, and
@@ -192,10 +201,15 @@ legs and knows their result. The check script gets an advisory rule:
   output; `publish-verify` forwards it. The jobs API needs `actions: read`,
   which the repository default token (`read`) does not include, so `ci` gets
   `permissions: { contents: read, actions: read }`.
-- `publish-finalize` appends a section to the GitHub release body:
-  "Unverified platforms: `osx-x64`. The ReadyToRun compiler smoke did not run
-  or did not pass on this platform (ADR-0207). The IL compiler is the
-  fallback." The post-release documentation PR copies the sentence into
+- `publish-finalize` owns one section of the GitHub release body, bounded by
+  the markers `<!-- unverified-platforms -->` and
+  `<!-- /unverified-platforms -->`. It replaces the text between the markers
+  with the current list: "Unverified platforms: `osx-x64`. The ReadyToRun
+  compiler smoke did not run or did not pass on this platform (ADR-0207). The
+  IL compiler is the fallback." When the list is empty, it removes the section.
+  The rest of the body is kept. So a re-run after a body update whose un-draft
+  failed writes the section once, and a re-run after a successful smoke leg
+  removes the RID. The post-release documentation PR copies the sentence into
   `website/docs/release-notes.md`, and the runbook says so. This keeps the
   ADR-0207 rule that an unverified platform is named in the release notes,
   without a hand step in the tag run.
@@ -248,7 +262,7 @@ publish code has never consumed. It costs one script call and no secrets.
 | --- | --- | --- | --- |
 | nuget.org | `dotnet nuget push <pkg>.nupkg --skip-duplicate`, three attempts with a pause, in the fixed order. Then, when `<pkg>.snupkg` exists, `dotnet nuget push <pkg>.snupkg --skip-duplicate` explicitly, so a symbol package whose first upload failed after the primary succeeded is retried on a re-run. No flat-container pre-query decides a skip: the feed proves the primary only, not the symbols. | Yes (409 is a warning). The remaining-packages loop has no retry. | Yes, with retry on both groups. 401 and 403 still fail. |
 | GitHub release | `view \|\| create --draft [--prerelease]`; `upload --clobber`. One job owns `create`. | Yes. | Yes. |
-| VS Code Marketplace | Pre-query (`marketplace-version`, the `extensionquery` REST). Present: skip. Absent: `vsce publish --skip-duplicate [--pre-release]`. Post-query decides success, not the vsce exit code, because `--skip-duplicate` after a post-upload timeout is unverified. vsce pinned to 3.9.2. | **No.** | Yes. |
+| VS Code Marketplace | Pre-query (`marketplace-version`, the `extensionquery` REST). Present: skip. Absent: `vsce publish --skip-duplicate`. Post-query decides success, not the vsce exit code, because `--skip-duplicate` after a post-upload timeout is unverified. vsce pinned to 3.9.2. | **No.** | Yes. |
 | Visual Studio Marketplace | Pre-query on the four-part version from `extension.vsixmanifest`. Present: skip. Absent: `VsixPublisher.exe publish` (documented overwrite). Post-query. | Yes by overwrite (not exercised). | Yes. |
 
 The flat container and the `extensionquery` API are public. The queries need
@@ -259,8 +273,16 @@ no credentials.
 A prerelease tag such as `v0.5.300-rc1` publishes. The GitHub release is
 created with `--prerelease` and stays so after finalize. NuGet receives the
 prerelease versions `<number>-g<sha>` that the build already produces. The VS
-Code extension is published with `--pre-release`. The Visual Studio Marketplace
-has no pre-release channel, so its users receive the version as an update.
+Code extension is published as a pre-release. The marker lives in the VSIX
+manifest, not in the publish command: the `vsix` job packages with
+`vsce package --pre-release` when the ref is a prerelease tag
+(`${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') && '--pre-release' || '' }}`),
+and `verify` reads `Microsoft.VisualStudio.Code.PreRelease` from
+`extension.vsixmanifest` and fails when the marker does not match the tag
+kind. Whether `vsce publish --packagePath` can add the marker to an already
+packaged VSIX is unverified, so the design does not rely on it. The Visual
+Studio Marketplace has no pre-release channel, so its users receive the
+version as an update.
 
 The VSIX versions carry no suffix. A prerelease tag and the following release
 tag must therefore sit on different commits, so that the NBGV height differs
@@ -333,14 +355,18 @@ Each step is a PR. The first is the least risky.
    `rerun-probe.yml` (`on: pull_request`): job A uploads an artifact; job B
    fails when `github.run_attempt == 1`; job C needs B and downloads the
    artifact. Re-run failed jobs. Record whether C ran and whether the download
-   found the attempt-1 artifact. The PR is closed without merge; the findings
-   go into the fact table.
+   found the attempt-1 artifact. The same workflow has job D with
+   `if: always()` that needs a job that fails on every attempt and succeeds
+   itself, and job E that needs D with no status function; record whether E
+   runs. The PR is closed without merge; the findings go into the fact table
+   and decide whether the chain jobs get the explicit condition (section 1).
 3. **Advisory smoke.** Add the advisory rule and the `unverified_rids` output
    to `ci-selection.py --check build` and `ci`, with the tests of section 2.
    Verifiable on PR CI (the rule is inert off tags) and by the script tests.
 4. **Split.** Replace the two publish jobs with the seven jobs of section 1,
-   `needs: [ci]`, draft-then-finalize, prerelease handling, pinned vsce,
-   `--skip-duplicate`, both extensions after the SDK. Update the runbook
+   `needs: [ci]`, draft-then-finalize, prerelease handling (including the
+   `--pre-release` package flag in `vsix`), pinned vsce, `--skip-duplicate`,
+   both extensions after the SDK. Update the runbook
    ("Watch the tag run", "Post-publish docs PR" for the unverified-platform
    sentence, manual publish as last resort). Verifiable before a tag only by
    the script tests and `actionlint`; the real exercise is step 5.
