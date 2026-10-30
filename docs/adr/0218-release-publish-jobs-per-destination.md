@@ -128,9 +128,12 @@ jobs in `build.yml`. There is no new workflow file, no reusable workflow, no
 tool is "Re-run failed jobs" on the tag run. The split exists so that this
 button is safe and re-runs only what failed.
 
-Every job has `if: startsWith(github.ref, 'refs/tags/v')` unless the table
-says otherwise, downloads the artifacts of the same run with
-`actions/download-artifact@v5`, and builds nothing.
+Every job has the condition `if: !cancelled() && startsWith(github.ref,
+'refs/tags/v') && needs.<p>.result == 'success'` for each direct prerequisite
+`<p>` listed in its `needs`, unless the table says otherwise. The explicit form
+is required because the implicit `success()` also looks at failed ancestors
+(see the probe in "Implementation notes"). Every job downloads the artifacts of
+the same run with `actions/download-artifact@v5` and builds nothing.
 
 | Job | Runner | `needs` | Permissions | Does |
 | --- | --- | --- | --- | --- |
@@ -146,20 +149,16 @@ The dependency chain is: six RID packages, then the SDK and tools, then both
 extensions, then finalize. The GitHub release draft runs beside the chain.
 Rules:
 
-- Default `needs` semantics do the gating inside the chain. A job whose
-  prerequisite failed is skipped. Two jobs state their condition in full:
-  `publish-verify`, because its prerequisite `ci` runs with `always()` after
-  failed jobs, and the ADR relies on `ci`'s own result (`success`) and not on
-  the jobs behind it; and `publish-finalize`, so that it reports the state
-  after a failure. Both use `!cancelled()` and `needs.<job>.result ==
-  'success'`, not `always()`, because `always()` also runs in a cancelled run,
-  and a cancelled release must not publish or finalize. Whether a job with no
-  status function runs after a prerequisite that succeeded under `always()`
-  is answered by the probe (migration step 2, see "Implementation notes"): the
-  implicit `success()` looks past the direct prerequisite, so every job in the
-  chain gets the explicit form. The `needs` context holds direct prerequisites
-  only, so every job that reads `needs.publish-verify.outputs.*` lists
-  `publish-verify`.
+- Every job states its condition in full (above). The implicit `success()`
+  would skip a job after a failed ancestor, which on a tag includes an advisory
+  `r2r-compiler-smoke` leg behind `ci`, so a default `needs` job could not
+  publish. `publish-verify` checks `ci`'s own result (`success`), not the jobs
+  behind it. `publish-finalize` keeps its own wider condition (table), so that
+  it reports the state after a failure, and its `prerelease` skip rule for the
+  Visual Studio job. The form uses `!cancelled()`, not `always()`, because
+  `always()` also runs in a cancelled run, and a cancelled release must not
+  publish or finalize. The `needs` context holds direct prerequisites only, so
+  every job that reads `needs.publish-verify.outputs.*` lists `publish-verify`.
 - Secrets stay repository secrets (`NUGET_API_KEY`, `VSCE_PAT`,
   `GITHUB_TOKEN`), as today. No environment is needed for them: the publish
   jobs run only on `v*` tag refs, which only the maintainer pushes, and
