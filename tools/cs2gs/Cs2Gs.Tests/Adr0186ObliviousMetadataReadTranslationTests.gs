@@ -5,16 +5,21 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
+import GSourceText = GSharp.Core.CodeAnalysis.Text.SourceText
+import GSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Immutable
 import System.IO
 import System.Linq
+import System.Reflection
 import Xunit
 
 /// ADR-0186 step 6 (PR 0): a read of oblivious CLR metadata that no project in
@@ -97,12 +102,12 @@ class Adr0186ObliviousMetadataReadTranslationTests : IDisposable {
     }
 
     /// A container read keeps its `!!`. An oblivious method returning
-    /// `string[]` reads as `[]!string!`, which does not convert to
-    /// the enabled `[]string` it is assigned to; `!!` strips the top
-    /// level and the value converts. This is the netstandard2.0
+    /// `string[]` reads as `[]!string!`. `!!` strips only the top level, and
+    /// ADR-0186 §3 rule 3 gives `[]string!` no conversion to `[]string`, so the
+    /// local stores nullable elements: `[]string?` (#5537). This is the netstandard2.0
     /// `Gsharp.NET.Sdk` shape
-    /// (`lines = File.ReadAllLines(path)`, #4449) that the first cut of
-    /// this rule broke. The compile check fails if the assertion is dropped.
+    /// (`lines = File.ReadAllLines(path)`, #4449 and #5413 decision A). The compile
+    /// check fails if the local keeps `[]string` or the assertion is dropped.
     @Fact
     func A_Container_Read_Keeps_Its_Assertion() {
         let libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousContainerLib")
@@ -117,13 +122,151 @@ public static class Use
         return lines.Length;
     }
 }`, MetadataReference.CreateFromFile(libraryPath), NullableContextOptions.Enable)
-        Assert.Contains("Node.Lines(p)!!", printed, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             []string{printed + Environment.NewLine + "Use.Count(\"x\")"},
             EmittedOracleOptions{References: []string{libraryPath}}
         )
         Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics))
         Assert.Equal(2, result.Value)
+        Assert.Contains("var lines []string?", printed, StringComparison.Ordinal)
+        Assert.Contains("Node.Lines(p)!!", printed, StringComparison.Ordinal)
+    }
+
+    /// Issue #5537: every storage kind that receives an imported oblivious
+    /// container keeps nullable elements. Array and `List` locals, a field, a
+    /// parameter, and a method return use the same rule. An array element that is
+    /// a type parameter of the call is not platform, so its storage stays `[]T`.
+    /// A non-null element use gets `!!`. A nullable target and a nil test do not.
+    /// A nil element throws
+    /// (cref:NullReferenceException) at the same use as in C#. The emitted
+    /// image passes strict ILVerify before it runs.
+    @Fact
+    func Container_Storage_Keeps_Nullable_Elements() {
+        let libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousContainerStorageLib")
+        let printed = Translate(`using System.Collections.Generic;
+using ObLib;
+
+public class Store
+{
+    public string[] Lines = new string[0];
+
+    public void Load(string p)
+    {
+        Lines = Node.Lines(p);
+    }
+}
+
+public static class Use
+{
+    public static int ArrayLocal(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        string first = lines[1];
+        return lines[0].Length + first.Length;
+    }
+
+    public static int ListLocal(string p)
+    {
+        List<string> items;
+        items = Node.Items(p);
+        int total = 0;
+        foreach (string item in items)
+        {
+            total += item.Length;
+        }
+        return total + items[1].Length;
+    }
+
+    public static int Field(string p)
+    {
+        Store store = new Store();
+        store.Load(p);
+        return store.Lines[1].Length;
+    }
+
+    public static int Parameter(string[] values)
+    {
+        return values[0].Length;
+    }
+
+    public static int Argument(string p)
+    {
+        return Parameter(Node.Lines(p));
+    }
+
+    public static string[] Returned(string p)
+    {
+        return Node.Lines(p);
+    }
+
+    public static int Return(string p)
+    {
+        return Returned(p)[0].Length;
+    }
+
+    public static int TypeArgumentArray(string p)
+    {
+        string[] empty;
+        empty = Node.Empty<string>();
+        return empty.Length;
+    }
+
+    public static int NilElementIsNotUsed(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        string? kept = lines[1];
+        return lines[1] == null && kept == null ? 1 : 0;
+    }
+
+    public static int NilElementThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        try
+        {
+            return lines[1].Length;
+        }
+        catch (System.NullReferenceException)
+        {
+            return -1;
+        }
+    }
+}`, MetadataReference.CreateFromFile(libraryPath), NullableContextOptions.Enable)
+        let consumer = this.CompileVerifyAndLoad(printed, libraryPath, "Adr0186ObliviousContainerStorageConsumer")
+        Assert.Equal(4, Invoke(consumer, "ArrayLocal", "ab"))
+        Assert.Equal(6, Invoke(consumer, "ListLocal", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Field", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Argument", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Return", "ab"))
+        Assert.Equal(0, Invoke(consumer, "TypeArgumentArray", "ab"))
+        Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
+        Assert.Equal(-1, Invoke(consumer, "NilElementThrows", "ab"))
+        let normalized = printed.Replace("\r\n", "\n")
+        for expected in[]string{
+            "var lines []string?",
+            "lines = Node.Lines(p)!!",
+            "let first = lines[1]!!",
+            "return lines[0]!!.Length + first.Length",
+            "var items List[string?]",
+            "items = Node.Items(p)!!",
+            "total += item!!.Length",
+            "return total + items[1]!!.Length",
+            "var Lines []string? = ",
+            "return store.Lines[1]!!.Length",
+            "func Parameter(values []string?) int32 {",
+            "return values[0]!!.Length",
+            "return Parameter(Node.Lines(p)!!)",
+            "func Returned(p string) []string? {",
+            "return Returned(p)[0]!!.Length",
+            "var empty []string\n",
+            "let kept string? = lines[1]\n",
+            "return if lines[1] == nil && kept == nil { 1 } else { 0 }",
+            "return lines[1]!!.Length"
+        } {
+            Assert.Contains(expected, normalized, StringComparison.Ordinal)
+        }
     }
 
     /// A member declared in a project this run also migrates is not frozen
@@ -535,6 +678,24 @@ public class Derived : Holder
         TranslationTestValidation.AssertBinds(resolver, printed)
     }
 
+    // Compiles the translation as a library, verifies it with the repository
+    // ilverify before it runs, and loads it. A skipped verification fails.
+    private func CompileVerifyAndLoad(printed string, libraryPath string, assemblyName string) Assembly {
+        let path = Path.Combine(this.directory, assemblyName + ".dll")
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        let compilation = GCompilation(resolver, []GSyntaxTree{GSyntaxTree.Parse(GSourceText.From(printed))})
+        compilation.IsLibrary = true
+        {
+            using let peStream = File.Create(path)
+            let emit = compilation.Emit(peStream, pdbStream: nil, refStream: nil, assemblyName: assemblyName)
+            Assert.True(emit.Success && emit.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", emit.Diagnostics))
+        }
+        let verification = IlVerifyRunner().Verify(path, []string{libraryPath})
+        Assert.True(verification.Status == IlVerifyStatus.Passed, verification.Output)
+        Assert.Empty(verification.Errors)
+        return EmittedFixture.Load(path)
+    }
+
     private func EmitObliviousLibrary(assemblyName string) string {
         Directory.CreateDirectory(this.directory)
         let path = Path.Combine(this.directory, assemblyName + ".dll")
@@ -559,6 +720,9 @@ public class Node
     }
     public string Describe() { return "node"; }
     public static string[] Lines(string p) { return new[] { p, p }; }
+    public static string[] Holes(string p) { return new[] { p, null }; }
+    public static T[] Empty<T>() { return new T[0]; }
+    public static System.Collections.Generic.List<string> Items(string p) { return new System.Collections.Generic.List<string> { p, p }; }
     public static int[] Ints(bool nil) { return nil ? null : new[] { 1, 2 }; }
 }
 
@@ -615,6 +779,11 @@ public static class Use
         }
     }
 }`
+
+        private func Invoke(consumer Assembly, method string, argument string) object? {
+            let use = consumer.GetTypes().Single((type Type) -> type.Name == "Use")
+            return use.GetMethod(method)!!.Invoke(nil, []object? {argument})
+        }
 
         private func Translate(source string, library MetadataReference, nullable NullableContextOptions) string {
             let tree = CSharpSyntaxTree.ParseText(

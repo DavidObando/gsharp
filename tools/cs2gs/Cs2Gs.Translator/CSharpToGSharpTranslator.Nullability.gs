@@ -283,6 +283,7 @@ partial class CSharpToGSharpTranslator {
                 default: default(ITypeSymbol?)
             }
             type = this.PromoteTupleDeclarationIfTainted(type, declaredType, symbol)
+            type = this.PromoteObliviousContainerStorage(type, symbol)
             if type!!.IsNullable {
                 return type
             }
@@ -334,6 +335,7 @@ partial class CSharpToGSharpTranslator {
         // must come from the shared decision table.
         private func PromoteReturnIfTainted(type GTypeReference?, symbol IMethodSymbol?) GTypeReference? {
             var type = type
+            type = this.PromoteObliviousContainerStorage(type, symbol)
             if type == nil || type.IsNullable || symbol == nil {
                 return type
             }

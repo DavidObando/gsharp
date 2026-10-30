@@ -3270,6 +3270,10 @@ partial class CSharpToGSharpTranslator {
             if checkNullableForEachBinding && this.IsNullableForEachBindingUse(expression) {
                 return false
             }
+            // Issue #5537: G# types an element of oblivious container storage `T?`.
+            if this.ReadsObliviousContainerStorageElement(expression) {
+                return false
+            }
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
@@ -4710,6 +4714,9 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             valueSymbol ISymbol?
         ) bool {
+            if this.ReadsObliviousContainerStorageElement(value) {
+                return true
+            }
             if value is ElementAccessExpressionSyntax elementAccess && this.IsImportedObliviousNullableMember(
                 this.context.GetSymbolInfo(elementAccess.Expression).Symbol
             ) {
@@ -5647,6 +5654,11 @@ partial class CSharpToGSharpTranslator {
             // contract, not as `MethodGroup!!` on the delegate conversion seam.
             if this.IsCallableValueExpression(recv) {
                 return false
+            }
+            // Issue #5537: an element of storage that keeps an imported oblivious
+            // container is `T?` in G#. A C# dereference of it throws on nil.
+            if this.ReadsObliviousContainerStorageElement(recv) {
+                return NullForgivenessTelemetry.Record("5537-oblivious-container-element")
             }
             if isDereferenceReceiver &&
                 this

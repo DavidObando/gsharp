@@ -156,7 +156,11 @@ partial class CSharpToGSharpTranslator {
                 // developer's declared type so the binding keeps the intended type.
                 var type GTypeReference? = nil
                 if hasExplicitType {
-                    var emitType = initializer == nil
+                    // Issue #5537: storage of an imported oblivious container always
+                    // states its nullable element positions.
+                    var emitType = initializer == nil || this.StoresObliviousContainerElements(
+                        this.context.GetDeclaredSymbol(declarator)
+                    )
                     // Prefer the local symbol's type: it carries the flow
                     // nullable annotation (`SttsBox?`), whereas
                     // `GetTypeInfo(declaration.Type)` reports the bare type and
@@ -208,6 +212,7 @@ partial class CSharpToGSharpTranslator {
                         } else {
                             default(GTypeReference?)
                         }
+                        type = this.PromoteObliviousContainerStorage(type, this.context.GetDeclaredSymbol(declarator))
                         // Issue #1072: a non-nullable reference/array local that is
                         // null-checked or null-assigned in its scope is really nullable.
                         if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol {
