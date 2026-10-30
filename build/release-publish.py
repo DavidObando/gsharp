@@ -338,7 +338,7 @@ def replace_notes(body: str, lines: list[str]) -> str:
     start = body.find(NOTES_START)
     end = body.find(NOTES_END, start + 1) if start >= 0 else -1
     if start >= 0 and end >= 0:
-        before, after = body[:start].rstrip(), body[end + len(NOTES_END):].strip()
+        before, after = body[:start].rstrip(), body[end + len(NOTES_END):].strip("\n")
         # Keep a blank line between the prose on both sides, so Markdown still sees two paragraphs.
         body = "\n\n".join(part for part in (before, after) if part)
     body = body.rstrip()

@@ -35,7 +35,8 @@ VSIX_NS = "http://schemas.microsoft.com/developer/vsx-schema/2011"
 
 def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     full_env = dict(os.environ)
-    full_env.pop("GITHUB_OUTPUT", None)
+    for name in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"):
+        full_env.pop(name, None)
     full_env.update(env or {})
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=full_env, check=False)
 
@@ -470,6 +471,8 @@ class NotesTests(unittest.TestCase):
         prose = "First paragraph.\n\n<!-- publish-notes -->\nold\n<!-- /publish-notes -->\n\nSecond paragraph.\n"
         self.assertEqual(rp.replace_notes(prose, []), "First paragraph.\n\nSecond paragraph.\n")
         self.assertIn("First paragraph.\n\nSecond paragraph.", rp.replace_notes(prose, ["new"]))
+        code = "intro\n\n<!-- publish-notes -->\nold\n<!-- /publish-notes -->\n\n    indented code\n"
+        self.assertEqual(rp.replace_notes(code, []), "intro\n\n    indented code\n")
         self.assertIn("bottom", rp.replace_notes(body, ["new"]))
         self.assertNotIn("old", rp.replace_notes(body, ["new"]))
 
