@@ -2747,6 +2747,7 @@ partial class CSharpToGSharpTranslator {
                 cast[GTypeReference](NamedTypeReference(creation.Type.ToString()))
             }
             type = this.PromoteCreationTupleArguments(type, typeSymbol, creation)
+            type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
                 creation.ArgumentList?.Arguments ?? default(Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax])

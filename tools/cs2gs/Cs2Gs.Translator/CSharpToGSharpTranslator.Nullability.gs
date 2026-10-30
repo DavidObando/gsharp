@@ -924,7 +924,11 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return elementType
             }
-            if literal != nil && this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) {
+            if literal != nil &&
+                (
+                this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) ||
+                    this.ObliviousContainerSinkPromotesArrayElement(literal)
+            ) {
                 return MakeNullable(elementType)
             }
             for element in elements {

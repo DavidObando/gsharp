@@ -237,6 +237,24 @@ partial class CSharpToGSharpTranslator {
                     }
                 } else if initializer != nil && this.context.GetDeclaredSymbol(
                     declarator
+                ) is ILocalSymbol containerLocal &&
+                    this
+                    .StoresObliviousContainerElements(containerLocal) {
+                    // Issue #5537: an inferred local that is also assigned an imported
+                    // oblivious container states the nullable positions of its storage.
+                    let storedType ITypeSymbol = this
+                        .context
+                        .GetTypeInfo(declarator.Initializer!!.Value)
+                        .Type ??
+                        containerLocal
+                        .Type
+                        .WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                    type = this.PromoteObliviousContainerStorage(
+                        this.typeMapper.MapExplicitType(storedType, this.context, declaration!!.Type.GetLocation()),
+                        containerLocal
+                    )
+                } else if initializer != nil && this.context.GetDeclaredSymbol(
+                    declarator
                 ) is ILocalSymbol inferredLocal &&
                     this
                     .InferredLocalDeclarationIsNullable(inferredLocal) {

@@ -133,13 +133,17 @@ public static class Use
     }
 
     /// Issue #5537: every storage kind that receives an imported oblivious
-    /// container keeps nullable elements. Array and `List` locals, a field, a
-    /// parameter, and a method return use the same rule. An array element that is
-    /// a type parameter of the call is not platform, so its storage stays `[]T`.
-    /// A non-null element use gets `!!`. A nullable target and a nil test do not.
-    /// A nil element throws
-    /// (cref:NullReferenceException) at the same use as in C#. The emitted
-    /// image passes strict ILVerify before it runs.
+    /// container keeps nullable elements. Array and `List` locals, an inferred
+    /// local that is also assigned, a field, a parameter, a method return, and an
+    /// alias of such storage use the same rule. A construction stored there spells
+    /// the same element type. An indexer, field, property, or method result typed by
+    /// the container's type parameter is an element read. Only
+    /// the producer's platform positions change: a type-argument position keeps the
+    /// contract of the argument, and an array element that is a type parameter of the
+    /// call stays `[]T`. A non-null element dereference, return, or argument gets
+    /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
+    /// element throws (cref:NullReferenceException) at the same use as in C#. The
+    /// emitted image has no diagnostics and passes strict ILVerify before it runs.
     @Fact
     func Container_Storage_Keeps_Nullable_Elements() {
         let libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousContainerStorageLib")
@@ -212,6 +216,80 @@ public static class Use
         return empty.Length;
     }
 
+    public static string? NullableReturn(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return lines[1];
+    }
+
+    private static int? MaybeLength(string? value)
+    {
+        return value?.Length;
+    }
+
+    public static int NullableArgument(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return MaybeLength(lines[1]) == null ? 1 : 0;
+    }
+
+    private static int Length(string value)
+    {
+        return value.Length;
+    }
+
+    public static string NonNullReturn(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        return lines[0];
+    }
+
+    public static int NonNullArgument(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        return Length(lines[0]);
+    }
+
+    public static int MixedWrites(string p)
+    {
+        string[] mixed = Node.Lines(p);
+        mixed = new[] { "ok" };
+        return mixed[0].Length;
+    }
+
+    public static int ReassignedInferredLocal(string p)
+    {
+        var items = new List<string>();
+        items = Node.Items(p);
+        return items[0].Length;
+    }
+
+    public static int NestedTypeArgument(string p)
+    {
+        List<List<string>> nested;
+        nested = Wrapping.Wrap(new List<string> { p });
+        return nested[0][0].Length;
+    }
+
+    public static int Alias(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        var alias = lines;
+        return alias[0].Length;
+    }
+
+    public static int MemberResult(string p)
+    {
+        Box<string> box;
+        box = Node.MakeBox(p);
+        return box.Value.Length + box.Get().Length;
+    }
+
     public static int NilElementIsNotUsed(string p)
     {
         string[] lines;
@@ -241,6 +319,15 @@ public static class Use
         Assert.Equal(2, Invoke(consumer, "Argument", "ab"))
         Assert.Equal(2, Invoke(consumer, "Return", "ab"))
         Assert.Equal(0, Invoke(consumer, "TypeArgumentArray", "ab"))
+        Assert.Null(Invoke(consumer, "NullableReturn", "ab"))
+        Assert.Equal(1, Invoke(consumer, "NullableArgument", "ab"))
+        Assert.Equal("ab", Invoke(consumer, "NonNullReturn", "ab"))
+        Assert.Equal(2, Invoke(consumer, "NonNullArgument", "ab"))
+        Assert.Equal(2, Invoke(consumer, "MixedWrites", "ab"))
+        Assert.Equal(2, Invoke(consumer, "ReassignedInferredLocal", "ab"))
+        Assert.Equal(2, Invoke(consumer, "NestedTypeArgument", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Alias", "ab"))
+        Assert.Equal(4, Invoke(consumer, "MemberResult", "ab"))
         Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
         Assert.Equal(-1, Invoke(consumer, "NilElementThrows", "ab"))
         let normalized = printed.Replace("\r\n", "\n")
@@ -253,7 +340,7 @@ public static class Use
             "items = Node.Items(p)!!",
             "total += item!!.Length",
             "return total + items[1]!!.Length",
-            "var Lines []string? = ",
+            "var Lines []string? = [0]string?\n",
             "return store.Lines[1]!!.Length",
             "func Parameter(values []string?) int32 {",
             "return values[0]!!.Length",
@@ -263,7 +350,22 @@ public static class Use
             "var empty []string\n",
             "let kept string? = lines[1]\n",
             "return if lines[1] == nil && kept == nil { 1 } else { 0 }",
-            "return lines[1]!!.Length"
+            "return lines[1]!!.Length",
+            "return lines[1]\n",
+            "return if MaybeLength(lines[1]) == nil { 1 } else { 0 }",
+            "return lines[0]!!\n",
+            "return Length(lines[0]!!)",
+            "var mixed []string? = Node.Lines(p)!!",
+            "mixed = []string?{\"ok\"}",
+            "return mixed[0]!!.Length",
+            "var items List[string?] = List[string?]()",
+            "return items[0]!!.Length",
+            "var nested List[List[string]?]\n",
+            "return nested[0]!![0].Length",
+            "let alias []string? = lines",
+            "return alias[0]!!.Length",
+            "var box Box[string?]",
+            "return box.Value!!.Length + box.Get()!!.Length"
         } {
             Assert.Contains(expected, normalized, StringComparison.Ordinal)
         }
@@ -722,6 +824,7 @@ public class Node
     public static string[] Lines(string p) { return new[] { p, p }; }
     public static string[] Holes(string p) { return new[] { p, null }; }
     public static T[] Empty<T>() { return new T[0]; }
+    public static Box<string> MakeBox(string p) { var box = new Box<string>(); box.Value = p; return box; }
     public static System.Collections.Generic.List<string> Items(string p) { return new System.Collections.Generic.List<string> { p, p }; }
     public static int[] Ints(bool nil) { return nil ? null : new[] { 1, 2 }; }
 }
@@ -737,6 +840,12 @@ public static class Wrapping
     {
         return value == null;
     }
+}
+
+public class Box<T>
+{
+    public T Value;
+    public T Get() { return Value; }
 }
 
 public class Holder

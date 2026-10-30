@@ -2392,7 +2392,8 @@ partial class CSharpToGSharpTranslator {
         // nullable-conversion errors at its other (non-null) uses, so the
         // assertion is applied only here at the receiver/foreach-source use site.
         private func LocalInitializedFromImportedObliviousNullable(symbol ISymbol?) bool {
-            if symbol is not ILocalSymbol local {
+            // Issue #5537: oblivious container storage states a non-null outer type.
+            if symbol is not ILocalSymbol local || this.StoresObliviousContainerElements(local) {
                 return false
             }
             for reference in local.DeclaringSyntaxReferences {
@@ -5656,8 +5657,9 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // Issue #5537: an element of storage that keeps an imported oblivious
-            // container is `T?` in G#. A C# dereference of it throws on nil.
-            if this.ReadsObliviousContainerStorageElement(recv) {
+            // container is `T?` in G#. A C# dereference of it throws on nil. A value
+            // position keeps the target-aware bridge, so a nullable target gets no `!!`.
+            if isDereferenceReceiver && this.ReadsObliviousContainerStorageElement(recv) {
                 return NullForgivenessTelemetry.Record("5537-oblivious-container-element")
             }
             if isDereferenceReceiver &&
