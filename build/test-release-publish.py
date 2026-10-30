@@ -28,6 +28,7 @@ OTHERS = ("Gsharp.NET.Sdk", "Gsharp.Templates", "Gsharp.Repl", "Gsharp.Gsfmt", "
           "GSharp.CodeAnalysis.Analyzers.Testing")
 PROPS = ('<Project><ItemGroup><PackageDownload Include="Gsharp.NET.Sdk.Compiler.$(_GsharpHostRid)"\n'
          '  Version="[$(GsharpSdkVersion)]" /></ItemGroup></Project>')
+SDK = "Gsharp.NET.Sdk"
 VSIX_NS = "http://schemas.microsoft.com/developer/vsx-schema/2011"
 
 
@@ -68,7 +69,7 @@ def make_packages(folder: Path, version: str = "0.5.212", skip: tuple[str, ...] 
 
 
 def make_vsix(folder: Path, code_version: str = "0.5.212", studio_version: str = "0.5.212.9261",
-              marker: bool = False, pin: str = "Gsharp.NET.Sdk/0.5.212") -> None:
+              marker: bool = False, pin: str = f"{SDK}/0.5.212") -> None:
     folder.mkdir(parents=True, exist_ok=True)
     write_zip(folder / "vscode-gsharp.vsix", {"extension.vsixmanifest": vsix_manifest(code_version, marker)})
     write_zip(folder / "GSharp.VisualStudio.vsix", {
@@ -194,7 +195,7 @@ class VerifyTagTests(unittest.TestCase):
     def test_prerelease_passes_with_marker_and_sha_version(self) -> None:
         make_packages(self.nupkgs, version="0.5.300-g1a2b3c4")
         make_vsix(self.vsix, code_version="0.5.300", studio_version="0.5.300.9261", marker=True,
-                  pin="Gsharp.NET.Sdk/0.5.300-g1a2b3c4")
+                  pin=f"{SDK}/0.5.300-g1a2b3c4")
         output = self.root / "output.txt"
         result = self.verify("v0.5.300-rc1", env={"GITHUB_OUTPUT": str(output)})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -218,7 +219,7 @@ class VerifyTagTests(unittest.TestCase):
 
     def test_release_tag_with_a_prerelease_package_fails(self) -> None:
         make_packages(self.nupkgs, version="0.5.212-g1a2b3c4")
-        make_vsix(self.vsix, pin="Gsharp.NET.Sdk/0.5.212-g1a2b3c4")
+        make_vsix(self.vsix, pin=f"{SDK}/0.5.212-g1a2b3c4")
         self.assertIn("needs package version 0.5.212, found 0.5.212-g1a2b3c4", self.verify("v0.5.212").stderr)
 
     def test_prerelease_tag_with_a_release_package_fails(self) -> None:
@@ -228,7 +229,7 @@ class VerifyTagTests(unittest.TestCase):
 
     def test_prerelease_tag_number_must_match(self) -> None:
         make_packages(self.nupkgs, version="0.5.299-g1a2b3c4")
-        make_vsix(self.vsix, code_version="0.5.299", marker=True, pin="Gsharp.NET.Sdk/0.5.299-g1a2b3c4")
+        make_vsix(self.vsix, code_version="0.5.299", marker=True, pin=f"{SDK}/0.5.299-g1a2b3c4")
         self.assertIn("needs package version 0.5.300-g<sha>", self.verify("v0.5.300-rc1").stderr)
 
     def test_marker_must_follow_the_kind(self) -> None:
@@ -236,7 +237,7 @@ class VerifyTagTests(unittest.TestCase):
         make_vsix(self.vsix, marker=True)
         self.assertIn("pre-release marker is present for a release tag", self.verify("v0.5.212").stderr)
         make_packages(self.root / "pre", version="0.5.212-g1a2b3c4")
-        make_vsix(self.root / "pre-vsix", pin="Gsharp.NET.Sdk/0.5.212-g1a2b3c4")
+        make_vsix(self.root / "pre-vsix", pin=f"{SDK}/0.5.212-g1a2b3c4")
         result = run("verify", "--nupkgs", str(self.root / "pre"), "--vsix", str(self.root / "pre-vsix"), "--tag", "v0.5.212-rc1")
         self.assertIn("pre-release marker is absent for a prerelease tag", result.stderr)
 
@@ -257,10 +258,10 @@ class VerifyTagTests(unittest.TestCase):
 
     def test_templates_must_pin_the_package_version(self) -> None:
         make_packages(self.nupkgs)
-        make_vsix(self.vsix, pin="Gsharp.NET.Sdk/0.3.159")
+        make_vsix(self.vsix, pin=f"{SDK}/0.3.159")
         result = self.verify("v0.5.212")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("pins 'Gsharp.NET.Sdk/0.3.159', expected Gsharp.NET.Sdk/0.5.212", result.stderr)
+        self.assertIn(f"pins '{SDK}/0.3.159', expected {SDK}/0.5.212", result.stderr)
 
     def test_missing_vsix_fails(self) -> None:
         make_packages(self.nupkgs)

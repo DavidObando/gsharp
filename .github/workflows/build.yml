@@ -149,6 +149,9 @@ jobs:
         run: python3 build/test-release-publish.py
 
       - name: Verify the packed NuGet packages
+        # A component-scoped PR packs only the SDK and templates, so the full
+        # inventory is required only when the whole solution was built.
+        if: github.event_name != 'pull_request' || fromJSON(needs.select.outputs.plan).full
         # ADR-0218: the package inventory (six RID compiler packages, six other
         # packages, five symbol packages), one version across them, and the SDK's
         # PackageDownload version. The tag run checks the same list before it pushes.
