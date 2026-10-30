@@ -45,6 +45,8 @@ import Xunit
 /// | 17 | conditional object-initializer member | `F: if b { Maybe()!! } ...` then `)!!` again (GS0536) | the arm asserts once | initializer path asserts a non-null whole again (M12) |
 /// | 18 | `var v = b ? Maybe() : new C()` (G# infers `C?`) | unchanged | unchanged | nil symbol treated as a declared sink (M13) |
 /// | 19 | `C v = b ? Maybe() : new C()` | no `!!` (GS0155) | the arm asserts once | declared call result ignored (M1) |
+/// | 20 | `Path.GetFileName(path)` under a null guard on a `string?` argument | `Name3` no `!!` | unchanged (G# narrows `path`) | guard ignored (M14) |
+/// | 21 | call that flows through a user-defined conversion into an initializer member | no `!!` | unchanged (the conversion bridge decides) | conversion skip removed (M15) |
 /// | 13 | call as argument of a `where T : class` generic parameter | no `!!` (GS0155 or throw) | `Use(Maybe()!!)` | declared call result ignored |
 open class Issue5516MaybeNullAssignTests {
     @Fact
@@ -104,9 +106,9 @@ public static class K {
 public static class K {
   static C? Maybe() => null;
   static void Consume(C? x) { }
-  public static void M() { var v = Maybe(); }
+  public static void M() { var v = Maybe(); v = Maybe(); }
 }`)
-            Assert.Contains("let v = Maybe()\n", printed.Replace("\r\n", "\n"), StringComparison.Ordinal)
+            Assert.Contains("var v = Maybe()\n", printed.Replace("\r\n", "\n"), StringComparison.Ordinal)
             Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
         }
     }
@@ -286,6 +288,27 @@ public static class K {
 }`)
         Assert.Equal(1, Count(printed, "Maybe()!!"))
         Assert.DoesNotContain("})!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row20_GuardedNotNullIfNotNullArgument_IsNotAsserted() {
+        let printed = Translate(true, `using System.IO;
+public static class K {
+  public static string Name3(string? path) { if (path != null) return Path.GetFileName(path); return ""; }
+}`)
+        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row21_UserDefinedConversion_IsLeftToTheConversionBridge() {
+        let printed = Translate(true, `public class A { }
+public class B { public static implicit operator B(A? a) => new B(); }
+public class Holder { public B F = new B(); }
+public static class K {
+  static A? Maybe() => null;
+  public static void M() { var h = new Holder { F = Maybe() }; }
+}`, bind: false)
+        Assert.DoesNotContain("Maybe()!!", printed, StringComparison.Ordinal)
     }
 
     shared {

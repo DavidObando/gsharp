@@ -4635,8 +4635,29 @@ partial class CSharpToGSharpTranslator {
             }
             // `IsNullableInitializer` is the translator's one reading of a declared `T?`: it also
             // follows `[return: NotNullIfNotNull]` to the argument, as `Path.GetFileName(path)` needs.
-            return call is InvocationExpressionSyntax && this.IsAnnotationsContextWithoutFlowAnalysis(call) &&
-                this.IsNullableInitializer(call)
+            if !(call is InvocationExpressionSyntax) || !this.IsAnnotationsContextWithoutFlowAnalysis(call) ||
+                // A user-defined conversion has its own input and result contracts, which
+            // the conversion bridge in `ForgiveNullableReferenceValueCore` decides.
+            this.FlowsThroughUserDefinedConversion(value) {
+                return false
+            }
+            // G# narrows a guarded argument, and the call then returns it non-null.
+            if ConditionalNotNullPostcondition.TryGetForwardedArgument(
+                call,
+                func (node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) ISymbol? {
+                    return this.context.GetSymbolInfo(node).Symbol
+                },
+                out var forwarded
+            ) &&
+                this
+                .context
+                .GetSymbolInfo(forwarded)
+                .Symbol is {} forwardedSymbol &&
+                (forwardedSymbol is ILocalSymbol || forwardedSymbol is IParameterSymbol) &&
+                this.IsDominatedByNullCheckGuard(forwarded, forwardedSymbol) {
+                return false
+            }
+            return this.IsNullableInitializer(call)
         }
 
         private func IsImportedObliviousCollectionElement(
