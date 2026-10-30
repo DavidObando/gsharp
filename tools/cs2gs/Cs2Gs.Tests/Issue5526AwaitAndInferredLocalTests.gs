@@ -40,6 +40,8 @@ import Xunit
 /// | 10 | `var w = Maybe(); Id(w)` (G# infers the argument) | unchanged | no `!!` | inferred-argument exclusion removed (M7) |
 /// | 12 | `F = await MA()` into a `B` field with `implicit operator B(A?)` | no `!!` | unchanged (the conversion bridge decides) | conversion exclusion removed from the await read (M8) |
 /// | 13 | `var w = await MA(); Take(w)`, both | `Take(w)` (GS0155) | `Take(w!!)` | await case removed from `IsNullableInitializer` (M9) |
+/// | 14 | `await MA().ConfigureAwait(false)` of a `Task<C?>` and a `ValueTask<C?>`, into a parameter and a `var` local | no `!!` | `(await MA().ConfigureAwait(false))!!`, `Take(w!!)` | `ConfigureAwait` unwrap removed (M10) |
+/// | 15 | `var w = Maybe(); lookup[w]` with `implicit operator B(A?)` | no `!!` | unchanged (the conversion decides) | conversion exclusion removed from the inferred-local rule (M11) |
 /// | 11 | `var w = Maybe(); w = new C(); Take(w)` | `Take(w)` (GS0155) | `Take(w!!)` (G# does not narrow `w` by the write) | M5 |
 open class Issue5526AwaitAndInferredLocalTests {
     @Fact
@@ -196,6 +198,34 @@ public static class K {
   public static async Task F() { var w = await MA(); Take(w); }
 }`)
         Assert.Equal(1, Count(printed, "Take(w!!)"))
+    }
+
+    @Fact
+    func Row14_ConfiguredAwait_IsAsserted() {
+        let printed = Translate(true, `using System.Threading.Tasks;
+public class C { public int N; }
+public static class K {
+  static Task<C?> MA() => Task.FromResult<C?>(null);
+  static ValueTask<C?> MV() => new ValueTask<C?>((C?)null);
+  static void Take(C x) { }
+  public static async Task F(C p) { p = await MA().ConfigureAwait(false); p = await MV().ConfigureAwait(false); var w = await MA().ConfigureAwait(false); Take(w); }
+}`)
+        Assert.Equal(1, Count(printed, "(await MA().ConfigureAwait(false))!!"))
+        Assert.Equal(1, Count(printed, "(await MV().ConfigureAwait(false))!!"))
+        Assert.Equal(1, Count(printed, "Take(w!!)"))
+    }
+
+    @Fact
+    func Row15_InferredLocalAsIndexerKeyThroughConversion_IsLeftToTheConversion() {
+        let printed = Translate(true, `using System.Collections.Generic;
+public class A { }
+public class B { public static implicit operator B(A? a) => new B(); }
+public class Lookup { public int this[B key] => 1; }
+public static class K {
+  static A? Maybe() => null;
+  public static int M(Lookup lookup) { var w = Maybe(); return lookup[w]; }
+}`, bind: false)
+        Assert.DoesNotContain("w!!", printed, StringComparison.Ordinal)
     }
 
     shared {

@@ -4629,10 +4629,17 @@ partial class CSharpToGSharpTranslator {
         private func DeclaredAwaitedResultIsAnnotatedNullable(
             awaited Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax
         ) bool {
+            // `task.ConfigureAwait(false)` awaits the same task through its configured awaitable.
+            var awaitedTask Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax = awaited.Expression
+            if awaitedTask is InvocationExpressionSyntax{
+                Expression: MemberAccessExpressionSyntax{Name: {Identifier: {ValueText: "ConfigureAwait"}}} configured
+            } {
+                awaitedTask = configured.Expression
+            }
             return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) &&
                 this
                 .context
-                .GetSymbolInfo(awaited.Expression)
+                .GetSymbolInfo(awaitedTask)
                 .Symbol is IMethodSymbol{ReturnType: INamedTypeSymbol{TypeArguments: {Length: 1} typeArguments} task} &&
                 (task.OriginalDefinition.Name == "Task" || task.OriginalDefinition.Name == "ValueTask") &&
                 task
@@ -5855,7 +5862,10 @@ partial class CSharpToGSharpTranslator {
                     (
                     widenedSinkNeedsNonNull &&
                         !widenedSinkInfersType &&
-                        (this.IsTranslatorWidenedDeclaration(symbol) || this.IsInferredNullableLocal(symbol))
+                        (
+                        this.IsTranslatorWidenedDeclaration(symbol) ||
+                            (this.IsInferredNullableLocal(symbol) && !this.FlowsThroughUserDefinedConversion(recv))
+                    )
                 )
             ) &&
                 this.IsAnnotationsContextWithoutFlowAnalysis(recv)
