@@ -299,7 +299,9 @@ open class Adr0208NarrowingCorpusTests {
                 "t08_5231_lazy_value_in_a_loop_R16",
                 "t09_5231_string_length_in_a_loop_R16",
                 "t10_5231_interface_count_kills_R16",
-                "t11_5231_static_getter_kills_R16"
+                "t11_5231_static_getter_kills_R16",
+                "t12_5231_lazy_value_in_a_property_pattern_R16",
+                "t13_5231_string_length_in_a_property_pattern_R16"
             },
             names
         )
@@ -3738,6 +3740,34 @@ func Run(b Box) string {
     return b.Pet.Name + n.ToString()
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@17:18", "reject", "", "R16"}
+            yield[]object{"t12_5231_lazy_value_in_a_property_pattern_R16", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, xs []C?) int32 {
+    let lazy = Lazy[int32](() -> {
+        xs[0] = nil
+        return 1
+    })
+    if a == nil { return 0 }
+    let matched = lazy is {Value: 1}
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))`, "GS0158@13:14", "reject", "", "R16"}
+            yield[]object{"t13_5231_string_length_in_a_property_pattern_R16", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?, xs []C?, s string) int32 {
+    if a == nil { return 0 }
+    let matched = s is {Length: 3}
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs, "abc"))`, "", "run", "1", "R16"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

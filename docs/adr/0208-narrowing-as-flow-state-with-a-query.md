@@ -966,7 +966,9 @@ Details per row:
   `BoundClrPropertyAccessExpression` with a `PropertyInfo`; a field is no getter.
   Known limitation (follow-up issue): an imported setter or indexer that runs user code
   (`ObservableCollection<T>` indexer set raising `CollectionChanged`) does not kill a closure-assigned
-  local either; that shape is not changed here. Corpus rows t01 to t11.
+  local either; that shape is not changed here. An imported property of a property pattern (`lazy is { Value: 1 }`) follows the same predicate
+  (`ClrMemberReadRunsUserCode`). Known limitation (#5534): the effects of an `if` condition apply after its
+  branches are bound, for a source getter as for an imported one. Corpus rows t01 to t13.
 - **R15 (#5237).** `AnalyzeCallableArguments` keeps a closure-assigned local
   across a call when the callee has no captures and receives no callable
   argument. A callee can still run a closure that an earlier statement

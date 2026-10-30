@@ -2418,6 +2418,10 @@ internal partial class StatementBinder {
                 if field.Property is {} property && !property.IsAutoProperty {
                     MarkMayMutateGlobalRoots()
                 }
+                // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
+                if StatementBinder.ClrMemberReadRunsUserCode(field.ClrMember) {
+                    MarkMayMutateGlobalRoots()
+                }
                 VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
             }
         }
@@ -4998,7 +5002,12 @@ internal partial class StatementBinder {
         /// code) only when (cref:IsStableClrGetter) says so; an unlisted property is a call.
         internal func ClrPropertyReadRunsUserCode(
             node BoundExpression
-        ) bool -> node is BoundClrPropertyAccessExpression{Member: PropertyInfo property} &&
+        ) bool -> node is BoundClrPropertyAccessExpression{Member: var member} &&
+            ClrMemberReadRunsUserCode(member)
+
+        /// ADR-0208 R16 (#5231): the same decision for a member that is read without an access node, such as the
+        /// member of an imported property pattern (`lazy is { Value: 1 }`).
+        internal func ClrMemberReadRunsUserCode(member MemberInfo?) bool -> member is PropertyInfo property &&
             !IsStableClrGetter(property)
 
         /// ADR-0208 R16 (#5231): the explicit list of imported getters that run no user code. A getter is stable
