@@ -236,6 +236,34 @@ class Program {
     }
 
     @Fact
+    func ImportedExtensionReceiver_SkipsFunctionValueThatNeedsAConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let f () -> int32 = () -> 1
+    let g () -> int64 = () -> 2
+    Console.Write(f.M(1))
+    Console.Write(E.M(f, 1))
+    Console.Write(g.M(1))
+    Console.Write(E.M(g, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Func<long> g = () => 2;
+        Console.Write(f.M(1));
+        Console.Write(E.M(f, 1));
+        Console.Write(g.M(1));
+        Console.Write(E.M(g, 1));
+    }
+}
+`, "OOFF")
+    }
+
+    @Fact
     func ImportedConstructors_SkipFunctionValueThatNeedsAConversion() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
         Check(fixture, `import System
@@ -679,6 +707,10 @@ namespace FunctionControl {
         public static string M(object o, long x) => "O";
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
+    }
+    public static class E {
+        public static string M(this System.Func<long> f, int x) => "F";
+        public static string M(this object o, long x) => "O";
     }
     public class C {
         public string Kind;

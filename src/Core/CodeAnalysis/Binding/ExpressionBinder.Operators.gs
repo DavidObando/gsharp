@@ -4176,23 +4176,38 @@ internal partial class ExpressionBinder {
         /// Issue #5536: the delegate-parameter callback that every imported overload resolution with bound
         /// arguments registers, for methods, constructors and base constructors.
         /// @param boundArguments The bound call arguments.
-        /// @param argumentOffset The number of leading resolver arguments that are not call arguments.
+        /// @param receiver The receiver of a reduced extension call. When present, it is resolver slot 0 and the
+        /// call arguments follow it, so the receiver's `this` parameter gets the same check.
         /// @returns A callback that answers (cref:ClrOverloadResolution.ImplicitConversionKind.None) when a
         /// function value cannot keep its delegate, and
         /// (cref:ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch) for different ref kinds.
         internal func MakeDelegateArgumentCheck(
             boundArguments IReadOnlyList[BoundExpression]?,
-            argumentOffset int32 = 0
+            receiver BoundExpression? = nil
         )((int32, Type) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             if boundArguments == nil {
                 return nil
             }
+            let argumentOffset = if receiver != nil {
+                1
+            } else {
+                0
+            }
             return (index int32, clrParameterType Type?) -> {
                 let argIndex = index - argumentOffset
-                if argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == nil {
+                if argIndex >= boundArguments.Count || clrParameterType == nil {
                     return nil
                 }
-                let argument = boundArguments[argIndex]
+                let argument BoundExpression? = if argIndex >= 0 {
+                    boundArguments[argIndex]
+                } else if index == 0 {
+                    receiver
+                } else {
+                    nil
+                }
+                if argument == nil {
+                    return nil
+                }
                 // An ordinary argument at an `in` parameter is passed by readonly reference to its pointee. An
                 // explicit address keeps the exact-storage rules of the resolver.
                 var delegateType Type = clrParameterType

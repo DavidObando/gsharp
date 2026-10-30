@@ -1877,7 +1877,7 @@ internal partial class ExpressionBinder {
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
                 structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
                 erasedArgumentMismatchCheck: ExtensionErasedMismatchCheck,
-                delegateArgumentCheck: MakeDelegateArgumentCheck(arguments, argumentOffset: 1),
+                delegateArgumentCheck: MakeDelegateArgumentCheck(arguments, receiver: receiver),
                 methodGroupInference: MakeMethodGroupInference(
                     arguments,
                     GetEffectiveArgumentClrTypeForOverloadResolution,
