@@ -456,6 +456,63 @@ partial class CSharpToGSharpTranslator {
             return LiteralExpression.Null()
         }
 
+        // The declared type and symbol of what `owner` returns: a method or local
+        // function (awaited result for an async one), or a property, indexer or
+        // getter, whose slot is the property.
+        private func ReturnSlotOf(owner Microsoft.CodeAnalysis.SyntaxNode?)(Type ITypeSymbol?, Symbol ISymbol?) {
+            switch owner {
+                case Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PropertyDeclarationSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .IndexerDeclarationSyntax {
+                    if this.context.GetDeclaredSymbol(owner) is IPropertySymbol property {
+                        return (property.Type, property)
+                    }
+                    return (nil, nil)
+                }
+                case Microsoft.CodeAnalysis.CSharp.Syntax.AccessorDeclarationSyntax accessor {
+                    if accessor.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration) &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(accessor) is IMethodSymbol{
+                        AssociatedSymbol: IPropertySymbol getterProperty
+                    } {
+                        return (getterProperty.Type, getterProperty)
+                    }
+                    return (nil, nil)
+                }
+                case Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseMethodDeclarationSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .LocalFunctionStatementSyntax {
+                    if this.context.GetDeclaredSymbol(owner) is not IMethodSymbol method {
+                        return (nil, nil)
+                    }
+                    var declared = method.ReturnType
+                    if method.IsAsync &&
+                        declared is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} awaitable {
+                        declared = awaitable.TypeArguments[0]
+                    }
+                    return (declared, method)
+                }
+                default {
+                    return (nil, nil)
+                }
+            }
+        }
+
         // The declared type and symbol of the slot a `null` literal flows into,
         // looking through parentheses and a `!`: a `return`, the right side of a
         // simple assignment, or a positional argument. Anything else has no
@@ -485,6 +542,11 @@ partial class CSharpToGSharpTranslator {
                             .CodeAnalysis
                             .CSharp
                             .Syntax
+                            .AccessorDeclarationSyntax ||
+                            n is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
                             .LocalFunctionStatementSyntax ||
                             n is Microsoft
                             .CodeAnalysis
@@ -492,31 +554,10 @@ partial class CSharpToGSharpTranslator {
                             .Syntax
                             .AnonymousFunctionExpressionSyntax
                     )
-                    if !(
-                        (
-                            owner is Microsoft
-                                .CodeAnalysis
-                                .CSharp
-                                .Syntax
-                                .BaseMethodDeclarationSyntax ||
-                                owner is Microsoft
-                                .CodeAnalysis
-                                .CSharp
-                                .Syntax
-                                .LocalFunctionStatementSyntax
-                        )
-                    ) ||
-                        this
-                        .context
-                        .GetDeclaredSymbol(owner) is not IMethodSymbol method {
-                        return (nil, nil)
-                    }
-                    var declared = method.ReturnType
-                    if method.IsAsync &&
-                        declared is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} awaitable {
-                        declared = awaitable.TypeArguments[0]
-                    }
-                    return (declared, method)
+                    return this.ReturnSlotOf(owner)
+                }
+                case Microsoft.CodeAnalysis.CSharp.Syntax.ArrowExpressionClauseSyntax arrow {
+                    return this.ReturnSlotOf(arrow.Parent)
                 }
                 case Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment when assignment.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
@@ -531,14 +572,9 @@ partial class CSharpToGSharpTranslator {
                         default: (nil, nil)
                     }
                 }
-                case Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArgumentSyntax argument when argument.NameColon == nil &&
-                    argument
-                    .RefKindKeyword
-                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) &&
+                case Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax argument when argument.RefKindKeyword.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+                ) &&
                     argument.Parent is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -548,11 +584,21 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(argumentList.Parent)
                     .Symbol is IMethodSymbol callee {
-                    let index = argumentList.Arguments.IndexOf(argument)
-                    if index < 0 || index >= callee.Parameters.Length || callee.Parameters[index].IsParams {
+                    // A named argument binds by name, a positional one by position.
+                    var parameter IParameterSymbol? = nil
+                    if argument.NameColon is {} nameColon {
+                        let name = nameColon.Name.Identifier.ValueText
+                        parameter = callee.Parameters.FirstOrDefault((p IParameterSymbol) -> p.Name == name)
+                    } else {
+                        let index = argumentList.Arguments.IndexOf(argument)
+                        if index >= 0 && index < callee.Parameters.Length {
+                            parameter = callee.Parameters[index]
+                        }
+                    }
+                    if parameter == nil || parameter.IsParams {
                         return (nil, nil)
                     }
-                    return (callee.Parameters[index].Type, callee.Parameters[index])
+                    return (parameter.Type, parameter)
                 }
                 default {
                     return (nil, nil)

@@ -621,6 +621,14 @@ internal shared class ObliviousNullabilityAnalyzer {
         for key in keys {
             pending.Push(key)
         }
+        // A declaration seen through its project's emitted reference assembly
+        // has only an assembly key; resolve it back to the project's source
+        // declaration so its file key (and the linked projects) are reached too.
+        if original.DeclaringSyntaxReferences.Length == 0 {
+            for sourceKey in SourceDeclarationKeys(original, graphs) {
+                pending.Push(sourceKey)
+            }
+        }
         while pending.Count != 0 {
             let current = pending.Pop()
             if !visited.Add(current) {
@@ -2210,6 +2218,41 @@ internal shared class ObliviousNullabilityAnalyzer {
         return keys
     }
 
+    // The keys of the source declaration that `metadataSymbol` (an emitted
+    // reference assembly's view) stands for, found by documentation id in the run
+    // compilation with the same assembly identity.
+    private func SourceDeclarationKeys(metadataSymbol ISymbol, graphs List[NullArgumentGraph]) List[string] {
+        let keys = List[string]()
+        let identity = metadataSymbol.ContainingAssembly?.Identity
+        if identity == nil {
+            return keys
+        }
+        let id = NullArgumentId(metadataSymbol)
+        if id == nil {
+            return keys
+        }
+        for graph in graphs {
+            if graph.Owner is not CSharpCompilation csharp || !graph.Owner.Assembly.Identity.Equals(identity) {
+                continue
+            }
+            var source ISymbol? = nil
+            if id.StartsWith("P:M:", StringComparison.Ordinal) {
+                let separator = id.LastIndexOf('#')
+                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
+                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
+                IMethodSymbol method && ordinal < method.Parameters.Length {
+                    source = method.Parameters[ordinal]
+                }
+            } else {
+                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
+            }
+            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
+                keys.AddRange(NullArgumentKeys(source))
+            }
+        }
+        return keys
+    }
+
     private func ComputeSourcePaths(compilation Compilation) HashSet[string] {
         let paths = HashSet[string](StringComparer.Ordinal)
         for tree in compilation.SyntaxTrees {
@@ -2376,16 +2419,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if node is AssignmentExpressionSyntax assignment && assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
-                    ReadsEnclosingParameterByName(assignment.Right) {
+                    IsForwardedValueShape(assignment.Right) {
                     let target ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
                     if target is IFieldSymbol or IPropertySymbol {
                         AddEdge(target, model.GetSymbolInfo(Unwrap(assignment.Right)).Symbol)
                     }
-                } else if (
-                    node is ReturnStatementSyntax{Expression: {} returned} && ReadsEnclosingParameterByName(returned)
-                ) {
-                    // `return p;` hands the parameter's value on as the method's
-                    // result: the result must be as nullable as the parameter.
+                } else if (node is ReturnStatementSyntax{Expression: {} returned} && IsForwardedValueShape(returned)) {
+                    // `return p;` / `return stored;` / `return Other(..);` hands a
+                    // value on as the method's result: the result must be as
+                    // nullable as what it returns.
                     if EnclosingNamedMethod(node) is {} declaration && model.GetDeclaredSymbol(
                         declaration
                     ) is {} method {
@@ -2393,7 +2435,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 } else if (
                     node is ArrowExpressionClauseSyntax{Parent: MethodDeclarationSyntax arrowMethod} arrow &&
-                        ReadsEnclosingParameterByName(arrow.Expression)
+                        IsForwardedValueShape(arrow.Expression)
                 ) {
                     if model.GetDeclaredSymbol(arrowMethod) is {} method {
                         AddEdge(method, model.GetSymbolInfo(Unwrap(arrow.Expression)).Symbol)
@@ -2412,9 +2454,33 @@ internal shared class ObliviousNullabilityAnalyzer {
                         }
                     }
                 }
+                // `p.Ignore()` on a reduced extension has no argument to inspect:
+                // the receiver is the unreduced method's `this` parameter.
+                if node is InvocationExpressionSyntax{
+                    Expression: MemberAccessExpressionSyntax{Expression: {} receiver}
+                } invocation &&
+                    ReadsEnclosingParameterByName(receiver) &&
+                    model
+                    .GetSymbolInfo(invocation)
+                    .Symbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
+                    unreduced
+                    .Parameters
+                    .Length > 0 {
+                    AddEdge(unreduced.Parameters[0], model.GetSymbolInfo(Unwrap(receiver)).Symbol)
+                }
             }
         }
     }
+
+    // The shapes whose value is a symbol read rather than a computation: a
+    // parameter, field or property read, or the result of a call. Used only at
+    // an assignment's right side and a method's returned value, where the lookup
+    // is cheap and the candidate guards decide.
+    private func IsForwardedValueShape(expression ExpressionSyntax) bool -> Unwrap(
+        expression
+    ) is IdentifierNameSyntax or
+        MemberAccessExpressionSyntax or
+        InvocationExpressionSyntax
 
     // The method declaration whose body directly contains `node`: not a lambda
     // or a local function nested in it, whose `return` is not the method's.
