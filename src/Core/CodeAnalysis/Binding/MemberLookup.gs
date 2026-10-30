@@ -3830,7 +3830,7 @@ internal class MemberLookup {
                     // enough to pass the ClrType gate (mirroring the delegate-
                     // component eraser); the symbolic-argument recovery downstream
                     // re-derives the real element type for inference.
-                    erased = userClass.ImportedBaseType?.ClrType ?? typeof(object)
+                    erased = TypeMemberModel.GetNearestImportedBase(userClass)?.ClrType ?? typeof(object)
                     return true
                 }
                 case InterfaceSymbol {
@@ -6809,15 +6809,41 @@ internal class MemberLookup {
         ) bool {
             mappedArguments = default(ImmutableArray[TypeSymbol])
             foundProjection = false
+            for arguments in EnumerateConstructedTypeArgumentsThroughHierarchy(source, targetOpenDefinition) {
+                if !foundProjection {
+                    mappedArguments = arguments
+                    foundProjection = true
+                    continue
+                }
+                if mappedArguments.Length != arguments.Length || !mappedArguments.Zip(arguments).All(
+                    (pair(First TypeSymbol, Second TypeSymbol)) -> DeclarationBinder.TypeSignaturesEquivalent(
+                        pair.First,
+                        pair.Second
+                    )
+                ) {
+                    mappedArguments = default(ImmutableArray[TypeSymbol])
+                    return false
+                }
+            }
+            return foundProjection
+        }
+
+        /// Enumerates every matching owner vector without erasing source arguments or choosing an interface instantiation.
+        /// @param source The symbolic CLR-backed source.
+        /// @param targetOpenDefinition The requested generic definition.
+        /// @returns All matching symbolic argument vectors in hierarchy order.
+        internal func EnumerateConstructedTypeArgumentsThroughHierarchy(
+            source TypeSymbol,
+            targetOpenDefinition Type
+        ) sequence[ImmutableArray[TypeSymbol]] {
             if source.ClrType is {IsArray: true} sourceArray && sourceArray.GetArrayRank() == 1 &&
                 Conversion
                 .IsArrayElementInterface(targetOpenDefinition) {
                 let positions = source.GetElementPositions()
                 if positions.Length == 1 {
-                    mappedArguments = positions
-                    foundProjection = true
-                    return true
+                    yield positions
                 }
+                yield break
             }
             var sourceOpenDefinition Type?
             var sourceArguments ImmutableArray[TypeSymbol]
@@ -6832,18 +6858,7 @@ internal class MemberLookup {
                 }
                 sourceArguments = source.GetElementPositions()
             } else {
-                return false
-            }
-            let VectorsEquivalent = func (left ImmutableArray[TypeSymbol], right ImmutableArray[TypeSymbol]) bool {
-                if left.Length != right.Length {
-                    return false
-                }
-                for var i = 0; i < left.Length; i++ {
-                    if !DeclarationBinder.TypeSignaturesEquivalent(left[i], right[i]) {
-                        return false
-                    }
-                }
-                return true
+                yield break
             }
             for candidate in EnumerateOpenInterfacesAndBases(sourceOpenDefinition!!) {
                 var candidateDefinition Type
@@ -6879,18 +6894,8 @@ internal class MemberLookup {
                         )
                     )
                 }
-                let projectedArguments = builder.MoveToImmutable()
-                if !foundProjection {
-                    mappedArguments = projectedArguments
-                    foundProjection = true
-                    continue
-                }
-                if !VectorsEquivalent(mappedArguments, projectedArguments) {
-                    mappedArguments = default(ImmutableArray[TypeSymbol])
-                    return false
-                }
+                yield builder.MoveToImmutable()
             }
-            return foundProjection
         }
 
         internal func TryProjectConstructedHierarchyClrType(
@@ -9452,31 +9457,14 @@ internal class MemberLookup {
             if imp.OpenDefinition == nil {
                 return false
             }
-            // Walk the open definition's interfaces/base for an instantiation of
-            // targetOpenDef, then substitute the symbolic args back through.
-            for iface in EnumerateOpenInterfacesAndBases(imp.OpenDefinition) {
-                if !iface.IsGenericType || !ClrTypeUtilities.AreSame(iface.GetGenericTypeDefinition(), targetOpenDef) {
-                    continue
-                }
-                let openArgs = iface.GetGenericArguments()
-                let lifted = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
-                for oa in openArgs {
-                    lifted.Add(
-                        MapOpenClrTypeToSymbolicWithoutNullability(
-                            oa,
-                            imp.OpenDefinition,
-                            imp.TypeArguments,
-                            NullabilityFreeReason.TypeStructure
-                        )
-                    )
-                }
-                liftedArgs = lifted.MoveToImmutable()
+            for arguments in EnumerateConstructedTypeArgumentsThroughHierarchy(imp, targetOpenDef) {
+                liftedArgs = arguments
                 return true
             }
             return false
         }
 
-        private func EnumerateOpenInterfacesAndBases(openDef Type) sequence[Type] {
+        internal func EnumerateOpenInterfacesAndBases(openDef Type) sequence[Type] {
             // Issue #4559: sparse InterfaceImpl metadata (as G# emits it) lists only
             // the DIRECT interfaces of a type, so GetInterfaces() on a class or
             // interface omits interfaces inherited through them (IReadOnlyCollection<T>

@@ -1711,7 +1711,7 @@ internal partial class ExpressionBinder {
         // `EntityTypeBuilder<Book>.HasOne((e) -> e.Conversion)` where the
         // navigation property is nullable).
         if typeSymbol is NullableTypeSymbol{UnderlyingType: StructSymbol{IsClass: true} nullableUserClass} {
-            return nullableUserClass.ImportedBaseType?.ClrType ?? typeof(object)
+            return TypeMemberModel.GetNearestImportedBase(nullableUserClass)?.ClrType ?? typeof(object)
         }
         // A nullable user value struct / interface / named delegate rides
         // through the same `object` boundary as its non-nullable form.
@@ -1734,7 +1734,7 @@ internal partial class ExpressionBinder {
             // projecting an interface unconditionally breaks calls that bind
             // today (#2840). The projection is applied only on the FAILURE path
             // — see TryProjectUserClassArgumentInterfaces.
-            return ss.ImportedBaseType?.ClrType ?? typeof(object)
+            return TypeMemberModel.GetNearestImportedBase(ss)?.ClrType ?? typeof(object)
         }
         // ADR-0087 §3 R5 / issue #765: a user-defined G# data struct (value
         // type) appearing as an argument to an imported CLR generic method —

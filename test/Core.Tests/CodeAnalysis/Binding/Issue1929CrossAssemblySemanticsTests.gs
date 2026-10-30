@@ -10,10 +10,12 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import MetadataReference = Microsoft.CodeAnalysis.MetadataReference
+import Microsoft.CodeAnalysis.CSharp
+import OutputKind = Microsoft.CodeAnalysis.OutputKind
 import System
-import System.Collections.Generic
-import System.Collections.Immutable
 import System.IO
+import System.Linq
 import System.Reflection
 import Xunit
 
@@ -245,50 +247,162 @@ func Run() int32 {
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
     }
 
-    /// Non-blocking review finding #3: the positional-ctor metadata payload
-    /// must not silently drop a parameter whose name diverges from its
-    /// backing field's name — (cref:ImportedTypeSymbol) now resolves
-    /// each parameter's type via the backing field's metadata token first,
-    /// falling back to name matching only when no token was recorded.
+    /// Primary metadata selects declared storage by token, not by a coincident member name.
+    /// Name matching applies only when the token is zero.
     @Fact
     func BuildPrimaryConstructorParameters_Resolves_By_FieldToken_Even_When_Name_Diverges() {
-        let fieldType = TypeSymbol.Int32
-        let backingField = FieldSymbol("x", fieldType, Accessibility.Public, isReadOnly: true)
-        const fakeFieldToken = 0x04000042
-        let fieldByToken = Dictionary[int32, FieldSymbol]{[fakeFieldToken] = backingField}
-        // The parameter name intentionally does NOT match any field/property
-        // name — simulating a future rename/mangling divergence — but the
-        // token points at the real backing field.
-        let semantics = ImportedTypeSemantics(
-            MetadataToken: 0x02000005,
-            IsValueType: true,
-            IsData: true,
-            PrimaryConstructorParameterNames: ImmutableArray.Create("renamedParam"),
-            PrimaryConstructorParameterFieldTokens: ImmutableArray.Create(fakeFieldToken)
+        let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue1929FieldToken")
+        Directory.CreateDirectory(outputDir)
+        let libraryPath = Path.Combine(outputDir, "TokenContract.dll")
+        let coreLibrary = typeof(object).Assembly.Location
+        let references = []string{
+            coreLibrary,
+            Path.Combine(Path.GetDirectoryName(coreLibrary)!!, "System.Runtime.dll")
+        }.Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+        let library = CSharpCompilation.Create(
+            "TokenContract",
+            []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|struct|1|renamedParam:67108865")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|struct|1|renamedParam:0")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554436|struct|1|renamedParam:67108865")]
+namespace TokenContract;
+public struct Point {
+    private readonly int x;
+    public readonly string renamedParam;
+    public Point(int renamedParam) { x = renamedParam; this.renamedParam = "decoy"; }
+    public int Read() => x;
+}
+public struct Legacy {
+    public readonly int renamedParam;
+    public Legacy(int renamedParam) { this.renamedParam = renamedParam; }
+}
+public struct WrongOwner {
+    public readonly string renamedParam;
+    public WrongOwner(int renamedParam) { this.renamedParam = "wrong owner"; }
+}`)},
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
         )
-        let method MethodInfo? = typeof(ImportedTypeSymbol).GetMethod(
-            "BuildPrimaryConstructorParameters",
-            BindingFlags.NonPublic | BindingFlags.Static
+        {
+            using let stream = File.Create(libraryPath)
+            let result = library.Emit(stream)
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+        }
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        Assert.True(resolver.TryResolveType("TokenContract.Point", out var reflected))
+        let type = Assert.IsAssignableFrom[Type](reflected)
+        Assert.Equal(0x02000002, type.MetadataToken)
+        let storage = Assert.IsAssignableFrom[FieldInfo](
+            type.GetField("x", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
         )
-        Assert.NotNull(method)
-        let result = ImmutableArray[ParameterSymbol](
-            method!!.Invoke(
-                nil,
-                []object{
-                    typeof(object),
-                    ImmutableArray[FieldSymbol].Empty,
-                    ImmutableArray[PropertySymbol].Empty,
-                    fieldByToken,
-                    semantics
-                }
-            )
-        )
-        let parameter = Assert.Single(result)
+        Assert.Equal(0x04000001, storage.MetadataToken)
+        Assert.True(storage.IsPrivate)
+        Assert.Same(type.Module, storage.Module)
+        Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(type, resolver, out var aggregate))
+        let parameter = Assert.Single(aggregate.PrimaryConstructorParameters)
         Assert.Equal("renamedParam", parameter.Name)
-        Assert.Same(fieldType, parameter.Type)
+        Assert.NotEqual(parameter.Name, storage.Name)
+        Assert.Same(TypeSymbol.Int32, parameter.Type)
+        Assert.Equal("x", ImportedAssemblySemantics.GetPrimaryConstructorMember(type, 0)!!.Name)
+        Assert.NotNull(ImportedTypeSymbol.FindPrimaryConstructor(type, aggregate.PrimaryConstructorParameters))
+        Assert.True(resolver.TryResolveType("TokenContract.Legacy", out var legacy))
+        Assert.Equal(0x02000003, legacy.MetadataToken)
+        Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(legacy, resolver, out var legacyAggregate))
+        Assert.Same(TypeSymbol.Int32, Assert.Single(legacyAggregate.PrimaryConstructorParameters).Type)
+        Assert.True(resolver.TryResolveType("TokenContract.WrongOwner", out var wrongOwner))
+        Assert.Equal(0x02000004, wrongOwner.MetadataToken)
+        Assert.True(ImportedTypeSymbol.TryCreateSemanticAggregate(wrongOwner, resolver, out var rejectedAggregate))
+        Assert.Null(ImportedAssemblySemantics.GetPrimaryConstructorMember(wrongOwner, 0))
+        Assert.Same(TypeSymbol.Error, Assert.Single(rejectedAggregate.PrimaryConstructorParameters).Type)
+        Assert.Null(
+            ImportedTypeSymbol.FindPrimaryConstructor(wrongOwner, rejectedAggregate.PrimaryConstructorParameters)
+        )
+    }
+
+    /// Issue #5425: an alias to an imported nongeneric data class gets the literal arity check.
+    /// The check applies before the imported constructor path, for literals and spreads.
+    /// The test reads global-scope diagnostics only.
+    /// A separate defect makes program binding fail for these aliases.
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataClassAlias_RejectsTypeArgumentsBeforeConstructorPath(referenceAssembly bool) {
+        let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5425AliasArity", referenceAssembly.ToString())
+        Directory.CreateDirectory(outputDir)
+        let implementationPath = Path.Combine(outputDir, "AliasArity5425.dll")
+        let referencePath = Path.Combine(outputDir, "AliasArity5425.ref.dll")
+        let coreLibrary = typeof(object).Assembly.Location
+        let references = []string{
+            coreLibrary,
+            Path.Combine(Path.GetDirectoryName(coreLibrary)!!, "System.Runtime.dll")
+        }.Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+        let library = CSharpCompilation.Create(
+            "AliasArity5425",
+            []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(`
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Value:67108865")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|class|1|Value:67108866")]
+namespace AliasArity5425;
+public class Box {
+    public int Value;
+    public Box(int Value) { this.Value = Value; }
+}
+public class Generic<T> {
+    public T Value;
+    public Generic(T Value) { this.Value = Value; }
+}`)},
+            references,
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        )
+        {
+            using let implementation = File.Create(implementationPath)
+            using let referenceStream = File.Create(referencePath)
+            let result = library.Emit(
+                implementation,
+                metadataPEStream: referenceStream,
+                options: Microsoft.CodeAnalysis.Emit.EmitOptions(includePrivateMembers: false)
+            )
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+        }
+        let selected = if referenceAssembly {
+            referencePath
+        } else {
+            implementationPath
+        }
+        let prefix = "package Demo\nimport AliasArity5425\ntype A = Box\ntype B = A\ndata struct S(Value int32)\n"
+        for statement in[]string{
+            "let value = A[int32]{Value: 7}",
+            "let value = B[int32]{Value: 7}",
+            "let value = A[int32, string]{Value: 7}",
+            "let value = A[int32]{...S{Value: 7}}"
+        } {
+            let diagnostics = BindGlobalScope(selected, prefix + statement)
+            let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+            Assert.Equal("GS0148", diagnostic.Id)
+            let typeArguments = statement.Substring(13, statement.IndexOf('{') - 13)
+            Assert.Equal(prefix.Length + 13, diagnostic.Location.Span.Start)
+            Assert.Equal(typeArguments, diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        }
+        let controls = BindGlobalScope(selected, prefix + `let a = A{Value: 1}
+let b = B{Value: 2}
+let c = Box{Value: 3}
+let d = A{...S{Value: 4}}
+let e = Generic[int32]{Value: 5}
+let f = Generic[int32]{...S{Value: 6}}
+let g int32 = a.Value + b.Value + c.Value + d.Value + e.Value + f.Value`)
+        Assert.Empty(controls.Where((d Diagnostic) -> d.IsError))
     }
 
     shared {
+        private func BindGlobalScope(reference string, source string)[]Diagnostic {
+            using let resolver = ReferenceResolver.WithReferences([]string{reference})
+            resolver.CurrentAssemblyName = "AliasArity5425.Consumer"
+            let tree = SyntaxTree.Parse(SourceText.From(source))
+            let compilation = Compilation(resolver, tree)
+            return tree.Diagnostics.Concat(compilation.GlobalScope.Diagnostics).ToArray()
+        }
+
         private func EmitLibraryAssembly(libraryPath string) {
             let library = Compilation(SyntaxTree.Parse(SourceText.From(`package Demo
 

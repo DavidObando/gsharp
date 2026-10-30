@@ -3465,7 +3465,7 @@ internal class ConversionClassifier {
                         default(ConstructorInfo?)
                     }
                 )
-                if missingDeclarationShape && slot.TargetType.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(
                         if constructionSyntax is StructLiteralExpressionSyntax literal {
                             literal.TypeIdentifier.Location
