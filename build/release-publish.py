@@ -6,6 +6,7 @@ Commands:
   verify                          check the packages (and, with --tag, the tag and the VSIX files) before a push.
   nuget-push --group G            push one group of packages to nuget.org, primary package then symbol package.
   marketplace-version <id>        ask a marketplace whether an extension version is published.
+  finalize                        check every destination, write the release notes section, un-draft the release.
 
 Every destination is keyed by version and "already published" is success, so "Re-run failed jobs" on a tag
 run is safe. The expected package list lives here, beside RIDS of check-rid-packages.py.
@@ -227,7 +228,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     output = os.environ.get("GITHUB_OUTPUT")
     if kind is not None and output:
         with open(output, "a", encoding="utf-8") as handle:
-            handle.write(f"version={version}\nprerelease={'true' if kind == 'prerelease' else 'false'}\n")
+            handle.write(f"version={version}\nprerelease={'true' if kind == 'prerelease' else 'false'}\n"
+                         f"vscode_version={manifest_identity_version(vsix_manifest(args.vsix / VSCODE_VSIX))}\n"
+                         f"visual_studio_version={manifest_identity_version(vsix_manifest(args.vsix / VISUAL_STUDIO_VSIX))}\n")
     return 0
 
 
@@ -310,6 +313,111 @@ def positive_int(text: str) -> int:
     return value
 
 
+NOTES_START = "<!-- publish-notes -->"
+NOTES_END = "<!-- /publish-notes -->"
+VSCODE_ID = "gsharplang.vscode-gsharp"
+VISUAL_STUDIO_ID = "gsharplang.GSharp-VisualStudio"
+FLAT_CONTAINER = "https://api.nuget.org/v3-flatcontainer"
+
+
+def notes_lines(unverified: list[str], prerelease: bool) -> list[str]:
+    """The text that publish-finalize owns in the release body (ADR-0218 section 2)."""
+    lines = []
+    if unverified:
+        names = ", ".join(f"`{rid}`" for rid in unverified)
+        lines.append(f"Unverified platform{'s' if len(unverified) > 1 else ''}: {names}. The ReadyToRun compiler smoke "
+                     "did not run or did not pass on this platform (ADR-0207). The IL compiler is the fallback.")
+    if prerelease:
+        lines.append("Not published to the Visual Studio Marketplace: prerelease tags publish to NuGet, GitHub and the "
+                     "VS Code Marketplace (pre-release) only.")
+    return lines
+
+
+def replace_notes(body: str, lines: list[str]) -> str:
+    """Replace the marker-bounded section of a release body. No lines removes the section. The rest is kept."""
+    start = body.find(NOTES_START)
+    end = body.find(NOTES_END, start + 1) if start >= 0 else -1
+    if start >= 0 and end >= 0:
+        body = body[:start].rstrip() + "\n" + body[end + len(NOTES_END):].lstrip("\n")
+    body = body.rstrip()
+    if not lines:
+        return body + "\n" if body else ""
+    section = "\n".join([NOTES_START, *lines, NOTES_END])
+    return (body + "\n\n" if body else "") + section + "\n"
+
+
+def feed_has(base_url: str, package_id: str, version: str) -> bool:
+    lower = package_id.lower()
+    url = f"{base_url.rstrip('/')}/{lower}/{version.lower()}/{lower}.nuspec"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError):
+        return False
+
+
+def expected_assets(version: str) -> list[str]:
+    names = [f"{p}.{version}.nupkg" for p in (*COMPILER_PACKAGES, *SDK_PACKAGES)]
+    names += [f"{p}.{version}.snupkg" for p in SYMBOL_PACKAGES]
+    return sorted([*names, VSCODE_VSIX, VISUAL_STUDIO_VSIX])
+
+
+def cmd_finalize(args: argparse.Namespace) -> int:
+    """Un-draft the release when every destination of this tag has the version. Otherwise name what is missing."""
+    prerelease = args.prerelease == "true"
+    unverified = args.unverified.split()
+    results = {"publish-github-release": args.github_release, "publish-vscode-marketplace": args.vscode,
+               "publish-visual-studio-marketplace": args.visual_studio}
+    rows: list[tuple[str, bool, str]] = []
+
+    def row(name: str, ok: bool, detail: str = "") -> None:
+        rows.append((name, ok, detail))
+
+    for job, result in results.items():
+        skipped_ok = job == "publish-visual-studio-marketplace" and prerelease and result == "skipped"
+        row(f"job {job}", result == "success" or skipped_ok, result)
+    missing_ids = [p for p in (*COMPILER_PACKAGES, *SDK_PACKAGES) if not feed_has(args.feed_url, p, args.version)]
+    row("nuget.org (12 packages)", not missing_ids, ", ".join(missing_ids))
+    wait_for = [("VS Code Marketplace", VSCODE_ID, args.vscode_version, "prerelease" if prerelease else "release")]
+    if not prerelease:
+        wait_for.append(("Visual Studio Marketplace", VISUAL_STUDIO_ID, args.visual_studio_version, "any"))
+    for label, extension_id, version, kind in wait_for:
+        try:
+            found = published_versions(extension_id, args.marketplace_url)
+        except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError):
+            found = {}
+        ok = version in found and (kind == "any" or found[version] == (kind == "prerelease"))
+        row(label, ok, f"{extension_id} {version}")
+    view = subprocess.run([args.gh, "release", "view", args.tag, "--repo", args.repo, "--json", "assets,body"],
+                          capture_output=True, text=True, check=False)
+    body, assets = "", set()
+    if view.returncode == 0:
+        data = json.loads(view.stdout)
+        body, assets = data.get("body") or "", {a["name"] for a in data.get("assets", [])}
+    absent = sorted(set(expected_assets(args.version)) - assets)
+    row("GitHub release assets", view.returncode == 0 and not absent, ", ".join(absent) or view.stderr.strip())
+
+    table = "| Destination | State | Detail |\n| --- | --- | --- |\n" + "".join(
+        f"| {name} | {'ok' if ok else 'MISSING'} | {detail} |\n" for name, ok, detail in rows)
+    print(table)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+            handle.write(f"## Publish state of {args.tag}\n\n{table}")
+    failed = [name for name, ok, _ in rows if not ok]
+    if failed:
+        print(f"not finalized; re-run the failed jobs after fixing: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    notes = Path(args.notes_file)
+    notes.write_text(replace_notes(body, notes_lines(unverified, prerelease)), encoding="utf-8")
+    edit = subprocess.run([args.gh, "release", "edit", args.tag, "--repo", args.repo, "--notes-file", str(notes),
+                           "--draft=false"], check=False)
+    if edit.returncode != 0:
+        print("gh release edit failed; the release stays a draft", file=sys.stderr)
+        return 1
+    print(f"{args.tag} is public")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -340,7 +448,24 @@ def main(argv: list[str] | None = None) -> int:
     market.add_argument("--interval", type=float, default=30)
     market.add_argument("--url", default=MARKETPLACE_QUERY)
 
+    final = sub.add_parser("finalize", help="check every destination, then un-draft the release")
+    final.add_argument("--tag", required=True)
+    final.add_argument("--repo", required=True, help="owner/name")
+    final.add_argument("--version", required=True, help="package version")
+    final.add_argument("--prerelease", choices=("true", "false"), required=True)
+    final.add_argument("--vscode-version", required=True)
+    final.add_argument("--visual-studio-version", required=True)
+    final.add_argument("--unverified", default="", help="space-separated RIDs whose smoke did not pass")
+    for job in ("github-release", "vscode", "visual-studio"):
+        final.add_argument(f"--{job}", required=True, help=f"result of the {job} job")
+    final.add_argument("--notes-file", required=True, help="where to write the new release body")
+    final.add_argument("--gh", default="gh")
+    final.add_argument("--feed-url", default=FLAT_CONTAINER)
+    final.add_argument("--marketplace-url", default=MARKETPLACE_QUERY)
+
     args = parser.parse_args(argv)
+    if args.command == "finalize":
+        return cmd_finalize(args)
     if args.command == "tag-kind":
         print(tag_kind(args.ref_name))
         return 0
