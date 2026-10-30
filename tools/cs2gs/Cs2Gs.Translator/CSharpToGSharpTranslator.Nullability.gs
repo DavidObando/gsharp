@@ -1068,6 +1068,15 @@ partial class CSharpToGSharpTranslator {
                     return this.IsNullableInitializer(ternary.WhenTrue) || this.IsNullableInitializer(ternary.WhenFalse)
                 }
             }
+            // Issue #5527: an await of a `Task<T?>` where C# runs no flow analysis.
+            if expression is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AwaitExpressionSyntax awaited &&
+                this.DeclaredAwaitedResultIsAnnotatedNullable(awaited) {
+                return true
+            }
             // Flow nullability when the nullable context happens to be enabled.
             let info = this.context.GetTypeInfo(expression)
             if info.Nullability.Annotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
