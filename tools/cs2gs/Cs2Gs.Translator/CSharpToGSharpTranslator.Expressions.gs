@@ -4635,6 +4635,26 @@ partial class CSharpToGSharpTranslator {
             }
             // `IsNullableInitializer` is the translator's one reading of a declared `T?`: it also
             // follows `[return: NotNullIfNotNull]` to the argument, as `Path.GetFileName(path)` needs.
+            // Issue #5526: `await call` yields the type argument of the task, whose `?` is part of
+            // the declared type and survives where the call's own annotation does not.
+            if call is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaited {
+                return this.IsAnnotationsContextWithoutFlowAnalysis(awaited) &&
+                    this
+                    .context
+                    .GetSymbolInfo(awaited.Expression)
+                    .Symbol is IMethodSymbol{
+                    ReturnType: INamedTypeSymbol{TypeArguments: {Length: 1} typeArguments} task
+                } &&
+                    (task.OriginalDefinition.Name == "Task" || task.OriginalDefinition.Name == "ValueTask") &&
+                    task
+                    .ContainingNamespace
+                    ?.ToDisplayString() == "System.Threading.Tasks" &&
+                    typeArguments[0].IsReferenceType &&
+                    typeArguments[0].NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            }
             if !(call is InvocationExpressionSyntax) || !this.IsAnnotationsContextWithoutFlowAnalysis(call) ||
                 // A user-defined conversion has its own input and result contracts, which
             // the conversion bridge in `ForgiveNullableReferenceValueCore` decides.
@@ -5540,6 +5560,19 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        /// Issue #5527: whether [`symbol`](paramref) is a `var` local whose initializer is nullable by declaration.
+        /// @remarks G# infers `T?` for it, so a read that feeds a sink which stays non-null needs the same `!!`
+        /// that full flow analysis gives when C# knows the local is non-null there.
+        private func IsInferredNullableLocal(symbol ISymbol?) bool {
+            return symbol is ILocalSymbol local &&
+                IsImplicitlyTypedLocal(local) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                this.IsNullableInitializer(initializer)
+        }
+
         /// Determines whether [`recv`](paramref) needs a G# `!!`
         /// assertion because it is either a declared-nullable reference narrowed
         /// non-null by flow or an ordinary dereference receiver whose declaration
@@ -5808,7 +5841,11 @@ partial class CSharpToGSharpTranslator {
             // non-null one C# proved, so the argument is asserted there.
             let annotationsWithoutFlowAnalysis = (
                 isDereferenceReceiver ||
-                    (widenedSinkNeedsNonNull && !widenedSinkInfersType && this.IsTranslatorWidenedDeclaration(symbol))
+                    (
+                    widenedSinkNeedsNonNull &&
+                        !widenedSinkInfersType &&
+                        (this.IsTranslatorWidenedDeclaration(symbol) || this.IsInferredNullableLocal(symbol))
+                )
             ) &&
                 this.IsAnnotationsContextWithoutFlowAnalysis(recv)
             if flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull && !annotationsWithoutFlowAnalysis {
@@ -7664,6 +7701,9 @@ partial class CSharpToGSharpTranslator {
                 expression GExpression?
             ) GExpression? -> if TranslatedExpressionIsStaticallyNonNull(expression) {
                 expression
+            } else if expression is AwaitExpression {
+                // `await x!!` asserts the task; the awaited value needs `(await x)!!` (issue #5526).
+                cast[GExpression](NonNullAssertionExpression(ParenthesizedExpression(expression)))
             } else {
                 cast[GExpression](NonNullAssertionExpression(expression))
             }
