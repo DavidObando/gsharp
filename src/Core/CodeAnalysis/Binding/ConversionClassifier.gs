@@ -182,14 +182,8 @@ internal class ConversionClassifier {
     /// @param argument The bound argument.
     /// @param target The parameter type.
     /// @returns The conversion, or (cref:Conversion.None) when a function value cannot keep its delegate.
-    internal func ClassifyArgumentConversion(argument BoundExpression, target TypeSymbol) Conversion {
-        let conversion = ClassifyArgumentConversion(argument.Type, target)
-        return if conversion.Exists && !conversion.IsIdentity && !KeepsConvertedDelegate(argument, target) {
-            Conversion.None
-        } else {
-            conversion
-        }
-    }
+    internal func ClassifyArgumentConversion(argument BoundExpression, target TypeSymbol) Conversion ->
+    ClassifyConvertedDelegate(argument, target, ClassifyArgumentConversion(argument.Type, target))
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
 
@@ -708,12 +702,7 @@ internal class ConversionClassifier {
             return BoundClrConversionCallExpression(nil, expression, liftedMethod!!, liftedOwner, type!!)
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
-        // Issue #5536: the literal arms above give a function literal a body of the target shape. Any other
-        // function value keeps its delegate, so a conversion that needs a new body does not exist for it.
-        if conversion.Exists && !conversion.IsIdentity && !KeepsConvertedDelegate(expression, type!!) {
-            conversion = Conversion.None
-        }
-        // A checked cast also keeps the delegate: `castclass` throws when the delegate is not the target.
+        conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
         if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
             Conversion.ChecksFunctionValueDelegate(expression.Type, type!!) {
             conversion = Conversion.Explicit
@@ -4949,6 +4938,31 @@ internal class ConversionClassifier {
         /// @returns `false` when the conversion needs a new function body.
         internal func KeepsConvertedDelegate(expression BoundExpression, target TypeSymbol) bool ->
         expression is BoundFunctionLiteralExpression || Conversion.KeepsFunctionValueDelegate(expression.Type, target)
+
+        /// Issue #5536: adjusts the type-pair classification of [`expression`](paramref) for a function value
+        /// that keeps its delegate. An implicit conversion that needs a new body does not exist for a function
+        /// value. An explicit one exists only as a checked `castclass` downcast
+        /// ((cref:Conversion.ChecksFunctionValueDelegate)), so an implicit use reports the cast-required
+        /// diagnostic.
+        /// @param expression The converted expression.
+        /// @param target The conversion target.
+        /// @param conversion The type-pair classification.
+        /// @returns The classification that binding and overload applicability use.
+        internal func ClassifyConvertedDelegate(
+            expression BoundExpression,
+            target TypeSymbol,
+            conversion Conversion
+        ) Conversion {
+            if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
+                return conversion
+            }
+            return if Conversion.HasCheckedReferenceConversion(expression.Type, target) &&
+                Conversion.ChecksFunctionValueDelegate(expression.Type, target) {
+                Conversion.Explicit
+            } else {
+                Conversion.None
+            }
+        }
 
         /// Issue #3505: true when [`from`](paramref) and [`to`](paramref)
         /// share an arity and differ in at least one slot by a strict implicit

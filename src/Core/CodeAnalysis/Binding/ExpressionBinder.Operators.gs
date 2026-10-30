@@ -3667,14 +3667,6 @@ internal partial class ExpressionBinder {
                         ClrOverloadResolution.ImplicitConversionKind.None
                     }
                 }
-                // Issue #5536: a function value keeps its delegate, so a delegate parameter that needs a new body is
-                // not applicable. Only a non-generic declaration has exact parameter types here: a generic one can
-                // be closed over erased source types, so its argument conversion decides after inference.
-                if parameter.Member is MethodBase{IsGenericMethod: false, DeclaringType: {IsGenericType: false}} &&
-                    !ConversionClassifier
-                    .KeepsConvertedDelegate(boundArguments[argIndex], nativeTarget) {
-                    return ClrOverloadResolution.ImplicitConversionKind.None
-                }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
@@ -3744,12 +3736,6 @@ internal partial class ExpressionBinder {
                 )
                 if NativeProtocolOperations.GetProtocol(targetType) != nil {
                     return nativeConversions?.ClassifyArgumentConversion(sourceType, targetType).IsImplicit == true
-                }
-                // Issue #5536: the same function-value rule as the classifier above. A source element can make the
-                // CLR target an erased surrogate, so only a function value without one is checked here.
-                if !TypeSymbol.ContainsSameCompilationUserType(sourceType) &&
-                    !ConversionClassifier.KeepsConvertedDelegate(boundArguments[argIndex], targetType) {
-                    return false
                 }
                 return Conversion.ClassifyNonStructural(sourceType, targetType)
                     .IsImplicit ||
@@ -4187,37 +4173,59 @@ internal partial class ExpressionBinder {
         )
             .IsImplicit
 
-        internal func MakeDelegateRefKindArgumentCheck(
+        /// Issue #5536: the delegate-parameter callback that every imported overload resolution with bound
+        /// arguments registers, for methods, constructors and base constructors.
+        /// @param boundArguments The bound call arguments.
+        /// @param argumentOffset The number of leading resolver arguments that are not call arguments.
+        /// @returns A callback that answers (cref:ClrOverloadResolution.ImplicitConversionKind.None) when a
+        /// function value cannot keep its delegate, and
+        /// (cref:ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch) for different ref kinds.
+        internal func MakeDelegateArgumentCheck(
             boundArguments IReadOnlyList[BoundExpression]?,
             argumentOffset int32 = 0
-        )((int32, Type) -> bool?)? {
+        )((int32, Type) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             if boundArguments == nil {
                 return nil
             }
             return (index int32, clrParameterType Type?) -> {
                 let argIndex = index - argumentOffset
-                if argIndex < 0 ||
-                    argIndex >= boundArguments.Count ||
-                    clrParameterType == nil ||
-                    !ClrTypeUtilities.IsDelegateType(clrParameterType) {
+                if argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == nil {
                     return nil
                 }
-                if !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
-                    boundArguments[argIndex],
+                let argument = boundArguments[argIndex]
+                // An ordinary argument at an `in` parameter is passed by readonly reference to its pointee. An
+                // explicit address keeps the exact-storage rules of the resolver.
+                var delegateType Type = clrParameterType
+                if delegateType.IsByRef &&
+                    !(argument is BoundAddressOfExpression or BoundConditionalAddressExpression) {
+                    delegateType = delegateType.GetElementType() ?? delegateType
+                }
+                if !ClrTypeUtilities.IsDelegateType(delegateType) {
+                    return nil
+                }
+                // Issue #5536: a function value keeps its delegate, so a parameter that needs a new body is not
+                // applicable. A function literal binds its body to the parameter and keeps return adaptation.
+                if !ConversionClassifier.KeepsConvertedDelegate(
+                    argument,
+                    TypeSymbol.FromClrTypeWithoutNullability(delegateType, NullabilityFreeReason.IdentityComparison)
+                ) {
+                    return ClrOverloadResolution.ImplicitConversionKind.None
+                }
+                if clrParameterType.IsByRef || !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
+                    argument,
                     out var sourceRefKinds
                 ) {
                     return nil
                 }
-                let targetInvoke MethodInfo? = clrParameterType.GetMethodSafe("Invoke")
+                let targetInvoke MethodInfo? = delegateType.GetMethodSafe("Invoke")
                 if targetInvoke == nil {
                     return nil
                 }
                 let targetRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(targetInvoke)
-                return if sourceRefKinds.Length == targetRefKinds.Length {
-                    sourceRefKinds.SequenceEqual(targetRefKinds)
-                } else {
-                    nil
+                if sourceRefKinds.Length == targetRefKinds.Length && !sourceRefKinds.SequenceEqual(targetRefKinds) {
+                    return ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch
                 }
+                return nil
             }
         }
     }

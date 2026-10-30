@@ -1318,7 +1318,7 @@ internal partial class ExpressionBinder {
                 nativeConversions: conversions
             ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
-            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+            delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             deferredInferenceArgs: BuildOpenLiteralInferenceFlags(arguments),
@@ -1877,7 +1877,7 @@ internal partial class ExpressionBinder {
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
                 structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
                 erasedArgumentMismatchCheck: ExtensionErasedMismatchCheck,
-                delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
+                delegateArgumentCheck: MakeDelegateArgumentCheck(arguments, argumentOffset: 1),
                 methodGroupInference: MakeMethodGroupInference(
                     arguments,
                     GetEffectiveArgumentClrTypeForOverloadResolution,
@@ -3633,7 +3633,7 @@ internal partial class ExpressionBinder {
                 nativeConversions: conversions
             ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
-            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+            delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgTypes,

@@ -212,6 +212,78 @@ class Program {
     }
 
     @Fact
+    func ImportedInParameter_SkipsFunctionValueThatNeedsAConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let f () -> int32 = () -> 1
+    let g () -> int64 = () -> 2
+    Console.Write(Calls.In(f, 1))
+    Console.Write(Calls.In(g, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Func<long> g = () => 2;
+        Console.Write(Calls.In(f, 1));
+        Console.Write(Calls.In(g, 1));
+    }
+}
+`, "OF")
+    }
+
+    @Fact
+    func ImportedConstructors_SkipFunctionValueThatNeedsAConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+class Derived : C {
+    init(f () -> int32) : base(f, 1) {}
+}
+func Main() {
+    let f () -> int32 = () -> 1
+    Console.Write(C(f, 1).Kind)
+    Console.Write(Derived(f).Kind)
+    Console.Write(C(() -> 1, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Derived : C {
+    public Derived(Func<int> f) : base(f, 1) {}
+}
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Console.Write(new C(f, 1).Kind);
+        Console.Write(new Derived(f).Kind);
+        Console.Write(new C(() => 1, 1).Kind);
+    }
+}
+`, "OOF")
+    }
+
+    @Fact
+    func ImplicitDowncast_ReportsCastRequired() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func D(a () -> Animal) () -> Dog -> a
+func Main() {}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static Func<Dog> D(Func<Animal> a) => a;
+    static void Main() {}
+}
+`, "CS0266", line: 4, column: 37, length: 1, diagnostic: "GS0156")
+    }
+
+    @Fact
     func NullableReferenceResult_ToImportedDelegate_KeepsTheDelegate() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
         Check(fixture, `import System
@@ -605,6 +677,13 @@ namespace FunctionControl {
     public static class Calls {
         public static string M(System.Func<long> f, int x) => "F";
         public static string M(object o, long x) => "O";
+        public static string In(in System.Func<long> f, int x) => "F";
+        public static string In(object o, long x) => "O";
+    }
+    public class C {
+        public string Kind;
+        public C(System.Func<long> f, int x) { Kind = "F"; }
+        public C(object o, long x) { Kind = "O"; }
     }
 }
 `
