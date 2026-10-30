@@ -38,6 +38,8 @@ import Xunit
 /// | 9 | indexer key | `D[Maybe()]` (GS0155) | `D[Maybe()!!]` | index path ignores the flag |
 /// | 10 | call as argument of a nullable parameter | `Consume(Maybe())` | unchanged | call result asserted without the sink check |
 /// | 11 | `#nullable disable` region calling a `T?` method | no `!!` | unchanged | annotations gate removed |
+/// | 12 | call as argument of an unconstrained generic parameter G# infers | `Count(Maybe())` | unchanged | inferred sink treated as declared |
+/// | 13 | call as argument of a `where T : class` generic parameter | no `!!` (GS0155 or throw) | `Use(Maybe()!!)` | declared call result ignored |
 open class Issue5516MaybeNullAssignTests {
     @Fact
     func Row1_ParameterAssignedFromNullableCall_IsAsserted() {
@@ -175,6 +177,30 @@ public static class K {
 #nullable restore
 }`, bind: false)
         Assert.DoesNotContain("Maybe()!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row12_InferredGenericArgument_KeepsTheNullableCall() {
+        // G# infers `T = C?`, so an assertion would throw where C# returns 1.
+        let printed = Translate(true, `public class C { public int N; }
+public static class K {
+  static C? Maybe() => null;
+  static int Count<T>(T x) => 1;
+  public static int M() { return Count(Maybe()); }
+}`)
+        Assert.Contains("Count(Maybe())", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row13_ConstrainedGenericArgument_IsAsserted() {
+        let printed = Translate(true, `public class C { public int N; }
+public static class K {
+  static C? Maybe() => null;
+  static int Use<T>(T x) where T : class => 1;
+  public static int M() { return Use(Maybe()); }
+}`)
+        Assert.Equal(1, Count(printed, "Use(Maybe()!!)"))
     }
 
     shared {

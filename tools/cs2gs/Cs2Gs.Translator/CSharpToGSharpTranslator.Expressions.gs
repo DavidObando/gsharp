@@ -2917,9 +2917,11 @@ partial class CSharpToGSharpTranslator {
                 respectNullGuards: true
             )
             // Issue #5516: where C# runs no flow analysis a call result keeps its
-            // declared `T?` only on the method. A local that G# infers from the
-            // value takes that `T?` itself, so only a declared sink asks for it.
+            // declared `T?` only on the method. A local or a generic parameter
+            // that G# infers from the value takes that `T?` itself, so only a
+            // declared sink asks for it.
             let declaredSink = targetSymbol != nil &&
+                !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
                 value,
