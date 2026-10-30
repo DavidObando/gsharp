@@ -1759,14 +1759,14 @@ class Conversion {
                 if AreTypeArgumentsEquivalent(rectangularSource.ElementType, rectangularTarget.ElementType) {
                     return Conversion.Implicit
                 }
-                let elementConversion = ClassifyNonStructural(
-                    rectangularSource.ElementType,
-                    rectangularTarget.ElementType
-                )
+                // CLR array covariance reuses the array only when each element keeps its reference (#5518).
                 return if IsReferenceLikeTarget(rectangularSource.ElementType) &&
                     IsReferenceLikeTarget(rectangularTarget.ElementType) &&
-                    elementConversion.Exists &&
-                    elementConversion.IsImplicit {
+                    IsVarianceArgumentCompatible(
+                    rectangularSource.ElementType,
+                    rectangularTarget.ElementType,
+                    allowPlatformNilCheck: true
+                ) {
                     Conversion.Implicit
                 } else {
                     (
@@ -1960,7 +1960,11 @@ class Conversion {
         /// @param from The source constructed interface.
         /// @param to The target constructed interface.
         /// @returns `true` when the conversion is variance-compatible.
-        internal func IsVarianceCompatibleInterfaceConversion(from InterfaceSymbol?, to InterfaceSymbol?) bool {
+        internal func IsVarianceCompatibleInterfaceConversion(
+            from InterfaceSymbol?,
+            to InterfaceSymbol?,
+            nominalOnly bool = false
+        ) bool {
             if from == nil || to == nil || from.Definition != to.Definition {
                 return false
             }
@@ -1999,7 +2003,7 @@ class Conversion {
                         // nil check (`string!` -> `object`) is not variance: a
                         // variance conversion reads every element through the
                         // target view with no per-element check point.
-                        if !IsVarianceArgumentCompatible(fromArg, toArg, allowPlatformNilCheck: false) {
+                        if !IsVariantArgumentRelated(fromArg, toArg, nominalOnly, allowPlatformNilCheck: false) {
                             return false
                         }
                     }
@@ -2012,7 +2016,7 @@ class Conversion {
                         // #4420: symmetric to the covariant arm. A view that
                         // writes `string!` (possibly nil) into a sink declared
                         // non-null `object` has no per-element check point.
-                        if !IsVarianceArgumentCompatible(toArg, fromArg, allowPlatformNilCheck: false) {
+                        if !IsVariantArgumentRelated(toArg, fromArg, nominalOnly, allowPlatformNilCheck: false) {
                             return false
                         }
                     }
@@ -2055,7 +2059,8 @@ class Conversion {
 
         internal func ArrayElementConvertsToInterfaceSymbolically(
             sourceElement TypeSymbol,
-            targetInterface TypeSymbol
+            targetInterface TypeSymbol,
+            nominalOnly bool = false
         ) bool {
             // Issue #2140: element-INDEPENDENT non-generic array interfaces.
             // Every one-dimensional array implements these regardless of its
@@ -2114,7 +2119,7 @@ class Conversion {
                 !IsReferenceTypeArgument(targetElement) {
                 return false
             }
-            return IsVarianceArgumentCompatible(sourceElement, targetElement, allowPlatformNilCheck: true)
+            return IsVariantArgumentRelated(sourceElement, targetElement, nominalOnly, allowPlatformNilCheck: true)
         }
 
         /// Issue #3505: true when [`from`](paramref) implicitly converts to
@@ -2161,9 +2166,24 @@ class Conversion {
                 !IsReferenceLikeTarget(target) {
                 return false
             }
+            return ProvesNominalReference(source, target)
+        }
+
+        /// Proves that an implicit conversion keeps the same reference: a nominal base, interface, array, delegate or
+        /// variant relation, not a conversion that constructs or selects another reference. It does not classify the
+        /// pair; callers classify once, and nested arguments recurse only through this proof, so each pair is proven once.
+        /// @param source The source type.
+        /// @param target The target type.
+        /// @returns `true` when the target view is the same reference.
+        private func ProvesNominalReference(source TypeSymbol, target TypeSymbol) bool {
             let sourceShape = source.StripToBareShape()
             let targetShape = target.StripToBareShape()
-            // Prove nominal inheritance separately from implicit conversions that construct or select another reference.
+            if !IsReferenceLikeTarget(sourceShape) || !IsReferenceLikeTarget(targetShape) {
+                return false
+            }
+            if AreTypeArgumentsEquivalent(sourceShape, targetShape) {
+                return true
+            }
             if targetShape == TypeSymbol.Object || targetShape.ClrType?.IsSameAs(typeof(object)) == true {
                 return true
             }
@@ -2175,17 +2195,16 @@ class Conversion {
                 }
                 for c in GetStructHierarchy(sourceClass) {
                     for iface in c.Interfaces {
-                        if IsRepresentationPreservingImplicit(iface, target) {
+                        if ProvesNominalReference(iface, targetShape) {
                             return true
                         }
                     }
                     for iface in c.ImplementedClrInterfaces {
-                        if IsRepresentationPreservingImplicit(iface, target) {
+                        if ProvesNominalReference(iface, targetShape) {
                             return true
                         }
                     }
-                    if c.ImportedBaseType is {} importedBase &&
-                        IsRepresentationPreservingImplicit(importedBase, target) {
+                    if c.ImportedBaseType is {} importedBase && ProvesNominalReference(importedBase, targetShape) {
                         return true
                     }
                 }
@@ -2193,11 +2212,14 @@ class Conversion {
             if sourceShape is InterfaceSymbol sourceInterface {
                 for iface in sourceInterface.SelfAndAllBaseInterfaces() {
                     if targetShape is InterfaceSymbol targetInterface &&
-                        (iface == targetInterface || IsVarianceCompatibleInterfaceConversion(iface, targetInterface)) {
+                        (
+                        iface == targetInterface ||
+                            IsVarianceCompatibleInterfaceConversion(iface, targetInterface, nominalOnly: true)
+                    ) {
                         return true
                     }
                     for imported in iface.BaseClrInterfaces {
-                        if IsRepresentationPreservingImplicit(imported, target) {
+                        if ProvesNominalReference(imported, targetShape) {
                             return true
                         }
                     }
@@ -2210,7 +2232,7 @@ class Conversion {
                     typeParameter.InterfaceConstraint,
                     typeParameter.ClrInterfaceConstraint
                 } {
-                    if bound != nil && IsRepresentationPreservingImplicit(bound, target) {
+                    if bound != nil && ProvesNominalReference(bound, targetShape) {
                         return true
                     }
                 }
@@ -2223,8 +2245,26 @@ class Conversion {
                     IsElementIndependentArrayInterface(targetShape) {
                     return true
                 }
+                // `[N]T` and `[]T` are the same CLR `T[]`; slice covariance stays explicit-only.
+                if targetShape is SliceTypeSymbol targetSlice &&
+                    OneDimensionalArrayElement(sourceShape) is {} fixedElement &&
+                    AreTypeArgumentsEquivalent(fixedElement, targetSlice.ElementType) {
+                    return true
+                }
+                // Equal-rank rectangular arrays use CLR array covariance over reference elements.
+                if sourceShape is RectangularArrayTypeSymbol sourceRectangular &&
+                    targetShape is RectangularArrayTypeSymbol targetRectangular &&
+                    sourceRectangular.Rank == targetRectangular.Rank &&
+                    IsVariantArgumentRelated(
+                    sourceRectangular.ElementType,
+                    targetRectangular.ElementType,
+                    nominalOnly: true,
+                    allowPlatformNilCheck: false
+                ) {
+                    return true
+                }
                 if OneDimensionalArrayElement(sourceShape) is {} sourceElement &&
-                    ArrayElementConvertsToInterfaceSymbolically(sourceElement, targetShape) {
+                    ArrayElementConvertsToInterfaceSymbolically(sourceElement, targetShape, nominalOnly: true) {
                     return true
                 }
             }
@@ -2241,6 +2281,32 @@ class Conversion {
             ) {
                 return true
             }
+            // A `Func`/`Action` keeps its parameters and only widens a reference result, as CLR delegate variance does.
+            if sourceShape is FunctionTypeSymbol sourceFunction && targetShape is FunctionTypeSymbol targetFunction {
+                if sourceFunction.Arity != targetFunction.Arity {
+                    return false
+                }
+                for var i = 0; i < sourceFunction.Arity; i++ {
+                    if sourceFunction.IsVariadic[i] != targetFunction.IsVariadic[i] ||
+                        !TypeSymbol
+                        .AreRuntimeEquivalentIgnoringReferenceNullability(
+                        sourceFunction.ParameterTypes[i],
+                        targetFunction.ParameterTypes[i]
+                    ) {
+                        return false
+                    }
+                }
+                return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    sourceFunction.ReturnType,
+                    targetFunction.ReturnType
+                ) ||
+                    IsVariantArgumentRelated(
+                    sourceFunction.ReturnType,
+                    targetFunction.ReturnType,
+                    nominalOnly: true,
+                    allowPlatformNilCheck: false
+                )
+            }
             // IEnumerable<T> derives from the non-generic IEnumerable (#3566).
             if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(sourceShape, out var enumerableDefinition, out _) &&
                 enumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1" &&
@@ -2249,15 +2315,33 @@ class Conversion {
                 ?.FullName == "System.Collections.IEnumerable" {
                 return true
             }
-            if (sourceShape is ImportedTypeSymbol || TryGetConstructedGenericShape(source, out _, out _)) &&
-                TryGetConstructedGenericShape(target, out _, out _) {
-                return TryClassifyConstructedImportedReferenceConversion(source, target)
+            if (sourceShape is ImportedTypeSymbol || TryGetConstructedGenericShape(sourceShape, out _, out _)) &&
+                TryGetConstructedGenericShape(targetShape, out _, out _) {
+                return TryClassifyConstructedImportedReferenceConversion(sourceShape, targetShape, nominalOnly: true)
             }
-            return if source.ClrType is {} sourceClr && target.ClrType is {} targetClr {
+            return if sourceShape.ClrType is {} sourceClr && targetShape.ClrType is {} targetClr {
                 ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
             } else {
                 false
             }
+        }
+
+        /// Relates one variant position. Classification checks the argument once; the nominal proof alone then
+        /// rejects conversions that construct or select another reference, such as channel getter projections (#5518).
+        /// With [`nominalOnly`](paramref), the caller has already classified the enclosing pair, so only the proof
+        /// recurses.
+        private func IsVariantArgumentRelated(
+            source TypeSymbol,
+            target TypeSymbol,
+            nominalOnly bool,
+            allowPlatformNilCheck bool
+        ) bool {
+            if !nominalOnly {
+                return IsVarianceArgumentCompatible(source, target, allowPlatformNilCheck)
+            }
+            return IsReferenceTypeArgument(source) &&
+                IsReferenceTypeArgument(target) &&
+                ProvesNominalReference(source, target)
         }
 
         /// True when [`type`](paramref) is a reference-capable type for
@@ -3026,11 +3110,13 @@ class Conversion {
         /// @param from The actual source shape.
         /// @param to The actual target shape.
         /// @param clrArgumentBoundary Whether CLR applicability already admitted reference annotations.
+        /// @param nominalOnly Whether the caller already classified the pair, so variant arguments use only the nominal proof.
         /// @returns Whether the symbolic hierarchy and variance admit the relation.
         private func TryClassifyConstructedImportedReferenceConversion(
             from TypeSymbol?,
             to TypeSymbol?,
-            clrArgumentBoundary bool = false
+            clrArgumentBoundary bool = false,
+            nominalOnly bool = false
         ) bool {
             if from == nil ||
                 !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments) ||
@@ -3056,7 +3142,8 @@ class Conversion {
                     sourceTypeArguments,
                     targetArguments,
                     targetOpen,
-                    clrArgumentBoundary
+                    clrArgumentBoundary,
+                    nominalOnly
                 )
             }
             if from is not ImportedTypeSymbol importedSource {
@@ -3070,7 +3157,8 @@ class Conversion {
                     arguments,
                     targetArguments,
                     targetOpen,
-                    clrArgumentBoundary
+                    clrArgumentBoundary,
+                    nominalOnly
                 ) {
                     return true
                 }
@@ -3082,7 +3170,8 @@ class Conversion {
             sourceArguments ImmutableArray[TypeSymbol],
             targetArguments ImmutableArray[TypeSymbol],
             targetOpen Type,
-            clrArgumentBoundary bool
+            clrArgumentBoundary bool,
+            nominalOnly bool
         ) bool {
             if sourceArguments.Length != targetArguments.Length {
                 return false
@@ -3126,15 +3215,17 @@ class Conversion {
                     IsReferenceTypeArgument(sourceArgument) &&
                     IsReferenceTypeArgument(targetArgument)
                 let compatible = switch variance {
-                    case GenericParameterAttributes.Covariant: IsVarianceArgumentCompatible(
+                    case GenericParameterAttributes.Covariant: IsVariantArgumentRelated(
                         sourceArgument,
                         targetArgument,
+                        nominalOnly,
                         isDelegateConformanceBoundary
                     ) ||
                         (clrReferenceArguments && HasClrArgumentRuntimeRelation(sourceArgument, targetArgument))
-                    case GenericParameterAttributes.Contravariant: IsVarianceArgumentCompatible(
+                    case GenericParameterAttributes.Contravariant: IsVariantArgumentRelated(
                         targetArgument,
                         sourceArgument,
+                        nominalOnly,
                         isDelegateConformanceBoundary
                     ) ||
                         (clrReferenceArguments && HasClrArgumentRuntimeRelation(targetArgument, sourceArgument))
@@ -4308,11 +4399,13 @@ class Conversion {
             if !IsReferenceTypeArgument(source) || !IsReferenceTypeArgument(target) {
                 return false
             }
+            // Classification already related nested arguments; only the nominal proof is added for this pair.
             let conversion = Classify(source, target)
             return conversion.Exists &&
                 conversion.IsImplicit &&
+                !conversion.IsStructuralProjection &&
                 (allowPlatformNilCheck || !conversion.RequiresPlatformNilCheck) &&
-                IsRepresentationPreservingImplicit(source.StripToBareShape(), target.StripToBareShape())
+                ProvesNominalReference(source, target)
         }
 
         /// The element positions of a magic collection, <b>with the nullability

@@ -552,6 +552,38 @@ class Program {
         "CS0029",
         "GS0155"
     )
+    @InlineData(
+        "[,]Channel[int32]",
+        "[,]ChannelReader[int32]",
+        "Channel<int>[,]",
+        "ChannelReader<int>[,]",
+        "CS0029",
+        "GS0155"
+    )
+    @InlineData(
+        "sequence[[,]Channel[int32]]",
+        "sequence[[,]ChannelReader[int32]]",
+        "IEnumerable<Channel<int>[,]>",
+        "IEnumerable<ChannelReader<int>[,]>",
+        "CS0266",
+        "GS0156"
+    )
+    @InlineData(
+        "sequence[() -> int32]",
+        "sequence[() -> int64]",
+        "IEnumerable<System.Func<int>>",
+        "IEnumerable<System.Func<long>>",
+        "CS0266",
+        "GS0156"
+    )
+    @InlineData(
+        "sequence[() -> Channel[int32]]",
+        "sequence[() -> ChannelReader[int32]]",
+        "IEnumerable<System.Func<Channel<int>>>",
+        "IEnumerable<System.Func<ChannelReader<int>>>",
+        "CS0266",
+        "GS0156"
+    )
     func NominalVariance_RejectsWrongOwnerValueTypesAndNestedProjections(
         from string,
         to string,
@@ -636,6 +668,172 @@ class Program {
 }
 `
         Check(fixture, source, oracle, "112TrueTrueTrue1")
+    }
+
+    @Fact
+    func NestedArrayAndFunctionVariance_KeepReferences() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+open class Animal {}
+class Dog : Animal {}
+func Grids(x sequence[[,]Dog]) sequence[[,]Animal] -> x
+func Makers(x sequence[() -> Dog]) sequence[() -> Animal] -> x
+func Nested(x sequence[() -> () -> Dog]) sequence[() -> () -> Animal] -> x
+func Main() {
+    let grid = [1, 2]Dog{Dog(), Dog()}
+    let grids sequence[[,]Dog] = [][,]Dog{grid}
+    let maker = () -> Dog()
+    let makers sequence[() -> Dog] = []() -> Dog{maker}
+    let nested sequence[() -> () -> Dog] = []() -> () -> Dog{() -> maker}
+    var count = 0
+    for g in Grids(grids) { count += g.Length }
+    for m in Makers(makers) { if m() is Dog { count += 10 } }
+    for n in Nested(nested) { if n()() is Dog { count += 100 } }
+    Console.Write(count)
+    Console.Write(Object.ReferenceEquals(grids, Grids(grids)))
+    Console.Write(Object.ReferenceEquals(makers, Makers(makers)))
+    Console.Write(Object.ReferenceEquals(nested, Nested(nested)))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using System.Collections.Generic;
+using UpcastControl;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static IEnumerable<Animal[,]> Grids(IEnumerable<Dog[,]> x) => x;
+    static IEnumerable<Func<Animal>> Makers(IEnumerable<Func<Dog>> x) => x;
+    static IEnumerable<Func<Func<Animal>>> Nested(IEnumerable<Func<Func<Dog>>> x) => x;
+    static void Main() {
+        var grid = new Dog[1, 2] { { new Dog(), new Dog() } };
+        IEnumerable<Dog[,]> grids = new[] { grid };
+        Func<Dog> maker = () => new Dog();
+        IEnumerable<Func<Dog>> makers = new[] { maker };
+        IEnumerable<Func<Func<Dog>>> nested = new Func<Func<Dog>>[] { () => maker };
+        var count = 0;
+        foreach (var g in Grids(grids)) count += g.Length;
+        foreach (var m in Makers(makers)) { if (m() is Dog) count += 10; }
+        foreach (var n in Nested(nested)) { if (n()() is Dog) count += 100; }
+        Console.Write(count);
+        Console.Write(Object.ReferenceEquals(grids, Grids(grids)));
+        Console.Write(Object.ReferenceEquals(makers, Makers(makers)));
+        Console.Write(Object.ReferenceEquals(nested, Nested(nested)));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "112TrueTrueTrue1")
+    }
+
+    @Fact
+    func FixedArrayAndSliceJoin_PreservesSliceFact() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+class Item {
+    let Value int32
+    init(value int32) { Value = value }
+}
+func Up(value [2]Item) []Item -> value
+func Read(value object, flag bool) int32 {
+    if flag {
+        if value !is [2]Item { return 0 }
+    } else {
+        if value !is []Item { return 0 }
+    }
+    var sum = 0
+    for item in value { sum += item.Value }
+    return sum + value.Length
+}
+func Main() {
+    let fixed = [2]Item{Item(3), Item(4)}
+    Console.Write(Read(fixed, true))
+    Console.Write(Read(fixed, false))
+    Console.Write(Object.ReferenceEquals(fixed, Up(fixed)))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using UpcastControl;
+class Item { public readonly int Value; public Item(int value) { Value = value; } }
+class Program {
+    static Item[] Up(Item[] value) => value;
+    static int Read(object value, bool flag) {
+        if (value is not Item[] items) return 0;
+        var sum = 0;
+        foreach (var item in items) sum += item.Value;
+        return sum + items.Length;
+    }
+    static void Main() {
+        var fixedItems = new[] { new Item(3), new Item(4) };
+        Console.Write(Read(fixedItems, true));
+        Console.Write(Read(fixedItems, false));
+        Console.Write(Object.ReferenceEquals(fixedItems, Up(fixedItems)));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "99True1")
+    }
+
+    @Fact
+    func DeepNestedCovariance_ProvesEachArgumentPairOnce() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        // Proving each nested pair more than once grows exponentially; this depth cannot finish then.
+        let depth = 32
+        var from = "string"
+        var to = "object"
+        var oracleFrom = "string"
+        var oracleTo = "object"
+        for var i = 0; i < depth; i++ {
+            from = "IReadOnlyList[" + from + "]"
+            to = "IReadOnlyList[" + to + "]"
+            oracleFrom = "IReadOnlyList<" + oracleFrom + ">"
+            oracleTo = "IReadOnlyList<" + oracleTo + ">"
+        }
+        let element = from.Substring("IReadOnlyList[".Length, from.Length - "IReadOnlyList[".Length - 1)
+        let oracleElement = oracleFrom.Substring(
+            "IReadOnlyList<".Length,
+            oracleFrom.Length - "IReadOnlyList<".Length - 1
+        )
+        let source = "import System\nimport System.Collections.Generic\nimport UpcastControl\nfunc Up(x " +
+            from +
+            ") " +
+            to +
+            " -> x\nfunc Main() {\n    let value " +
+            from +
+            " = []" +
+            element +
+            "{}\n    Console.Write(Object.ReferenceEquals(value, Up(value)))\n" +
+            "    Console.Write(Base[uint32].Read(Base[uint32]()))\n}\n"
+        let oracle = "using System;\nusing System.Collections.Generic;\nusing UpcastControl;\nclass Program {\n" +
+            "    static " +
+            oracleTo +
+            " Up(" +
+            oracleFrom +
+            " x) => x;\n    static void Main() {\n        " +
+            oracleFrom +
+            " value = new " +
+            oracleElement +
+            "[0];\n        Console.Write(Object.ReferenceEquals(value, Up(value)));\n" +
+            "        Console.Write(Base<uint>.Read(new Base<uint>()));\n    }\n}\n"
+        Check(fixture, source, oracle, "True1")
+    }
+
+    @Fact
+    func FunctionVariance_RejectsNamedDelegateMaterialization() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let declaration = "func Up(x sequence[() -> Item]) sequence[Maker] -> "
+        let source = "class Item {}\ndelegate Maker() Item;\n" + declaration + "x\nfunc Main() {}\n"
+        let oracle = `using System;
+using System.Collections.Generic;
+class Item {}
+delegate Item Maker();
+class Program { static IEnumerable<Maker> Up(IEnumerable<Func<Item>> x) => x; }
+`
+        Reject(fixture, source, oracle, "CS0266", 3, declaration.Length + 1, 1, diagnostic: "GS0156")
     }
 
     @Fact
