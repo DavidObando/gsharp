@@ -180,6 +180,15 @@ class VerifyNugetTests(unittest.TestCase):
         make_packages(self.nupkgs, props=PROPS.replace("$(GsharpSdkVersion)", "0.5.212"))
         self.assertEqual(self.verify().returncode, 0)
 
+    def test_sdk_props_ignore_comments_and_attribute_order(self) -> None:
+        commented = "<Project><!-- " + PROPS.replace("<Project>", "").replace("</Project>", "") + " --></Project>"
+        make_packages(self.nupkgs, props=commented)
+        self.assertIn("has no PackageDownload", self.verify().stderr)
+        reordered = ('<Project><ItemGroup><PackageDownload Version="[$(GsharpSdkVersion)]" '
+                     'Include="Gsharp.NET.Sdk.Compiler.$(_GsharpHostRid)" /></ItemGroup></Project>')
+        make_packages(self.nupkgs, props=reordered)
+        self.assertEqual(self.verify().returncode, 0)
+
     def test_sdk_props_without_package_download_fail(self) -> None:
         make_packages(self.nupkgs, props="<Project/>")
         self.assertIn("has no PackageDownload", self.verify().stderr)

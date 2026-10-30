@@ -116,7 +116,12 @@ def check_sdk_props(sdk_file: Path, version: str) -> list[str]:
             text = archive.read("build/Gsharp.NET.Sdk.props").decode("utf-8-sig")
     except (zipfile.BadZipFile, KeyError) as error:
         return [f"{sdk_file.name}: cannot read build/Gsharp.NET.Sdk.props: {error}"]
-    versions = re.findall(r'<PackageDownload\s[^>]*Include="Gsharp\.NET\.Sdk\.Compiler\.[^"]*"[^>]*?Version="([^"]*)"', text)
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as error:
+        return [f"{sdk_file.name}: build/Gsharp.NET.Sdk.props is not valid XML: {error}"]
+    versions = [e.get("Version", "") for e in root.iter()
+                if local(e.tag) == "PackageDownload" and e.get("Include", "").startswith("Gsharp.NET.Sdk.Compiler.")]
     if not versions:
         return [f"{sdk_file.name}: build/Gsharp.NET.Sdk.props has no PackageDownload of Gsharp.NET.Sdk.Compiler"]
     return [f"{sdk_file.name}: PackageDownload version {found} is not [$(GsharpSdkVersion)] or [{version}]"
