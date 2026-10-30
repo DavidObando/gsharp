@@ -231,6 +231,105 @@ class Program {
         Check(fixture, source, oracle, "TrueTrueTrue1")
     }
 
+    // Issue #5544: tuple elements that differ only by reference annotations are one CLR type.
+    @Theory
+    @InlineData("(Name string, Scope object)", "(string Name, object Scope)")
+    @InlineData("(string, object)", "(string, object)")
+    @InlineData("(string?, object?)", "(string?, object?)")
+    func SourceClassTupleInterface_ErasesReferenceAnnotationsAndKeepsIdentity(key string, oracleKey string) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Collections.Generic
+import UpcastControl
+class KeyComparer : IEqualityComparer[@KEY@] {
+    func Equals(x @KEY@, y @KEY@) bool {
+        Console.Write("E")
+        return string.Equals(x.Item1, y.Item1) && Object.ReferenceEquals(x.Item2, y.Item2)
+    }
+    func GetHashCode(obj @KEY@) int32 {
+        Console.Write("H")
+        return HashCode.Combine(obj.Item1)
+    }
+}
+shared class Counts { var Receivers int32 = 0 }
+func Target(value KeyComparer) KeyComparer {
+    Counts.Receivers += 1
+    Console.Write("R")
+    return value
+}
+func View(value KeyComparer) IEqualityComparer[(string?, object?)] -> value
+func Main() {
+    let comparer = KeyComparer()
+    let owner = Object()
+    let keys = Dictionary[(string?, object?), bool](Target(comparer))
+    keys[("a", owner)] = true
+    Console.Write(keys.ContainsKey(("a", owner)))
+    let set = HashSet[(string?, object?)](Target(comparer))
+    Console.Write(set.Add(("b", owner)))
+    let view IEqualityComparer[(string?, object?)] = Target(comparer)
+    Console.Write(Object.ReferenceEquals(view, comparer))
+    Console.Write(Object.ReferenceEquals(View(comparer), comparer))
+    Console.Write(Counts.Receivers)
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`.Replace("@KEY@", key)
+        let oracle = `using System;
+using System.Collections.Generic;
+using UpcastControl;
+class KeyComparer : IEqualityComparer<@KEY@> {
+    public bool Equals(@KEY@ x, @KEY@ y) {
+        Console.Write("E");
+        return string.Equals(x.Item1, y.Item1) && Object.ReferenceEquals(x.Item2, y.Item2);
+    }
+    public int GetHashCode(@KEY@ obj) {
+        Console.Write("H");
+        return HashCode.Combine(obj.Item1);
+    }
+}
+class Program {
+    static int receivers;
+    static KeyComparer Target(KeyComparer value) { receivers++; Console.Write("R"); return value; }
+    static IEqualityComparer<(string?, object?)> View(KeyComparer value) => value;
+    static void Main() {
+        var comparer = new KeyComparer();
+        var owner = new Object();
+        var keys = new Dictionary<(string?, object?), bool>(Target(comparer));
+        keys[("a", owner)] = true;
+        Console.Write(keys.ContainsKey(("a", owner)));
+        var set = new HashSet<(string?, object?)>(Target(comparer));
+        Console.Write(set.Add(("b", owner)));
+        IEqualityComparer<(string?, object?)> view = Target(comparer);
+        Console.Write(Object.ReferenceEquals(view, comparer));
+        Console.Write(Object.ReferenceEquals(View(comparer), comparer));
+        Console.Write(receivers);
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`.Replace("@KEY@", oracleKey)
+        Check(fixture, source, oracle, "RHHETrueRHTrueRTrueTrue31")
+    }
+
+    // Issue #5544: an optional value tuple element is a different CLR type, so the interface view stays rejected.
+    @Fact
+    func SourceClassTupleInterface_RejectsOptionalValueElement() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let declaration = "func Up(x KeyComparer) IEqualityComparer[(int32?, string)] -> "
+        let source = "import System.Collections.Generic\n" +
+            "class KeyComparer : IEqualityComparer[(int32, string)] {\n" +
+            "    func Equals(x (int32, string), y (int32, string)) bool -> x.Item1 == y.Item1\n" +
+            "    func GetHashCode(obj (int32, string)) int32 -> obj.Item1\n" +
+            "}\n" +
+            declaration +
+            "x\nfunc Main() {}\n"
+        let oracle = "using System.Collections.Generic;\n" +
+            "sealed class KeyComparer : IEqualityComparer<(int, string)> {\n" +
+            "    public bool Equals((int, string) x, (int, string) y) => x.Item1 == y.Item1;\n" +
+            "    public int GetHashCode((int, string) obj) => obj.Item1;\n" +
+            "}\n" +
+            "class Program { static IEqualityComparer<(int?, string)> Up(KeyComparer x) => x; }\n"
+        Reject(fixture, source, oracle, "CS0029", 6, declaration.Length + 1, 1)
+    }
+
     @Theory
     @InlineData(false, false)
     @InlineData(true, false)

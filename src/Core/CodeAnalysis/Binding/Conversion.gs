@@ -2294,7 +2294,10 @@ class Conversion {
             if !IsReferenceLikeTarget(sourceShape) || !IsReferenceLikeTarget(targetShape) {
                 return false
             }
-            if AreTypeArgumentsEquivalent(sourceShape, targetShape) {
+            // The caller classified the contracts, so one runtime type is the same reference (#5544).
+            // Reference annotations have no runtime type, also inside a tuple argument. A `Nullable<V>` stays distinct.
+            if AreTypeArgumentsEquivalent(sourceShape, targetShape) ||
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceShape, targetShape) {
                 return true
             }
             if targetShape == TypeSymbol.Object || targetShape.ClrType?.IsSameAs(typeof(object)) == true {
