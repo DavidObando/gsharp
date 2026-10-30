@@ -310,7 +310,8 @@ open class Adr0208NarrowingCorpusTests {
                 "v06_5534_call_in_a_condition_with_an_initializer_R18",
                 "v07_5534_stable_getter_in_a_condition_keeps_the_fact_R18",
                 "v08_5534_member_path_stays_rejected_R18",
-                "v09_5534_test_after_the_call_still_narrows_the_branch_R18"
+                "v09_5534_test_after_the_call_still_narrows_the_branch_R18",
+                "v10_5534_assignment_in_a_condition_kills_in_the_branch_R18"
             },
             names
         )
@@ -4170,6 +4171,48 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "2", "R18"}
+            yield[]object{"v10_5534_assignment_in_a_condition_kills_in_the_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    if (x = nil) == nil {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@38:18", "reject", "", "R18"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
