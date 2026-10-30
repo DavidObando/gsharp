@@ -1543,6 +1543,16 @@ partial class CSharpToGSharpTranslator {
             // and produced GS0155. Trust the widening only where this run
             // actually emits the declaration.
             if IsVariadicCarrierParameter(targetSymbol) {
+                // Issue #5537: the shared storage rule spells the element of a
+                // `params` parameter that receives oblivious container storage
+                // `T?`, so an expanded nullable argument needs no bridge.
+                if targetSymbol is IParameterSymbol promotedParameter && SymbolEqualityComparer.Default.Equals(
+                    targetType,
+                    GetParamsElementType(promotedParameter)
+                ) &&
+                    this.ObliviousParamsElementIsPromoted(promotedParameter) {
+                    return false
+                }
                 return !(targetSymbol is IParameterSymbol{Type: IArrayTypeSymbol array} paramsParameter) ||
                     !SymbolEqualityComparer
                     .Default

@@ -923,7 +923,7 @@ partial class CSharpToGSharpTranslator {
                 type = this.PromoteIfUsedAsNullable(type, symbol)
             }
             if variadic {
-                type = this.PromoteObliviousParamsElement(type, symbol)
+                type = this.PromoteObliviousParamsElement(type, parameterType, symbol)
             }
             // Issue #914 (oblivious sink): a DELEGATE-typed parameter that is
             // invoked inside its method with a null (or promoted-nullable)

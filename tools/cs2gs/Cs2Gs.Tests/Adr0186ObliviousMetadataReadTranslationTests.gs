@@ -144,7 +144,9 @@ public static class Use
     /// local keeps its outer nullability. A `params` array, spelled `...T`, and a
     /// generic interface that the container implements, such as `IEnumerable[T]`,
     /// state the same nullable element, so stored arrays flow there without an
-    /// unchecked conversion. A non-null element dereference, return, or argument gets
+    /// unchecked conversion. An expanded nil element passes to that `params`
+    /// parameter without `!!`, and a carrier (`...[]List[T]`, `...IEnumerable[T]`) is
+    /// promoted as whole storage. A non-null element dereference, return, or argument gets
     /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
     /// element throws (cref:NullReferenceException) at the same use as in C#. The
     /// emitted image has no diagnostics and passes strict ILVerify before it runs.
@@ -341,6 +343,40 @@ public static class Use
         return Nils("a", "b");
     }
 
+    public static int ParamsExpandedNilElement(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return Nils(lines[1]);
+    }
+
+    private static int Groups(params List<string>[] values)
+    {
+        return values.Length + values[0].Count;
+    }
+
+    public static int ParamsCarrier(string p)
+    {
+        return Groups(Node.Groups(p));
+    }
+
+    private static int SequenceNils(params IEnumerable<string> values)
+    {
+        int count = 0;
+        foreach (var value in values)
+        {
+            if (value == null) { count++; }
+        }
+        return count;
+    }
+
+    public static int ParamsCollectionCarrier(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return SequenceNils(lines);
+    }
+
     public static int ParamsElementThrows(string p)
     {
         string[] lines;
@@ -421,6 +457,9 @@ public static class Use
         Assert.Equal(1, Invoke(consumer, "ParamsDirect", "ab"))
         Assert.Equal(1, Invoke(consumer, "ParamsForward", "ab"))
         Assert.Equal(0, Invoke(consumer, "ParamsExpanded", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsExpandedNilElement", "ab"))
+        Assert.Equal(3, Invoke(consumer, "ParamsCarrier", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsCollectionCarrier", "ab"))
         Assert.Equal(-1, Invoke(consumer, "ParamsElementThrows", "ab"))
         Assert.Equal(2, Invoke(consumer, "InterfaceView", "ab"))
         Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
@@ -468,6 +507,9 @@ public static class Use
             "return values[1]!!.Length",
             "return Nils(Node.Holes(p)!!)",
             "return Nils(lines)",
+            "return Nils(lines[1])",
+            "private func Groups(values ...[]List[string?]?) int32 {",
+            "private func SequenceNils(values ...IEnumerable[string?]) int32 {",
             "private func CountNils(values IReadOnlyList[string?]) int32 {",
             "IEnumerable[string?] = lines"
         } {
@@ -930,6 +972,7 @@ public class Node
     public static T[] Empty<T>() { return new T[0]; }
     public static Box<string> MakeBox(string p) { var box = new Box<string>(); box.Value = p; return box; }
     public static System.Collections.Generic.List<string> Items(string p) { return new System.Collections.Generic.List<string> { p, p }; }
+    public static System.Collections.Generic.List<string>[] Groups(string p) { return new[] { new System.Collections.Generic.List<string> { p, null } }; }
     public static int[] Ints(bool nil) { return nil ? null : new[] { 1, 2 }; }
 }
 

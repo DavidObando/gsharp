@@ -68,12 +68,22 @@ partial class CSharpToGSharpTranslator {
             return PromoteNestedPositions(type, StorageType(symbol!!.OriginalDefinition), positions, "")
         }
 
-        /// Issue #5537: a `params` array spelled as its element (`...T`) states the
-        /// same nullable element position as other oblivious container storage.
-        /// @param type The mapped element type of the variadic parameter.
+        /// Issue #5537: a `params` parameter states the same nullable positions as
+        /// other oblivious container storage. A carrier that keeps its type after the
+        /// ellipsis (`...[]List[T]`, `...IEnumerable[T]`) is promoted as whole storage;
+        /// an array spelled as its element (`...T`) is promoted below position `0`.
+        /// @param type The mapped type that follows the ellipsis.
+        /// @param mappedType The C# type that `type` spells.
         /// @param parameter The `params` parameter.
         /// @returns The variadic type to emit.
-        private func PromoteObliviousParamsElement(type GTypeReference?, parameter IParameterSymbol) GTypeReference? {
+        private func PromoteObliviousParamsElement(
+            type GTypeReference?,
+            mappedType ITypeSymbol,
+            parameter IParameterSymbol
+        ) GTypeReference? {
+            if SymbolEqualityComparer.Default.Equals(mappedType, parameter.Type) {
+                return this.PromoteObliviousContainerStorage(type, parameter)
+            }
             let positions = this.ObliviousContainerPositions(parameter)
             if type == nil || positions == nil || parameter.OriginalDefinition.Type is not IArrayTypeSymbol arrayType {
                 return type
@@ -85,6 +95,17 @@ partial class CSharpToGSharpTranslator {
                 element
             }
         }
+
+        /// Issue #5537: whether (cref:PromoteObliviousParamsElement) makes the expanded
+        /// element of a `params` parameter nullable. Position `0` is the array element
+        /// or the single type argument of a collection carrier.
+        /// @param parameter The `params` parameter.
+        /// @returns True when an expanded argument may be nil.
+        private func ObliviousParamsElementIsPromoted(parameter IParameterSymbol) bool -> GetParamsElementType(
+            parameter
+        ) != nil &&
+            this
+            .ObliviousContainerPositions(parameter)?.Contains("0") == true
 
         /// Issue #5537: a construction stored in oblivious container storage spells the
         /// same nullable positions as the storage, so no conversion changes them.
