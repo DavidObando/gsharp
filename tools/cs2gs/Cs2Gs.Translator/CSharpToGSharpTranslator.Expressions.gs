@@ -2702,12 +2702,20 @@ partial class CSharpToGSharpTranslator {
             targetSymbol ISymbol?,
             includePromotedValue bool = false,
             reportedTarget ISymbol? = nil,
-            reportedSlotType ITypeSymbol? = nil
+            reportedSlotType ITypeSymbol? = nil,
+            fixedSink bool = false
         ) GExpression? -> this
             .ReportStoreBridge(
             value,
             translated,
-            this.ForgiveNullableReferenceValueCore(value, translated, targetType, targetSymbol, includePromotedValue),
+            this.ForgiveNullableReferenceValueCore(
+                value,
+                translated,
+                targetType,
+                targetSymbol,
+                includePromotedValue,
+                fixedSink: fixedSink
+            ),
             targetSymbol ?? reportedTarget,
             reportedSlotType
         )
@@ -2718,7 +2726,8 @@ partial class CSharpToGSharpTranslator {
             targetType ITypeSymbol?,
             targetSymbol ISymbol?,
             includePromotedValue bool,
-            operatorInput bool = false
+            operatorInput bool = false,
+            fixedSink bool = false
         ) GExpression? {
             var targetType = targetType
             var convertsValue = false
@@ -2916,9 +2925,19 @@ partial class CSharpToGSharpTranslator {
                 this.context.SemanticModel,
                 respectNullGuards: true
             )
+            // Issue #5516: where C# runs no flow analysis a call result keeps its
+            // declared `T?` only on the method. A local or a generic parameter
+            // that G# infers from the value takes that `T?` itself, so only a
+            // declared sink asks for it. `fixedSink` is the caller saying that
+            // a write targets storage whose type an earlier initializer fixed
+            // (a `var` local assigned again), where no symbol is passed.
+            let declaredSink = (targetSymbol != nil || fixedSink) &&
+                !inferredSink &&
+                !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
                 value,
-                respectDeclaredAnnotations: targetSymbol != nil
+                respectDeclaredAnnotations: targetSymbol != nil,
+                respectDeclaredCallResults: declaredSink
             ) &&
                 !directlyNullableResult &&
                 !generatedPromotedValue &&
@@ -4481,7 +4500,8 @@ partial class CSharpToGSharpTranslator {
 
         private func NullableReferenceValueMayBeNull(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            respectDeclaredAnnotations bool = false
+            respectDeclaredAnnotations bool = false,
+            respectDeclaredCallResults bool = false
         ) bool {
             let nullableForEachBinding = this.IsNullableForEachBindingUse(value)
             let managedArrayGenericResult = this.ManagedReferenceArrayWidenedExpressionMayBeNull(value)
@@ -4529,11 +4549,13 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .ParenthesizedExpressionSyntax: this.NullableReferenceValueMayBeNull(
                     parenthesized.Expression,
-                    respectDeclaredAnnotations
+                    respectDeclaredAnnotations,
+                    respectDeclaredCallResults
                 )
                 case cast is CastExpressionSyntax: this.NullableReferenceValueMayBeNull(
                     cast.Expression,
-                    respectDeclaredAnnotations
+                    respectDeclaredAnnotations,
+                    respectDeclaredCallResults
                 )
                 case conditional is Microsoft
                     .CodeAnalysis
@@ -4541,9 +4563,14 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .ConditionalExpressionSyntax: this.NullableReferenceValueMayBeNull(
                     conditional.WhenTrue,
-                    respectDeclaredAnnotations
+                    respectDeclaredAnnotations,
+                    respectDeclaredCallResults
                 ) ||
-                    this.NullableReferenceValueMayBeNull(conditional.WhenFalse, respectDeclaredAnnotations)
+                    this.NullableReferenceValueMayBeNull(
+                    conditional.WhenFalse,
+                    respectDeclaredAnnotations,
+                    respectDeclaredCallResults
+                )
                 case switchExpression is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -4553,11 +4580,19 @@ partial class CSharpToGSharpTranslator {
                     .Any(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
-                    ) -> this.NullableReferenceValueMayBeNull(arm.Expression, respectDeclaredAnnotations)
+                    ) -> this.NullableReferenceValueMayBeNull(
+                        arm.Expression,
+                        respectDeclaredAnnotations,
+                        respectDeclaredCallResults
+                    )
                 )
                 case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
-                ): this.NullableReferenceValueMayBeNull(coalesce.Right, respectDeclaredAnnotations)
+                ): this.NullableReferenceValueMayBeNull(
+                    coalesce.Right,
+                    respectDeclaredAnnotations,
+                    respectDeclaredCallResults
+                )
                 case assignment is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -4582,7 +4617,47 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated
-            )
+            ) ||
+                (respectDeclaredCallResults && this.DeclaredCallResultIsAnnotatedNullable(value))
+        }
+
+        /// Issue #5516: whether [`value`](paramref) is a call whose method declares a `T?` result,
+        /// read where C# runs no flow analysis (see (cref:IsAnnotationsContextWithoutFlowAnalysis)).
+        /// @remarks A field, property, local or parameter keeps its `T?` on the expression type there
+        /// (see (cref:GetDeclaredValueType)); a call result does not, so its declaration is the only
+        /// place C# states it. A flow state, when Roslyn has one, already answers this.
+        private func DeclaredCallResultIsAnnotatedNullable(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            var call Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = value
+            while call is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                call = parenthesized.Expression
+            }
+            // `IsNullableInitializer` is the translator's one reading of a declared `T?`: it also
+            // follows `[return: NotNullIfNotNull]` to the argument, as `Path.GetFileName(path)` needs.
+            if !(call is InvocationExpressionSyntax) || !this.IsAnnotationsContextWithoutFlowAnalysis(call) ||
+                // A user-defined conversion has its own input and result contracts, which
+            // the conversion bridge in `ForgiveNullableReferenceValueCore` decides.
+            this.FlowsThroughUserDefinedConversion(value) {
+                return false
+            }
+            // G# narrows a guarded argument, and the call then returns it non-null.
+            if ConditionalNotNullPostcondition.TryGetForwardedArgument(
+                call,
+                func (node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) ISymbol? {
+                    return this.context.GetSymbolInfo(node).Symbol
+                },
+                out var forwarded
+            ) &&
+                this
+                .context
+                .GetSymbolInfo(forwarded)
+                .Symbol is {} forwardedSymbol &&
+                (forwardedSymbol is ILocalSymbol || forwardedSymbol is IParameterSymbol) &&
+                this.IsDominatedByNullCheckGuard(forwarded, forwardedSymbol) {
+                return false
+            }
+            return this.IsNullableInitializer(call)
         }
 
         private func IsImportedObliviousCollectionElement(
@@ -5206,9 +5281,11 @@ partial class CSharpToGSharpTranslator {
             if this.TryRebuildPromotedTupleIndexKey(argument, translated, out var rebuiltKey) {
                 return rebuiltKey
             }
+            // A key whose arms are already asserted (issue #5516) is non-null as a whole.
             if !this.IndexArgumentTargetsNonNullableReference(argument) || !this.IndexArgumentValueNeedsNullForgiveness(
                 argument.Expression
-            ) {
+            ) ||
+                this.GSharpExpressionIsStaticallyNonNull(argument.Expression, translated) {
                 return translated
             }
             let assertionOperand GExpression? = if (
@@ -5400,7 +5477,7 @@ partial class CSharpToGSharpTranslator {
             if this.ReceiverNeedsNullForgiveness(value, widenedSinkNeedsNonNull: true) {
                 return true
             }
-            if this.NullableReferenceValueMayBeNull(value) {
+            if this.NullableReferenceValueMayBeNull(value, respectDeclaredCallResults: true) {
                 return true
             }
             switch value {
@@ -5443,6 +5520,24 @@ partial class CSharpToGSharpTranslator {
 
         private func ParameterWillRemainNonNullableReference(parameter IParameterSymbol) bool {
             return this.TargetWillRemainNonNullableReference(parameter.Type, parameter)
+        }
+
+        /// Issue #5516: whether [`node`](paramref) sits in a file with `#nullable enable annotations`
+        /// and warnings off (the shape of a source-generated file), in a compilation that is not
+        /// nullable-oblivious. Roslyn runs no flow analysis there: the flow state of every expression is
+        /// `None`, so the declared annotations are the only nullability C# states. Every rule that reads a
+        /// declaration instead of a flow state asks this one question.
+        private func IsAnnotationsContextWithoutFlowAnalysis(node Microsoft.CodeAnalysis.SyntaxNode?) bool {
+            if node == nil || this.IsObliviousCompilation() {
+                return false
+            }
+            if this.context.GetTypeInfo(node).Nullability.FlowState != Microsoft.CodeAnalysis.NullableFlowState.None {
+                return false
+            }
+            let nullableContext = this.context.SemanticModel.GetNullableContext(node.SpanStart)
+            return nullableContext.HasFlag(NullableContext.AnnotationsEnabled) && !nullableContext.HasFlag(
+                NullableContext.WarningsEnabled
+            )
         }
 
         /// Determines whether [`recv`](paramref) needs a G# `!!`
@@ -5715,21 +5810,7 @@ partial class CSharpToGSharpTranslator {
                 isDereferenceReceiver ||
                     (widenedSinkNeedsNonNull && !widenedSinkInfersType && this.IsTranslatorWidenedDeclaration(symbol))
             ) &&
-                flowState == Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .None &&
-                !this.IsObliviousCompilation() &&
-                this
-                .context
-                .SemanticModel
-                .GetNullableContext(recv!!.SpanStart)
-                .HasFlag(NullableContext.AnnotationsEnabled) &&
-                !this
-                .context
-                .SemanticModel
-                .GetNullableContext(recv!!.SpanStart)
-                .HasFlag(NullableContext.WarningsEnabled)
+                this.IsAnnotationsContextWithoutFlowAnalysis(recv)
             if flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull && !annotationsWithoutFlowAnalysis {
                 return false
             }
