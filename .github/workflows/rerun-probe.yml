@@ -1,0 +1,66 @@
+# Throwaway probe for ADR-0218 migration step 2 (issue #5530). It is never merged.
+# It runs only on a pull_request, uses no secrets and publishes nothing.
+name: rerun-probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rerun-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  a-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "uploaded by attempt ${{ github.run_attempt }}" > probe.txt
+      - uses: actions/upload-artifact@v5
+        with:
+          name: probe
+          path: probe.txt
+
+  b-fails-on-attempt-1:
+    needs: a-upload
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "attempt ${{ github.run_attempt }}"
+          test "${{ github.run_attempt }}" != "1"
+
+  c-needs-b-and-downloads:
+    needs: b-fails-on-attempt-1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: probe
+          path: ./probe
+      - run: |
+          echo "C ran in attempt ${{ github.run_attempt }}"
+          echo "artifact says: $(cat probe/probe.txt)"
+
+  f-always-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+
+  d-always-needs-f:
+    needs: f-always-fails
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "D ran in attempt ${{ github.run_attempt }}"
+
+  e-needs-d-no-status-function:
+    needs: d-always-needs-f
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "E ran in attempt ${{ github.run_attempt }}"
+
+  g-needs-d-explicit:
+    needs: d-always-needs-f
+    if: ${{ !cancelled() && needs.d-always-needs-f.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "G ran in attempt ${{ github.run_attempt }}"
