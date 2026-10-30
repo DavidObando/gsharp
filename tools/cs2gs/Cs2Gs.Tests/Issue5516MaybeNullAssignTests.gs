@@ -148,8 +148,13 @@ public static class K {
   static C? Maybe() => null;
   static Dictionary<C, int> D = new Dictionary<C, int>();
   public static int Ix() { return D[Maybe()]; }
+  public static int IxArm(C p, bool b) { return D[b ? Maybe() : p]; }
 }`)
         Assert.Equal(1, Count(printed, "D[Maybe()!!]"))
+        // The arm is asserted, so the conditional is not asserted again.
+        Assert.Equal(1, Count(printed, "D[if b { Maybe()!! } else { p }]"))
+        Assert.DoesNotContain("!!!!", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("})!!", printed, StringComparison.Ordinal)
     }
 
     @Fact

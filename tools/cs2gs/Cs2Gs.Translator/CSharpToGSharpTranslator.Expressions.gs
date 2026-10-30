@@ -5255,9 +5255,11 @@ partial class CSharpToGSharpTranslator {
             if this.TryRebuildPromotedTupleIndexKey(argument, translated, out var rebuiltKey) {
                 return rebuiltKey
             }
+            // A key whose arms are already asserted (issue #5516) is non-null as a whole.
             if !this.IndexArgumentTargetsNonNullableReference(argument) || !this.IndexArgumentValueNeedsNullForgiveness(
                 argument.Expression
-            ) {
+            ) ||
+                this.GSharpExpressionIsStaticallyNonNull(argument.Expression, translated) {
                 return translated
             }
             let assertionOperand GExpression? = if (
