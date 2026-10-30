@@ -89,10 +89,14 @@ holds twelve `.nupkg` and five `.snupkg`.
    timeout after the upload was accepted leaves exactly that state (#4640).
 4. **The Visual Studio job is coupled.** It needs `publish`, so any failure in
    steps 1 to 6 skips it, although its artifact and credentials are fine.
-5. **Extensions before the SDK.** Both extensions can reach the marketplaces
-   while the SDK push is still failing. The Visual Studio templates pin the
-   exact SDK version, so a user who installs early gets a template that cannot
-   restore.
+5. **Extensions after the SDK is an accident of the single job.** Today the
+   VS Code step follows the SDK feed check inside one `set -euo pipefail`
+   job, and the Visual Studio job needs the whole `publish` job, so neither
+   extension publishes while the SDK push fails. The guarantee matters: the
+   Visual Studio templates pin the exact SDK version, so a user who installs
+   the extension early gets a template that cannot restore. A split that puts
+   the extensions beside the NuGet jobs would lose it, so the split must keep
+   it as an explicit edge.
 6. **No pre-flight.** Nothing checks the tag name against the package version
    (#4639) or the artifact inventory before the first push.
 7. **Gate against ADR-0207.** ADR-0207 says a RID whose smoke cannot run must
@@ -236,9 +240,16 @@ rule.
 
 | Tag | Kind | Example |
 | --- | --- | --- |
-| `^v\d+\.\d+\.\d+$` | `release` | `v0.5.212` |
-| `^v\d+\.\d+\.\d+-[0-9A-Za-z.-]+$` (a SemVer prerelease suffix, any text: `-rc1`, `-beta.2`, `-alpha`, ...) | `prerelease` | `v0.5.300-rc1` |
-| Anything else, including a non-tag ref | `none` | `main`, `v1`, `v0.5.300+build` |
+| `v<core>` | `release` | `v0.5.212` |
+| `v<core>-<pre>` (a SemVer 2.0 prerelease suffix: `-rc1`, `-beta.2`, `-alpha`, ...) | `prerelease` | `v0.5.300-rc1` |
+| Anything else, including a non-tag ref | `none` | `main`, `v1`, `v01.5.300`, `v0.5.300+build`, `v0.5.300-01`, `v0.5.300-alpha..1` |
+
+`<core>` is three numeric identifiers without leading zeros,
+`N = 0|[1-9][0-9]*`, as `N.N.N`. `<pre>` is one or more dot-separated
+identifiers; each is `N` or a string of `[0-9A-Za-z-]` with at least one
+letter or hyphen. This is the SemVer 2.0 grammar for versions without build
+metadata; a `+build` part is rejected because NuGet drops it. The malformed
+examples in the last row are negative test cases.
 
 The consumers are: `verify` (a tag run with kind `none` fails); the `vsix` job
 (`--pre-release` package flag for `prerelease`); `publish-github-release`
@@ -270,15 +281,19 @@ as `release`.
   kind `prerelease`;
 - the `PackageDownload` version inside `Gsharp.NET.Sdk.props` of the SDK
   package is not the version of the six RID packages;
-- the VS Code VSIX version is not the `<number>` of the tag, or the Visual
-  Studio VSIX version does not start with it;
+- the VS Code VSIX version is not exactly the `<core>` of the tag, or the
+  Visual Studio VSIX version is not four numeric parts whose first three equal
+  the `<core>` of the tag part by part (`0.5.2120.9261` does not match
+  `0.5.212`; a textual prefix test would accept it);
 - the project templates inside the Visual Studio VSIX do not pin
   `Gsharp.NET.Sdk/<version>`.
 
-The NuGet part of the same check (`verify --nuget-only`, the first four
-points without the tag) also runs as a step of the `build` job on every push,
-right after the existing `check-netstandard-*` steps, against
-`out/bin/Release/nupkgs`. That step would have shown, on every `main` push
+The NuGet part of the same check, `verify --nuget-only`, also runs as a step
+of the `build` job on every push, right after the existing
+`check-netstandard-*` steps, against `out/bin/Release/nupkgs`. It has no
+VSIX and no tag, so it checks exactly three things: the package inventory
+(twelve `.nupkg`, five `.snupkg`), one version across the packages, and the
+`PackageDownload` version of the SDK equal to the RID package version. That step would have shown, on every `main` push
 since 2026-10-23, that the build produces a seven-package SDK set that the
 publish code has never consumed. It costs one script call and no secrets.
 
@@ -337,7 +352,7 @@ Studio version has a per-build fourth part, so it does not collide.
 | `publish-github-release` | Draft release with some assets; the NuGet chain and the extensions proceed; finalize fails | Uploads with `--clobber`; finalize un-drafts. |
 | `publish-nuget-compiler` | Zero to six RID packages; SDK, extensions and finalize skipped or failed; draft release | Pushes with `--skip-duplicate`; the chain continues to finalize. |
 | `publish-nuget-sdk` | Six RID packages; some of SDK and tools; extensions skipped; draft release | The precondition check passes; pushes the rest; the chain continues. |
-| `publish-vscode-marketplace` (timeout after upload) | Everything but Visual Studio and finalize | The pre-query finds the version; the job succeeds; finalize un-drafts. The Visual Studio job was never blocked by it. |
+| `publish-vscode-marketplace` (timeout after upload) | Everything but finalize. The Visual Studio job depends on `publish-nuget-sdk`, not on VS Code, so it runs and publishes in the same attempt | The pre-query finds the version; the job succeeds; finalize un-drafts. Visual Studio needs no re-run. |
 | `publish-visual-studio-marketplace` (release tag) | Everything but finalize | Pre-query, else overwrite publish; finalize un-drafts. |
 | `publish-visual-studio-marketplace` skipped (prerelease tag) | Not a failure. NuGet, GitHub and VS Code publish; finalize un-drafts and the release body says Visual Studio was not published | Nothing to re-run. |
 | `publish-finalize` (network) | Everything; release stays draft | Re-runs the queries and un-drafts. |
