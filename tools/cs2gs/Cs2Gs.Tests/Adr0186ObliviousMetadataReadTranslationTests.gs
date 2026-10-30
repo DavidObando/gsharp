@@ -146,7 +146,9 @@ public static class Use
     /// state the same nullable element, so stored arrays flow there without an
     /// unchecked conversion. An expanded nil element passes to that `params`
     /// parameter without `!!`, and a carrier (`...[]List[T]`, `...IEnumerable[T]`) is
-    /// promoted as whole storage. A non-null element dereference, return, or argument gets
+    /// promoted as whole storage. A nil element written into such storage or into a
+    /// construction stored there, by a call, an element write or a collection
+    /// initializer, stays nil. A non-null element dereference, return, or argument gets
     /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
     /// element throws (cref:NullReferenceException) at the same use as in C#. The
     /// emitted image has no diagnostics and passes strict ILVerify before it runs.
@@ -377,6 +379,55 @@ public static class Use
         return SequenceNils(lines);
     }
 
+    public static int WriteAdd(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        items.Add(lines[1]);
+        items.Insert(0, lines[1]);
+        return items[0] == null && items[3] == null ? 1 : 0;
+    }
+
+    public static int WriteElements(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        items[0] = lines[1];
+        string[] others;
+        others = Node.Lines(p);
+        others[0] = lines[1];
+        return items[0] == null && others[0] == null ? 1 : 0;
+    }
+
+    public static int WriteInitializer(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        items = new List<string> { lines[1] };
+        return items[0] == null ? 1 : 0;
+    }
+
+    public static int WriteMap(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Dictionary<string, string> table;
+        table = Node.Map(p);
+        table["k"] = lines[1];
+        table.Add("a", lines[1]);
+        var count = table["k"] == null && table["a"] == null ? 1 : 0;
+        table = new Dictionary<string, string> { { "b", lines[1] } };
+        var added = table["b"] == null ? count : 0;
+        table = new Dictionary<string, string> { ["c"] = lines[1] };
+        return table["c"] == null ? added : 0;
+    }
+
     public static int ParamsElementThrows(string p)
     {
         string[] lines;
@@ -460,6 +511,10 @@ public static class Use
         Assert.Equal(1, Invoke(consumer, "ParamsExpandedNilElement", "ab"))
         Assert.Equal(3, Invoke(consumer, "ParamsCarrier", "ab"))
         Assert.Equal(1, Invoke(consumer, "ParamsCollectionCarrier", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteAdd", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteElements", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteInitializer", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteMap", "ab"))
         Assert.Equal(-1, Invoke(consumer, "ParamsElementThrows", "ab"))
         Assert.Equal(2, Invoke(consumer, "InterfaceView", "ab"))
         Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
@@ -508,6 +563,13 @@ public static class Use
             "return Nils(Node.Holes(p)!!)",
             "return Nils(lines)",
             "return Nils(lines[1])",
+            "items.Add(lines[1])\n",
+            "items.Insert(0, lines[1])\n",
+            "items[0] = lines[1]\n",
+            "others[0] = lines[1]\n",
+            "items = List[string?]{ lines[1] }\n",
+            "table[\"k\"] = lines[1]\n",
+            "table.Add(\"a\", lines[1])\n",
             "private func Groups(values ...[]List[string?]?) int32 {",
             "private func SequenceNils(values ...IEnumerable[string?]) int32 {",
             "private func CountNils(values IReadOnlyList[string?]) int32 {",
@@ -972,6 +1034,7 @@ public class Node
     public static T[] Empty<T>() { return new T[0]; }
     public static Box<string> MakeBox(string p) { var box = new Box<string>(); box.Value = p; return box; }
     public static System.Collections.Generic.List<string> Items(string p) { return new System.Collections.Generic.List<string> { p, p }; }
+    public static System.Collections.Generic.Dictionary<string, string> Map(string p) { return new System.Collections.Generic.Dictionary<string, string> { { "k", p } }; }
     public static System.Collections.Generic.List<string>[] Groups(string p) { return new[] { new System.Collections.Generic.List<string> { p, null } }; }
     public static int[] Ints(bool nil) { return nil ? null : new[] { 1, 2 }; }
 }

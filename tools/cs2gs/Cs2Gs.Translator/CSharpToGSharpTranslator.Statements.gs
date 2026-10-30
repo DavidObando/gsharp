@@ -3465,7 +3465,9 @@ partial class CSharpToGSharpTranslator {
         private func ElementAccessAssignmentRequiresNonNullReference(assignment AssignmentExpressionSyntax?) bool {
             if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
                 !(assignment!!.Left is ElementAccessExpressionSyntax) ||
-                this.IsNullableArrayElementAccess(assignment!!.Left) {
+                this.IsNullableArrayElementAccess(assignment!!.Left) ||
+                // Issue #5537: the element of oblivious container storage is `T?`.
+            this.WritesObliviousContainerStorageElement(assignment!!.Right) {
                 return false
             }
             let leftSymbol ISymbol? = this.GetProjectedAssignmentTarget(

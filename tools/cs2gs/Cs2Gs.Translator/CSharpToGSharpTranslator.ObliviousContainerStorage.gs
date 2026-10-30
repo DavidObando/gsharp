@@ -191,9 +191,88 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        /// Issue #5537: whether [`value`](paramref) is written into a position that
+        /// oblivious container storage keeps nullable, so the write accepts nil. The
+        /// container is the receiver of a call or element write, or a construction
+        /// stored in such storage whose collection initializer holds the value. The
+        /// written parameter or indexer is typed by the container's type parameter, or
+        /// the value is an array element.
+        /// @param value The written C# value.
+        /// @returns True when the destination position of the value is `T?` in G#.
+        private func WritesObliviousContainerStorageElement(value ExpressionSyntax?) bool {
+            if value == nil || this.ObliviousContainerDestinations().Count == 0 {
+                return false
+            }
+            var written ExpressionSyntax = value
+            while written.Parent is ParenthesizedExpressionSyntax parenthesized {
+                written = parenthesized
+            }
+            let parent SyntaxNode? = written.Parent
+            // `items.Add(value)`, `items.Insert(0, value)`, `map.Add(key, value)`.
+            if parent is ArgumentSyntax{
+                Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
+            } argument &&
+                invocation.Expression is MemberAccessExpressionSyntax target &&
+                this
+                .context
+                .SemanticModel
+                .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                parameter.ContainingSymbol is IMethodSymbol{ReducedFrom: nil} {
+                return this.ElementPositionIsPromoted(this.context.GetSymbolInfo(target.Expression).Symbol, parameter)
+            }
+            // `items[0] = value`, `lines[0] = value`, `map[key] = value`.
+            if parent is AssignmentExpressionSyntax{Left: ElementAccessExpressionSyntax access} assignment &&
+                assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && assignment.Right == written {
+                return this.ElementPositionIsPromoted(
+                    this.context.GetSymbolInfo(access.Expression).Symbol,
+                    this.context.GetSymbolInfo(access).Symbol
+                )
+            }
+            // `new List<T> { value }`, `new Dictionary<K, V> { { key, value } }` and
+            // `new Dictionary<K, V> { [key] = value }`.
+            var element SyntaxNode = written
+            var index = 0
+            var member ISymbol? = nil
+            if parent is AssignmentExpressionSyntax{
+                Left: ImplicitElementAccessSyntax implicitAccess
+            } initializerAssignment &&
+                initializerAssignment.Right == written {
+                member = this.context.GetSymbolInfo(implicitAccess).Symbol
+                element = initializerAssignment
+            } else if parent is InitializerExpressionSyntax complex && complex.IsKind(
+                SyntaxKind.ComplexElementInitializerExpression
+            ) {
+                index = complex.Expressions.IndexOf(written)
+                element = complex
+            }
+            if element.Parent is not InitializerExpressionSyntax initializer ||
+                initializer.Parent is not BaseObjectCreationExpressionSyntax creation {
+                return false
+            }
+            if member == nil {
+                if !initializer.IsKind(SyntaxKind.CollectionInitializerExpression) ||
+                    this
+                    .context
+                    .SemanticModel
+                    .GetCollectionInitializerSymbolInfo(cast[ExpressionSyntax](element))
+                    .Symbol is not IMethodSymbol add ||
+                    index < 0 ||
+                    index >= add
+                    .Parameters
+                    .Length {
+                    return false
+                }
+                member = add.Parameters[index]
+            }
+            let sink ISymbol? = this.ResolveValueSink(creation)
+            return SameContainerShape(this.context.GetTypeInfo(creation).Type, StorageType(sink?.OriginalDefinition)) &&
+                this.ElementPositionIsPromoted(sink, member)
+        }
+
         // The element of an array, or a member result that is a type parameter of the
         // container type, is a recorded position of the storage. A nil member is the
-        // single element position of a `foreach`.
+        // single element position of a `foreach`. A parameter typed by a type parameter
+        // of the container is a written position.
         private func ElementPositionIsPromoted(container ISymbol?, member ISymbol?) bool {
             let positions = this.ObliviousContainerPositions(container)
             if positions == nil {

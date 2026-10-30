@@ -1457,12 +1457,22 @@ partial class CSharpToGSharpTranslator {
         // symbol. Only declarations emitted by this compilation can have their
         // contract widened by this compilation's promotion result. Project
         // references and CLR metadata retain their already-emitted contract.
-        private func TargetWillRemainNonNullableReference(targetType ITypeSymbol?, targetSymbol ISymbol?) bool {
+        private func TargetWillRemainNonNullableReference(
+            targetType ITypeSymbol?,
+            targetSymbol ISymbol?,
+            writtenValue ExpressionSyntax? = nil
+        ) bool {
             if !(targetType != nil && targetType.IsReferenceType == true) ||
                 targetType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
+                return false
+            }
+            // Issue #5537: a parameter or element typed by a type argument of oblivious
+            // container storage, or of a construction stored there, takes that argument's
+            // nullable spelling (`List[string?].Add`, `[]string?` elements).
+            if this.WritesObliviousContainerStorageElement(writtenValue) {
                 return false
             }
             // ADR-0169 analyzer mode: an INamespaceSymbol target renders as

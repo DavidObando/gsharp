@@ -2888,7 +2888,8 @@ partial class CSharpToGSharpTranslator {
                 IsInitializerOfInferredLocal(value, targetSymbol) ||
                 this.LambdaResultFeedsNullableObservedInvocation(value) || !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbol
+                targetSymbol,
+                value
             ) {
                 return translated
             }
@@ -5242,7 +5243,9 @@ partial class CSharpToGSharpTranslator {
             .NullableAnnotation
             .Annotated &&
             !(targetSymbol is IParameterSymbol parameter && IsInferredGenericParameterTarget(parameter, callSite)) &&
-            (!targetType.IsReferenceType || this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
+            (
+            !targetType.IsReferenceType || this.TargetWillRemainNonNullableReference(targetType, targetSymbol, callSite)
+        )
 
         private func FindNullForgivingTarget(value PostfixUnaryExpressionSyntax)(Type ITypeSymbol?, Symbol ISymbol?) {
             let ExplicitLocalTypeIsNullable = func (local ILocalSymbol) bool {

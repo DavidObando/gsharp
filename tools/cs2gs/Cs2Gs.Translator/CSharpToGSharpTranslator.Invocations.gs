@@ -1847,7 +1847,7 @@ partial class CSharpToGSharpTranslator {
             var targetRequiresNonNull bool
             if targetParameter != nil && targetType != nil {
                 targetRequiresNonNull = (
-                    this.TargetWillRemainNonNullableReference(targetType, targetParameter) &&
+                    this.TargetWillRemainNonNullableReference(targetType, targetParameter, argument.Expression) &&
                         !targetIsPromotedMigratedSibling &&
                         !this.IsObliviousImportedInferredTypeParameterTarget(targetParameter, argument.Expression)
                 ) ||
@@ -3163,7 +3163,8 @@ partial class CSharpToGSharpTranslator {
                 IsNullOrSuppressedNull(valueExpression) ||
                 this.PlatformTypedImportNeedsNoBridge(valueExpression) || !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbolForPromotionCheck
+                targetSymbolForPromotionCheck,
+                valueExpression
             ) ||
                 // A member whose arms are already asserted (issue #5516) is non-null as a whole.
             this.GSharpExpressionIsStaticallyNonNull(valueExpression, translatedValue) {
