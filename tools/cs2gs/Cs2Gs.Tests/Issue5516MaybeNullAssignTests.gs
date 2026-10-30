@@ -35,13 +35,16 @@ import Xunit
 /// | 6 | field and property writes | no `!!` (GS0155) | `Maybe()!!` | declared call result ignored |
 /// | 7 | parameter G# widens (null-checked) | `p C?`, `p = Maybe()` | unchanged | call result asserted without the sink check |
 /// | 8 | call in a conditional arm and the right of `??` | no `!!` (GS0155) | arm `Maybe()!!` | flag dropped on the arm recursion |
-/// | 9 | indexer key | `D[Maybe()]` (GS0155) | `D[Maybe()!!]` | index path ignores the flag |
+/// | 9 | indexer key and a conditional key | `D[Maybe()]` (GS0155) | `D[Maybe()!!]`, `D[if b { Maybe()!! } else { p }]` | index path ignores the flag; outer assertion on a non-null key (M8) |
 /// | 10 | call as argument of a nullable parameter | `Consume(Maybe())` | unchanged | call result asserted without the sink check |
 /// | 11 | `#nullable disable` region calling a `T?` method | no `!!` | unchanged | annotations gate removed |
 /// | 12 | call as argument of an unconstrained generic parameter G# infers | `Count(Maybe())` | unchanged | inferred sink treated as declared |
-/// | 14 | reassignment of a `var` local whose initializer fixed a non-null type | `v = Maybe()` (GS0155) | `v = Maybe()!!` | declared sink required a symbol (M10) |
+/// | 14 | reassignment of a `var` local whose initializer fixed a non-null type | `v = Maybe()` (GS0155) | `v = Maybe()!!` | `fixedSink` ignored (M10) |
 /// | 15 | object-initializer members and a collection-initializer element | no `!!` (GS0155) | `Holder{F: Maybe()!!, ...}`, `List[C]{ Maybe()!! }` | initializer path ignores the flag (M11) |
 /// | 16 | `Path.GetFileName(path)` with a non-null and a nullable argument | `Name` and `Name2` no `!!` | `Name` unchanged, `Name2` `!!` | declared `?` read without `NotNullIfNotNull` (M9) |
+/// | 17 | conditional object-initializer member | `F: if b { Maybe()!! } ...` then `)!!` again (GS0536) | the arm asserts once | initializer path asserts a non-null whole again (M12) |
+/// | 18 | `var v = b ? Maybe() : new C()` (G# infers `C?`) | unchanged | unchanged | nil symbol treated as a declared sink (M13) |
+/// | 19 | `C v = b ? Maybe() : new C()` | no `!!` (GS0155) | the arm asserts once | declared call result ignored (M1) |
 /// | 13 | call as argument of a `where T : class` generic parameter | no `!!` (GS0155 or throw) | `Use(Maybe()!!)` | declared call result ignored |
 open class Issue5516MaybeNullAssignTests {
     @Fact
@@ -248,6 +251,41 @@ public static class K {
             StringComparison.Ordinal
         )
         Assert.Equal(1, Count(printed, "Path.GetFileName(path)!!"))
+    }
+
+    @Fact
+    func Row17_ConditionalInitializerMember_IsAssertedOnce() {
+        let printed = Translate(true, `public class C { public int N; }
+public class Holder { public C F = new C(); }
+public static class K {
+  static C? Maybe() => null;
+  public static void M(C p, bool b) { var h = new Holder { F = b ? Maybe() : p }; }
+}`)
+        Assert.Equal(1, Count(printed, "Maybe()!!"))
+        Assert.DoesNotContain("})!!", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Row18_InferredLocalWithConditionalInitializer_KeepsTheNullableArm() {
+        for annotationsOnly in[](bool){true, false} {
+            let printed = Translate(annotationsOnly, `public class C { public int N; }
+public static class K {
+  static C? Maybe() => null;
+  public static void M(bool b) { var v = b ? Maybe() : new C(); }
+}`)
+            Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
+        }
+    }
+
+    @Fact
+    func Row19_ExplicitLocalWithConditionalInitializer_IsAssertedOnce() {
+        let printed = Translate(true, `public class C { public int N; }
+public static class K {
+  static C? Maybe() => null;
+  public static void M(bool b) { C v = b ? Maybe() : new C(); }
+}`)
+        Assert.Equal(1, Count(printed, "Maybe()!!"))
+        Assert.DoesNotContain("})!!", printed, StringComparison.Ordinal)
     }
 
     shared {

@@ -4474,7 +4474,8 @@ partial class CSharpToGSharpTranslator {
                 value,
                 assignmentTargetType,
                 promotionTarget,
-                includePromotedValue: true
+                includePromotedValue: true,
+                fixedSink: assignmentTarget != nil && promotionTarget == nil
             )
         }
 

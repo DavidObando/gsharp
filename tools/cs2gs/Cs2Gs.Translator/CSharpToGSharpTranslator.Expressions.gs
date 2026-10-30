@@ -2702,12 +2702,20 @@ partial class CSharpToGSharpTranslator {
             targetSymbol ISymbol?,
             includePromotedValue bool = false,
             reportedTarget ISymbol? = nil,
-            reportedSlotType ITypeSymbol? = nil
+            reportedSlotType ITypeSymbol? = nil,
+            fixedSink bool = false
         ) GExpression? -> this
             .ReportStoreBridge(
             value,
             translated,
-            this.ForgiveNullableReferenceValueCore(value, translated, targetType, targetSymbol, includePromotedValue),
+            this.ForgiveNullableReferenceValueCore(
+                value,
+                translated,
+                targetType,
+                targetSymbol,
+                includePromotedValue,
+                fixedSink: fixedSink
+            ),
             targetSymbol ?? reportedTarget,
             reportedSlotType
         )
@@ -2718,7 +2726,8 @@ partial class CSharpToGSharpTranslator {
             targetType ITypeSymbol?,
             targetSymbol ISymbol?,
             includePromotedValue bool,
-            operatorInput bool = false
+            operatorInput bool = false,
+            fixedSink bool = false
         ) GExpression? {
             var targetType = targetType
             var convertsValue = false
@@ -2919,9 +2928,11 @@ partial class CSharpToGSharpTranslator {
             // Issue #5516: where C# runs no flow analysis a call result keeps its
             // declared `T?` only on the method. A local or a generic parameter
             // that G# infers from the value takes that `T?` itself, so only a
-            // declared sink asks for it. A nil symbol is a sink stated by its type alone
-            // (the write to a `var` local whose initializer fixed a non-null type).
-            let declaredSink = !inferredSink &&
+            // declared sink asks for it. `fixedSink` is the caller saying that
+            // a write targets storage whose type an earlier initializer fixed
+            // (a `var` local assigned again), where no symbol is passed.
+            let declaredSink = (targetSymbol != nil || fixedSink) &&
+                !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
                 value,
