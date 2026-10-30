@@ -708,13 +708,15 @@ internal class ConversionClassifier {
             return BoundClrConversionCallExpression(nil, expression, liftedMethod!!, liftedOwner, type!!)
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
-        if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) {
-            conversion = Conversion.Explicit
-        }
         // Issue #5536: the literal arms above give a function literal a body of the target shape. Any other
         // function value keeps its delegate, so a conversion that needs a new body does not exist for it.
         if conversion.Exists && !conversion.IsIdentity && !KeepsConvertedDelegate(expression, type!!) {
             conversion = Conversion.None
+        }
+        // A checked cast also keeps the delegate: `castclass` throws when the delegate is not the target.
+        if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
+            Conversion.ChecksFunctionValueDelegate(expression.Type, type!!) {
+            conversion = Conversion.Explicit
         }
         // Issue #1183: C# §10.2.11 implicit constant expression conversion.
         // A *constant* integer expression (an integer literal, or unary +/-

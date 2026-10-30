@@ -156,6 +156,152 @@ class Program {
     }
 
     @Fact
+    func ChannelReaderResult_OfMethodGroup_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import System.Threading.Channels
+func Make() Channel[int32] { return Channel.CreateUnbounded[int32]() }
+func Get() () -> ChannelReader[int32] -> Make
+func Main() {}
+`, `using System;
+using System.Threading.Channels;
+class Program {
+    static Channel<int> Make() => Channel.CreateUnbounded<int>();
+    static Func<ChannelReader<int>> Get() => Make;
+    static void Main() {}
+}
+`, "CS0407", line: 4, column: 42, length: 4)
+    }
+
+    @Fact
+    func NumericResult_ForwardedToOpenGenericParameter_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+func Take[T](f (T) -> int64) {}
+func Forward[T](f (T) -> int32) { Take[T](f) }
+func Main() { Forward[string]((s string) -> s.Length) }
+`, `using System;
+class Program {
+    static void Take<T>(Func<T, long> f) {}
+    static void Forward<T>(Func<T, int> f) { Take<T>(f); }
+    static void Main() { Forward<string>(s => s.Length); }
+}
+`, "CS1503", line: 3, column: 43, length: 1, diagnostic: "GS0154")
+    }
+
+    @Fact
+    func ImportedOverloadResolution_SkipsFunctionValueThatNeedsAConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let f () -> int32 = () -> 1
+    Console.Write(Calls.M(f, 1))
+    Console.Write(Calls.M(() -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Console.Write(Calls.M(f, 1));
+        Console.Write(Calls.M(() => 1, 1));
+    }
+}
+`, "OF")
+    }
+
+    @Fact
+    func NullableReferenceResult_ToImportedDelegate_KeepsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func C(x (int32) -> Dog?) Converter[int32, Animal?] -> x
+func N(x (int32) -> Dog?) Converter[int32, Animal] -> x
+func Main() {
+    let f (int32) -> Dog? = (i int32) -> if i > 0 { Dog() } else { nil }
+    Console.Write(C(f)(1) is Dog)
+    Console.Write(C(f)(0) == nil)
+    Console.Write(N(f)(1) is Dog)
+}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static Converter<int, Animal?> C(Func<int, Dog?> x) => new Converter<int, Animal?>(x);
+    static Converter<int, Animal> N(Func<int, Dog?> x) => new Converter<int, Animal>(x!);
+    static void Main() {
+        Func<int, Dog?> f = i => i > 0 ? new Dog() : null;
+        Console.Write(C(f)(1) is Dog);
+        Console.Write(C(f)(0) == null);
+        Console.Write(N(f)(1) is Dog);
+    }
+}
+`, "TrueTrueTrue")
+    }
+
+    @Fact
+    func CheckedDowncast_KeepsTheDelegateOrThrows() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func Main() {
+    let d () -> Dog = () -> Dog()
+    let a () -> Animal = d
+    let back = cast[() -> Dog](a)
+    Console.Write(Object.ReferenceEquals(d, back))
+    let s () -> string = () -> "s"
+    let o () -> object = s
+    Console.Write(cast[() -> string](o)())
+    let wrong () -> object = () -> 1
+    try {
+        cast[() -> string](wrong)
+        Console.Write("no")
+    } catch (InvalidCastException) {
+        Console.Write("ICE")
+    }
+}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static void Main() {
+        Func<Dog> d = () => new Dog();
+        Func<Animal> a = d;
+        var back = (Func<Dog>)a;
+        Console.Write(Object.ReferenceEquals(d, back));
+        Func<string> s = () => "s";
+        Func<object> o = s;
+        Console.Write(((Func<string>)o)());
+        Func<object> wrong = () => 1;
+        try {
+            _ = (Func<string>)wrong;
+            Console.Write("no");
+        } catch (InvalidCastException) {
+            Console.Write("ICE");
+        }
+    }
+}
+`, "TruesICE")
+    }
+
+    @Fact
+    func NumericResult_ExplicitCast_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+func C(x () -> int32) () -> int64 -> cast[() -> int64](x)
+func Main() {}
+`, `using System;
+class Program {
+    static Func<long> C(Func<int> x) => (Func<long>)x;
+    static void Main() {}
+}
+`, "CS0030", line: 2, column: 56, length: 1)
+    }
+
+    @Fact
     func ContravariantParameter_KeepsTheDelegate() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
         Check(fixture, `import System
@@ -456,6 +602,10 @@ class Program {
 namespace FunctionControl {
     public delegate long Wide();
     public delegate object Make();
+    public static class Calls {
+        public static string M(System.Func<long> f, int x) => "F";
+        public static string M(object o, long x) => "O";
+    }
 }
 `
     }

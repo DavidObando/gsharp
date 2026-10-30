@@ -3667,6 +3667,14 @@ internal partial class ExpressionBinder {
                         ClrOverloadResolution.ImplicitConversionKind.None
                     }
                 }
+                // Issue #5536: a function value keeps its delegate, so a delegate parameter that needs a new body is
+                // not applicable. Only a non-generic declaration has exact parameter types here: a generic one can
+                // be closed over erased source types, so its argument conversion decides after inference.
+                if parameter.Member is MethodBase{IsGenericMethod: false, DeclaringType: {IsGenericType: false}} &&
+                    !ConversionClassifier
+                    .KeepsConvertedDelegate(boundArguments[argIndex], nativeTarget) {
+                    return ClrOverloadResolution.ImplicitConversionKind.None
+                }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
@@ -3736,6 +3744,12 @@ internal partial class ExpressionBinder {
                 )
                 if NativeProtocolOperations.GetProtocol(targetType) != nil {
                     return nativeConversions?.ClassifyArgumentConversion(sourceType, targetType).IsImplicit == true
+                }
+                // Issue #5536: the same function-value rule as the classifier above. A source element can make the
+                // CLR target an erased surrogate, so only a function value without one is checked here.
+                if !TypeSymbol.ContainsSameCompilationUserType(sourceType) &&
+                    !ConversionClassifier.KeepsConvertedDelegate(boundArguments[argIndex], targetType) {
+                    return false
                 }
                 return Conversion.ClassifyNonStructural(sourceType, targetType)
                     .IsImplicit ||

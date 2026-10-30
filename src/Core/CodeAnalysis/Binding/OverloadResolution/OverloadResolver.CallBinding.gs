@@ -2587,6 +2587,15 @@ internal partial class OverloadResolver {
                         "an argument conversion has a target type",
                         expression: "expectedType"
                     )
+                ) ||
+                    // Issue #5536: whether a function value keeps its delegate is decidable on an open target too.
+                !ConversionClassifier.KeepsConvertedDelegate(
+                    argument,
+                    Invariant.Required(
+                        expectedType,
+                        "an argument conversion has a target type",
+                        expression: "expectedType"
+                    )
                 )
             ) &&
                 (
@@ -2599,7 +2608,15 @@ internal partial class OverloadResolver {
                     )
                 )
                     .IsImplicit ||
-                    !ConversionClassifier.KeepsConvertedDelegate(argument, expectedType!!)
+                    !ConversionClassifier
+                    .KeepsConvertedDelegate(
+                    argument,
+                    Invariant.Required(
+                        expectedType,
+                        "an argument conversion has a target type",
+                        expression: "expectedType"
+                    )
+                )
             ) {
                 // Issue #889: arrow/func literal → void-returning delegate.
                 let voidDelegateLoc = if i < parameterSyntax.Length {

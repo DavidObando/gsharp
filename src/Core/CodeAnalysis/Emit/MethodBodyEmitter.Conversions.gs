@@ -105,13 +105,22 @@ internal partial class MethodBodyEmitter {
         let delegateSourceType = UnwrapReferenceNullable(conv.Expression.Type)
         let delegateTargetType = UnwrapReferenceNullable(conv.Type)
         // Issue #5536: a function value or method group keeps its delegate. The binder admits it only when
-        // `Conversion.KeepsFunctionValueDelegate` holds. A value that is already a valid target reference needs no IL.
-        // A method group is bound to the target delegate by the arms below.
+        // `Conversion.KeepsFunctionValueDelegate` holds, or for an explicit checked cast. A checked cast is
+        // `castclass`, which keeps the reference or throws. A value that is already a valid target reference needs
+        // no IL. A method group is bound to the target delegate by the arms below.
         if delegateSourceType is FunctionTypeSymbol && !(conv.Expression is BoundFunctionLiteralExpression) {
             if !Conversion.KeepsFunctionValueDelegate(conv.Expression.Type, conv.Type) {
-                throw InvalidOperationException(
-                    "Conversion from '${conv.Expression.Type.Name}' to '${conv.Type.Name}' needs a function literal."
-                )
+                if !Conversion.HasCheckedReferenceConversion(conv.Expression.Type, conv.Type) ||
+                    !Conversion
+                    .ChecksFunctionValueDelegate(conv.Expression.Type, conv.Type) {
+                    throw InvalidOperationException(
+                        "Conversion from '${conv.Expression.Type.Name}' to '${conv.Type.Name}' needs a function literal."
+                    )
+                }
+                this.EmitExpression(conv.Expression)
+                this.il.OpCode(ILOpCode.Castclass)
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(delegateTargetType))
+                return
             }
             if !(conv.Expression is BoundMethodGroupExpression || conv.Expression is BoundClrMethodGroupExpression) &&
                 Conversion

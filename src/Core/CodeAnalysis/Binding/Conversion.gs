@@ -2131,7 +2131,9 @@ class Conversion {
         /// perform. Reference nullability and platform wrappers are ignored only
         /// when deciding whether each slot is reference-like; the annotated types
         /// still drive conversion classification so nullable-to-non-nullable stays
-        /// rejected.
+        /// rejected. Issue #5536: the slot must also keep the same reference
+        /// ((cref:ProvesNominalReference)), so a channel reader projection is not a
+        /// variant slot.
         /// @param from The value-producing side of the slot.
         /// @param to The value-consuming side of the slot.
         /// @returns `true` for a strict implicit reference conversion.
@@ -2150,7 +2152,10 @@ class Conversion {
                 return false
             }
             let conversion = ClassifyNonStructural(from, to)
-            return conversion.Exists && conversion.IsImplicit && !conversion.IsStructuralProjection
+            return conversion.Exists &&
+                conversion.IsImplicit &&
+                !conversion.IsStructuralProjection &&
+                ProvesNominalReference(referenceFrom, referenceTo)
         }
 
         internal func IsRepresentationPreservingImplicit(source TypeSymbol, target TypeSymbol) bool {
@@ -2188,6 +2193,27 @@ class Conversion {
                 return true
             }
             return KeepsFunctionSlotReferences(sourceFunction, targetFunction)
+        }
+
+        /// Issue #5536: decides whether an explicit checked reference conversion of a function value is valid.
+        /// `castclass` keeps the delegate and throws (cref:InvalidCastException) when the delegate is not
+        /// already a [`target`](paramref) reference. So a function or delegate target must be able to widen
+        /// back to the source by (cref:ReusesFunctionValueDelegate), as for `() -> Animal` to `() -> Dog`.
+        /// A cast that needs a new body, such as `() -> int32` to `() -> int64`, is not a checked conversion.
+        /// @param source The type of the function value.
+        /// @param target The cast target.
+        /// @returns `false` only for a function value cast to a function or delegate shape that no delegate of
+        /// the source can already be.
+        internal func ChecksFunctionValueDelegate(source TypeSymbol, target TypeSymbol) bool {
+            let bareSource = source.StripToBareShape()
+            let bareTarget = target.StripToBareShape()
+            if !(bareSource is FunctionTypeSymbol) || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                bareTarget,
+                out _
+            ) {
+                return true
+            }
+            return ReusesFunctionValueDelegate(bareTarget, bareSource)
         }
 
         /// Issue #5536: decides whether a function value is already a valid reference of [`target`](paramref).
@@ -2251,7 +2277,9 @@ class Conversion {
             ) {
                 return true
             }
-            return allowVariance && IsRepresentationPreservingImplicit(producer, consumer)
+            // The caller classified the annotated pair; the slot proof is about representation only.
+            return allowVariance &&
+                IsRepresentationPreservingImplicit(producer.StripToBareShape(), consumer.StripToBareShape())
         }
 
         /// Proves that an implicit conversion keeps the same reference: a nominal base, interface, array, delegate or
