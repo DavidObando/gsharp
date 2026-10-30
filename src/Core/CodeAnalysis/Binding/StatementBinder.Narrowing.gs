@@ -5041,11 +5041,28 @@ internal partial class StatementBinder {
             node is BoundClrPropertyAssignmentExpression{Member: PropertyInfo setter} &&
                 !IsStableClrAccessor(setter, isSetter: true)
         ) ||
-            (node is BoundClrIndexExpression{Indexer: var getter} && !IsStableClrAccessor(getter, isSetter: false)) ||
             (
-            node is BoundClrIndexAssignmentExpression{Indexer: var indexer} &&
-                !IsStableClrAccessor(indexer, isSetter: true)
+            node is BoundClrIndexExpression{Indexer: var getter, Target: var target} &&
+                (!IsStableClrAccessor(getter, isSetter: false) || ClrIndexIsErasedGeneric(target.Type))
+        ) ||
+            (
+            node is BoundClrIndexAssignmentExpression{
+                Indexer: var indexer,
+                TargetExpression: var targetExpression,
+                Target: var targetVariable
+            } &&
+                (
+                !IsStableClrAccessor(indexer, isSetter: true) ||
+                    ClrIndexIsErasedGeneric(targetExpression?.Type ?? targetVariable?.Type)
+            )
         )
+
+        /// ADR-0208 R17 (#5532): an index access on a receiver of an erased generic type (`List[T]` over a type
+        /// parameter) is emitted as a call through the non-generic `IList` or `IDictionary` interface, which a
+        /// subclass can reimplement. The listed accessor is then not the one that runs.
+        private func ClrIndexIsErasedGeneric(receiverType TypeSymbol?) bool -> receiverType is ImportedTypeSymbol{
+            HasTypeParameterArgument: true
+        }
 
         /// ADR-0208 R16 (#5231): the same decision for a member that is read without an access node, such as the
         /// member of an imported property pattern (`lazy is { Value: 1 }`).
