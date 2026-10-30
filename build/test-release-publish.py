@@ -466,7 +466,10 @@ class NotesTests(unittest.TestCase):
     def test_replace_notes_keeps_text_after_the_section(self) -> None:
         rp = self.load()
         body = "top\n\n<!-- publish-notes -->\nold\n<!-- /publish-notes -->\n\nbottom\n"
-        self.assertEqual(rp.replace_notes(body, []), "top\nbottom\n")
+        self.assertEqual(rp.replace_notes(body, []), "top\n\nbottom\n")
+        prose = "First paragraph.\n\n<!-- publish-notes -->\nold\n<!-- /publish-notes -->\n\nSecond paragraph.\n"
+        self.assertEqual(rp.replace_notes(prose, []), "First paragraph.\n\nSecond paragraph.\n")
+        self.assertIn("First paragraph.\n\nSecond paragraph.", rp.replace_notes(prose, ["new"]))
         self.assertIn("bottom", rp.replace_notes(body, ["new"]))
         self.assertNotIn("old", rp.replace_notes(body, ["new"]))
 
