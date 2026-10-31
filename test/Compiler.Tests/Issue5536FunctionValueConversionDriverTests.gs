@@ -235,6 +235,115 @@ class Program {
 `, "OF")
     }
 
+    /// Issue #5543: a function literal is a plain value, so it binds to the pointee of an imported `in` or
+    /// `ref readonly` delegate parameter. That makes the delegate overload better than the `object` overload,
+    /// as in C#.
+    @Fact
+    func FunctionLiteral_AtImportedInDelegateParameter_SelectsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.In(() -> 1, 1))
+    Console.Write(Calls.In(() -> { return 1 }, 1))
+    Console.Write(Calls.RR(() -> 1, 1))
+    Console.Write(Calls.P((y) -> y + 1, 1))
+    Console.Write(Calls.PG((y) -> y + 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.In(() => 1, 1));
+        Console.Write(Calls.In(() => { return 1; }, 1));
+        Console.Write(Calls.RR(() => 1, 1));
+        Console.Write(Calls.P(y => y + 1, 1));
+        Console.Write(Calls.PG(y => y + 1, 1));
+    }
+}
+`, "FFFF3F2")
+    }
+
+    /// Issue #5543: imported constructors, instance methods and reduced extension calls use the same `in`
+    /// pointee target for a function literal.
+    @Fact
+    func FunctionLiteral_AtImportedInDelegateParameter_OfConstructorsAndInstanceCalls() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(InCtor(() -> 1, 1).Kind)
+    Console.Write(InReceiver().M(() -> 1, 1))
+    Console.Write(InReceiver().X(() -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(new InCtor(() => 1, 1).Kind);
+        Console.Write(new InReceiver().M(() => 1, 1));
+        Console.Write(new InReceiver().X(() => 1, 1));
+    }
+}
+`, "FFF")
+    }
+
+    /// Issue #5543 controls: a by-value delegate slot, a source `in` slot and an explicit address keep their
+    /// selection. A function value still needs a delegate that it can keep (#5536).
+    @Fact
+    func InDelegateParameter_ValuesAddressesAndSourceSlots_KeepTheirSelection() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func S(in f () -> int64, x int32) string -> "F"
+func S(o object, x int64) string -> "O"
+func Main() {
+    let f () -> int32 = () -> 1
+    var g () -> int64 = () -> 2
+    Console.Write(Calls.M(() -> 1, 1))
+    Console.Write(S(() -> 1, 1))
+    Console.Write(Calls.In(f, 1))
+    Console.Write(Calls.In(g, 1))
+    Console.Write(Calls.In(&g, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static string S(in Func<long> f, int x) => "F";
+    static string S(object o, long x) => "O";
+    static void Main() {
+        Func<int> f = () => 1;
+        Func<long> g = () => 2;
+        Console.Write(Calls.M(() => 1, 1));
+        Console.Write(S(() => 1, 1));
+        Console.Write(Calls.In(f, 1));
+        Console.Write(Calls.In(g, 1));
+        Console.Write(Calls.In(in g, 1));
+    }
+}
+`, "FFOFF")
+    }
+
+    /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
+    /// for one argument.
+    @Fact
+    func InDelegateParameter_LiteralThatEachCandidatePrefersOnce_StaysAmbiguous() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.Amb(() -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.Amb(() => 1, 1));
+    }
+}
+`, "CS0121", line: 4, column: 25, length: 15, diagnostic: "GS0160")
+    }
+
     @Fact
     func ImportedExtensionReceiver_SkipsFunctionValueThatNeedsAConversion() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -707,6 +816,27 @@ namespace FunctionControl {
         public static string M(object o, long x) => "O";
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
+        public static string RR(ref readonly System.Func<long> f, int x) => "F";
+        public static string RR(object o, long x) => "O";
+        public static string P(in System.Func<long, long> f, int x) => "F" + f(2);
+        public static string P(object o, long x) => "O";
+        public static string PG<T>(in System.Func<T, T> f, T x) => "F" + f(x);
+        public static string PG(object o, string s) => "O";
+        public static string Amb(in System.Func<long> f, int x) => "F";
+        public static string Amb(in System.Func<int> o, long x) => "O";
+    }
+    public class InReceiver {
+        public string M(in System.Func<long> f, int x) => "F";
+        public string M(object o, long x) => "O";
+    }
+    public static class InE {
+        public static string X(this InReceiver r, in System.Func<long> f, int x) => "F";
+        public static string X(this InReceiver r, object o, long x) => "O";
+    }
+    public class InCtor {
+        public string Kind;
+        public InCtor(in System.Func<long> f, int x) { Kind = "F"; }
+        public InCtor(object o, long x) { Kind = "O"; }
     }
     public static class E {
         public static string M(this System.Func<long> f, int x) => "F";

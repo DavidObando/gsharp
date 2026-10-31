@@ -739,10 +739,12 @@ internal partial class ExpressionBinder {
                     allMapped = false
                     break
                 }
-                let parameterType Type? = parameters[paramIndex].ParameterType
-                if parameterType == nil ||
-                    parameterType.ContainsGenericParameters ||
-                    !MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out var fn) || fn == nil {
+                let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
+                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionType(
+                    parameterType,
+                    out var fn
+                ) ||
+                    fn == nil {
                     allMapped = false
                     break
                 }
@@ -4337,31 +4339,21 @@ internal partial class ExpressionBinder {
         /// @returns `true` when the slot can receive the lambda.
         private func CanParameterReceiveLambdaOfArity(parameter ParameterInfo, arity int32, out determined bool) bool {
             determined = true
-            var parameterType Type? = parameter.ParameterType
-            if parameterType == nil {
-                determined = false
-                return false
-            }
-            if parameterType.IsByRef {
-                parameterType = parameterType.GetElementType()
-                if parameterType == nil {
-                    determined = false
-                    return false
-                }
-            }
-            if parameterType!!.IsGenericParameter {
+            // Issue #5543: a lambda is a plain value, so only an `in` slot passes it by reference.
+            let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameter)
+            if parameterType.IsGenericParameter {
                 // A bare method/type parameter slot (e.g. `TDelegate`) says nothing
                 // about the delegate shape it will close over.
                 determined = false
                 return false
             }
             try {
-                if MatchesDelegateArity(parameterType!!, arity) {
+                if MatchesDelegateArity(parameterType, arity) {
                     return true
                 }
                 // A `params Func[...][]` slot receives the lambda through the array
                 // element type in expanded form.
-                return parameterType!!.IsArray && parameterType!!.GetElementType() is {} elementType &&
+                return parameterType.IsArray && parameterType.GetElementType() is {} elementType &&
                     MatchesDelegateArity(elementType, arity)
             } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
                 determined = false
