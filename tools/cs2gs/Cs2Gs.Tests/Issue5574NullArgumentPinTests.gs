@@ -529,6 +529,163 @@ namespace Demo
         Assert.DoesNotContain("!!", printed)
     }
 
+    /// A partial method's calls bind its defining part, which has no body; the implementing part,
+    /// which can name the parameter differently, is where it is read.
+    @Fact
+    func APartialMethodImplementation_IsRead() {
+        let compilation = CompileFiles("App", nil, ("Partial.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static partial class P
+    {
+        public static partial string Forward(Node p);
+        public static partial string Forward(Node q) => new Sink().Take(q);
+        public static string Run() => Forward(null!);
+    }
+}`))
+        let printed = TranslateFile(compilation, "Partial.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken", CompileAndRun([]string{printed}, "Demo.P.Run()").Trim())
+        Assert.DoesNotContain("!!", printed)
+    }
+
+    /// A record's synthesized `Deconstruct` seen through another project's emitted reference is not
+    /// marked implicitly declared there; it is matched through the record's source declaration.
+    @Fact
+    func ADeconstructionThroughAnEmittedReference_Pins() {
+        let library = CompileFiles("Lib", nil, ("Entry.cs", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class Make { public static Entry Null() => new Entry(null!, 0); }
+}`))
+        let image = MemoryStream()
+        Assert.True(library.Emit(image).Success)
+        image.Position = 0
+        let app = CompileFiles("App", MetadataReference.CreateFromStream(image), ("Use.cs", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static string Run()
+        {
+            (Demo.Node item, int id) = Demo.Make.Null();
+            return new Demo.Sink().Take(item) + id;
+        }
+    }
+}`))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = TranslateFile(library, "Entry.cs", repository)
+        Assert.Equal(
+            "taken0",
+            CompileAndRun(
+                []string{libraryPrinted, TranslateFile(app, "Use.cs", repository)},
+                "Demo.App.Use.Run()"
+            ).Trim()
+        )
+        Assert.DoesNotContain("Item Node?", libraryPrinted)
+    }
+
+    /// A deconstruction nested in another reads the inner record's positional properties too.
+    @Fact
+    func ANestedDeconstruction_Pins() {
+        let compilation = CompileFiles("App", nil, ("Nested.cs", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class Use
+    {
+        public static string Run()
+        {
+            (int outer, (Node item, int id)) = (1, new Entry(null!, 0));
+            return new Sink().Take(item) + id + outer;
+        }
+    }
+}`))
+        let printed = TranslateFile(compilation, "Nested.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken01", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.DoesNotContain("Item Node?", printed)
+    }
+
+    /// A property pattern reads the property, and `var` captures its value, null included, into a
+    /// local, so the property pins.
+    @Fact
+    func APropertyPatternCapture_Pins() {
+        let compilation = CompileFiles("App", nil, ("Holder.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public class Holder
+    {
+        public Holder(Node stored) { Stored = stored; }
+        public Node Stored { get; }
+        public static string Run() => new Holder(null!) is { Stored: var captured } ? new Sink().Take(captured) : "none";
+    }
+}`))
+        let printed = TranslateFile(compilation, "Holder.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken", CompileAndRun([]string{printed}, "Demo.Holder.Run()").Trim())
+        Assert.DoesNotContain("Stored Node?", printed)
+    }
+
+    /// A user-defined `==` is a call: its operand is handed to the operator's parameter.
+    @Fact
+    func AUserDefinedEqualityOperand_IsHandedToTheOperator() {
+        let compilation = CompileFiles("App", nil, ("Node.cs", `
+namespace Demo
+{
+    public class Node
+    {
+        public static bool operator ==(Node a, Node b) => ReferenceEquals(a, b);
+        public static bool operator !=(Node a, Node b) => !ReferenceEquals(a, b);
+        public override bool Equals(object? obj) => ReferenceEquals(this, obj);
+        public override int GetHashCode() => 0;
+        public static bool Forward(Node p) => p == new Node();
+        public static string Run() => Forward(null!).ToString();
+    }
+}`))
+        let printed = TranslateFile(compilation, "Node.cs", []CSharpCompilation{compilation})
+        Assert.Equal("False", CompileAndRun([]string{printed}, "Demo.Node.Run()").Trim())
+        Assert.Contains("Forward(p Node)", printed)
+    }
+
+    /// A `var` pattern captures the value, null included, into a local: in `is`, in a switch
+    /// expression and in a switch statement. Only `is` runs: the translator bridges a switch's `var`
+    /// capture with `!!` whatever this rule decides (#5582).
+    @Fact
+    func AVarPatternCapture_Pins() {
+        let compilation = CompileFiles("App", nil, ("Capture.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class P
+    {
+        public static string Is(Node p) => p is var captured ? new Sink().Take(captured) : "none";
+        public static string Arm(Node q) => q switch { var c => new Sink().Take(c) };
+        public static string Case(Node r)
+        {
+            switch (r)
+            {
+                case var c: return new Sink().Take(c);
+            }
+        }
+        public static string Run() => Is(null!);
+        public static string Others() => Arm(null!) + Case(null!);
+    }
+}`))
+        let printed = TranslateFile(compilation, "Capture.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken", CompileAndRun([]string{printed}, "Demo.P.Run()").Trim())
+        Assert.Contains("Is(p Node)", printed)
+        Assert.Contains("Arm(q Node)", printed)
+        Assert.Contains("Case(r Node)", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

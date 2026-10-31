@@ -2218,10 +2218,26 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                     positional.Add(candidate)
                 }
-                for reference in parameter.ContainingSymbol.DeclaringSyntaxReferences {
-                    let body = reference.GetSyntax()
-                    if scopes.Add(body) {
-                        scopeList.Add(body)
+                // A partial method's calls bind its defining part; the implementing
+                // part, which can name the parameter differently, has the body.
+                let owners = List[ISymbol]{parameter.ContainingSymbol}
+                if parameter.ContainingSymbol is IMethodSymbol partialMethod {
+                    for part in[]IMethodSymbol? {
+                        partialMethod.PartialImplementationPart,
+                        partialMethod.PartialDefinitionPart
+                    } {
+                        if part != nil && parameter.Ordinal < part.Parameters.Length {
+                            parameterNames.Add(part.Parameters[parameter.Ordinal].Name)
+                            owners.Add(part)
+                        }
+                    }
+                }
+                for partOwner in owners {
+                    for reference in partOwner.DeclaringSyntaxReferences {
+                        let body = reference.GetSyntax()
+                        if scopes.Add(body) {
+                            scopeList.Add(body)
+                        }
                     }
                 }
             }
@@ -2229,17 +2245,18 @@ internal shared class ObliviousNullabilityAnalyzer {
         let Visit = func (owner Compilation, nodes sequence[SyntaxNode], names HashSet[string], indexers bool) {
             var model SemanticModel? = nil
             for node in nodes {
-                if deconstructed.Count != 0 &&
-                    DeconstructingMethod(node, owner, ref model) is IMethodSymbol{
-                    IsImplicitlyDeclared: true,
-                    ContainingType: {} deconstructedType
-                } &&
-                    deconstructed
-                    .TryGetValue(deconstructedType.OriginalDefinition, out var positionalCandidates) {
-                    // The deconstructed locals are G#-inferred from the widened
-                    // properties and asserted at their later reads (#5508).
-                    for positionalCandidate in positionalCandidates {
-                        AddNullArgumentRead(reads, positionalCandidate, (false, default(string?)))
+                if deconstructed.Count != 0 && DeconstructingMethods(node, owner, ref model) is {Count: > 0} methods {
+                    for method in methods {
+                        if SynthesizedDeconstructRecord(method, run) is {} record && deconstructed.TryGetValue(
+                            record,
+                            out var positionalCandidates
+                        ) {
+                            // The deconstructed locals are G#-inferred from the widened
+                            // properties and asserted at their later reads (#5508).
+                            for positionalCandidate in positionalCandidates {
+                                AddNullArgumentRead(reads, positionalCandidate, (false, default(string?)))
+                            }
+                        }
                     }
                     continue
                 }
@@ -2248,8 +2265,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                     CollectNullArgumentRead(element, model, run, candidates, reads)
                     continue
                 }
+                // An argument label names no read; a property pattern's label reads the property.
                 if node is not SimpleNameSyntax name || !names.Contains(name.Identifier.ValueText) ||
-                    name.Parent is NameColonSyntax ||
+                    name.Parent is NameColonSyntax{Parent: not SubpatternSyntax} ||
                     name.Parent is NameEqualsSyntax {
                     continue
                 }
@@ -2326,27 +2344,74 @@ internal shared class ObliviousNullabilityAnalyzer {
         AddNullArgumentRead(reads, candidate, ClassifyNullArgumentRead(expression, model, run))
     }
 
-    // Issue #5574: the `Deconstruct` a deconstruction or positional pattern
-    // `node` calls, or null for any other node.
-    private func DeconstructingMethod(node SyntaxNode, owner Compilation, ref model SemanticModel?) IMethodSymbol? {
+    // Issue #5574: every `Deconstruct` a deconstruction or positional pattern
+    // `node` calls, nested deconstructions included; empty for any other node.
+    private func DeconstructingMethods(node SyntaxNode, owner Compilation, ref model SemanticModel?) List[
+        IMethodSymbol
+    ] {
+        let methods = List[IMethodSymbol]()
         let isDeconstruction = node is AssignmentExpressionSyntax{
             Left: TupleExpressionSyntax or DeclarationExpressionSyntax
         } ||
             node is ForEachVariableStatementSyntax ||
             node is RecursivePatternSyntax{PositionalPatternClause: {}}
         if !isDeconstruction {
-            return nil
+            return methods
         }
         let current = model ?? owner.GetSemanticModel(node.SyntaxTree)
         model = current
-        return switch node {
-            case assignment is AssignmentExpressionSyntax: current.GetDeconstructionInfo(assignment).Method
-            case loop is ForEachVariableStatementSyntax: current.GetDeconstructionInfo(loop).Method
-            case pattern is RecursivePatternSyntax: (
-                current.GetOperation(pattern) as IRecursivePatternOperation
-            )?.DeconstructSymbol as IMethodSymbol
-            default: default(IMethodSymbol?)
+        switch node {
+            case assignment is AssignmentExpressionSyntax {
+                AddDeconstructingMethods(current.GetDeconstructionInfo(assignment), methods)
+            }
+            case loop is ForEachVariableStatementSyntax {
+                AddDeconstructingMethods(current.GetDeconstructionInfo(loop), methods)
+            }
+            case pattern is RecursivePatternSyntax {
+                // A nested positional pattern is a node of its own.
+                let deconstruct = (current.GetOperation(pattern) as IRecursivePatternOperation)?.DeconstructSymbol
+                if deconstruct is IMethodSymbol deconstructMethod {
+                    methods.Add(deconstructMethod)
+                }
+            }
         }
+        return methods
+    }
+
+    private func AddDeconstructingMethods(info DeconstructionInfo, methods List[IMethodSymbol]) {
+        if info.Method is {} method {
+            methods.Add(method)
+        }
+        for nested in info.Nested {
+            AddDeconstructingMethods(nested, methods)
+        }
+    }
+
+    // Issue #5574: the record whose synthesized `Deconstruct` `method` is, or
+    // null. Seen through a run project's emitted reference the method is not
+    // marked implicitly declared, so it is matched through the record's source
+    // declaration, which is also the key its positional candidates use.
+    private func SynthesizedDeconstructRecord(method IMethodSymbol, run NullArgumentRun) INamedTypeSymbol? {
+        let record = method.ContainingType.OriginalDefinition
+        if method.IsImplicitlyDeclared {
+            return record
+        }
+        if method.DeclaringSyntaxReferences.Length != 0 || !record.IsRecord {
+            return nil
+        }
+        for source in SourceDeclarationsInRun(record, run.Members) {
+            if source is INamedTypeSymbol sourceRecord && sourceRecord.GetMembers(method.Name).Any(
+                (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
+                    synthesized
+                    .Parameters
+                    .Length == method
+                    .Parameters
+                    .Length
+            ) {
+                return sourceRecord.OriginalDefinition
+            }
+        }
+        return nil
     }
 
     private func AddNullArgumentRead(
@@ -2375,8 +2440,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     // (`x == y`, `x is …`, `x ?? y`, `x?.M`, `switch (x)`) and the author's own
     // `x!` take the null as C# does or are asserted either way: G#'s `!!`
     // before a dereference throws where C# throws. A read that a null test
-    // guards (`if (x != null) …`) takes it too. A read handed to a slot (an argument, a store, a
-    // `return`, an arrow body, a reduced extension's receiver) takes the null
+    // guards (`if (x != null) …`) takes it too; a pattern that captures the
+    // value (`x is var y`) does not. A read handed to a slot (an argument, a store, a
+    // `return`, an arrow body, a reduced extension's receiver, a user-defined
+    // operator's operand) takes the null
     // when the slot is nullable — `(true, nil)` — or when the slot is a
     // declaration this rule widens too — `(false, slot)`, decided by the fixed
     // point. Anything else — a local, a lambda result, an interpolation, a `!`,
@@ -2429,6 +2496,19 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return (true, default(string?))
             }
             case binary is BinaryExpressionSyntax {
+                // A user-defined operator is a call: the operand is its argument.
+                if model.GetSymbolInfo(binary)
+                    .Symbol is IMethodSymbol{MethodKind: MethodKind.UserDefinedOperator} userOperator &&
+                    userOperator
+                    .Parameters
+                    .Length == 2 {
+                    let operand = if binary.Left == value {
+                        userOperator.Parameters[0]
+                    } else {
+                        userOperator.Parameters[1]
+                    }
+                    return ClassifyNullArgumentSlot(operand, run)
+                }
                 // A reference comparison takes a `T?` operand; `x ?? y` tests `x`.
                 return if binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression) ||
                     binary.IsKind(SyntaxKind.CoalesceExpression) && binary.Left == value {
@@ -2449,14 +2529,40 @@ internal shared class ObliviousNullabilityAnalyzer {
                 coalesceAssignment.Left == value {
                 return (true, default(string?))
             }
+            // A pattern tests the value, but a `var` pattern also captures it, null
+            // included, into a local.
             case pattern is IsPatternExpressionSyntax when pattern.Expression == value {
-                return (true, default(string?))
+                return if CapturesTheInput(pattern.Pattern) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
+            }
+            case subpattern is NameColonSyntax when subpattern.Parent is SubpatternSyntax property {
+                return if CapturesTheInput(property.Pattern) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
             }
             case switchStatement is SwitchStatementSyntax when switchStatement.Expression == value {
-                return (true, default(string?))
+                return if switchStatement.Sections.Any(
+                    (section SwitchSectionSyntax) -> section.Labels.Any(
+                        (label SwitchLabelSyntax) -> label is CasePatternSwitchLabelSyntax casePattern &&
+                            CapturesTheInput(casePattern.Pattern)
+                    )
+                ) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
             }
             case switchExpression is SwitchExpressionSyntax when switchExpression.GoverningExpression == value {
-                return (true, default(string?))
+                return if switchExpression.Arms.Any((arm SwitchExpressionArmSyntax) -> CapturesTheInput(arm.Pattern)) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
             }
             case loop is ForEachStatementSyntax when loop.Expression == value {
                 return (true, default(string?))
@@ -2498,6 +2604,18 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return unsafe
             }
         }
+    }
+
+    // Issue #5574: whether `pattern` binds the value it tests itself to a
+    // variable (`var x`, also under `or` or parentheses), which then holds a
+    // null the test let through. A subpattern binds a part, which is a read
+    // of its own.
+    private func CapturesTheInput(pattern PatternSyntax) bool -> switch pattern {
+        case capture is VarPatternSyntax: capture.Designation is not DiscardDesignationSyntax
+        case binaryPattern is BinaryPatternSyntax: CapturesTheInput(binaryPattern.Left) ||
+            CapturesTheInput(binaryPattern.Right)
+        case parenthesized is ParenthesizedPatternSyntax: CapturesTheInput(parenthesized.Pattern)
+        default: false
     }
 
     // Issue #5574: a slot that receives a read. A nullable slot takes the null;
