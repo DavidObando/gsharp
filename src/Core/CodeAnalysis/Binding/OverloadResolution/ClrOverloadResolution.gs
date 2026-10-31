@@ -4005,10 +4005,7 @@ internal shared class ClrOverloadResolution {
             var invoke MethodInfo?
             var invokeParams[]ParameterInfo
             try {
-                var delegateType Type? = parameters[paramIndex].ParameterType
-                if delegateType == nil {
-                    return false
-                }
+                var delegateType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
                 // Issue #2375: mirror UnifyForInference's #2142 unwrap — a
                 // deferred lambda slot whose delegate parameter is
                 // `Expression<TDelegate>` (e.g. `HasOne<TRelated>(Expression<Func<TEntity, TRelated>>)`)

@@ -4431,12 +4431,33 @@ internal class ConversionClassifier {
         /// @param argument The bound argument.
         /// @param parameter The imported CLR parameter.
         /// @returns `true` when the argument must be passed by implicit readonly reference.
-        func IsImplicitInClrArgument(argument BoundExpression, parameter ParameterInfo) bool -> parameter
+        func IsImplicitInClrArgument(
+            argument BoundExpression,
+            parameter ParameterInfo
+        ) bool -> IsImplicitInClrParameter(parameter) &&
+            (IsPlainValueArgument(argument) || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+
+        /// Issue #4400: whether an imported parameter is an `in` (or `ref readonly`) slot. Such a slot
+        /// accepts a plain value by implicit readonly reference.
+        /// @param parameter The imported CLR parameter.
+        /// @returns `true` for an `in` or `ref readonly` parameter.
+        func IsImplicitInClrParameter(parameter ParameterInfo) bool -> parameter
             .ParameterType
             .IsByRef &&
             parameter.IsIn &&
-            !parameter.IsOut &&
-            (IsPlainValueArgument(argument) || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+            !parameter.IsOut
+
+        /// Issue #5543: the CLR type that a plain value argument converts to at an imported parameter. This is
+        /// the pointee of an `in` or `ref readonly` slot, and the parameter type otherwise. Function-literal
+        /// target typing uses it, so a literal at an `in` delegate slot binds to the delegate, as in C#.
+        /// A `ref` or `out` slot keeps its by-reference type, because only an address can reach it.
+        /// @param parameter The imported CLR parameter.
+        /// @returns The type that a plain value converts to.
+        func GetPlainValueClrParameterType(parameter ParameterInfo) Type -> if IsImplicitInClrParameter(parameter) {
+            parameter.ParameterType.GetElementType() ?? parameter.ParameterType
+        } else {
+            parameter.ParameterType
+        }
 
         /// Issue #4400: whether a bound argument is a plain VALUE — not already an
         /// address (`in x`, `&x`, a conditional address, a `*T`),
