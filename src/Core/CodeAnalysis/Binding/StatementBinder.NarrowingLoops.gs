@@ -393,29 +393,23 @@ internal partial class StatementBinder {
             default {
                 if write.RightSideName != nil {
                     why = "variable"
-                    // Question 4 (decided for slice L1): a pattern-bound name is immutable and non-null by its
-                    // construct. Its type must convert to the root without a conversion operator.
+                    // Question 4 (decided for slice L1): a type-pattern variable of the region is non-null and
+                    // read-only. The scanner gives it a typed kind only where the binder scopes it; the binder
+                    // drops the scope that a guard leaks (`leaked|Type`) when the function has a user label. Its
+                    // type must convert to the root without a conversion operator.
                     var patternType TypeSymbol? = nil
                     var patternBound = false
                     let declaration = write.RightSideDeclaration
                     if declaration != nil && declaration.StartsWith("pattern|", StringComparison.Ordinal) {
                         patternBound = true
-                        let typeName = declaration.Substring("pattern|".Length)
-                        patternType = ResolveConstructedType(typeName)
+                        patternType = ResolveConstructedType(declaration.Substring("pattern|".Length))
+                    } else if declaration != nil && declaration.StartsWith("leaked|", StringComparison.Ordinal) {
+                        patternBound = true
+                        if !binderCtx.FunctionContainsUserGotoOrLabel {
+                            patternType = ResolveConstructedType(declaration.Substring("leaked|".Length))
+                        }
                     } else if declaration == "pattern" || declaration == "binding" {
                         patternBound = true
-                    } else if declaration == nil {
-                        let symbol = $scope.TryLookupSymbol(write.RightSideName)
-                        if symbol is VariableSymbol source &&
-                            source.DeclaringSyntax is {} declaringSyntax &&
-                            (
-                            declaringSyntax.Kind == SyntaxKind.TypePattern ||
-                                declaringSyntax.Kind == SyntaxKind.VarPattern ||
-                                declaringSyntax.Kind == SyntaxKind.IfLetBindingClause
-                        ) {
-                            patternBound = true
-                            patternType = StripAllNullability(source.Type)
-                        }
                     }
                     if patternBound {
                         why = "variable:pattern-bound"

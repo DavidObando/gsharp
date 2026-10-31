@@ -1398,12 +1398,22 @@ question is the one that first depends on it.
    `gsharp-csharp` leg, not Oahu: its frozen C# corpus translates to the same `access = inner` shape in Core
    (`ExpressionBinder.Assignments.gs`) and in `Cs2Gs.Translator` (`CSharpToGSharpTranslator.Deconstruction.gs`),
    and no restructuring of `src/Core` reaches that corpus, so without the clause 24 of the 58 apps went red.
-   The clause: a loop write whose right side is a pattern-bound variable (a `TypePattern` with a plain type
-   name, or an entry-scope variable declared by a `TypePattern`, `VarPattern` or `if let`/`guard let`/`while let`
-   binding) is a P7 proof when its type converts to the root's declared type (and to the fact's type for a
-   type-test fact) by `Conversion.IsRepresentationPreservingImplicit`, so no conversion operator runs. A
-   pattern variable that the region declares with a pattern the walker cannot type (`var`, `if let`) is still no
-   proof. An ordinary `let` or `var` copy is no proof. Original recommendation, superseded:
+   The clause: a loop write whose right side names a variable that a `TypePattern` with a plain type name
+   declares in the region is a P7 proof when the type converts to the root's declared type (and to the fact's
+   type for a type-test fact) by `Conversion.IsRepresentationPreservingImplicit`, so no conversion operator runs.
+   The walker gives the name the pattern's type only where the binder scopes the variable (ADR-0166): the then
+   branch of an `if` and the body of a `while`, `for` condition or `for` clause for the variables the condition
+   assigns when true, and the statements after `if c { exit }` (a direct statement of a block, with no
+   initializer and no `else`, its then branch ending in `return`, `throw`, `break` or `continue`) for the
+   variables `c` assigns when false. Its classification of `!`, `&&`, `||`, `not`, `and` and `or` is a subset of
+   `PatternVariables.Classify`. Anywhere else the name may denote another variable, a property or an imported
+   member, so it is no proof: a pattern variable of a closed scope, a when-false variable inside the then branch,
+   a guard whose then branch does not exit, and every guard of a function with a user label (the binder drops
+   that scope). Where the walker does not give a pattern variable its type, a write to its name or a bare read
+   of its name is taken to name other storage (W1, W5): the variable is read-only, and the name may denote an
+   entry-scope variable or a property there. Not in L1: a variable that the region declares with `var`, `if let`, `guard let`
+   or `while let`, and a pattern variable of the loop's entry scope; each is still no proof (a `var` pattern can
+   bind `nil`). An ordinary `let` or `var` copy is no proof. Original recommendation, superseded:
    **not in L1**, *provisional*: the site costs one `let`
    copy; L0 reports how many such sites Oahu has; if L0 finds any, L1 adds
    the clause (the symbol must record that it was bound by a non-null

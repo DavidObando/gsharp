@@ -616,6 +616,136 @@ func Run(done Flag, flag bool) string {
     }
 }
 func Main() { Console.WriteLine(Run(Flag{}, true)) }`, "GS0155")
+            Add("closed-scope-pattern-name-denotes-the-entry-variable (Q4)", `package T
+class Node { var V int32 = 1 }
+func Run(o object, n int32) int32 {
+    var access Node? = Node()
+    if access == nil { return 0 }
+    var inner Node? = nil
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + access.V
+        if i < 0 {
+            if o is Node inner { total = total + inner.V }
+        }
+        access = inner
+    }
+    return total
+}`, "GS0158")
+            Add("when-false-pattern-name-in-the-then-branch-denotes-the-entry-variable (Q4)", `package T
+class Node { var V int32 = 1 }
+func Run(o object, n int32) int32 {
+    var access Node? = Node()
+    if access == nil { return 0 }
+    var inner Node? = nil
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + access.V
+        if o is not Node inner { access = inner }
+    }
+    return total
+}`, "GS0158")
+            Add("write-to-a-when-false-pattern-name-writes-the-entry-variable (W1)", `package T
+class Node { var V int32 = 1 }
+func Run(o object, n int32) int32 {
+    var inner Node? = Node()
+    if inner == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + inner.V
+        if o is not Node inner { inner = nil }
+    }
+    return total
+}`, "GS0158")
+            Add("guard-without-an-exit-leaks-no-pattern-variable (Q4)", `package T
+class Node { var V int32 = 1 }
+func Run(o object, n int32) int32 {
+    var access Node? = Node()
+    if access == nil { return 0 }
+    var inner Node? = nil
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + access.V
+        if o is not Node inner { total = total + 1 }
+        access = inner
+    }
+    return total
+}`, "GS0158")
+            Add("guard-leak-is-dropped-in-a-function-with-a-label (Q4)", `package T
+class Node { var V int32 = 1 }
+func Run(o object, n int32) int32 {
+    var access Node? = Node()
+    var inner Node? = nil
+    var total = 0
+    if access != nil {
+        for var i = 0; i < n; i++ {
+            total = total + access.V
+            if o is not Node inner { return total }
+            access = inner
+        }
+    }
+    if total < 0 { goto done }
+done:
+    return total
+}`, "GS0158")
+            Add("when-false-pattern-name-in-the-then-branch-is-a-bare-property-read (W5)", `package T
+var g string? = "safe"
+class H {
+    prop inner string {
+        get {
+            g = nil
+            return "p"
+        }
+    }
+    func Run(o object, flag bool) string {
+        if g == nil { return "" }
+        for {
+            if flag == true { return g }
+            if o is not string inner { return inner }
+        }
+    }
+}
+func Main() { }`, "GS0155")
+            Add("negated-guard-pattern-variable-write-keeps-the-fact (Q4)", `package T
+class Node { var V int32 = 1
+    var Next object? = nil }
+func Run(o object, n int32) int32 {
+    var access Node? = o as Node
+    if access == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + access.V
+        if !(access.Next is Node inner) { continue }
+        access = inner
+    }
+    return total
+}`, "")
+            Add("for-clause-condition-pattern-variable-write-keeps-the-fact (Q4)", `package T
+class Node { var V int32 = 1
+    var Next object? = nil }
+func Run(o object, n int32) int32 {
+    var access Node? = o as Node
+    if access == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n && access.Next is Node inner; i++ {
+        total = total + access.V
+        access = inner
+    }
+    return total
+}`, "")
+            Add("for-condition-pattern-variable-write-keeps-the-fact (Q4)", `package T
+class Op { var Parent Op? = nil
+    var Name string = "a" }
+func Run(start Op) string {
+    var current Op? = start
+    if current == nil { return "" }
+    var last = ""
+    for current.Parent is Op parent {
+        last = current.Name
+        current = parent
+    }
+    return last
+}`, "")
             return rows
         }
     }
