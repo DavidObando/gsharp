@@ -478,7 +478,22 @@ partial class CSharpToGSharpTranslator {
                     case access is ElementAccessExpressionSyntax: access.Expression
                     default: default(ExpressionSyntax?)
                 }
-                return receiver != nil && this.ElementPositionIsPromoted(receiver, parameter)
+                if receiver != nil && this.ElementPositionIsPromoted(receiver, parameter) {
+                    return true
+                }
+                // Issue #5541: a parameter typed by a type parameter that the call binds to
+                // a nullable position (`Id[string?](x)`, `Box[string?](x)`, or an
+                // inferred `T?`) takes the value as it is.
+                return argument.Parent?.Parent is ExpressionSyntax call && this.CallSlotIsNullable(
+                    call,
+                    parameter.OriginalDefinition.Type
+                )
+            }
+            // A lambda result whose delegate result type the call binds to a nullable
+            // position: `lines.Select(l => { return l; })`.
+            if parent is ReturnStatementSyntax ||
+                (parent is AnonymousFunctionExpressionSyntax resultLambda && resultLambda.ExpressionBody == written) {
+                return this.LambdaResultSlotIsNullable(written)
             }
             if parent is AssignmentExpressionSyntax assignment && assignment.IsKind(
                 SyntaxKind.SimpleAssignmentExpression
@@ -549,6 +564,82 @@ partial class CSharpToGSharpTranslator {
                 )
             )
             return MemberPositionIsNullable(positions, createdType, member)
+        }
+
+        // Whether the type [`slotType`](paramref) of a parameter or delegate result of
+        // the call [`call`](paramref), with the call's type arguments bound as the
+        // analysis binds them, is nullable at the top level.
+        private func CallSlotIsNullable(call ExpressionSyntax, slotType ITypeSymbol) bool {
+            if !MentionsTypeParameter(slotType) {
+                return false
+            }
+            let flow = this.ObliviousContainerFlowState()
+            let model = this.context.SemanticModel
+            var bindings Dictionary[ITypeParameterSymbol, ObliviousPositionSet]? = nil
+            if call is InvocationExpressionSyntax invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol method {
+                bindings = this.ObliviousMemberTypeArguments(invocation, method, model, flow)
+            } else if call is BaseObjectCreationExpressionSyntax creation &&
+                this
+                .context
+                .GetTypeInfo(creation)
+                .Type is INamedTypeSymbol created {
+                // A construction binds its type parameters to the positions it states.
+                let stated = this.ObliviousCreationPositions(creation, model, flow)
+                bindings = TypeParameterMap()
+                let parameters = FlatTypeArguments(created.OriginalDefinition)
+                for var i = 0; i < parameters.Count; i++ {
+                    if parameters[i] is ITypeParameterSymbol parameter {
+                        bindings[parameter] = Subtree(stated, IndexPosition(i))
+                    }
+                }
+            }
+            if bindings == nil {
+                return false
+            }
+            let slot = ObliviousPositionSet()
+            Substitute(slotType, bindings, "", slot)
+            return slot.Nullable.Contains("")
+        }
+
+        // Whether a value that a lambda returns has a nullable delegate result, because
+        // the call that receives the lambda binds that result's type to a nullable
+        // position.
+        private func LambdaResultSlotIsNullable(result ExpressionSyntax) bool {
+            var node SyntaxNode? = result.Parent
+            while node != nil && !(node is AnonymousFunctionExpressionSyntax) {
+                if node is LocalFunctionStatementSyntax || node is BaseMethodDeclarationSyntax {
+                    return false
+                }
+                node = node.Parent
+            }
+            if node is not AnonymousFunctionExpressionSyntax lambda || lambda.AsyncKeyword.IsKind(
+                SyntaxKind.AsyncKeyword
+            ) {
+                return false
+            }
+            var argumentNode SyntaxNode? = lambda.Parent
+            while argumentNode is ParenthesizedExpressionSyntax {
+                argumentNode = argumentNode.Parent
+            }
+            if argumentNode is not ArgumentSyntax argument ||
+                argument
+                .Parent
+                ?.Parent is not ExpressionSyntax call ||
+                this
+                .context
+                .SemanticModel
+                .GetOperation(argument) is not IArgumentOperation operation ||
+                operation.Parameter == nil {
+                return false
+            }
+            let invoke IMethodSymbol? = (
+                operation.Parameter!!.OriginalDefinition.Type as INamedTypeSymbol
+            )?.DelegateInvokeMethod
+            return invoke != nil && !invoke.ReturnsVoid && this.CallSlotIsNullable(call, invoke.ReturnType)
         }
 
         // The whole value that a write stores: an arm of a conditional or switch
@@ -689,6 +780,11 @@ partial class CSharpToGSharpTranslator {
                 if this.IsFrozenObliviousImportMember(symbol) {
                     CollectPlatformPositions(StorageType(UnreducedDefinition(symbol)), "", positions.Platform)
                 }
+                // A local that a G# nil test narrows reads as non-null at its top level,
+                // so a generic call or local that takes its type from it does too.
+                if positions.Nullable.Contains("") && value is IdentifierNameSyntax && this.IsNarrowedLocalRead(value) {
+                    positions.Nullable.Remove("")
+                }
             }
             if value is ElementAccessExpressionSyntax elementAccess && model.GetTypeInfo(elementAccess.Expression)
                 .Type is IArrayTypeSymbol {
@@ -702,6 +798,19 @@ partial class CSharpToGSharpTranslator {
                 Substitute(memberType, bindings, "", positions)
             }
             return Filtered(model.GetTypeInfo(value!!).Type, positions)
+        }
+
+        // Whether G# narrows the local or parameter that [`read`](paramref) reads to
+        // non-null. The answer depends only on the read's own tree and enclosing body,
+        // so the analysis and the translation of every document agree on it.
+        private func IsNarrowedLocalRead(read ExpressionSyntax) bool {
+            let modelScope = this.context.UseSemanticModelFor(read.SyntaxTree)
+            let bodyScope SyntaxNode? = this.state.CurrentBodyScope
+            this.state.CurrentBodyScope = nil
+            let narrowed = this.IsGSharpFlowNarrowedLocal(read)
+            this.state.CurrentBodyScope = bodyScope
+            modelScope.Dispose()
+            return narrowed
         }
 
         // The positions that the receiver of a member read and the arguments of a
@@ -1049,6 +1158,25 @@ partial class CSharpToGSharpTranslator {
                                 stored,
                                 compilation
                             )
+                        } else if destination is IMethodSymbol && flow.Destinations.TryGetValue(
+                            original,
+                            out var storedResult
+                        ) {
+                            // An `async` method stores the returned value as its task's
+                            // result, below position `0`.
+                            let result = HashSet[string](System.StringComparer.Ordinal)
+                            SubtreeInto(storedResult, prefix, result)
+                            result.Remove("")
+                            if result.Count > 0 {
+                                changed |= this.AddAliasedSourcePositions(
+                                    flow,
+                                    value,
+                                    model,
+                                    PositionType(destinationType, prefix),
+                                    result,
+                                    compilation
+                                )
+                            }
                         }
                     } else if positions == nil {
                         continue
