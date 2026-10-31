@@ -2906,10 +2906,8 @@ internal partial class ExpressionBinder {
                         continue
                     }
                 }
-                let parameterType Type? = parameters[paramIndex].ParameterType
-                if parameterType == nil {
-                    continue
-                }
+                // Issue #5543: a literal is a plain value, so an `in` slot targets its pointee.
+                let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
                 sawAnyMatchingSlot = true
                 if parameterType.ContainsGenericParameters {
                     // Open generic delegate parameters are resolved later, once the
