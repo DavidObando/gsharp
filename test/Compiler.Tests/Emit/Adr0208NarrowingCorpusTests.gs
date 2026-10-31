@@ -330,7 +330,9 @@ open class Adr0208NarrowingCorpusTests {
                 "v14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18",
                 "v15_5534_closure_created_in_a_condition_keeps_a_member_path_R18",
                 "v16_5534_closure_created_in_a_statement_keeps_a_member_path_R18",
-                "v17_5534_type_test_after_the_call_narrows_a_member_path_R18"
+                "v17_5534_type_test_after_the_call_narrows_a_member_path_R18",
+                "v18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18",
+                "v19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18"
             },
             names
         )
@@ -5059,6 +5061,97 @@ func Run(b Crate) string {
     return "z"
 }
 Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
+            yield[]object{"v18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet {}
+class Dog : Pet {}
+class Cat : Pet { func Meow() int32 { return 7 } }
+func Run() int32 {
+    var x Pet? = Dog()
+    let h = Holder{}
+    h.Callback = func() { x = Cat() }
+    if x !is Dog { return 0 }
+    if Check(h) && x is Cat {
+        return x.Meow()
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0159@43:18", "reject", "", "R18"}
+            yield[]object{"v19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x int32? = 5
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && x is int32 {
+        return x
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0156@40:16", "reject", "", "R18"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

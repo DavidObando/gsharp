@@ -957,7 +957,11 @@ Details per row:
   statement and for `if init; cond`, before the condition's own narrowing is classified. Three consequences
   keep safe code compiling. (1) The condition was bound before its effects, so a type test of a path whose fact
   the effects removed (`Check(h) && x is C` after a guard on `x`) is classified against the path's declared type,
-  the type it has after the effects, as a nil test already is. (2) The effects are read with the callable aliases
+  the type it has after the effects, as a nil test already is. This applies only to a fact that strips `?` or
+  `!` from a reference type, whose read emits no conversion. The operand of a subtype fact is read with a
+  `castclass` and a nullable value with an unwrap, so that test runs on the stale read (an `InvalidCastException`
+  or `InvalidOperationException` when the call changed the value; #5545); those branches stay rejected
+  (rows v18 and v19). (2) The effects are read with the callable aliases
   from before the condition, as for a statement, and the aliases are updated after them, so a call of an alias
   that the condition reassigns later (`action() && (action = callback) is {} a`) keeps its classification.
   (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or
@@ -966,7 +970,7 @@ Details per row:
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
   tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
   `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
-  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows v01 to v17.
+  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows v01 to v19.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only

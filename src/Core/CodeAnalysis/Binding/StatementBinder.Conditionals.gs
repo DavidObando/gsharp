@@ -701,7 +701,9 @@ internal partial class StatementBinder {
     /// ADR-0208 R18 (#5534): the condition is bound before its effects apply, so the operand of a type test reads
     /// the fact from before the condition ran. When the condition's effects removed that fact (the operand still
     /// has the removed type), the test is classified against the declared type of the path, the type the path has
-    /// after the effects. Otherwise the bound type is the current one and `nil` keeps it.
+    /// after the effects. Otherwise the bound type is the current one and `nil` keeps it. Only a fact that strips
+    /// `?` or `!` from a reference type qualifies: its read emits no conversion, so the test sees the current
+    /// value. A subtype fact (`castclass`) or a nullable value (an unwrap) would test the stale read.
     private func TypeTestOperandTypeAfterEffects(
         operand BoundExpression,
         removedFacts Dictionary[AccessPath, TypeSymbol]?
@@ -711,7 +713,8 @@ internal partial class StatementBinder {
         }
         if operand is BoundVariableExpression variable {
             return if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) &&
-                operand.Type == removedType {
+                operand.Type == removedType &&
+                IsNullabilityOnlyFact(variable.Variable.Type, removedType) {
                 variable.Variable.Type
             } else {
                 default(TypeSymbol?)
@@ -719,9 +722,23 @@ internal partial class StatementBinder {
         }
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
             removedFacts.TryGetValue(path!!, out var removedMemberType) && currentType == removedMemberType {
-            return MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
+            let declared = MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
+            return if IsNullabilityOnlyFact(declared, currentType!!) {
+                declared
+            } else {
+                default(TypeSymbol?)
+            }
         }
         return nil
+    }
+
+    private func IsNullabilityOnlyFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {
+        case nullable is NullableTypeSymbol: nullable.UnderlyingType == fact && !NullableLifting.IsValueTypeNullable(
+            nullable
+        ) &&
+            !NullableLifting.IsUserValueTypeNullable(nullable)
+        case platform is PlatformTypeSymbol: platform.UnderlyingType == fact
+        default: false
     }
 
     private func TryClassifyNilGuard(condition BoundExpression)(
