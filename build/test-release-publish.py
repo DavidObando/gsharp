@@ -361,6 +361,8 @@ class NugetPushTests(unittest.TestCase):
     def test_symbols_are_pushed_only_by_the_explicit_snupkg_push(self) -> None:
         self.assertEqual(self.push("sdk").returncode, 0)
         lines = self.log.read_text().splitlines()
+        # Six packages and five symbol packages; an empty log must not pass.
+        self.assertEqual(sorted(Path(line.split()[0]).suffix for line in lines), [".nupkg"] * 6 + [".snupkg"] * 5)
         for line in lines:
             with self.subTest(line=line.split()[0]):
                 self.assertEqual("--no-symbols" in line.split(), line.split()[0].endswith(".nupkg"))
