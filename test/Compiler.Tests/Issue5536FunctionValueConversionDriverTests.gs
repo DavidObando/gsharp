@@ -288,6 +288,73 @@ class Program {
 `, "FFF")
     }
 
+    /// Issue #5543: symbolic target recovery reads the pointee of an `in` delegate slot too. A source type
+    /// argument therefore reaches an explicit or inferred lambda parameter for generic receivers, generic
+    /// methods, reduced extensions, static members and constructors.
+    @Fact
+    func FunctionLiteral_AtImportedInDelegateParameter_KeepsSourceTypeArguments() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import System.Collections.Generic
+import FunctionControl
+class Pt {
+    var X int32 = 3
+}
+func Main() {
+    let p = Pt()
+    Console.Write(InBox[Pt]().M(p, (q Pt) -> q.X))
+    Console.Write(InBox[Pt]().M(p, (q) -> q.X))
+    Console.Write(InHolder[Pt](p, (q Pt) -> q.X).Kind)
+    Console.Write(InHolder[Pt](p, (q) -> q.X).Kind)
+    Console.Write(InStatic[Pt].S(p, (q Pt) -> q.X))
+    Console.Write(InGeneric.Of(p, (q) -> q.X))
+    Console.Write(List[Pt]{p}.Each((q) -> q.X))
+}
+`, `using System;
+using System.Collections.Generic;
+using FunctionControl;
+class Pt {
+    public int X = 3;
+}
+class Program {
+    static void Main() {
+        var p = new Pt();
+        Console.Write(new InBox<Pt>().M(p, (Pt q) => q.X));
+        Console.Write(new InBox<Pt>().M(p, q => q.X));
+        Console.Write(new InHolder<Pt>(p, (Pt q) => q.X).Kind);
+        Console.Write(new InHolder<Pt>(p, q => q.X).Kind);
+        Console.Write(InStatic<Pt>.S(p, (Pt q) => q.X));
+        Console.Write(InGeneric.Of(p, q => q.X));
+        Console.Write(new List<Pt> { p }.Each(q => q.X));
+    }
+}
+`, "B3B3H3H3S3G3E3")
+    }
+
+    /// Issue #5543 control: an expression-bodied literal whose result does not convert to the `in` delegate
+    /// keeps its natural type, so the `object` overload applies, as for a by-value slot.
+    @Fact
+    func InDelegateParameter_IncompatibleExpressionLiteral_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.In(() -> "s", 1))
+    Console.Write(Calls.M(() -> "s", 1))
+    Console.Write(InCtor(() -> "s", 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.In(() => "s", 1));
+        Console.Write(Calls.M(() => "s", 1));
+        Console.Write(new InCtor(() => "s", 1).Kind);
+    }
+}
+`, "OOO")
+    }
+
     /// Issue #5543 controls: a by-value delegate slot, a source `in` slot and an explicit address keep their
     /// selection. A function value still needs a delegate that it can keep (#5536).
     @Fact
@@ -832,6 +899,20 @@ namespace FunctionControl {
     public static class InE {
         public static string X(this InReceiver r, in System.Func<long> f, int x) => "F";
         public static string X(this InReceiver r, object o, long x) => "O";
+    }
+    public class InBox<T> {
+        public string M(T x, in System.Func<T, int> f) => "B" + f(x);
+    }
+    public class InHolder<T> {
+        public string Kind;
+        public InHolder(T x, in System.Func<T, int> f) { Kind = "H" + f(x); }
+    }
+    public class InStatic<T> {
+        public static string S(T x, in System.Func<T, int> f) => "S" + f(x);
+    }
+    public static class InGeneric {
+        public static string Of<T>(T x, in System.Func<T, int> f) => "G" + f(x);
+        public static string Each<T>(this System.Collections.Generic.List<T> l, in System.Func<T, int> f) => "E" + f(l[0]);
     }
     public class InCtor {
         public string Kind;

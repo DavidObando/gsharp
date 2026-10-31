@@ -3020,8 +3020,9 @@ internal partial class ExpressionBinder {
                         continue
                     }
                 }
+                // Issue #5543: a lambda is a plain value, so an `in` slot targets its pointee.
                 if !TryBuildSymbolicDelegateTarget(
-                    parameters[paramIndex].ParameterType,
+                    ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex]),
                     openGenericDefinition,
                     symbolicTypeArgs,
                     out var mappedDelegate,
