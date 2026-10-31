@@ -1266,11 +1266,11 @@ internal partial class OverloadResolver {
         var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
         if extension.IsGeneric {
             substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
-            if ce.TypeArgumentList != nil {
-                let explicitArgs = ce.TypeArgumentList.Arguments
+            if ce.TypeArgumentList is {} typeArgumentList {
+                let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != extension.TypeParameters.Length {
                     Diagnostics.ReportWrongTypeArgumentCount(
-                        ce.TypeArgumentList.Location,
+                        typeArgumentList.Location,
                         extension.Name,
                         extension.TypeParameters.Length,
                         explicitArgs.Count
@@ -1665,11 +1665,11 @@ internal partial class OverloadResolver {
             if substitution == nil {
                 substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
             }
-            if ce.TypeArgumentList != nil {
-                let explicitArgs = ce.TypeArgumentList.Arguments
+            if ce.TypeArgumentList is {} typeArgumentList {
+                let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != method.TypeParameters.Length {
                     Diagnostics.ReportWrongTypeArgumentCount(
-                        ce.TypeArgumentList.Location,
+                        typeArgumentList.Location,
                         method.Name,
                         method.TypeParameters.Length,
                         explicitArgs.Count
