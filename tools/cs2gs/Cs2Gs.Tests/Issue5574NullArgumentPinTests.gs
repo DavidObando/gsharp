@@ -404,6 +404,82 @@ namespace Demo
         Assert.Equal("taken taken True True", CompileAndRun([]string{printed}, "Demo.Reads.Run()").Trim())
     }
 
+    /// More reads into fixed slots: a setter's `value`, an indexer's result, and a user-defined
+    /// conversion whose input stays non-null. Each pins what it reads, and the translation passes
+    /// the nulls on as C# does.
+    @Fact
+    func SetterIndexerAndConversionReads_Pin() {
+        let compilation = CompileFiles("App", nil, ("Holder.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Box { public static implicit operator Box(Node n) => new Box(); }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public class Holder
+    {
+        private readonly Sink sink = new Sink();
+        private Node item = new Node();
+        private Node second = new Node();
+        public string Taken = "";
+        public Box? Stored;
+        public Holder(Node a, Node b, Node c) { Current = a; second = b; Stored = c; }
+        public Node Current { get => item; set { Taken = sink.Take(value); item = value; } }
+        public Node this[int i] => second;
+        public string Run() => Taken + " " + sink.Take(this[0]) + " " + (Stored == null);
+        public static string Probe() => new Holder(null!, null!, null!).Run();
+    }
+}`))
+        let printed = TranslateFile(compilation, "Holder.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken taken False", CompileAndRun([]string{printed}, "Demo.Holder.Probe()").Trim())
+    }
+
+    /// A null argument that reaches a sibling project's parameter through its emitted reference is
+    /// decided with the source's reads: `Forward` hands `p` to a fixed slot, so `p` is pinned.
+    @Fact
+    func ANullThroughAnEmittedReference_ReadsTheSourceDeclaration() {
+        let library = CompileFiles("Lib", nil, ("Fwd.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class Fwd { public static string Forward(Node p) => new Sink().Take(p); }
+}`))
+        let image = MemoryStream()
+        Assert.True(library.Emit(image).Success)
+        image.Position = 0
+        let app = CompileFiles("App", MetadataReference.CreateFromStream(image), ("Probe.cs", `
+namespace Demo.App
+{
+    public static class Probe { public static string Run() => Demo.Fwd.Forward(null!); }
+}`))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = TranslateFile(library, "Fwd.cs", repository)
+        Assert.Equal(
+            "taken",
+            CompileAndRun(
+                []string{libraryPrinted, TranslateFile(app, "Probe.cs", repository)},
+                "Demo.App.Probe.Run()"
+            ).Trim()
+        )
+        Assert.Contains("Forward(p Node)", libraryPrinted)
+    }
+
+    /// A discarded call result goes nowhere, so it does not pin the call's return or what it returns.
+    @Fact
+    func ADiscardedCallResult_DoesNotPin() {
+        let printed = TranslateBound(("Identity.cs", `
+namespace Demo
+{
+    public static class Calls
+    {
+        public static string Identity(string p) => p;
+        public static void Go() { Identity(null!); }
+    }
+}`))
+        Assert.Contains("Identity(p string?)", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

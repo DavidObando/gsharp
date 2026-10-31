@@ -2102,6 +2102,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                     declarations[canonical] = symbols
                 }
                 symbols.Add(entry.Value)
+                // A declaration seen through a run project's emitted reference is
+                // read in its source, so the source declaration joins it.
+                if entry.Value.DeclaringSyntaxReferences.Length == 0 {
+                    symbols.AddRange(SourceDeclarationsInRun(entry.Value, run.Members))
+                }
             }
         }
         let IsEmitted = func (canonical string) bool {
@@ -2176,11 +2181,26 @@ internal shared class ObliviousNullabilityAnalyzer {
         let parameterNames = HashSet[string](StringComparer.Ordinal)
         let scopes = HashSet[SyntaxNode]()
         let scopeList = List[SyntaxNode]()
+        var readsIndexers = false
         for candidate in candidates {
             if !declarations.TryGetValue(candidate, out var symbols) {
                 continue
             }
             for symbol in symbols {
+                if symbol is IPropertySymbol property {
+                    readsIndexers = readsIndexers || property.IsIndexer
+                    // A setter's or init accessor's `value` is the property itself.
+                    for reference in property
+                        .SetMethod
+                        ?.DeclaringSyntaxReferences ??
+                        ImmutableArray[SyntaxReference].Empty {
+                        let accessor = reference.GetSyntax()
+                        parameterNames.Add("value")
+                        if scopes.Add(accessor) {
+                            scopeList.Add(accessor)
+                        }
+                    }
+                }
                 if symbol is not IParameterSymbol parameter {
                     memberNames.Add(symbol.Name)
                     continue
@@ -2197,9 +2217,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        let Visit = func (owner Compilation, nodes sequence[SyntaxNode], names HashSet[string]) {
+        let Visit = func (owner Compilation, nodes sequence[SyntaxNode], names HashSet[string], indexers bool) {
             var model SemanticModel? = nil
             for node in nodes {
+                if indexers && node is ElementAccessExpressionSyntax element {
+                    model = model ?? owner.GetSemanticModel(element.SyntaxTree)
+                    CollectNullArgumentRead(element, model, run, candidates, reads)
+                    continue
+                }
                 if node is not SimpleNameSyntax name || !names.Contains(name.Identifier.ValueText) ||
                     name.Parent is NameColonSyntax ||
                     name.Parent is NameEqualsSyntax {
@@ -2227,12 +2252,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                     } else {
                         tree.GetRoot().FindNode(member.Span)
                     }
-                    Visit(graph.Owner, linked.DescendantNodes(), parameterNames)
+                    Visit(graph.Owner, linked.DescendantNodes(), parameterNames, false)
                 }
             }
-            if memberNames.Count != 0 {
+            if memberNames.Count != 0 || readsIndexers {
                 for tree in graph.Owner.SyntaxTrees {
-                    Visit(graph.Owner, tree.GetRoot().DescendantNodes(), memberNames)
+                    Visit(graph.Owner, tree.GetRoot().DescendantNodes(), memberNames, readsIndexers)
                 }
             }
         }
@@ -2240,7 +2265,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func CollectNullArgumentRead(
-        name SimpleNameSyntax,
+        name ExpressionSyntax,
         model SemanticModel,
         run NullArgumentRun,
         candidates HashSet[string],
@@ -2318,7 +2343,21 @@ internal shared class ObliviousNullabilityAnalyzer {
             value = parenthesized
         }
         let unsafe = (false, default(string?))
+        // A user-defined conversion receives the value first: its input is the slot.
+        if value is ExpressionSyntax converted && model.GetConversion(converted) is {
+            IsUserDefined: true,
+            MethodSymbol: {} conversionOperator
+        } &&
+            conversionOperator
+            .Parameters
+            .Length > 0 {
+            return ClassifyNullArgumentSlot(conversionOperator.Parameters[0], run)
+        }
         switch value.Parent {
+            case _ is ExpressionStatementSyntax {
+                // A discarded result (`Identity(p);`) goes nowhere.
+                return (true, default(string?))
+            }
             case access is MemberAccessExpressionSyntax when access.Expression == value {
                 // `x.Ext()` hands `x` to the extension's `this` parameter.
                 if access.Parent is InvocationExpressionSyntax call && call.Expression == access && model.GetSymbolInfo(
@@ -2469,6 +2508,37 @@ internal shared class ObliviousNullabilityAnalyzer {
             .NullableAnnotation
             .None ||
             IsEmittedByRun(slot.OriginalDefinition, graphs)
+    }
+
+    // Issue #5574: the source declarations, in the run's compilations, that a
+    // declaration seen through a run project's emitted reference stands for.
+    private func SourceDeclarationsInRun(symbol ISymbol, graphs List[NullArgumentGraph]) List[ISymbol] {
+        let sources = List[ISymbol]()
+        let identity = symbol.ContainingAssembly?.Identity
+        let id = NullArgumentId(symbol)
+        if identity == nil || id == nil {
+            return sources
+        }
+        for graph in graphs {
+            if graph.Owner is not CSharpCompilation csharp || !csharp.Assembly.Identity.Equals(identity) {
+                continue
+            }
+            var source ISymbol? = nil
+            if id.StartsWith("P:M:", StringComparison.Ordinal) {
+                let separator = id.LastIndexOf('#')
+                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
+                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
+                IMethodSymbol method && ordinal < method.Parameters.Length {
+                    source = method.Parameters[ordinal]
+                }
+            } else {
+                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
+            }
+            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
+                sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+            }
+        }
+        return sources
     }
 
     // Issue #5574: `IsDeclaredInThisRun` for the run as a whole: a source
