@@ -343,6 +343,22 @@ class H {
         let n = b.v
     }
 }`, "")
+            yield Row("ok-untargeted-tuple-join-is-nullable", `func F(c bool) {
+    let t = c ? (Box(), 1) : (nil, 2)
+    let b Box? = t.Item1
+}`, "")
+            yield Row("ok-untargeted-tuple-switch-join-is-nullable", `func F(i int32) {
+    let t = switch i {
+        case 0: (name: "a", n: 1)
+        case 1: (name: nil, n: 2)
+        default: (name: "c", n: 3)
+    }
+    let s string? = t.name
+}`, "")
+            yield Row("ok-untargeted-nested-tuple-join-is-nullable", `func F(c bool) {
+    let t = if c { ((Box(), 1), 3) } else { ((nil, 2), 4) }
+    let b Box? = t.Item1.Item1
+}`, "")
             yield Row("ok-coalesce-nil-in-field-initializer", `class H(value Box?) {
     public var f Box? = value ?? nil
 }`, "")

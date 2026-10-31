@@ -185,7 +185,9 @@ namespace Demo
     /// Row 7: a virtual member does not own a signature its overrides share.
     @Fact
     func VirtualMethodParameter_IsNotPromoted() {
-        let printed = TranslateEnabled(("Walker.cs", `
+        let printed = TranslateEnabled(
+            "the virtual parameter keeps its non-null signature, so the hand-authored `Depth(null!)` stays `Depth(nil)`, which is GS0154 since #4316 (widening across a virtual hierarchy is #5524)",
+            ("Walker.cs", `
 namespace Demo
 {
     public class Node { }
@@ -194,7 +196,8 @@ namespace Demo
         public virtual int Depth(Node parent) => parent.GetHashCode();
         public int Run() => Depth(null!);
     }
-}`))
+}`)
+        )
         Assert.DoesNotContain("parent Node?", printed[0])
     }
 

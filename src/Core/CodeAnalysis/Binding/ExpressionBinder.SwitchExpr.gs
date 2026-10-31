@@ -327,6 +327,9 @@ internal partial class ExpressionBinder {
                         break
                     }
                 }
+                if common == nil {
+                    common = JoinTupleArmsWithNilElements(significant)
+                }
             }
             // Issue #1151: when a `nil` arm was present and the common type of the
             // remaining arms is a non-nullable value type `T`, unify to `T?`.
@@ -356,6 +359,67 @@ internal partial class ExpressionBinder {
                 common = PlatformTypeSymbol.Get(common)
             }
             return common
+        }
+
+        /// Issue #4316: tuple arms that hold a `nil` element join element by element, with the same
+        /// join as a scalar arm. `c ? (Box(), 1) : (nil, 2)` is `(Box?, int32)` exactly as
+        /// `c ? Box() : nil` is `Box?`, because `nil` no longer converts to a bare `Box`.
+        /// @param arms The tuple arm types, without `nil`, `never` or nullable wrappers.
+        /// @returns The element-wise join, or `null` when an arm is not a tuple of the same arity,
+        /// no arm holds a `nil` element, or an element has no common type.
+        private func JoinTupleArmsWithNilElements(arms IReadOnlyList[TypeSymbol]) TypeSymbol? {
+            if arms.Count < 2 || arms[0] is not TupleTypeSymbol {
+                return nil
+            }
+            var holdsNil = false
+            for arm in arms {
+                if arm is not TupleTypeSymbol tuple || tuple.Arity != cast[TupleTypeSymbol](arms[0]).Arity {
+                    return nil
+                }
+                holdsNil = holdsNil || HoldsNilElement(tuple)
+            }
+            if !holdsNil {
+                return nil
+            }
+            var joined = cast[TupleTypeSymbol](arms[0])
+            for var k = 1; k < arms.Count; k++ {
+                let next = cast[TupleTypeSymbol](arms[k])
+                let elements = ImmutableArray.CreateBuilder[TypeSymbol](joined.Arity)
+                let names = ImmutableArray.CreateBuilder[string?](joined.Arity)
+                var anyName = false
+                for var i = 0; i < joined.Arity; i++ {
+                    let element = ComputeConditionalResultType(joined.ElementTypes[i], next.ElementTypes[i], nil)
+                    if element == nil || element == TypeSymbol.Null {
+                        return nil
+                    }
+                    elements.Add(element)
+                    // A name survives only when both arms give the element the same name.
+                    let name string? = if joined.HasNames &&
+                        next.HasNames &&
+                        joined.ElementNames[i] == next.ElementNames[i] {
+                        joined.ElementNames[i]
+                    } else {
+                        nil
+                    }
+                    anyName = anyName || name != nil
+                    names.Add(name)
+                }
+                joined = if anyName {
+                    TupleTypeSymbol.Get(elements.MoveToImmutable(), names.MoveToImmutable())
+                } else {
+                    TupleTypeSymbol.Get(elements.MoveToImmutable())
+                }
+            }
+            return joined
+        }
+
+        private func HoldsNilElement(tuple TupleTypeSymbol) bool {
+            for element in tuple.ElementTypes {
+                if element == TypeSymbol.Null || element is TupleTypeSymbol nested && HoldsNilElement(nested) {
+                    return true
+                }
+            }
+            return false
         }
 
         /// Enumerates the candidate supertypes of [`type`](paramref) ordered
