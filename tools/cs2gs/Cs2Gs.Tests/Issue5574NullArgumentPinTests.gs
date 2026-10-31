@@ -354,6 +354,56 @@ namespace Demo
         Assert.DoesNotContain("node Node?", printed)
     }
 
+    /// A read handed to a slot that widens on its own (here `Sink`, which a call also passes `null`)
+    /// takes the null, so it does not pin what it reads.
+    @Fact
+    func AReadIntoAnIndependentlyWidenedSlot_DoesNotPin() {
+        let printed = TranslateBound(("Holder.cs", `
+namespace Demo
+{
+    public class Holder
+    {
+        private readonly string stored;
+        public Holder(string p) { stored = p; }
+        public static void Sink(string s) { }
+        public void Use() => Sink(stored);
+        public static void Go() { new Holder(null!).Use(); Sink(null!); }
+    }
+}`))
+        Assert.Contains("init(p string?)", printed)
+        Assert.Contains("Sink(s string?)", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
+    /// Reads the earlier forward-edge collection missed — a positional record property, a lambda's
+    /// result (both body forms), and an unqualified generic call's result — each handed to a slot
+    /// that keeps a non-null contract. Every read is now classified, so each pins its source and
+    /// the translation passes the null on as C# does.
+    @Fact
+    func EveryReadIntoAFixedSlot_Pins() {
+        let compilation = CompileFiles("App", nil, ("Reads.cs", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item);
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class Reads
+    {
+        public static Node Identity<T>(Node p) => p;
+        public static bool Block(Node q) { System.Func<Node> f = () => { return q; }; return f() is null; }
+        public static bool Arrow(Node r) { System.Func<Node> f = () => r; return f() is null; }
+        public static string Run()
+        {
+            var sink = new Sink();
+            return sink.Take(new Entry(null!).Item) + " " + sink.Take(Identity<int>(null!)) + " " +
+                Block(null!) + " " + Arrow(null!);
+        }
+    }
+}`))
+        let printed = TranslateFile(compilation, "Reads.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken taken True True", CompileAndRun([]string{printed}, "Demo.Reads.Run()").Trim())
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)
