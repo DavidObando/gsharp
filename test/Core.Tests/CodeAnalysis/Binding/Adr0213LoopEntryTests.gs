@@ -964,6 +964,44 @@ func Run(ref text string?, cb () -> void) int32 {
     return n
 }
 func Main() { }`, "GS0158")
+            Add("return-asserted-value-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Box { var N int32 = 1 }
+func operator implicit (b Box) string {
+    g = nil
+    throw InvalidOperationException("c")
+}
+func Run(b Box?) string {
+    if g == nil { return "" }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        try { return b!! } catch (InvalidOperationException) { }
+    }
+}
+func Main() { }`, "GS0155")
+            Add("when-false-pattern-name-in-a-test-is-a-bare-property-read (W5)", `package T
+var g string? = "safe"
+class H {
+    prop inner object {
+        get {
+            g = nil
+            return "p"
+        }
+    }
+    func Run(o object, flag bool) string {
+        if g == nil { return "" }
+        for {
+            if flag == true { return g }
+            if o is not string inner {
+                if inner is string { }
+            }
+        }
+    }
+}
+func Main() { }`, "GS0155")
             return rows
         }
     }

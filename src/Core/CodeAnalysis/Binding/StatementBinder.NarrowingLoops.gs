@@ -868,19 +868,8 @@ internal partial class StatementBinder {
         let facts = Dictionary[AccessPath, TypeSymbol]()
         for entry in elseFacts {
             let path = entry.Key
-            var removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
-            if !removed &&
-                filterNames != nil &&
-                (
-                headerEffects.ContainsCall ||
-                    headerEffects.ContainsMemberRead ||
-                    resolved.ReadsProperty ||
-                    resolved.RunsUserOperator ||
-                    resolved.RunsUserCodeOnWrite
-            ) &&
-                (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path)) {
-                removed = true
-            }
+            // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
+            let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
             if !removed {
                 facts[path] = entry.Value
             }
