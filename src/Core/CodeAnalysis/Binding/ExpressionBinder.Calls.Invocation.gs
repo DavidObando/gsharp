@@ -2854,7 +2854,7 @@ internal partial class ExpressionBinder {
                         nativeConversions: conversions
                     ),
                     erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
-                    delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+                    delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
                     methodGroupInference: MakeMethodGroupInference(
                         arguments,
                         GetEffectiveArgumentClrTypeForOverloadResolution
@@ -2902,7 +2902,7 @@ internal partial class ExpressionBinder {
                                 nativeConversions: conversions
                             ),
                             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
-                            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+                            delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
                             methodGroupInference: MakeMethodGroupInference(
                                 arguments,
                                 GetEffectiveArgumentClrTypeForOverloadResolution

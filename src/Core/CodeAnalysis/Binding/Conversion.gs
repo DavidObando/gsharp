@@ -2131,7 +2131,9 @@ class Conversion {
         /// perform. Reference nullability and platform wrappers are ignored only
         /// when deciding whether each slot is reference-like; the annotated types
         /// still drive conversion classification so nullable-to-non-nullable stays
-        /// rejected.
+        /// rejected. Issue #5536: the slot must also keep the same reference
+        /// ((cref:ProvesNominalReference)), so a channel reader projection is not a
+        /// variant slot.
         /// @param from The value-producing side of the slot.
         /// @param to The value-consuming side of the slot.
         /// @returns `true` for a strict implicit reference conversion.
@@ -2150,7 +2152,10 @@ class Conversion {
                 return false
             }
             let conversion = ClassifyNonStructural(from, to)
-            return conversion.Exists && conversion.IsImplicit && !conversion.IsStructuralProjection
+            return conversion.Exists &&
+                conversion.IsImplicit &&
+                !conversion.IsStructuralProjection &&
+                ProvesNominalReference(referenceFrom, referenceTo)
         }
 
         internal func IsRepresentationPreservingImplicit(source TypeSymbol, target TypeSymbol) bool {
@@ -2169,6 +2174,114 @@ class Conversion {
             return ProvesNominalReference(source, target)
         }
 
+        /// Issue #5536: decides whether a function value converts to a function or delegate target without a new body.
+        /// A function literal binds its body to the target, so only a literal can convert a result or parameter value.
+        /// A function value or method group keeps its delegate: emission reuses the delegate
+        /// ((cref:ReusesFunctionValueDelegate)) or binds its method to the target delegate. Both need each parameter
+        /// and the result to keep its reference, as CLR delegate compatibility does (ADR-0108).
+        /// @param source The type of the function value or method group.
+        /// @param target The conversion target.
+        /// @returns `false` only when [`source`](paramref) is a function type, [`target`](paramref) is a function or
+        /// delegate shape, and a parameter or the result needs a value conversion.
+        internal func KeepsFunctionValueDelegate(source TypeSymbol, target TypeSymbol) bool {
+            let sourceFunction = source.StripToBareShape() as FunctionTypeSymbol
+            if sourceFunction == nil || ReusesFunctionValueDelegate(source, target) {
+                return true
+            }
+            // A named or imported delegate binds the method of the value again, so its Invoke shape is the target.
+            if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(target.StripToBareShape(), out var targetFunction) {
+                return true
+            }
+            return KeepsFunctionSlotReferences(sourceFunction, targetFunction)
+        }
+
+        /// Issue #5536: decides whether an explicit checked reference conversion of a function value is valid.
+        /// `castclass` keeps the delegate and throws (cref:InvalidCastException) when the delegate is not
+        /// already a [`target`](paramref) reference. So a function or delegate target must be able to widen
+        /// back to the source by (cref:ReusesFunctionValueDelegate), as for `() -> Animal` to `() -> Dog`.
+        /// A cast that needs a new body, such as `() -> int32` to `() -> int64`, is not a checked conversion.
+        /// @param source The type of the function value.
+        /// @param target The cast target.
+        /// @returns `false` only for a function value cast to a function or delegate shape that no delegate of
+        /// the source can already be.
+        internal func ChecksFunctionValueDelegate(source TypeSymbol, target TypeSymbol) bool {
+            let bareSource = source.StripToBareShape()
+            let bareTarget = target.StripToBareShape()
+            if !(bareSource is FunctionTypeSymbol) || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                bareTarget,
+                out _
+            ) {
+                return true
+            }
+            return ReusesFunctionValueDelegate(bareTarget, bareSource)
+        }
+
+        /// Issue #5536: decides whether a function value is already a valid reference of [`target`](paramref).
+        /// This is the nominal proof of (cref:IsRepresentationPreservingImplicit), or the natural `Func`/`Action`
+        /// variance between two arrow function types. The variance check compares each slot with its reference
+        /// nullability erased, because a nullable annotation has no runtime representation.
+        /// @param source The type of the function value.
+        /// @param target The conversion target.
+        /// @returns `true` when emission can use the value without IL.
+        internal func ReusesFunctionValueDelegate(source TypeSymbol, target TypeSymbol) bool {
+            if IsRepresentationPreservingImplicit(source, target) {
+                return true
+            }
+            let sourceFunction = source.StripToBareShape() as FunctionTypeSymbol
+            let targetFunction = target.StripToBareShape() as FunctionTypeSymbol
+            if sourceFunction == nil ||
+                targetFunction == nil ||
+                !TryGetNaturalDelegateShape(sourceFunction, out var sourceDelegate, out _) ||
+                !TryGetNaturalDelegateShape(targetFunction, out var targetDelegate, out _) ||
+                !ClrTypeUtilities.AreSame(sourceDelegate, targetDelegate) {
+                return false
+            }
+            // Only the generic `Func`/`Action` definitions declare variance; other natural shapes need equal slots.
+            let definition = sourceDelegate?.FullName ?? string.Empty
+            let variant = sourceDelegate?.IsGenericTypeDefinition == true &&
+                (
+                definition.StartsWith("System.Func`", StringComparison.Ordinal) || definition.StartsWith(
+                    "System.Action`",
+                    StringComparison.Ordinal
+                )
+            )
+            return KeepsFunctionSlotReferences(sourceFunction, targetFunction, allowVariance: variant)
+        }
+
+        /// Relates each slot of two function shapes as CLR delegate compatibility does. A parameter of
+        /// [`target`](paramref) flows into [`source`](paramref), and the result flows out.
+        /// @param source The function shape that produces the delegate.
+        /// @param target The function or Invoke shape that the delegate must satisfy.
+        /// @param allowVariance When `false`, each slot must have the same runtime type.
+        /// @returns `true` when each slot has the same runtime type or a nominal reference conversion.
+        private func KeepsFunctionSlotReferences(
+            source FunctionTypeSymbol,
+            target FunctionTypeSymbol,
+            allowVariance bool = true
+        ) bool {
+            if source.Arity != target.Arity {
+                return false
+            }
+            for var i = 0; i < source.Arity; i++ {
+                if !KeepsSlotReference(target.ParameterTypes[i], source.ParameterTypes[i], allowVariance) {
+                    return false
+                }
+            }
+            return KeepsSlotReference(source.ReturnType, target.ReturnType, allowVariance)
+        }
+
+        private func KeepsSlotReference(producer TypeSymbol, consumer TypeSymbol, allowVariance bool) bool {
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                producer.StripToBareShape(),
+                consumer.StripToBareShape()
+            ) {
+                return true
+            }
+            // The caller classified the annotated pair; the slot proof is about representation only.
+            return allowVariance &&
+                IsRepresentationPreservingImplicit(producer.StripToBareShape(), consumer.StripToBareShape())
+        }
+
         /// Proves that an implicit conversion keeps the same reference: a nominal base, interface, array, delegate or
         /// variant relation, not a conversion that constructs or selects another reference. It does not classify the
         /// pair; callers classify once, and nested arguments recurse only through this proof, so each pair is proven once.
@@ -2181,7 +2294,10 @@ class Conversion {
             if !IsReferenceLikeTarget(sourceShape) || !IsReferenceLikeTarget(targetShape) {
                 return false
             }
-            if AreTypeArgumentsEquivalent(sourceShape, targetShape) {
+            // The caller classified the contracts, so one runtime type is the same reference (#5544).
+            // Reference annotations have no runtime type, also inside a tuple argument. A `Nullable<V>` stays distinct.
+            if AreTypeArgumentsEquivalent(sourceShape, targetShape) ||
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceShape, targetShape) {
                 return true
             }
             if targetShape == TypeSymbol.Object || targetShape.ClrType?.IsSameAs(typeof(object)) == true {
@@ -4699,6 +4815,8 @@ class Conversion {
         /// conversion check and the symbolically-resolved delegate-target check —
         /// this is safe to use even when one or both sides wrap a same-compilation
         /// type with no (or an erased) CLR backing.
+        /// Issue #5536: this is the shape rule for a function literal. A function
+        /// value must also satisfy (cref:KeepsFunctionValueDelegate).
         /// @param from The source function-type shape.
         /// @param to The target function-type shape.
         /// @returns `true` when the shapes are assignment-compatible.

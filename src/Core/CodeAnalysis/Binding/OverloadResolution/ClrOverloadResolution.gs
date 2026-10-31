@@ -668,9 +668,11 @@ internal shared class ClrOverloadResolution {
     /// @param structuralProjectionArgumentCheck Optional binder callback that recognizes an argument's
     /// symbolic object
     /// shape as projectable to a candidate CLR parameter type.
-    /// @param delegateRefKindArgumentCheck Optional binder callback comparing delegate argument and
-    /// parameter
-    /// ref/out/in metadata for applicability ranking.
+    /// @param delegateArgumentCheck Optional binder callback for a delegate parameter. It answers
+    /// (cref:ImplicitConversionKind.DelegateRefKindMismatch) when the ref/out/in metadata differs, which ranks
+    /// the candidate last. Issue #5536: it answers (cref:ImplicitConversionKind.None) when a function value
+    /// argument cannot keep its delegate, which makes the candidate inapplicable unless the slot is generic in
+    /// the declaration and so possibly erased.
     /// @param methodGroupInference Optional callback that resolves a deferred method group from the input
     /// types of the candidate's delegate parameter for generic inference.
     /// @param methodGroupArgumentCheck Optional callback identifying which source arguments are deferred
@@ -736,7 +738,7 @@ internal shared class ClrOverloadResolution {
         supplementaryInterfaceCheck((Type, Type) -> bool)? = nil,
         constantNarrowingArgumentCheck((int32, Type) -> bool)? = nil,
         structuralProjectionArgumentCheck((int32, Type) -> bool)? = nil,
-        delegateRefKindArgumentCheck((int32, Type) -> bool?)? = nil,
+        delegateArgumentCheck((int32, Type) -> ImplicitConversionKind?)? = nil,
         methodGroupInference((int32, IReadOnlyList[Type]) -> (Parameters[]Type, Return Type)?)? = nil,
         methodGroupArgumentCheck((int32) -> bool)? = nil,
         deferredInferenceArgs IReadOnlyList[bool]? = nil,
@@ -784,7 +786,7 @@ internal shared class ClrOverloadResolution {
                     supplementaryInterfaceCheck,
                     constantNarrowingArgumentCheck,
                     structuralProjectionArgumentCheck,
-                    delegateRefKindArgumentCheck,
+                    delegateArgumentCheck,
                     methodGroupInference,
                     methodGroupArgumentCheck,
                     deferredInferenceArgs,
@@ -824,7 +826,7 @@ internal shared class ClrOverloadResolution {
                         supplementaryInterfaceCheck,
                         constantNarrowingArgumentCheck,
                         structuralProjectionArgumentCheck,
-                        delegateRefKindArgumentCheck,
+                        delegateArgumentCheck,
                         methodGroupInference,
                         methodGroupArgumentCheck,
                         erasedArgumentMismatchCheck,
@@ -5317,7 +5319,7 @@ internal shared class ClrOverloadResolution {
         supplementaryInterfaceCheck((Type, Type) -> bool)? = nil,
         constantNarrowingArgumentCheck((int32, Type) -> bool)? = nil,
         structuralProjectionArgumentCheck((int32, Type) -> bool)? = nil,
-        delegateRefKindArgumentCheck((int32, Type) -> bool?)? = nil,
+        delegateArgumentCheck((int32, Type) -> ImplicitConversionKind?)? = nil,
         methodGroupInference((int32, IReadOnlyList[Type]) -> (Parameters[]Type, Return Type)?)? = nil,
         methodGroupArgumentCheck((int32) -> bool)? = nil,
         deferredInferenceArgs IReadOnlyList[bool]? = nil,
@@ -5681,7 +5683,10 @@ internal shared class ClrOverloadResolution {
                         ok = false
                         break
                     }
-                    conversions[i] = if delegateRefKindArgumentCheck?(i, paramTypes[i]) == false {
+                    conversions[i] = if delegateArgumentCheck?(
+                        i,
+                        paramTypes[i]
+                    ) == ImplicitConversionKind.DelegateRefKindMismatch {
                         ImplicitConversionKind.DelegateRefKindMismatch
                     } else {
                         ImplicitConversionKind.Identity
@@ -5834,8 +5839,16 @@ internal shared class ClrOverloadResolution {
                         break
                     }
                 }
-                if conv != ImplicitConversionKind.None && delegateRefKindArgumentCheck?(i, paramTypes[i]) == false {
-                    conv = ImplicitConversionKind.DelegateRefKindMismatch
+                if conv != ImplicitConversionKind.None {
+                    let delegateFit = delegateArgumentCheck?(i, paramTypes[i])
+                    if delegateFit == ImplicitConversionKind.None &&
+                        !IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine) {
+                        ok = false
+                        break
+                    }
+                    if delegateFit == ImplicitConversionKind.DelegateRefKindMismatch {
+                        conv = ImplicitConversionKind.DelegateRefKindMismatch
+                    }
                 }
                 conversions[i] = conv
             }
@@ -5984,7 +5997,7 @@ internal shared class ClrOverloadResolution {
         supplementaryInterfaceCheck((Type, Type) -> bool)? = nil,
         constantNarrowingArgumentCheck((int32, Type) -> bool)? = nil,
         structuralProjectionArgumentCheck((int32, Type) -> bool)? = nil,
-        delegateRefKindArgumentCheck((int32, Type) -> bool?)? = nil,
+        delegateArgumentCheck((int32, Type) -> ImplicitConversionKind?)? = nil,
         methodGroupInference((int32, IReadOnlyList[Type]) -> (Parameters[]Type, Return Type)?)? = nil,
         methodGroupArgumentCheck((int32) -> bool)? = nil,
         erasedArgumentMismatchCheck((int32, Type) -> bool)? = nil,
@@ -6186,7 +6199,10 @@ internal shared class ClrOverloadResolution {
                 ) {
                     return
                 }
-                conversions[i] = if delegateRefKindArgumentCheck?(i, target) == false {
+                conversions[i] = if delegateArgumentCheck?(
+                    i,
+                    target
+                ) == ImplicitConversionKind.DelegateRefKindMismatch {
                     ImplicitConversionKind.DelegateRefKindMismatch
                 } else {
                     ImplicitConversionKind.Identity
@@ -6261,8 +6277,15 @@ internal shared class ClrOverloadResolution {
                     return
                 }
             }
-            if conv != ImplicitConversionKind.None && delegateRefKindArgumentCheck?(i, target) == false {
-                conv = ImplicitConversionKind.DelegateRefKindMismatch
+            if conv != ImplicitConversionKind.None {
+                let delegateFit = delegateArgumentCheck?(i, target)
+                if delegateFit == ImplicitConversionKind.None &&
+                    !IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine) {
+                    return
+                }
+                if delegateFit == ImplicitConversionKind.DelegateRefKindMismatch {
+                    conv = ImplicitConversionKind.DelegateRefKindMismatch
+                }
             }
             conversions[i] = conv
         }
