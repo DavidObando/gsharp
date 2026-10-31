@@ -227,210 +227,46 @@ internal partial class StatementBinder {
 
     /// Binds a loop body while pushing the loop's break/continue labels (and
     /// optional ADR-0070 label name) onto (cref:BinderContext.LoopStack).
+    /// @remarks ADR-0213 section 6 (slice L1): when a fact is in force at the loop, the lower
+    /// bound of the loop is applied to the frames first (cref:ApplyLoopEntryLowerBound), and the
+    /// header and the body are bound once. A fact that survives holds on every iteration, so
+    /// nothing is bound a second time and no state is saved or restored.
     /// @param body The loop body statement.
     /// @param labelName The ADR-0070 label, or `null`.
     /// @param breakLabel The synthesized break label.
     /// @param continueLabel The synthesized continue label.
-    /// @param inheritedNarrowingFrameCount Number of active frames whose
-    /// narrowings predate this loop iteration.
-    /// @param backEdgeTail Optional post/condition evaluation executed
-    /// between body completion and the next iteration.
-    /// @param backEdgeCondition Optional condition that must be true
-    /// before control reaches the next iteration.
-    /// @param bindIteration Optional binder for a repeated header and
-    /// body, so both are rebound after inherited narrowing is invalidated.
-    /// @param iterationRunsUserCode Whether the loop header calls user code
-    /// before every body run, as an enumerator `MoveNext` does (ADR-0208 R11, #5170).
+    /// @param bindIteration Optional binder for the header and the body of the loop, which runs
+    /// inside the loop's label scope and returns the bound body.
+    /// @param iterationRunsUserCode Whether the loop header calls user code before every body run, as an
+    /// enumerator `MoveNext` does (ADR-0208 R11, #5170). Syntax does not show it: the binder reads it from
+    /// the type of the collection, and an array, a slice or a string has no such call.
     private func BindLoopBody(
         body StatementSyntax,
         labelName string?,
         out breakLabel BoundLabel,
         out continueLabel BoundLabel,
-        inheritedNarrowingFrameCount int32 = -1,
-        backEdgeTail BoundStatement? = nil,
-        backEdgeCondition BoundExpression? = nil,
-        bindIteration(() -> (Body BoundStatement, Tail BoundStatement?, Condition BoundExpression?))? = nil,
+        bindIteration(() -> BoundStatement)? = nil,
         iterationRunsUserCode bool = false
     ) BoundStatement {
-        var inheritedNarrowingFrameCount = inheritedNarrowingFrameCount
-        var backEdgeTail = backEdgeTail
-        var backEdgeCondition = backEdgeCondition
-        let BindCore = func (out localBreakLabel BoundLabel, out localContinueLabel BoundLabel) BoundStatement {
-            binderCtx.LabelCounter++
-            localBreakLabel = BoundLabel("break${binderCtx.LabelCounter}")
-            localContinueLabel = BoundLabel("continue${binderCtx.LabelCounter}")
-            binderCtx.LoopStack.Push((labelName, localBreakLabel, localContinueLabel))
-            try {
-                if bindIteration != nil {
-                    let iteration = bindIteration()
-                    backEdgeTail = iteration.Tail
-                    backEdgeCondition = iteration.Condition
-                    return iteration.Body
-                }
-                return Invariant.Required(
-                    BindStatement(body),
-                    "a loop body has a bound statement",
-                    expression: "BindStatement(body)"
-                )
-            } finally {
-                binderCtx.LoopStack.Pop()
+        if HasAnyActiveNarrowings() {
+            ApplyLoopEntryLowerBound(body, iterationRunsUserCode)
+        }
+        binderCtx.LabelCounter++
+        breakLabel = BoundLabel("break${binderCtx.LabelCounter}")
+        continueLabel = BoundLabel("continue${binderCtx.LabelCounter}")
+        binderCtx.LoopStack.Push((labelName, breakLabel, continueLabel))
+        try {
+            if bindIteration != nil {
+                return bindIteration()
             }
+            return Invariant.Required(
+                BindStatement(body),
+                "a loop body has a bound statement",
+                expression: "BindStatement(body)"
+            )
+        } finally {
+            binderCtx.LoopStack.Pop()
         }
-        inheritedNarrowingFrameCount = if inheritedNarrowingFrameCount < 0 {
-            binderCtx.NarrowedVariables.Count
-        } else {
-            inheritedNarrowingFrameCount
-        }
-        if !HasActiveNarrowings(inheritedNarrowingFrameCount) {
-            return BindCore(out breakLabel, out continueLabel)
-        }
-        let diagnosticCount = Diagnostics.Count
-        let narrowingSnapshots = binderCtx
-            .NarrowedVariables
-            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
-            .ToArray()
-        let pendingEarlyExitFrames = binderCtx.PendingEarlyExitFrames.ToArray()
-        let pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray()
-        let definedUserLabels = binderCtx.DefinedUserLabels.ToArray()
-        let pendingGotoAssignmentStarts = Dictionary[string, int32](binderCtx.PendingGotoAssignmentStarts)
-        let externalCallableAliasesSnapshot = externalCallableAliases.ToArray()
-        let assignmentNarrowingGenerations = Dictionary[VariableSymbol, int32](binderCtx.AssignmentNarrowingGenerations)
-        let assignmentNarrowingGeneration = binderCtx.AssignmentNarrowingGeneration
-        let pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
-            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
-            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
-                .Value
-                .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
-                .ToList()
-        )
-        let backwardGotoNarrowingStates = binderCtx.BackwardGotoNarrowingStates.ToDictionary(
-            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Key,
-            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Value.Clone()
-        )
-        let reachableUserLabelsSnapshot = binderCtx.ReachableUserLabels.ToArray()
-        let deferredUnreachableGotoEdgesSnapshot = binderCtx.DeferredUnreachableGotoEdges.ToArray()
-        let potentialReachabilityLabelSnapshot = binderCtx.PotentialReachabilityLabel
-        let userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray()
-        let boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray()
-        let finallyEntryExternalCallableAliasesSnapshot = finallyEntryExternalCallableAliases.ToArray()
-        let finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray()
-        let activeFinallyClausesSnapshot = activeFinallyClauses.ToArray()
-        let activeCleanupStatementsSnapshot = activeCleanupStatements.ToArray()
-        let activeCleanupRegionsSnapshot = activeCleanupRegions.ToArray()
-        let syntheticLocalCounter = binderCtx.SyntheticLocalCounter
-        let RestoreDictionary[TKey, TValue] = func (
-            destination Dictionary[TKey, TValue],
-            snapshot[]KeyValuePair[TKey, TValue]
-        ) {
-            destination.Clear()
-            for entry in snapshot {
-                destination.Add(entry.Key, entry.Value)
-            }
-        }
-        let RestoreSet[T] = func (destination HashSet[T], snapshot[]T) {
-            destination.Clear()
-            for item in snapshot {
-                destination.Add(item)
-            }
-        }
-        // Issue #2943: first bind supplies exact assignment symbols and lowered
-        // control flow. If a write can reach the back-edge, restore speculative
-        // state, remove only inherited narrowings, and bind the body again.
-        // Comparison mode: reports of a bind that is discarded must not reach the report.
-        let speculation = NarrowingComparison.BeginSpeculation()
-        let firstBody = BindCore(out var firstBreakLabel, out var firstContinueLabel)
-        let mutations = CollectLoopBackEdgeMutations(
-            firstBody,
-            firstBreakLabel,
-            firstContinueLabel,
-            backEdgeTail,
-            backEdgeCondition
-        )
-        if iterationRunsUserCode {
-            mutations.MarkIterationRunsUserCode()
-        }
-        let loopEntryExternalCallableAliases = ComputeLoopEntryExternalCallableAliases(
-            firstBody,
-            backEdgeTail,
-            firstBreakLabel,
-            firstContinueLabel,
-            externalCallableAliasesSnapshot,
-            backEdgeCondition
-        )
-        let narrowingInvalidations = CollectInheritedNarrowingInvalidations(
-            mutations,
-            mutations.MayMutateMemberPaths,
-            inheritedNarrowingFrameCount,
-            narrowingSnapshots
-        )
-        if narrowingInvalidations.Count == 0 && loopEntryExternalCallableAliases.SetEquals(
-            externalCallableAliasesSnapshot
-        ) {
-            NarrowingComparison.EndSpeculation(speculation, true)
-            // ADR-0213 slice L0: the walker's lower bound against the analysis above. Report only.
-            if NarrowingComparison.LoopsEnabled {
-                ReportLoopComparison(body, narrowingSnapshots, inheritedNarrowingFrameCount, narrowingInvalidations)
-            }
-            breakLabel = firstBreakLabel
-            continueLabel = firstContinueLabel
-            return firstBody
-        }
-        NarrowingComparison.EndSpeculation(speculation, false)
-        if NarrowingComparison.LoopsEnabled {
-            ReportLoopComparison(body, narrowingSnapshots, inheritedNarrowingFrameCount, narrowingInvalidations)
-        }
-        // ADR-0208 section 18: counts the loop bodies that this design binds twice.
-        CompilationMeasurements.Count("narrowing.loop-rebinds")
-        Diagnostics.TruncateTo(diagnosticCount)
-        for var i = 0; i < narrowingSnapshots.Length; i++ {
-            let frame = binderCtx.NarrowedVariables[i]
-            frame.Clear()
-            for entry in narrowingSnapshots[i] {
-                frame.Add(entry.Key, entry.Value)
-            }
-        }
-        RestoreDictionary(binderCtx.PendingEarlyExitFrames, pendingEarlyExitFrames)
-        RestoreDictionary(binderCtx.PendingSwitchExitFrames, pendingSwitchExitFrames)
-        RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels)
-        RestoreDictionary(binderCtx.PendingGotoAssignmentStarts, pendingGotoAssignmentStarts.ToArray())
-        RestoreSet(externalCallableAliases, externalCallableAliasesSnapshot)
-        RestoreDictionary(binderCtx.AssignmentNarrowingGenerations, assignmentNarrowingGenerations.ToArray())
-        this.binderCtx.AssignmentNarrowingGeneration = assignmentNarrowingGeneration
-        binderCtx.PendingGotoNarrowingSnapshots.Clear()
-        for entry in pendingGotoNarrowingSnapshots {
-            binderCtx.PendingGotoNarrowingSnapshots.Add(entry.Key, entry.Value)
-        }
-        binderCtx.BackwardGotoNarrowingStates.Clear()
-        for entry in backwardGotoNarrowingStates {
-            binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value)
-        }
-        RestoreSet(binderCtx.ReachableUserLabels, reachableUserLabelsSnapshot)
-        binderCtx.DeferredUnreachableGotoEdges.Clear()
-        binderCtx.DeferredUnreachableGotoEdges.AddRange(deferredUnreachableGotoEdgesSnapshot)
-        this.binderCtx.PotentialReachabilityLabel = potentialReachabilityLabelSnapshot
-        userGotoHandlerRegions.Clear()
-        for region in userGotoHandlerSnapshot {
-            userGotoHandlerRegions.Add(region)
-        }
-        RestoreDictionary(boundFinallyBlocks, boundFinallyBlocksSnapshot)
-        RestoreDictionary(finallyEntryExternalCallableAliases, finallyEntryExternalCallableAliasesSnapshot)
-        RestoreDictionary(finallyFlowSummaries, finallyFlowSummariesSnapshot)
-        activeFinallyClauses.Clear()
-        for var i = activeFinallyClausesSnapshot.Length - 1; i >= 0; i-- {
-            activeFinallyClauses.Push(activeFinallyClausesSnapshot[i])
-        }
-        activeCleanupStatements.Clear()
-        for var i = activeCleanupStatementsSnapshot.Length - 1; i >= 0; i-- {
-            activeCleanupStatements.Push(activeCleanupStatementsSnapshot[i])
-        }
-        activeCleanupRegions.Clear()
-        for var i = activeCleanupRegionsSnapshot.Length - 1; i >= 0; i-- {
-            activeCleanupRegions.Push(activeCleanupRegionsSnapshot[i])
-        }
-        this.binderCtx.SyntheticLocalCounter = syntheticLocalCounter
-        InvalidateInheritedNarrowings(narrowingInvalidations)
-        RestoreSet(externalCallableAliases, loopEntryExternalCallableAliases.ToArray())
-        return BindCore(out breakLabel, out continueLabel)
     }
 
     private func BindBreakStatement(syntax BreakStatementSyntax) BoundStatement {

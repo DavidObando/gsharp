@@ -1222,6 +1222,98 @@ remove for R7 (f) on the measured code.
 **Spans.** Core, Core.Tests, gsc and the Oahu cells that compile have no
 backward `goto`, so no span.
 
+### 20b. Findings of slice L1
+
+Slice L1 (issue [#5317](https://github.com/DavidObando/gsharp/issues/5317), which also
+closes [#5315](https://github.com/DavidObando/gsharp/issues/5315)) replaced the snapshot and
+the second bind of `BindLoopBody` with the lower bound of section 6, applied to the frames
+before the header and the body are bound once. Each loop that is entered with a fact in force
+runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideRegionKill`).
+
+**Divergences from the text above.**
+
+- *Deletions.* `CollectLoopBackEdgeMutations`, `LoopBackEdgeMutationCollector`,
+  `CollectInheritedNarrowingInvalidations`, `ComputeLoopEntryExternalCallableAliases`,
+  `MarkIterationRunsUserCode`, `NarrowingComparison.BeginSpeculation`/`EndSpeculation`, the
+  `inheritedNarrowingFrameCount`, `backEdgeTail` and `backEdgeCondition` parameters and the
+  `bindIteration` tuple are gone. `AssignmentPreservesNarrowing`, `IsDefinitelyNonNullValue`,
+  `FunctionReturnsDefinitelyNonNull` and `IsDefinitelyNonNullSyntax` stay: the `finally` summaries
+  and the backward-`goto` checker still call them, and L2 deletes them with the checker.
+  `narrowing.loop-rebinds` is no longer counted (it reads 0; L3 removes the name).
+- *Iteration.* `iterationRunsUserCode` stays, as an argument of `BindLoopBody` and of
+  `RegionEffectScanner.ScanLoop`: whether a `for ... in` header runs user code is a property of the
+  collection's type, which syntax does not show. An array, a slice or a string iteration is not a
+  call (the `indexed-for-in` row of #5170 keeps its result). A nested loop is still a call.
+- *Literal types.* A non-nil literal proves a type-test fact only when it is a string literal whose type
+  converts to the fact's type. Slice L0 took every literal for a string, so `value = 42` kept a
+  `value is string` fact.
+- *Member reads and by-reference parameters.* A member read keeps member-bearing paths, mutable
+  globals, closure-assigned locals and the facts of an alias of an element or a member out
+  (W5, no exemption). It does not remove the fact of a by-reference parameter, as a plain call does not
+  (amendment A3, #5292); only a member, index or pointer write, an indirect call, an iteration or a
+  suspension does. Slice L0 removed it on any read, which rejected the A3 rows `h1`,
+  `out-parameter-survives-calls-in-a-loop` and `out-parameters-of-different-types-do-not-overlap`.
+- *No back edge.* A loop whose condition is the literal `false` (`while false`, `do { } while false`)
+  is bound under its entry state.
+- *Closure-assigned names.* They are computed on first use. `ApplyLoopEntryLowerBound` computes them
+  before it decides, because until then the shared predicate assumes that every name is assigned.
+- *Exit state (R7 (f)).* Break states are not recorded, so the join of table 9 cannot be taken. A loop
+  without a `break` in its body, in a function without a user label, adds the facts of the header's false
+  state to the block after the loop, minus the facts that the condition itself can remove
+  (`RecordLoopExitFacts`). A loop with a `break` keeps today's exit. The row `g1`-with-`break` and the
+  join of break states wait for the slice that records them.
+- *External callable aliases.* A function value that the region assigns, or that shares storage with one
+  that it assigns, leaves the set at the loop entry; a region with a pointer write or an unknown syntax
+  kind empties the set.
+- *R16 in loops (documented cost of row R7 (e)).* ADR-0208 R16 keeps a fact across a read of a stable imported
+  getter (`string.Length`) and a field read is no call, in straight-line code. The walker sees only syntax, so it
+  cannot tell them from a user getter, and Q7 (decided) allows no exemption: the corpus row
+  `t09_5231_string_length_in_a_loop_R16_loop_is_stricter` (`x.Value + s.Length` with a closure-assigned `x`) is
+  rejected in a loop. A resolved-member exemption (a plain-name receiver resolved at the entry scope whose member is
+  on the R16 list, or a field of a class whose hierarchy cannot hide it) is a later slice; it would accept q5c, q5d
+  would stay rejected, and it needs its own rows and mutants.
+- *Conversion sites.* A user-defined conversion is a call (W4), and the walker cannot see types, so every place
+  where the binder converts a value is a candidate: a declared, assigned, multi-assigned, deconstructed or bound
+  (`if let`) value, both operands of `??`, a returned value, and a condition or guard (`if`, the loops, `if let`, `while let`, `guard let`, switch and select
+  guards, `catch ... when`, `?:`) unless it is `bool` by its form (a `true` or `false` literal, `is`, a comparison,
+  `!`, `&&` or `||`). The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of a
+  tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
+- *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a
+  function value, which is an indirect call (A3), also when a nested loop's record is composed. A member call
+  whose receiver is a plain name of the entry scope (a variable or a type) is a plain call (A3) only when every
+  member of that name on the receiver's declared type, and on the type its entry fact narrows it to, is a method;
+  otherwise it invokes a function value, which is indirect: a member of a delegate (`callback.Invoke()`), a field or
+  property of function type (class, interface or tuple element), an extension method. The member of any other
+  receiver (an element, a member chain, a call result) is taken for a method, as in slice L0 and the A3 rows
+  (`frames[i].TryGetValue(path, out found)`), unless it is `Invoke`, `BeginInvoke` or `DynamicInvoke`
+  (`holder.Cb.Invoke()`). A function-typed field called through a chain (`a.b.Cb()`) stays a plain call.
+- *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
+  or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
+  can catch the exception after the filter has written the root.
+- *Pattern variables (question 4).* The walker gives a type-pattern variable its type only where the binder
+  scopes it (ADR-0166); see question 4 of section 23 for the rule and what stays out of L1.
+- *A loop the walker cannot name* (the synthetic loop of a collection spread) removes every fact.
+
+**Measurements** (candidate compiler, the cells of slice L0, compare mode on). Facts of the loops that
+inherit a fact; "removed" is the walker's decision, which the binder now applies.
+
+| Input | Loops with live facts | Facts | Removed | Kept | Compile of the cell |
+| --- | --- | --- | --- | --- | --- |
+| Core | 1494 | 2089 | 59 | 2030 | 33 errors, listed below |
+| Core.Tests | 30 | 32 | 0 | 32 | clean |
+| gsc | 4 | 4 | 0 | 4 | clean |
+| Oahu, 12 cells that compile | 50 | 63 | 6 | 57 | clean (`Oahu.Cli.Tui` has the same 8 errors with the main compiler) |
+| Cs2Gs.Translator | 335 | 431 | 9 | 422 | 4 errors at one site |
+
+The 33 errors of Core are the sites of rows R7 (b) and R7 (c): `ExpressionBinder.Assignments.gs:5452-5501`
+(`access = inner`, a pattern variable; question 4), and `MemberLookup.gs:1213` with `3319-3379` (a
+closure-assigned local read in a loop that calls). Cs2Gs.Translator has `Deconstruction.gs:111-125`
+(a reassignment from a pattern variable). No diagnostic falls outside a row of
+section 16. The pin-move PR restructures these sites (section 18). After the clause of question 4 and a
+merge of main that changed the `MemberLookup` sites, Core, Core.Tests, gsc, LanguageServer,
+Compiler.Tests, Cs2Gs.Translator and the Oahu cells give the same diagnostics with the candidate as with the main
+compiler.
+
 ### 21. Mutation-evidence plan (ADR-0154)
 
 Each rule has a named, hand-applied mutant that is run red and then
@@ -1325,7 +1417,27 @@ question is the one that first depends on it.
    (`is T name`, `if let`/`guard let`/`while let` binding, a `case T name`
    arm)?** Such a variable is immutable and non-null by the construct that
    bound it, and it is the one Core site R7 (b) rejects (`access = inner`).
-   Recommendation: **not in L1**, *provisional*: the site costs one `let`
+   **Decided for slice L1 (maintainer, 2026-10-30): add the clause.** The reason is the nightly's
+   `gsharp-csharp` leg, not Oahu: its frozen C# corpus translates to the same `access = inner` shape in Core
+   (`ExpressionBinder.Assignments.gs`) and in `Cs2Gs.Translator` (`CSharpToGSharpTranslator.Deconstruction.gs`),
+   and no restructuring of `src/Core` reaches that corpus, so without the clause 24 of the 58 apps went red.
+   The clause: a loop write whose right side names a variable that a `TypePattern` with a plain type name
+   declares in the region is a P7 proof when the type converts to the root's declared type (and to the fact's
+   type for a type-test fact) by `Conversion.IsRepresentationPreservingImplicit`, so no conversion operator runs.
+   The walker gives the name the pattern's type only where the binder scopes the variable (ADR-0166): the then
+   branch of an `if` and the body of a `while`, `for` condition or `for` clause for the variables the condition
+   assigns when true, and the statements after `if c { exit }` (a direct statement of a block, with no
+   initializer and no `else`, its then branch ending in `return`, `throw`, `break` or `continue`) for the
+   variables `c` assigns when false. Its classification of `!`, `&&`, `||`, `not`, `and` and `or` is a subset of
+   `PatternVariables.Classify`. Anywhere else the name may denote another variable, a property or an imported
+   member, so it is no proof: a pattern variable of a closed scope, a when-false variable inside the then branch,
+   a guard whose then branch does not exit, and every guard of a function with a user label (the binder drops
+   that scope). Where the walker does not give a pattern variable its type, a write to its name or a bare read
+   of its name is taken to name other storage (W1, W5): the variable is read-only, and the name may denote an
+   entry-scope variable or a property there. Not in L1: a variable that the region declares with `var`, `if let`, `guard let`
+   or `while let`, and a pattern variable of the loop's entry scope; each is still no proof (a `var` pattern can
+   bind `nil`). An ordinary `let` or `var` copy is no proof. Original recommendation, superseded:
+   **not in L1**, *provisional*: the site costs one `let`
    copy; L0 reports how many such sites Oahu has; if L0 finds any, L1 adds
    the clause (the symbol must record that it was bound by a non-null
    producing pattern, which the slice confirms or adds) with a corpus row

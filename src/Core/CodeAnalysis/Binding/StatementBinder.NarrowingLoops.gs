@@ -11,6 +11,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 
 /// ADR-0213 section 20, slice L0: the loop comparison. At each loop whose entry
 /// state holds a fact, the binder computes the lower bound `Lower(S, R)` of
@@ -81,6 +82,44 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        /// Whether an operator of the region may be user-defined: an operand is not a plain name or a literal, or
+        /// a name that is an operand has a type that is not built in.
+        prop RunsUserOperator bool {
+            get;
+            set;
+        }
+
+        /// Whether the region writes a bare property (a setter), or converts a value in a package that declares a
+        /// user-defined conversion (rule W4).
+        prop RunsUserCodeOnWrite bool {
+            get;
+            set;
+        }
+
+        /// Whether a bare name that the region reads binds to a property of the enclosing type (rule W5).
+        prop ReadsProperty bool {
+            get;
+            set;
+        }
+    }
+
+    private var packageDeclaresConversions bool? = nil
+
+    // Whether a type of the package declares a user-defined conversion operator.
+    private func PackageDeclaresConversions() bool {
+        if packageDeclaresConversions == nil {
+            var found = false
+            for declared in $scope.GetDeclaredStructs() {
+                for method in declared.StaticMethods {
+                    if method.Name == "op_Implicit" || method.Name == "op_Explicit" {
+                        found = true
+                    }
+                }
+            }
+            packageDeclaresConversions = found
+        }
+        return packageDeclaresConversions == true
     }
 
     private func SameRoot(first VariableSymbol, second VariableSymbol) bool {
@@ -97,6 +136,69 @@ internal partial class StatementBinder {
 
     private func ResolveRegionWrites(effects RegionEffects) ResolvedRegionWrites {
         let resolved = ResolvedRegionWrites()
+        if effects.ContainsConversionCandidate {
+            resolved.RunsUserCodeOnWrite = true
+        }
+        // A returned name or constant runs no conversion operator when its type keeps its representation in the
+        // return type, or when the return type is built in (a user conversion needs a type of the package).
+        let enclosing = function
+        let returnType = if enclosing == nil || enclosing.IsReturnTypeInferred {
+            default(TypeSymbol?)
+        } else {
+            StripAllNullability(enclosing.Type)
+        }
+        if effects.ReturnsConstant && (returnType == nil || !MetadataTypeKeys.IsBuiltIn(returnType)) {
+            resolved.RunsUserCodeOnWrite = true
+        }
+        for name in effects.ReturnedNames {
+            let returned = if $scope.TryLookupSymbol(name) is VariableSymbol variable {
+                StripAllNullability(variable.Type)
+            } else {
+                default(TypeSymbol?)
+            }
+            if returned == nil || returnType == nil || !Conversion.IsRepresentationPreservingImplicit(
+                returned,
+                returnType
+            ) {
+                resolved.RunsUserCodeOnWrite = true
+            }
+        }
+        if effects.ContainsOperatorCandidate {
+            resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand
+            for name in effects.OperatorOperandNames {
+                // A declaration of the region is not found here, and its type is unknown: it counts.
+                if $scope.TryLookupSymbol(name) is VariableSymbol operand {
+                    let operandType = StripAllNullability(operand.Type)
+                    // `object` can hold a value of a type with operators.
+                    if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) || object.Equals(
+                        operandType,
+                        TypeSymbol.Object
+                    ) {
+                        resolved.RunsUserOperator = true
+                    }
+                } else {
+                    resolved.RunsUserOperator = true
+                }
+            }
+        }
+        for name in effects.NilCompareOperandNames {
+            if $scope.TryLookupSymbol(name) is VariableSymbol compared {
+                let comparedType = compared.Type
+                // A non-nullable value type compared with `nil` may select a user-defined `==`.
+                if comparedType != nil &&
+                    (
+                    object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
+                        (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType))
+                ) {
+                    resolved.RunsUserOperator = true
+                }
+            }
+        }
+        for name in effects.BareReads {
+            if $scope.TryLookupSymbol(name) is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
+                resolved.ReadsProperty = true
+            }
+        }
         for write in effects.Writes {
             if write.ViaCallArgument {
                 resolved.WritesViaCallArgument = true
@@ -104,6 +206,9 @@ internal partial class StatementBinder {
             let symbol = $scope.TryLookupSymbol(write.Name)
             if symbol is not VariableSymbol variable {
                 continue
+            }
+            if variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
+                resolved.RunsUserCodeOnWrite = true
             }
             if variable is ImplicitFieldVariableSymbol or
                 ImplicitPropertyVariableSymbol or
@@ -168,6 +273,15 @@ internal partial class StatementBinder {
         return false
     }
 
+    // Whether the region runs code that it does not show: a call, a getter, a user operator or a conversion.
+    private func RegionRunsCode(effects RegionEffects, resolved ResolvedRegionWrites) bool -> effects.ContainsCall ||
+        effects.ContainsSuspension ||
+        effects.ContainsIteration ||
+        effects.ContainsMemberRead ||
+        resolved.RunsUserOperator ||
+        resolved.RunsUserCodeOnWrite ||
+        resolved.ReadsProperty
+
     private func CallIsIndirect(call RegionCall) bool {
         switch call.Kind {
             case RegionCallKind.NamedInvocation {
@@ -178,10 +292,104 @@ internal partial class StatementBinder {
             case RegionCallKind.ExpressionInvocation, RegionCallKind.Construction, RegionCallKind.Other {
                 return true
             }
+            case RegionCallKind.MemberInvocation {
+                return MemberCallIsIndirect(call)
+            }
             default {
-                // A member call is a plain call here: ADR-0208 amendment A3 keeps by-reference storage
-                // across a call to a method. The walker does not tell a method from a function-typed field.
                 return false
+            }
+        }
+    }
+
+    // A member call is a plain call (ADR-0208 amendment A3 keeps by-reference storage across a call to a method)
+    // when the member is surely a method. A receiver that is a plain name of the entry scope, a variable or a type,
+    // is resolved: every member of that name on its declared type, and on the type its entry fact narrows it to,
+    // must be a method, so a member of a delegate (`Invoke`), a field or a property of function type, an extension
+    // method and an element of a tuple count as a function value. The member of any other receiver (an element,
+    // a member chain, a call result) is taken for a method, as in slice L0, unless it invokes a delegate.
+    private func MemberCallIsIndirect(call RegionCall) bool {
+        let member = call.CalleeName
+        let receiverName = call.ReceiverName
+        if member == nil {
+            return true
+        }
+        if receiverName == nil {
+            return member == "Invoke" || member == "BeginInvoke" || member == "DynamicInvoke"
+        }
+        let symbol = $scope.TryLookupSymbol(receiverName)
+        if symbol is VariableSymbol receiver {
+            if !MemberIsOnlyMethod(StripAllNullability(receiver.Type), member) {
+                return true
+            }
+            let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(receiver))
+            return narrowed != nil && !MemberIsOnlyMethod(StripAllNullability(narrowed), member)
+        }
+        let type = if symbol is TypeSymbol named {
+            named
+        } else if symbol == nil {
+            ResolveConstructedType(receiverName)
+        } else {
+            default(TypeSymbol?)
+        }
+        return !MemberIsOnlyMethod(type, member)
+    }
+
+    // Whether the type has a member of the name and every such member is a method.
+    private func MemberIsOnlyMethod(type TypeSymbol?, member string) bool {
+        switch type {
+            case nil {
+                return false
+            }
+            case FunctionTypeSymbol, DelegateTypeSymbol {
+                return false
+            }
+            case declared is StructSymbol {
+                var found = false
+                for level in declared.GetHierarchy() {
+                    for symbol in level.GetMembers() {
+                        if symbol.Name == member {
+                            if symbol is not FunctionSymbol {
+                                return false
+                            }
+                            found = true
+                        }
+                    }
+                }
+                if found {
+                    return true
+                }
+                return declared
+                    .GetHierarchy()
+                    .Last()
+                    .ImportedBaseType is {} importedBase &&
+                    MemberIsOnlyMethod(importedBase, member)
+            }
+            case contract is InterfaceSymbol {
+                for method in contract.Methods {
+                    if method.Name == member {
+                        return true
+                    }
+                }
+                return false
+            }
+            default {
+                if type?.ClrType is not{} clrType || ClrTypeUtilities.IsDelegateType(clrType) {
+                    return false
+                }
+                let members = clrType.GetMember(
+                    member,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
+                    BindingFlags.FlattenHierarchy
+                )
+                if members.Length == 0 {
+                    return false
+                }
+                for clrMember in members {
+                    if clrMember is not MethodInfo {
+                        return false
+                    }
+                }
+                return true
             }
         }
     }
@@ -247,7 +455,9 @@ internal partial class StatementBinder {
                     why = "literal-into-value-type"
                     return false
                 }
-                if factKind == "type-test" && !ConvertsImplicitly(TypeSymbol.String, narrowedType) {
+                // The literal proves a type-test fact only when its own type converts to the fact's type.
+                if factKind == "type-test" &&
+                    (write.ConstructedTypeName != "string" || !ConvertsImplicitly(TypeSymbol.String, narrowedType)) {
                     why = "literal-type-differs"
                     return false
                 }
@@ -258,7 +468,25 @@ internal partial class StatementBinder {
                     why = "null-assertion-proves-nullability-only"
                     return false
                 }
-                return true
+                // The asserted value must convert to the root without a conversion operator: a name whose type
+                // keeps its representation.
+                if write.RightSideName == nil || write.RightSideDeclaration != nil {
+                    why = "null-assertion-of-an-unknown-value"
+                    return false
+                }
+                if $scope.TryLookupSymbol(write.RightSideName) is VariableSymbol asserted {
+                    let assertedType = StripAllNullability(asserted.Type)
+                    if assertedType == nil || declared == nil || !Conversion.IsRepresentationPreservingImplicit(
+                        assertedType,
+                        declared
+                    ) {
+                        why = "null-assertion-converts"
+                        return false
+                    }
+                    return true
+                }
+                why = "null-assertion-of-an-unknown-value"
+                return false
             }
             case RegionWriteProof.Construction {
                 if write.ConstructedTypeName == nil {
@@ -293,19 +521,38 @@ internal partial class StatementBinder {
             default {
                 if write.RightSideName != nil {
                     why = "variable"
-                    // Question 4: a pattern-bound name is immutable and non-null by its construct.
-                    if write.RightSideDeclaration == "pattern" || write.RightSideDeclaration == "binding" {
+                    // Question 4 (decided for slice L1): a type-pattern variable of the region is non-null and
+                    // read-only. The scanner gives it a typed kind only where the binder scopes it; the binder
+                    // drops the scope that a guard leaks (`leaked|Type`) when the function has a user label. Its
+                    // type must convert to the root without a conversion operator.
+                    var patternType TypeSymbol? = nil
+                    var patternBound = false
+                    let declaration = write.RightSideDeclaration
+                    if declaration != nil && declaration.StartsWith("pattern|", StringComparison.Ordinal) {
+                        patternBound = true
+                        patternType = ResolveConstructedType(declaration.Substring("pattern|".Length))
+                    } else if declaration != nil && declaration.StartsWith("leaked|", StringComparison.Ordinal) {
+                        patternBound = true
+                        if !binderCtx.FunctionContainsUserGotoOrLabel {
+                            patternType = ResolveConstructedType(declaration.Substring("leaked|".Length))
+                        }
+                    } else if declaration == "pattern" || declaration == "binding" {
+                        patternBound = true
+                    }
+                    if patternBound {
                         why = "variable:pattern-bound"
-                    } else if write.RightSideDeclaration == nil {
-                        let symbol = $scope.TryLookupSymbol(write.RightSideName)
-                        if symbol is VariableSymbol source &&
-                            source.DeclaringSyntax is {} declaration &&
+                        let declaredRoot = StripAllNullability(root.Type)
+                        if patternType != nil && declaredRoot != nil && Conversion.IsRepresentationPreservingImplicit(
+                            patternType,
+                            declaredRoot
+                        ) &&
                             (
-                            declaration.Kind == SyntaxKind.TypePattern ||
-                                declaration.Kind == SyntaxKind.VarPattern ||
-                                declaration.Kind == SyntaxKind.IfLetBindingClause
+                            factKind != "type-test" || Conversion.IsRepresentationPreservingImplicit(
+                                patternType,
+                                narrowedType
+                            )
                         ) {
-                            why = "variable:pattern-bound"
+                            return true
                         }
                     }
                 }
@@ -315,8 +562,9 @@ internal partial class StatementBinder {
     }
 
     private func ConvertsImplicitly(from TypeSymbol, to TypeSymbol) bool {
-        let conversion = Conversion.Classify(from, to)
-        return conversion.Exists && conversion.IsImplicit
+        // A structural projection between unrelated classes makes a new object of the other type, so only a
+        // conversion that keeps the representation proves a type-test fact.
+        return Conversion.IsRepresentationPreservingImplicit(from, to)
     }
 
     /// The consumer rule of ADR-0213 section 7, steps (i) to (vii), for one fact.
@@ -332,9 +580,14 @@ internal partial class StatementBinder {
         if effects.ContainsUnknownKind {
             return RegionKillDecision(true, "W6", "-")
         }
-        let callLike = effects.ContainsCall || effects.ContainsSuspension || effects.ContainsIteration
+        // A user-defined operator is a call (ADR-0208 construct table).
+        let callLike = effects.ContainsCall ||
+            effects.ContainsSuspension ||
+            effects.ContainsIteration ||
+            resolved.RunsUserOperator ||
+            resolved.RunsUserCodeOnWrite
         // Rule W5: every member or index read is an unknown getter, which is a call.
-        let readLike = effects.ContainsMemberRead
+        let readLike = effects.ContainsMemberRead || resolved.ReadsProperty
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite
         let mayMutateMemberPaths = callLike || readLike || memberWrite
         var indirectCall = effects.ContainsIteration || effects.ContainsSuspension
@@ -343,7 +596,11 @@ internal partial class StatementBinder {
                 indirectCall = true
             }
         }
-        let mayMutateReferenceStorage = memberWrite || readLike || indirectCall
+        // A member read is an unknown getter, which the table classes as a call (ADR-0208 R14). Amendment A3
+        // (#5292) keeps the fact of a by-reference parameter across a call, so a read does not write the
+        // storage that such a parameter names. It still removes member-bearing paths and the facts of an
+        // alias of an element or a member.
+        let mayMutateReferenceStorage = memberWrite || indirectCall
         let mayMutateAnyRoot = callLike || readLike
         let callRule = if callLike {
             "W4"
@@ -374,7 +631,9 @@ internal partial class StatementBinder {
             return RegionKillDecision(true, "W2(root-replaced)", "-")
         }
         // (iv) the shared predicate for every effect other than a plain write to this root.
-        if filterNames != nil && effects.ContainsHandler {
+        // A handler of the region, or one in code that the region calls, can catch an exception after an enclosing
+        // filter has written the root.
+        if filterNames != nil && (effects.ContainsHandler || callLike || readLike) {
             if filterNames.Contains(root.Name) || MayBeMutatedByUnknownCallable(path) {
                 return RegionKillDecision(true, "W8", "R10")
             }
@@ -484,111 +743,114 @@ internal partial class StatementBinder {
         return RegionKillDecision(false, "-", "-")
     }
 
-    /// The loop comparison of slice L0. [`body`](paramref) is the body of a loop that was bound once
-    /// under the entry facts of [`snapshots`](paramref).
-    private func ReportLoopComparison(
-        body StatementSyntax,
-        snapshots[]Dictionary[AccessPath, TypeSymbol],
-        frameCount int32,
-        invalidations List[(FrameIndex int32, Path AccessPath)]
-    ) {
+    /// ADR-0213 section 6 (slice L1): applies the lower bound `Lower(S, R)` of the loop whose body is
+    /// [`body`](paramref) to the frames, before the header and the body are bound. `S` is the facts of the
+    /// frames, `R` the region of the loop. A fact that the consumer rule of section 7 removes leaves its
+    /// frame, and stays out of it after the loop. The external callable aliases that the region may
+    /// reassign leave their set. When `GSHARP_NARROWING_COMPARE` is set, the decision for every fact goes
+    /// to the `.loops` report.
+    private func ApplyLoopEntryLowerBound(body StatementSyntax, iterationRunsUserCode bool) {
         let loop = body.Parent
+        let frameCount = binderCtx.NarrowedVariables.Count
+        let invalidations = List[(FrameIndex int32, Path AccessPath)]()
         if loop == nil || RegionEffectKindTable.Classify(loop.Kind) != RegionEffectClass.Loop {
-            NarrowingComparison.ReportLoopSummary(body.Location, -1, 0, 0, "no-loop-parent")
+            // A loop that the walker cannot name has no region to scan: every fact is removed (rule W6).
+            for var i = frameCount - 1; i >= 0; i-- {
+                for path in binderCtx.NarrowedVariables[i].Keys {
+                    invalidations.Add((i, path))
+                }
+            }
+            InvalidateInheritedNarrowings(invalidations)
+            externalCallableAliases.Clear()
+            CompilationMeasurements.Count("narrowing.region-facts-killed", cast[int64](invalidations.Count))
+            if NarrowingComparison.LoopsEnabled {
+                NarrowingComparison.ReportLoopSummary(
+                    body.Location,
+                    invalidations.Count,
+                    invalidations.Count,
+                    0,
+                    "no-loop-parent"
+                )
+            }
+            return
+        }
+        // The names that a closure of the function assigns decide the shared predicates below. They are
+        // computed on first use, and until then every name is assumed assigned.
+        EnsureClosureAssignedNames(loop)
+        if HeaderIsLiteralFalse(loop) {
+            // No back edge: the body runs once from the entry state, or never.
             return
         }
         let scanner = GetRegionScanner()
         let visitedBefore = scanner.NodesVisited
         let regionsBefore = scanner.Regions
-        let effects = scanner.ScanLoop(loop)
+        let effects = scanner.ScanLoop(loop, iterationRunsUserCode)
         if scanner.Regions != regionsBefore {
             CompilationMeasurements.Count("narrowing.region-walks")
             CompilationMeasurements.Count("narrowing.region-nodes", cast[int64](scanner.NodesVisited - visitedBefore))
         }
-        // S: the facts of the frames the loop inherits, the innermost frame first.
-        let paths = List[AccessPath]()
-        let types = List[TypeSymbol]()
-        let frameIndexes = List[int32]()
-        for var i = Math.Min(frameCount, snapshots.Length) - 1; i >= 0; i-- {
-            for entry in snapshots[i] {
-                var seen = false
-                for existing in paths {
-                    if existing.Equals(entry.Key) {
-                        seen = true
-                        break
-                    }
-                }
-                if !seen {
-                    paths.Add(entry.Key)
-                    types.Add(entry.Value)
-                    frameIndexes.Add(i)
-                }
-            }
-        }
-        if paths.Count == 0 {
-            return
-        }
         let resolved = ResolveRegionWrites(effects)
         var filterNames HashSet[string]? = nil
-        if effects.ContainsHandler {
+        if effects.ContainsHandler || RegionRunsCode(effects, resolved) {
             let filters = CollectCatchFiltersAbove(loop)
             if filters.Count > 0 {
                 filterNames = CollectEnclosingFilterNames(filters)
             }
         }
-        var killedByBoth = 0
-        var keptByBoth = 0
+        // S: the facts of the frames. A path that two frames hold is reported once, for the innermost frame.
+        let reported = List[AccessPath]()
+        var factCount = 0
+        var killedCount = 0
         var memberReadsWithLiveFacts = 0
         let location = loop.Location
-        for var i = 0; i < paths.Count; i++ {
-            let path = paths[i]
-            var oldKilled = false
-            for (frameIndex, killedPath) in invalidations {
-                if frameIndex == frameIndexes[i] && killedPath.Equals(path) {
-                    oldKilled = true
-                    break
+        for var i = frameCount - 1; i >= 0; i-- {
+            for entry in binderCtx.NarrowedVariables[i] {
+                let path = entry.Key
+                let decision = DecideRegionKill(path, entry.Value, effects, resolved, filterNames)
+                if decision.Killed {
+                    invalidations.Add((i, path))
                 }
-            }
-            let decision = DecideRegionKill(path, types[i], effects, resolved, filterNames)
-            if decision.Killed {
-                CompilationMeasurements.Count("narrowing.region-facts-killed")
-            }
-            if oldKilled && decision.Killed {
-                killedByBoth++
-            } else if !oldKilled && !decision.Killed {
-                keptByBoth++
-            } else if decision.Killed {
-                NarrowingComparison.ReportLoopDisagreement(
-                    location,
-                    path.ToString(),
-                    FactKind(path, types[i]),
-                    "old-kept/new-killed",
-                    decision.Rule,
-                    decision.Row
-                )
-            } else {
-                // The walker keeps a fact that today's analysis removes. Rule P7 explains the
-                // construction forms (row R7 (d)). Anything else is a defect of the ADR.
-                var rowText = "UNCLASSIFIED"
-                var ruleText = "none"
-                for var r = 0; r < resolved.Roots.Count; r++ {
-                    if SameRoot(resolved.Roots[r], path.Root) {
-                        ruleText = "P7(kept)"
-                        rowText = "R7 d"
+                var seen = false
+                for existing in reported {
+                    if existing.Equals(path) {
+                        seen = true
+                        break
                     }
                 }
-                NarrowingComparison.ReportLoopDisagreement(
-                    location,
-                    path.ToString(),
-                    FactKind(path, types[i]),
-                    "old-killed/new-kept",
-                    ruleText,
-                    rowText
+                if seen {
+                    continue
+                }
+                reported.Add(path)
+                factCount++
+                if decision.Killed {
+                    killedCount++
+                    CompilationMeasurements.Count("narrowing.region-facts-killed")
+                }
+                if effects.MemberReadCount > 0 && MayBeMutatedByUnknownCallable(path) {
+                    memberReadsWithLiveFacts++
+                }
+                if NarrowingComparison.LoopsEnabled && decision.Killed {
+                    NarrowingComparison.ReportLoopKill(
+                        location,
+                        path.ToString(),
+                        FactKind(path, entry.Value),
+                        decision.Rule,
+                        decision.Row
+                    )
+                }
+            }
+        }
+        InvalidateInheritedNarrowings(invalidations)
+        // ADR-0213 section 13: a function value that the region may reassign is no longer external at the
+        // loop header, so a call in the loop can reach a closure.
+        if effects.ContainsUnknownKind || effects.ContainsPointerWrite {
+            externalCallableAliases.Clear()
+        } else if externalCallableAliases.Count > 0 && resolved.Roots.Count > 0 {
+            externalCallableAliases.RemoveWhere(
+                (alias VariableSymbol) -> resolved.Roots.Any(
+                    (written VariableSymbol) -> SameRoot(written, alias) || MayShareStorage(written, alias)
                 )
-            }
-            if effects.MemberReadCount > 0 && MayBeMutatedByUnknownCallable(path) {
-                memberReadsWithLiveFacts++
-            }
+            )
         }
         if effects.MemberReadCount > 0 {
             CompilationMeasurements.Count("narrowing.region-member-reads", cast[int64](effects.MemberReadCount))
@@ -599,18 +861,56 @@ internal partial class StatementBinder {
                 )
             }
         }
-        NarrowingComparison.ReportLoopSummary(
-            location,
-            paths.Count,
-            killedByBoth,
-            keptByBoth,
-            "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
-        )
+        if NarrowingComparison.LoopsEnabled {
+            NarrowingComparison.ReportLoopSummary(
+                location,
+                factCount,
+                killedCount,
+                factCount - killedCount,
+                "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
+            )
+        }
     }
 
-    /// Row R7 (f): the facts that the header of a loop proves when the loop ends and that no frame
-    /// holds after the loop today. The report lists the `!!` sites after the loop on the same path.
-    private func ReportLoopExitGain(loopBody StatementSyntax, condition BoundExpression?) {
+    // A loop whose condition is the literal `false` has no back edge (`while false`, `do { } while false`),
+    // so its body is bound under the state at its entry.
+    private func HeaderIsLiteralFalse(loop SyntaxNode) bool {
+        var condition ExpressionSyntax? = nil
+        switch loop.Kind {
+            case SyntaxKind.WhileStatement {
+                condition = cast[WhileStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForConditionStatement {
+                condition = cast[ForConditionStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForClauseStatement {
+                condition = cast[ForClauseStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.DoWhileStatement {
+                condition = cast[DoWhileStatementSyntax](loop).Condition
+            }
+            default { }
+        }
+        while condition is ParenthesizedExpressionSyntax parenthesized {
+            condition = parenthesized.Expression
+        }
+        return condition is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.FalseKeyword
+    }
+
+    // The facts that the header of a loop proves when the loop ends, by loop statement. Row R7 (f).
+    private let loopExitFacts Dictionary[SyntaxNode, Dictionary[AccessPath, TypeSymbol]] = Dictionary[
+        SyntaxNode,
+        Dictionary[AccessPath, TypeSymbol]
+    ]()
+
+    /// Row R7 (f), table 9 column `Exit state`: a loop without a `break` ends only when its header is
+    /// false, so the facts that the condition proves false hold after the loop whatever the body wrote.
+    /// The header is bound under the lower bound of the loop, so each fact holds on every iteration.
+    /// A fact that the condition itself may remove is dropped, as for a statement (rule A2).
+    /// @remarks A loop with a `break` keeps today's exit (no fact is added): the states of the `break`
+    /// statements are not recorded yet, so the join of table 9 cannot be taken. The same holds in a
+    /// function with a user label or `goto` (#4285).
+    private func RecordLoopExitFacts(loopBody StatementSyntax, condition BoundExpression?) {
         if condition == nil {
             return
         }
@@ -619,23 +919,96 @@ internal partial class StatementBinder {
             return
         }
         let elseFacts = ComputeConditionNarrowing(condition).Else
-        if elseFacts == nil {
+        if elseFacts == nil || elseFacts.Count == 0 {
             return
         }
-        let location = loop.Location
-        let hasBreak = ContainsBreakFor(loopBody)
+        let hasBreak = ContainsBreakFor(loop)
+        if NarrowingComparison.LoopsEnabled {
+            for entry in elseFacts {
+                // The frames hold the state after the loop. A fact that they hold is not a gain.
+                if binderCtx.NarrowedVariables.Query(entry.Key) != nil {
+                    continue
+                }
+                let text = if entry.Key.HasMembers {
+                    ""
+                } else {
+                    entry.Key.Root.Name
+                }
+                NarrowingComparison.ReportLoopExitGain(
+                    loop.Location,
+                    entry.Key.ToString(),
+                    hasBreak,
+                    FindBangSitesAfter(loop, text)
+                )
+            }
+        }
+        // The loop ends when the header is false, so the break of a block expression in the header or in the post
+        // statement also leaves it: the whole loop is scanned.
+        if hasBreak || binderCtx.FunctionContainsUserGotoOrLabel {
+            return
+        }
+        // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
+        // a getter, an operator, a write to the root, a write through `ref` or a filter of an enclosing try.
+        let headerSyntax = HeaderSyntax(loop)
+        if headerSyntax == nil {
+            return
+        }
+        let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
+        let resolved = ResolveRegionWrites(headerEffects)
+        let filters = CollectCatchFiltersAbove(loop)
+        var filterNames HashSet[string]? = nil
+        if filters.Count > 0 {
+            filterNames = CollectEnclosingFilterNames(filters)
+        }
+        let facts = Dictionary[AccessPath, TypeSymbol]()
         for entry in elseFacts {
-            // The frames hold the state after the loop. A fact that they hold is not a gain.
-            if binderCtx.NarrowedVariables.Query(entry.Key) != nil {
-                continue
+            let path = entry.Key
+            // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
+            let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
+            if !removed {
+                facts[path] = entry.Value
             }
-            let text = if entry.Key.HasMembers {
-                ""
-            } else {
-                entry.Key.Root.Name
+        }
+        if facts.Count > 0 {
+            loopExitFacts[loop] = facts
+        }
+    }
+
+    // The condition of a loop statement, or `nil`.
+    private func HeaderSyntax(loop SyntaxNode) SyntaxNode? {
+        switch loop.Kind {
+            case SyntaxKind.WhileStatement {
+                return cast[WhileStatementSyntax](loop).Condition
             }
-            let sites = FindBangSitesAfter(loop, text)
-            NarrowingComparison.ReportLoopExitGain(location, entry.Key.ToString(), hasBreak, sites)
+            case SyntaxKind.ForConditionStatement {
+                return cast[ForConditionStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.ForClauseStatement {
+                return cast[ForClauseStatementSyntax](loop).Condition
+            }
+            case SyntaxKind.DoWhileStatement {
+                return cast[DoWhileStatementSyntax](loop).Condition
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
+    /// Adds the facts that the header of the loop statement [`syntax`](paramref) proves on exit to
+    /// [`persistentFrame`](paramref). It runs after the statement's invalidation, which removes the
+    /// roots that the body writes: the exit state is the state of the header, not of the body.
+    private func ApplyLoopExitNarrowings(syntax SyntaxNode, persistentFrame NarrowingFrame) {
+        var node = syntax
+        while node is LabeledStatementSyntax labeled {
+            node = labeled.Statement
+        }
+        if !loopExitFacts.TryGetValue(node, out var facts) {
+            return
+        }
+        loopExitFacts.Remove(node)
+        for entry in facts {
+            SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
         }
     }
 

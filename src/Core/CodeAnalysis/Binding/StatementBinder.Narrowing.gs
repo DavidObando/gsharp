@@ -102,35 +102,6 @@ internal partial class StatementBinder {
         RestoreExternalCallableAliases(left)
     }
 
-    private func ComputeLoopEntryExternalCallableAliases(
-        body BoundStatement,
-        backEdgeTail BoundStatement?,
-        breakLabel BoundLabel,
-        continueLabel BoundLabel,
-        entryAliases IReadOnlyCollection[VariableSymbol],
-        backEdgeCondition BoundExpression? = nil
-    ) HashSet[VariableSymbol] {
-        let iteration = ImmutableArray.CreateBuilder[BoundStatement]()
-        if backEdgeCondition != nil {
-            iteration.Add(BoundExpressionStatement(nil, backEdgeCondition))
-        }
-        iteration.Add(body)
-        iteration.Add(BoundLabelStatement(nil, continueLabel))
-        if backEdgeTail != nil {
-            iteration.Add(backEdgeTail)
-        }
-        iteration.Add(BoundLabelStatement(nil, breakLabel))
-        let loop = BoundForInfiniteStatement(
-            nil,
-            BoundBlockStatement(nil, iteration.ToImmutable()),
-            breakLabel,
-            continueLabel
-        )
-        let collector = NewCollector(nil, entryAliases)
-        collector.Visit(loop)
-        return collector.DefinitelyExternalFunctionValues.ToHashSet()
-    }
-
     /// If [`statement`](paramref) is a call expression statement whose
     /// called function carries `[MemberNotNull("_f", …)]`, narrows each
     /// named field (via its (cref:ImplicitFieldVariableSymbol)) to its
@@ -715,87 +686,10 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func CollectInheritedNarrowingInvalidations(
-        mutations AssignedRootsCollector,
-        mayMutateMemberPaths bool,
-        frameCount int32,
-        frames IReadOnlyList[Dictionary[AccessPath, TypeSymbol]]
-    ) List[(FrameIndex int32, Path AccessPath)] {
-        let invalidations = List[(FrameIndex int32, Path AccessPath)]()
-        for var i = Math.Min(frameCount, frames.Count) - 1; i >= 0; i-- {
-            for path in frames[i].Keys {
-                if MayBeMutatedByUnknownWrite(mutations, path) || mutations.MayMutateGlobalRoot(
-                    path.Root,
-                    frames[i][path]
-                ) ||
-                    mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    DropsOnMemberMutation(path, mutations) {
-                    invalidations.Add((i, path))
-                }
-            }
-        }
-        return invalidations
-    }
-
     private func InvalidateInheritedNarrowings(invalidations IReadOnlyList[(FrameIndex int32, Path AccessPath)]) {
         for (frameIndex, path) in invalidations {
             binderCtx.NarrowedVariables[frameIndex].Remove(path)
         }
-    }
-
-    private func CollectLoopBackEdgeMutations(
-        body BoundStatement,
-        breakLabel BoundLabel,
-        continueLabel BoundLabel,
-        backEdgeTail BoundStatement?,
-        backEdgeCondition BoundExpression?
-    ) LoopBackEdgeMutationCollector {
-        let markerLabel = BoundLabel("loopBackEdge")
-        let marker = BoundExpressionStatement(nil, BoundLiteralExpression(nil, true))
-        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        statements.Add(body)
-        statements.Add(BoundLabelStatement(nil, continueLabel))
-        if backEdgeTail != nil {
-            statements.Add(backEdgeTail)
-        }
-        if backEdgeCondition != nil {
-            statements.Add(BoundConditionalGotoStatement(nil, markerLabel, backEdgeCondition, jumpIfTrue: true))
-            statements.Add(BoundGotoStatement(nil, breakLabel))
-            statements.Add(BoundLabelStatement(nil, markerLabel))
-        }
-        statements.Add(marker)
-        statements.Add(BoundLabelStatement(nil, breakLabel))
-        let graph = ControlFlowGraph.Create(Lowerer.Lower(BoundBlockStatement(nil, statements.ToImmutable())))
-        let markerBlock ControlFlowGraph.BasicBlock? = graph.Blocks.FirstOrDefault(
-            (block ControlFlowGraph.BasicBlock) -> block.Statements.Any(
-                (statement BoundStatement) -> object.ReferenceEquals(statement, marker)
-            )
-        )
-        let collector = LoopBackEdgeMutationCollector(
-            AssignmentPreservesNarrowing,
-            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
-        )
-        if markerBlock == nil {
-            return collector
-        }
-        let reachesBackEdge = HashSet[ControlFlowGraph.BasicBlock]()
-        let pending = Stack[ControlFlowGraph.BasicBlock]()
-        pending.Push(markerBlock)
-        while pending.Count > 0 {
-            let block = pending.Pop()
-            if !reachesBackEdge.Add(block) {
-                continue
-            }
-            for incoming in block.Incoming {
-                pending.Push(incoming.From)
-            }
-        }
-        for block in reachesBackEdge {
-            for statement in block.Statements {
-                collector.Visit(statement)
-            }
-        }
-        return collector
     }
 
     /// ADR-0069 / issue #700: when the bound statement is an
@@ -2816,11 +2710,6 @@ internal partial class StatementBinder {
             }
         }
 
-        // ADR-0208 R11 (#5170): the loop header runs user code before every body run.
-        func MarkIterationRunsUserCode() {
-            MarkMayMutateGlobalRoots()
-        }
-
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
         // (ADR-0208 row R15).
         private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true, runsSourceCode bool = true) {
@@ -3195,13 +3084,6 @@ internal partial class StatementBinder {
         Mutations AssignedRootsCollector,
         NonNullOnNormalExit Dictionary[AccessPath, TypeSymbol]?
     ) : IEquatable[FinallyFlowSummary] { }
-
-    private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
-        init(
-            assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
-            mayShareStorage(VariableSymbol, VariableSymbol) -> bool
-        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage) { }
-    }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
         if internallyReachableFallthroughStatements.Contains(statement) {

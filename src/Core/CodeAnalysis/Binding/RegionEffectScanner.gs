@@ -46,7 +46,7 @@ internal sealed class RegionEffectScanner {
             get;
         }
 
-        /// Gets how each name was declared: `pattern`, `binding` or `local`.
+        /// Gets how each name was declared: `pattern`, `pattern|Type`, `leaked|Type`, `binding` or `local`.
         prop Kinds Dictionary[string, string] {
             get;
         }
@@ -77,7 +77,10 @@ internal sealed class RegionEffectScanner {
     /// `for` clause and the collection of a range loop run once before the region and are not in
     /// it. The record is cached per loop.
     /// @param loop A loop statement, or a labeled statement that holds one.
-    func ScanLoop(loop SyntaxNode) RegionEffects {
+    /// @param iterationRunsUserCode Whether the iteration of a range loop runs user code (`MoveNext`,
+    /// `Current`, disposal). The binder knows it from the collection's type, which syntax does not show; it
+    /// is `false` for an array, a slice or a string. It only applies to the loop itself, not to a nested one.
+    func ScanLoop(loop SyntaxNode, iterationRunsUserCode bool = true) RegionEffects {
         var node = loop
         while node is LabeledStatementSyntax labeled {
             node = labeled.Statement
@@ -91,7 +94,7 @@ internal sealed class RegionEffectScanner {
             topLevelCache.Add(node, nested)
             return nested
         }
-        let result = ScanFresh(node, true)
+        let result = ScanFresh(node, true, iterationRunsUserCode)
         topLevelCache.Add(node, result)
         if sameWhenNested {
             nestedCache.Add(node, result)
@@ -125,7 +128,7 @@ internal sealed class RegionEffectScanner {
         return result
     }
 
-    private func ScanFresh(node SyntaxNode, topLevel bool) RegionEffects {
+    private func ScanFresh(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) RegionEffects {
         let savedScopes = scopes
         let savedCurrent = current
         let savedClosure = closureDepth
@@ -136,7 +139,7 @@ internal sealed class RegionEffectScanner {
         closureDepth = 0
         patternNames = HashSet[string]()
         let before = NodesVisited
-        VisitLoop(node, topLevel)
+        VisitLoop(node, topLevel, iterationRunsUserCode)
         current.NodesVisited = NodesVisited - before
         Regions++
         let result = current
@@ -161,12 +164,29 @@ internal sealed class RegionEffectScanner {
         if token == nil {
             return
         }
-        let name = token.ValueText
+        DeclareName(token.ValueText, declaration)
+    }
+
+    private func DeclareName(name string, declaration string) {
         if name.Length > 0 && scopes.Count > 0 {
             scopes[scopes.Count - 1].Names.Add(name)
             scopes[scopes.Count - 1].Kinds[name] = declaration
             if declaration != "local" {
                 patternNames.Add(name)
+            }
+        }
+    }
+
+    // Gives the pattern variables of the innermost scope the typed kind (`pattern|Type`, rule P7) that the
+    // classification of a condition proves for the statement that the condition guards.
+    private func RetypePatternNames(names Dictionary[string, string]) {
+        if scopes.Count == 0 {
+            return
+        }
+        let frame = scopes[scopes.Count - 1]
+        for pair in names {
+            if frame.Kinds.TryGetValue(pair.Key, out var kind) && kind.StartsWith("pattern", StringComparison.Ordinal) {
+                frame.Kinds[pair.Key] = pair.Value
             }
         }
     }
@@ -193,6 +213,22 @@ internal sealed class RegionEffectScanner {
     private func DeclaringFrame(name string) int32 {
         for var i = scopes.Count - 1; i >= 0; i-- {
             if scopes[i].Names.Contains(name) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    // The frame whose declaration the name surely denotes, or -1. A pattern variable with the plain kind
+    // `pattern` may be out of the binder's scope where the scanner still holds it (a when-false variable in a
+    // then branch, ADR-0166), and a leaked one is out of it in a function with a user label, so a write or a
+    // bare read of its name is taken to name other storage.
+    private func DeclaringStorageFrame(name string) int32 {
+        for var i = scopes.Count - 1; i >= 0; i-- {
+            if scopes[i].Kinds.TryGetValue(name, out var kind) && kind != "pattern" && !kind.StartsWith(
+                "leaked|",
+                StringComparison.Ordinal
+            ) {
                 return i
             }
         }
@@ -255,6 +291,26 @@ internal sealed class RegionEffectScanner {
             default { }
         }
         switch kind {
+            case SyntaxKind.NameOfExpression { }
+            case SyntaxKind.ReturnStatement {
+                let returnStatement = cast[ReturnStatementSyntax](node)
+                if Active() && !returnStatement.IsRefReturn {
+                    RecordReturnedValue(returnStatement.Expression)
+                }
+                VisitChildren(node)
+            }
+            case SyntaxKind.ConditionalExpression {
+                let conditional = cast[ConditionalExpressionSyntax](node)
+                VisitCondition(conditional.Condition)
+                Visit(conditional.WhenTrue)
+                Visit(conditional.WhenFalse)
+            }
+            case SyntaxKind.NameExpression {
+                let read = cast[NameExpressionSyntax](node).IdentifierToken.ValueText
+                if Active() && DeclaringStorageFrame(read) < 0 && !current.BareReads.Contains(read) {
+                    current.BareReads.Add(read)
+                }
+            }
             case SyntaxKind.BlockStatement {
                 VisitBlock(cast[BlockStatementSyntax](node))
             }
@@ -280,7 +336,8 @@ internal sealed class RegionEffectScanner {
                 Push()
                 Visit(ifStatement.Initializer)
                 Push()
-                Visit(ifStatement.Condition)
+                VisitCondition(ifStatement.Condition)
+                RetypePatternNames(ClassifyCondition(ifStatement.Condition).WhenTrue)
                 Visit(ifStatement.ThenStatement)
                 Pop()
                 Visit(ifStatement.ElseClause)
@@ -290,7 +347,7 @@ internal sealed class RegionEffectScanner {
                 let ifLet = cast[IfLetStatementSyntax](node)
                 Push()
                 VisitBindings(ifLet.Bindings)
-                Visit(ifLet.Guard)
+                VisitCondition(ifLet.Guard)
                 Visit(ifLet.ThenStatement)
                 Pop()
                 Visit(ifLet.ElseClause)
@@ -299,7 +356,7 @@ internal sealed class RegionEffectScanner {
                 let ifLet = cast[IfLetExpressionSyntax](node)
                 Push()
                 VisitBindings(ifLet.Bindings)
-                Visit(ifLet.Guard)
+                VisitCondition(ifLet.Guard)
                 Visit(ifLet.ThenBlock)
                 Pop()
                 Visit(ifLet.ElseExpression)
@@ -308,7 +365,7 @@ internal sealed class RegionEffectScanner {
                 let guardLet = cast[GuardLetStatementSyntax](node)
                 // The names are visible to the statements that follow the guard.
                 VisitBindings(guardLet.Bindings)
-                Visit(guardLet.Guard)
+                VisitCondition(guardLet.Guard)
                 Visit(guardLet.ElseStatement)
             }
             case SyntaxKind.VariableDeclaration {
@@ -340,6 +397,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.TupleDeconstructionStatement {
                 let deconstruction = cast[TupleDeconstructionStatementSyntax](node)
                 Visit(deconstruction.Initializer)
+                RecordDeconstruction()
                 for identifier in deconstruction.Identifiers {
                     Declare(identifier)
                 }
@@ -347,6 +405,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.NamedDeconstructionStatement {
                 let deconstruction = cast[NamedDeconstructionStatementSyntax](node)
                 Visit(deconstruction.Initializer)
+                RecordDeconstruction()
                 for field in deconstruction.Fields {
                     Declare(field.LocalIdentifier)
                 }
@@ -356,6 +415,7 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.TypePattern {
                 let pattern = cast[TypePatternSyntax](node)
+                // The typed kind (rule P7) is given where the binder scopes the variable (`RetypePatternNames`).
                 Declare(pattern.Identifier, "pattern")
                 Declare(pattern.Designation, "pattern")
                 Visit(pattern.PropertyPattern)
@@ -383,7 +443,7 @@ internal sealed class RegionEffectScanner {
                 for switchCase in switchStatement.Cases {
                     Push()
                     Visit(switchCase.Value)
-                    Visit(switchCase.Guard)
+                    VisitCondition(switchCase.Guard)
                     Visit(switchCase.Body)
                     Pop()
                 }
@@ -394,7 +454,7 @@ internal sealed class RegionEffectScanner {
                 for arm in switchExpression.Arms {
                     Push()
                     Visit(arm.Value)
-                    Visit(arm.Guard)
+                    VisitCondition(arm.Guard)
                     Visit(arm.Result)
                     Pop()
                 }
@@ -408,7 +468,7 @@ internal sealed class RegionEffectScanner {
                 Visit(selectCase.Value)
                 Push()
                 Declare(selectCase.Identifier)
-                Visit(selectCase.Guard)
+                VisitCondition(selectCase.Guard)
                 Visit(selectCase.Body)
                 Pop()
             }
@@ -422,7 +482,7 @@ internal sealed class RegionEffectScanner {
                     }
                     Push()
                     Declare(clause.Identifier)
-                    Visit(clause.Filter)
+                    VisitCondition(clause.Filter)
                     Visit(clause.Body)
                     Pop()
                 }
@@ -448,6 +508,8 @@ internal sealed class RegionEffectScanner {
                 .FieldAssignmentExpression {
                 if Active() {
                     current.ContainsMemberWrite = true
+                    // A setter or an indexer runs user code.
+                    current.ContainsCall = true
                 }
                 if kind == SyntaxKind.CompoundIndexAssignmentExpression ||
                     kind == SyntaxKind
@@ -455,6 +517,7 @@ internal sealed class RegionEffectScanner {
                     if Active() {
                         // An operator or a setter can run code.
                         current.ContainsOperatorCandidate = true
+                        current.OperatorHasUnresolvedOperand = true
                     }
                 }
                 VisitChildren(node)
@@ -480,8 +543,48 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.BinaryExpression {
                 let binary = cast[BinaryExpressionSyntax](node)
+                if Active() && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+                    // The two operands meet in one type, which a structural projection or a user conversion
+                    // may reach (rule W4).
+                    current.ContainsConversionCandidate = true
+                }
                 if Active() && IsOperatorCandidate(binary) {
                     current.ContainsOperatorCandidate = true
+                    RecordOperatorOperand(binary.Left)
+                    RecordOperatorOperand(binary.Right)
+                } else if Active() &&
+                    (
+                    binary
+                        .OperatorToken
+                        .Kind == SyntaxKind.EqualsEqualsToken ||
+                        binary
+                        .OperatorToken
+                        .Kind == SyntaxKind.BangEqualsToken
+                ) {
+                    // A comparison with `nil` is a null test unless the other operand is a non-nullable value type.
+                    let other = if IsNilLiteral(binary.Left) {
+                        binary.Right
+                    } else {
+                        binary.Left
+                    }
+                    var inner ExpressionSyntax = other
+                    while inner is ParenthesizedExpressionSyntax parenthesized {
+                        inner = parenthesized.Expression
+                    }
+                    if inner is NameExpressionSyntax nilOperand {
+                        let text = nilOperand.IdentifierToken.ValueText
+                        if IsDeclared(text) {
+                            // A name of the region may have any type.
+                            current.ContainsOperatorCandidate = true
+                            current.OperatorHasUnresolvedOperand = true
+                        } else if !current.NilCompareOperandNames.Contains(text) {
+                            current.NilCompareOperandNames.Add(text)
+                        }
+                    } else if inner.Kind != SyntaxKind.AccessorExpression && inner.Kind != SyntaxKind.IndexExpression {
+                        // A construction or a call may produce a value type: `default(Token) == nil`.
+                        current.ContainsOperatorCandidate = true
+                        current.OperatorHasUnresolvedOperand = true
+                    }
                 }
                 VisitChildren(node)
             }
@@ -545,6 +648,7 @@ internal sealed class RegionEffectScanner {
         for statement in statements {
             starts.Add(current.Writes.Count)
             Visit(statement)
+            DeclareLeakedPatternNames(statement)
         }
         starts.Add(current.Writes.Count)
         // A write before an unconditional exit of its own statement list is on an exit path.
@@ -569,16 +673,167 @@ internal sealed class RegionEffectScanner {
         statement.Kind == SyntaxKind.RethrowStatement ||
         statement.Kind == SyntaxKind.GotoStatement
 
+    // ADR-0166: `if c { exit }`, a direct statement of a block with no initializer and no else, declares the
+    // variables that `c` assigns when false in the block after it, unless the function has a user label. The
+    // kind `leaked|Type` leaves that test to the consumer, which knows the function.
+    private func DeclareLeakedPatternNames(statement StatementSyntax) {
+        if statement is not IfStatementSyntax ifStatement ||
+            ifStatement.Initializer != nil ||
+            ifStatement.ElseClause != nil ||
+            !EndsInExit(ifStatement.ThenStatement) {
+            return
+        }
+        for pair in ClassifyCondition(ifStatement.Condition).WhenFalse {
+            DeclareName(
+                pair.Key,
+                if pair.Value.StartsWith("pattern|", StringComparison.Ordinal) {
+                    "leaked|" + pair.Value.Substring("pattern|".Length)
+                } else {
+                    "pattern"
+                }
+            )
+        }
+    }
+
+    private func EndsInExit(statement StatementSyntax) bool {
+        if statement is BlockStatementSyntax block {
+            return block.Statements.Length > 0 && EndsInExit(block.Statements[block.Statements.Length - 1])
+        }
+        return statement.Kind == SyntaxKind.BreakStatement ||
+            statement.Kind == SyntaxKind.ContinueStatement ||
+            statement.Kind == SyntaxKind.ReturnStatement ||
+            statement.Kind == SyntaxKind.ThrowStatement ||
+            statement.Kind == SyntaxKind.RethrowStatement
+    }
+
+    // ADR-0166 as a syntax shape: the pattern variables that a condition assigns when it is true and when it is
+    // false, each with its declaration kind. Each set is a subset of what `PatternVariables.Classify` gives the
+    // binder, so a typed kind never names a variable that the binder does not scope there. The two operands of
+    // `&&`, `||`, `and` and `or` declare different variables, so none is assigned on the paths of both.
+    private func ClassifyCondition(condition ExpressionSyntax?)(
+        WhenTrue Dictionary[string, string],
+        WhenFalse Dictionary[string, string]
+    ) {
+        switch condition {
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return ClassifyCondition(parenthesized.Expression)
+            }
+            case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.BangToken {
+                {
+                    let (whenTrue, whenFalse) = ClassifyCondition(unary.Operand)
+                    return (whenFalse, whenTrue)
+                }
+            }
+            case binary is BinaryExpressionSyntax when binary.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
+                {
+                    let (leftTrue, leftFalse) = ClassifyCondition(binary.Left)
+                    let (rightTrue, rightFalse) = ClassifyCondition(binary.Right)
+                    return (UnionPatternNames(leftTrue, rightTrue), Dictionary[string, string]())
+                }
+            }
+            case binary is BinaryExpressionSyntax when binary.OperatorToken.Kind == SyntaxKind.PipePipeToken {
+                {
+                    let (leftTrue, leftFalse) = ClassifyCondition(binary.Left)
+                    let (rightTrue, rightFalse) = ClassifyCondition(binary.Right)
+                    return (Dictionary[string, string](), UnionPatternNames(leftFalse, rightFalse))
+                }
+            }
+            case isExpression is IsExpressionSyntax {
+                return ClassifyPatternNames(isExpression.Pattern)
+            }
+            default {
+                return (Dictionary[string, string](), Dictionary[string, string]())
+            }
+        }
+    }
+
+    private func ClassifyPatternNames(pattern PatternSyntax)(
+        WhenTrue Dictionary[string, string],
+        WhenFalse Dictionary[string, string]
+    ) {
+        switch pattern {
+            case parenthesized is ParenthesizedPatternSyntax {
+                return ClassifyPatternNames(parenthesized.Pattern)
+            }
+            case notPattern is NotPatternSyntax {
+                {
+                    let (whenTrue, whenFalse) = ClassifyPatternNames(notPattern.Pattern)
+                    return (whenFalse, whenTrue)
+                }
+            }
+            case binary is BinaryPatternSyntax when binary.OperatorToken.Text == "and" {
+                {
+                    let (leftTrue, leftFalse) = ClassifyPatternNames(binary.Left)
+                    let (rightTrue, rightFalse) = ClassifyPatternNames(binary.Right)
+                    return (UnionPatternNames(leftTrue, rightTrue), Dictionary[string, string]())
+                }
+            }
+            case binary is BinaryPatternSyntax when binary.OperatorToken.Text == "or" {
+                {
+                    let (leftTrue, leftFalse) = ClassifyPatternNames(binary.Left)
+                    let (rightTrue, rightFalse) = ClassifyPatternNames(binary.Right)
+                    return (Dictionary[string, string](), UnionPatternNames(leftFalse, rightFalse))
+                }
+            }
+            case typePattern is TypePatternSyntax {
+                {
+                    let whenTrue = Dictionary[string, string]()
+                    if typePattern.BindingIdentifier is {} identifier &&
+                        identifier.ValueText != "" &&
+                        identifier.ValueText != "_" {
+                        let type = typePattern.Type
+                        whenTrue[identifier.ValueText] = if type.Identifier == nil ||
+                            type.IsArray ||
+                            type.IsNullable ||
+                            type.HasTypeArguments ||
+                            type.IsTuple ||
+                            type.IsFunction ||
+                            type.IsFunctionPointer {
+                            "pattern"
+                        } else {
+                            "pattern|" + type.DottedName
+                        }
+                    }
+                    return (whenTrue, Dictionary[string, string]())
+                }
+            }
+            default {
+                return (Dictionary[string, string](), Dictionary[string, string]())
+            }
+        }
+    }
+
+    private func UnionPatternNames(left Dictionary[string, string], right Dictionary[string, string]) Dictionary[
+        string,
+        string
+    ] {
+        let result = Dictionary[string, string](left)
+        for pair in right {
+            result[pair.Key] = if result.TryGetValue(pair.Key, out var kind) && kind != pair.Value {
+                "pattern"
+            } else {
+                pair.Value
+            }
+        }
+        return result
+    }
+
     private func VisitBindings(bindings SeparatedSyntaxList[IfLetBindingClauseSyntax]) {
         for binding in bindings {
             NodesVisited++
             Visit(binding.Initializer)
+            if Active() {
+                current.ContainsConversionCandidate = true
+            }
             Declare(binding.Identifier, "binding")
         }
     }
 
     private func VisitVariableDeclaration(declaration VariableDeclarationSyntax) {
         Visit(declaration.Initializer)
+        if Active() && declaration.Initializer != nil {
+            current.ContainsConversionCandidate = true
+        }
         let name = declaration.Identifier.ValueText
         // The storage that a `ref` local names is fixed where it is declared, before a later declaration
         // of the same name can hide it (rule W3).
@@ -639,10 +894,25 @@ internal sealed class RegionEffectScanner {
     // reaches its storage (W3). The nested record stays as it was: it is cached and shared.
     private func Compose(record RegionEffects) {
         for write in record.Writes {
+            // A callable that an enclosing declaration names like the type takes call binding (probe d2).
+            let shadowed = (
+                write.Proof == RegionWriteProof.Construction &&
+                    write.ConstructedTypeName != nil &&
+                    IsDeclared(write.ConstructedTypeName)
+            ) ||
+                (
+                write.Proof == RegionWriteProof.NullAssertion &&
+                    write.RightSideName != nil &&
+                    IsDeclared(write.RightSideName)
+            )
             PlaceWrite(
                 write.Name,
                 write.Position,
-                write.Proof,
+                if shadowed {
+                    RegionWriteProof.None
+                } else {
+                    write.Proof
+                },
                 write.ConstructedTypeName,
                 write.RightSideName,
                 write.RightSideDeclaration,
@@ -650,21 +920,170 @@ internal sealed class RegionEffectScanner {
                 write.FollowedByExit
             )
         }
+        if Active() {
+            for name in record.NilCompareOperandNames {
+                if IsDeclared(name) {
+                    current.ContainsOperatorCandidate = true
+                    current.OperatorHasUnresolvedOperand = true
+                }
+            }
+            for name in record.OperatorOperandNames {
+                if IsDeclared(name) {
+                    current.OperatorHasUnresolvedOperand = true
+                }
+            }
+            for name in record.ReturnedNames {
+                if IsDeclared(name) {
+                    current.ContainsConversionCandidate = true
+                }
+            }
+        }
+        let bareBefore = current.BareReads.ToArray()
+        let callsBefore = current.Calls.Count
         current.AbsorbFlags(record, Active())
+        // A nested named call whose callee the enclosing region declares calls a function value. A nested member
+        // call whose receiver the enclosing region declares has a receiver that the entry scope cannot resolve.
+        for var i = callsBefore; i < current.Calls.Count; i++ {
+            let call = current.Calls[i]
+            if call.Kind == RegionCallKind.MemberInvocation &&
+                call.ReceiverName != nil &&
+                IsDeclared(call.ReceiverName) {
+                current.Calls[i] = RegionCall(
+                    RegionCallKind.MemberInvocation,
+                    call.CalleeName,
+                    call.ByReferenceNames,
+                    call.ByValueNames,
+                    call.HasUnresolvedOperand,
+                    call.Position
+                )
+            } else if call.Kind == RegionCallKind.NamedInvocation &&
+                call.CalleeName != nil &&
+                IsDeclared(call.CalleeName) {
+                current.Calls[i] = RegionCall(
+                    RegionCallKind.ExpressionInvocation,
+                    nil,
+                    call.ByReferenceNames,
+                    call.ByValueNames,
+                    call.HasUnresolvedOperand,
+                    call.Position
+                )
+            }
+        }
+        // A name that an enclosing declaration of the region hides is no property read.
+        for name in record.BareReads {
+            if DeclaringStorageFrame(name) >= 0 && !bareBefore.Contains(name) {
+                current.BareReads.Remove(name)
+            }
+        }
     }
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
     // `for` clause and the collection of a range loop are outside it (table T3, T5).
-    private func VisitLoop(node SyntaxNode, topLevel bool) {
+    // A deconstruction calls `Deconstruct`, reads data members or converts the parts to declared types (rule W4).
+    private func RecordDeconstruction() {
+        if Active() {
+            current.ContainsConversionCandidate = true
+        }
+    }
+
+    // A returned value is converted to the return type, which may select a user conversion (rule W4). The consumer
+    // decides a plain name and a constant with their types. A member or element read is an unknown getter already
+    // (W5), which removes what a conversion can.
+    private func RecordReturnedValue(value ExpressionSyntax?) {
+        var inner = value
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        switch inner {
+            case nil { }
+            case name is NameExpressionSyntax {
+                let text = name.IdentifierToken.ValueText
+                if IsDeclared(text) {
+                    // A name of the region may have any type.
+                    current.ContainsConversionCandidate = true
+                } else if !current.ReturnedNames.Contains(text) {
+                    current.ReturnedNames.Add(text)
+                }
+            }
+            case literal is LiteralExpressionSyntax {
+                if literal.LiteralToken.Kind != SyntaxKind.NilKeyword {
+                    current.ReturnsConstant = true
+                }
+            }
+            case NameOfExpressionSyntax {
+                current.ReturnsConstant = true
+            }
+            case AccessorExpressionSyntax, IndexExpressionSyntax { }
+            default {
+                current.ContainsConversionCandidate = true
+            }
+        }
+    }
+
+    // A condition or a guard is converted to `bool`. Unless it is `bool` by its form, it may select a user
+    // conversion (a name, a member read, an element, a block value, a conditional).
+    private func VisitCondition(condition ExpressionSyntax?) {
+        if condition != nil && Active() && !IsBooleanByForm(condition) {
+            current.ContainsConversionCandidate = true
+        }
+        Visit(condition)
+    }
+
+    // A literal `true` or `false`, an `is` test, a comparison, `!`, `&&` or `||`: the binder converts none of
+    // them, since `&&` and `||` take `bool` operands. A user operator in a comparison or in `!` is an operator
+    // candidate of its own.
+    private func IsBooleanByForm(expression ExpressionSyntax) bool {
+        switch expression {
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return IsBooleanByForm(parenthesized.Expression)
+            }
+            case literal is LiteralExpressionSyntax {
+                let token = literal.LiteralToken.Kind
+                return token == SyntaxKind.TrueKeyword || token == SyntaxKind.FalseKeyword
+            }
+            case IsExpressionSyntax {
+                return true
+            }
+            case unary is UnaryExpressionSyntax {
+                return unary.OperatorToken.Kind == SyntaxKind.BangToken
+            }
+            case binary is BinaryExpressionSyntax {
+                switch binary.OperatorToken.Kind {
+                    case SyntaxKind.AmpersandAmpersandToken,
+                    SyntaxKind.PipePipeToken,
+                    SyntaxKind.EqualsEqualsToken,
+                    SyntaxKind.BangEqualsToken,
+                    SyntaxKind.LessToken,
+                    SyntaxKind.LessOrEqualsToken,
+                    SyntaxKind.GreaterToken,
+                    SyntaxKind.GreaterOrEqualsToken {
+                        return true
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func VisitLoop(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) {
         switch node.Kind {
             case SyntaxKind.WhileStatement {
                 let loop = cast[WhileStatementSyntax](node)
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
+                // A nested loop is scanned in scopes of its own, so the typed kinds end with this scan.
+                RetypePatternNames(ClassifyCondition(loop.Condition).WhenTrue)
                 Visit(loop.Body)
             }
             case SyntaxKind.ForConditionStatement {
                 let loop = cast[ForConditionStatementSyntax](node)
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
+                // A nested loop is scanned in scopes of its own, so the typed kinds end with this scan.
+                RetypePatternNames(ClassifyCondition(loop.Condition).WhenTrue)
                 Visit(loop.Body)
             }
             case SyntaxKind.ForClauseStatement {
@@ -673,8 +1092,9 @@ internal sealed class RegionEffectScanner {
                 if !topLevel {
                     Visit(loop.Initializer)
                 }
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
                 Visit(loop.Post)
+                RetypePatternNames(ClassifyCondition(loop.Condition).WhenTrue)
                 Visit(loop.Body)
                 Pop()
             }
@@ -694,7 +1114,9 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.ForRangeStatement {
                 let loop = cast[ForRangeStatementSyntax](node)
-                RecordIteration(false)
+                if iterationRunsUserCode {
+                    RecordIteration(false)
+                }
                 if !topLevel {
                     Visit(loop.Collection)
                 }
@@ -706,7 +1128,9 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.ForTupleRangeStatement {
                 let loop = cast[ForTupleRangeStatementSyntax](node)
-                RecordIteration(false)
+                if iterationRunsUserCode {
+                    RecordIteration(false)
+                }
                 if !topLevel {
                     Visit(loop.Collection)
                 }
@@ -732,14 +1156,14 @@ internal sealed class RegionEffectScanner {
                 let loop = cast[WhileLetStatementSyntax](node)
                 Push()
                 VisitBindings(loop.Bindings)
-                Visit(loop.Guard)
+                VisitCondition(loop.Guard)
                 Visit(loop.Body)
                 Pop()
             }
             case SyntaxKind.DoWhileStatement {
                 let loop = cast[DoWhileStatementSyntax](node)
                 Visit(loop.Body)
-                Visit(loop.Condition)
+                VisitCondition(loop.Condition)
             }
             default {
                 current.ContainsUnknownKind = true
@@ -815,8 +1239,10 @@ internal sealed class RegionEffectScanner {
         if target is NameExpressionSyntax name {
             // `x += v` and `x++` read and write the variable. A user-defined operator can also run code.
             RecordWrite(name.IdentifierToken.ValueText, name.IdentifierToken.Span.Start, nil)
-            if Active() && !subscription.IsIncrementDecrement {
+            if Active() {
                 current.ContainsOperatorCandidate = true
+                RecordOperatorOperand(name)
+                RecordOperatorOperand(subscription.Value)
             }
         } else {
             // An event subscription, a compound member write or an increment of a member.
@@ -842,6 +1268,9 @@ internal sealed class RegionEffectScanner {
     }
 
     private func VisitMultiAssignment(statement MultiAssignmentStatementSyntax) {
+        if Active() {
+            current.ContainsConversionCandidate = true
+        }
         for value in statement.Values {
             Visit(value)
         }
@@ -871,6 +1300,9 @@ internal sealed class RegionEffectScanner {
         var proof = RegionWriteProof.None
         var typeName string? = nil
         var rightName string? = nil
+        if Active() && value != nil {
+            current.ContainsConversionCandidate = true
+        }
         if value != nil {
             ClassifyProof(value, out proof, out typeName, out rightName)
         }
@@ -878,6 +1310,7 @@ internal sealed class RegionEffectScanner {
         if rightName != nil {
             rightDeclaration = DeclarationKind(rightName)
             if rightDeclaration == nil && patternNames.Contains(rightName) {
+                // A pattern variable of a closed scope: the name may denote another variable here.
                 rightDeclaration = "pattern"
             }
         }
@@ -896,7 +1329,7 @@ internal sealed class RegionEffectScanner {
         viaCallArgument bool,
         followedByExit bool
     ) {
-        let frame = DeclaringFrame(name)
+        let frame = DeclaringStorageFrame(name)
         if frame >= 0 {
             if scopes[frame].Aliases.TryGetValue(name, out var target) && !scopes[frame].LocalAliases.Contains(name) {
                 if target == nil {
@@ -952,6 +1385,12 @@ internal sealed class RegionEffectScanner {
             case literal is LiteralExpressionSyntax {
                 if literal.LiteralToken.Kind != SyntaxKind.NilKeyword {
                     proof = RegionWriteProof.NonNilLiteral
+                    // The type of a type-test fact must accept the literal: only a string literal proves one.
+                    typeName = if literal.LiteralToken.Kind == SyntaxKind.StringToken {
+                        "string"
+                    } else {
+                        nil
+                    }
                 }
             }
             case call is CallExpressionSyntax {
@@ -972,6 +1411,13 @@ internal sealed class RegionEffectScanner {
             case unary is UnaryExpressionSyntax {
                 if unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
                     proof = RegionWriteProof.NullAssertion
+                    var operand ExpressionSyntax = unary.Operand
+                    while operand is ParenthesizedExpressionSyntax parenthesized {
+                        operand = parenthesized.Expression
+                    }
+                    if operand is NameExpressionSyntax asserted {
+                        rightName = asserted.IdentifierToken.ValueText
+                    }
                 }
             }
             case name is NameExpressionSyntax {
@@ -991,6 +1437,7 @@ internal sealed class RegionEffectScanner {
         }
         if Active() && IsUnaryOperatorCandidate(unary) {
             current.ContainsOperatorCandidate = true
+            RecordOperatorOperand(unary.Operand)
         }
         Visit(unary.Operand)
     }
@@ -1057,18 +1504,58 @@ internal sealed class RegionEffectScanner {
         }
     }
 
+    // An operand of an operator candidate: a name is resolved by the consumer, a literal is ruled out, anything
+    // else may have a user-defined type.
+    private func RecordOperatorOperand(operand ExpressionSyntax?) {
+        if operand == nil {
+            return
+        }
+        var expression ExpressionSyntax? = operand
+        while expression is ParenthesizedExpressionSyntax parenthesized {
+            expression = parenthesized.Expression
+        }
+        if expression is LiteralExpressionSyntax {
+            return
+        }
+        if expression is NameExpressionSyntax name {
+            let text = name.IdentifierToken.ValueText
+            if IsDeclared(text) {
+                // A name of the region may be a variable of any type, and shadow one of the entry scope.
+                current.OperatorHasUnresolvedOperand = true
+                return
+            }
+            if !current.OperatorOperandNames.Contains(text) {
+                current.OperatorOperandNames.Add(text)
+            }
+            return
+        }
+        current.OperatorHasUnresolvedOperand = true
+    }
+
+    private func IsNilLiteral(expression ExpressionSyntax) bool {
+        var inner ExpressionSyntax = expression
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        return inner is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.NilKeyword
+    }
+
     private func IsOperatorCandidate(binary BinaryExpressionSyntax) bool {
         switch binary.OperatorToken.Kind {
             case SyntaxKind.AmpersandAmpersandToken, SyntaxKind.PipePipeToken, SyntaxKind.QuestionQuestionToken {
                 return false
             }
             default {
-                return binary
-                    .Left
-                    .Kind != SyntaxKind.LiteralExpression &&
+                // Equality with `nil` is a null test, not a call of a user operator.
+                if binary
+                    .OperatorToken
+                    .Kind == SyntaxKind.EqualsEqualsToken ||
                     binary
-                    .Right
-                    .Kind != SyntaxKind.LiteralExpression
+                    .OperatorToken
+                    .Kind == SyntaxKind.BangEqualsToken {
+                    return !IsNilLiteral(binary.Left) && !IsNilLiteral(binary.Right)
+                }
+                return true
             }
         }
     }
@@ -1077,10 +1564,11 @@ internal sealed class RegionEffectScanner {
         switch unary.OperatorToken.Kind {
             case SyntaxKind.PlusToken,
             SyntaxKind.MinusToken,
+            SyntaxKind.BangToken,
             SyntaxKind.TildeToken,
             SyntaxKind.PlusPlusToken,
             SyntaxKind.MinusMinusToken {
-                return unary.Operand.Kind != SyntaxKind.LiteralExpression
+                return true
             }
             default {
                 return false
@@ -1117,12 +1605,18 @@ internal sealed class RegionEffectScanner {
         var kind = RegionCallKind.NamedInvocation
         if receiver != nil {
             kind = RegionCallKind.MemberInvocation
-        } else if call.Callee != nil {
+        } else if call.Callee != nil || IsDeclared(call.Identifier.ValueText) {
+            // A callee that the region declares is a function value, which the entry scope cannot resolve.
             kind = RegionCallKind.ExpressionInvocation
         }
         let byReference = List[string]()
         let byValue = List[string]()
         var unresolved = false
+        // The consumer resolves a plain receiver at the entry scope, to tell a function value from a method.
+        var receiverName string? = nil
+        if receiver != nil && receiverIsRoot && NameOf(receiver) is {} plainReceiver && !IsDeclared(plainReceiver) {
+            receiverName = plainReceiver
+        }
         if receiver != nil && receiverIsRoot {
             let receiverName = NameOf(receiver)
             if receiverName != nil {
@@ -1187,7 +1681,7 @@ internal sealed class RegionEffectScanner {
             current.Calls.Add(
                 RegionCall(
                     kind,
-                    if kind == RegionCallKind.NamedInvocation {
+                    if kind == RegionCallKind.NamedInvocation || kind == RegionCallKind.MemberInvocation {
                         call.Identifier.ValueText
                     } else {
                         default(string?)
@@ -1195,7 +1689,8 @@ internal sealed class RegionEffectScanner {
                     byReference,
                     byValue,
                     unresolved,
-                    call.Span.Start
+                    call.Span.Start,
+                    receiverName
                 )
             )
         }

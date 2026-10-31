@@ -110,10 +110,12 @@ internal sealed class RegionCall {
         byReferenceNames List[string],
         byValueNames List[string],
         hasUnresolvedOperand bool,
-        position int32
+        position int32,
+        receiverName string? = nil
     ) {
         Kind = kind
         CalleeName = calleeName
+        ReceiverName = receiverName
         ByReferenceNames = byReferenceNames
         ByValueNames = byValueNames
         HasUnresolvedOperand = hasUnresolvedOperand
@@ -124,8 +126,13 @@ internal sealed class RegionCall {
         get;
     }
 
-    /// Gets the name of the callee for a named invocation, or `nil`.
+    /// Gets the name of the callee for a named invocation, or of the member for a member invocation, or `nil`.
     prop CalleeName string? {
+        get;
+    }
+
+    /// Gets the plain name of the receiver of a member invocation when the region does not declare it, or `nil`.
+    prop ReceiverName string? {
         get;
     }
 
@@ -160,6 +167,10 @@ internal sealed class RegionEffects {
         Writes = List[RegionWrite]()
         Calls = List[RegionCall]()
         Declared = List[string]()
+        BareReads = List[string]()
+        OperatorOperandNames = List[string]()
+        NilCompareOperandNames = List[string]()
+        ReturnedNames = List[string]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -249,6 +260,49 @@ internal sealed class RegionEffects {
         set;
     }
 
+    /// Gets the plain names compared with `nil` (a leading `?` marks a name that the region declares).
+    prop NilCompareOperandNames List[string] {
+        get;
+    }
+
+    /// Whether a declaration with a type or an assignment takes a value that is not a literal. A user-defined
+    /// conversion may run code there (rule W4); the consumer asks whether the package declares any.
+    prop ContainsConversionCandidate bool {
+        get;
+        set;
+    }
+
+    /// Gets the names read in the region that no declaration of the region encloses (a bare name can bind to a
+    /// property getter of the enclosing type; the consumer resolves it at the entry scope, rule W5).
+    prop BareReads List[string] {
+        get;
+    }
+
+    /// Gets the plain names that a `return` of the region converts to the return type, in order of first appearance.
+    /// The consumer asks whether a conversion operator can run there (rule W4).
+    prop ReturnedNames List[string] {
+        get;
+    }
+
+    /// Whether a `return` of the region converts a literal or a `nameof` to the return type (rule W4).
+    prop ReturnsConstant bool {
+        get;
+        set;
+    }
+
+    /// Gets the names that are operands of an operator candidate (a binary or unary operator with no literal
+    /// operand), in order of first appearance.
+    prop OperatorOperandNames List[string] {
+        get;
+    }
+
+    /// Whether an operator candidate has an operand that is not a plain name or a literal (a user-defined operator
+    /// may be selected by its type, which the walker cannot see).
+    prop OperatorHasUnresolvedOperand bool {
+        get;
+        set;
+    }
+
     /// Gets the number of member and index reads in the region (rule W5).
     prop MemberReadCount int32 {
         get;
@@ -294,6 +348,29 @@ internal sealed class RegionEffects {
         ContainsOperatorCandidate = ContainsOperatorCandidate || other.ContainsOperatorCandidate
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
+        ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
+        ReturnsConstant = ReturnsConstant || other.ReturnsConstant
+        for name in other.ReturnedNames {
+            if !ReturnedNames.Contains(name) {
+                ReturnedNames.Add(name)
+            }
+        }
+        OperatorHasUnresolvedOperand = OperatorHasUnresolvedOperand || other.OperatorHasUnresolvedOperand
+        for name in other.NilCompareOperandNames {
+            if !NilCompareOperandNames.Contains(name) {
+                NilCompareOperandNames.Add(name)
+            }
+        }
+        for name in other.OperatorOperandNames {
+            if !OperatorOperandNames.Contains(name) {
+                OperatorOperandNames.Add(name)
+            }
+        }
+        for name in other.BareReads {
+            if !BareReads.Contains(name) {
+                BareReads.Add(name)
+            }
+        }
     }
 
     /// A compact text of the record, for the report and for tests: the flags set, then the
