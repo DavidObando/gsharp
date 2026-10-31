@@ -1006,11 +1006,12 @@ Details per row:
   declaration-pass fact (like `DeclaresStaticInitializerBlock`, it does not depend on binding order), and
   `TypeInitializationRunsUserCode(type, atStaticMemberAccess)` is still the one decision. An initializer
   runs no code when it is `nil` into a reference or `T?` field type, or a literal token (possibly parenthesized or
-  under a unary operator, `-1`) of a built-in field type (a numeric type, `bool`, `char`, `string`, `object`, or
-  `T?` of one). A literal of another field type, or `nil` into a value type, can call a user-defined conversion,
-  and anything else (a call, a name, a construction) is code, on purpose, so the answer reads only the syntax and
-  the declared field type. Constructing the type does not run
-  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and u01 to u24 (issue #5520).
+  under unary operators that are predefined for the literal's type, `-1`) of a built-in field type (a numeric
+  type, `bool`, `char`, `string`, `object`, or `T?` of one). A literal of another field type, or `nil` into a value
+  type, can call a user-defined conversion, a unary operator that is not predefined (`-"x"`) calls a user-defined
+  or extension operator, and anything else (a call, a name, a construction) is code, on purpose, so the answer
+  reads only the syntax and the declared field type. Constructing the type does not run
+  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and u01 to u25 (issue #5520).
 
   Contract of #5520 (each row is a compiler corpus row; the mutation witness is a product change that makes the row
   fail, recorded in the PR):
@@ -1027,7 +1028,8 @@ Details per row:
   | access in a loop between guard and use | accepted | `GS0158` | u18 | the same |
   | literal initializer of a field type with a user-defined conversion (`var Seed Token = 1`) | accepted, `NullReferenceException` | `GS0158` | u22 | a literal counts as no code whatever the field type |
   | `nil` initializer of a value type with a user-defined conversion (`var Seed Token = nil`) | accepted, `NullReferenceException` | `GS0158` | u23 | `nil` counts as no code whatever the field type |
-  | `nil` initializer of `T?` of that value type (`var Spare Token? = nil`) | accepted | accepted | u24 | `nil` counts as no code only into a reference type |
+  | `nil` initializer of `T?` of that value type (`var Spare Token? = nil`) | accepted | accepted | u24 | `nil` counts as code whatever the field type |
+  | literal under an extension unary operator (`var Seed int32 = -"x"`) | accepted, `NullReferenceException` | `GS0158` | u25 | any unary operator over a literal counts as no code |
   | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, u03, u04 | every initializer counts as non-literal; every static access counts |
   | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | u15 | the same |
   | `shared` field without an initializer | accepted | accepted | u19 | every static access counts |
