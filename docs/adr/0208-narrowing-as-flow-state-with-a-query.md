@@ -957,7 +957,7 @@ Details per row:
   node kinds; it calls `IsStableClrAccessor(property, isSetter)`, which is `IsStableClrGetter`
   generalised to setters and indexers with the same list discipline. The ordering of a condition's
   effects before its branches (#5534) is a different decision and is not part of this row.
-  Corpus rows u01 to u08.
+  Corpus rows u01 to u13 (u13 reads the `List<T>` indexer between the guard and the use).
 - **R16 (#5231, maintainer decision: the stable-getter list).** The construct
   table already lists `BoundClrPropertyAccessExpression` as `call`, but the
   collector did not apply it: `AssignedRootsCollector.VisitExpression` killed
