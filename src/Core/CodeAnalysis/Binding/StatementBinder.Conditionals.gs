@@ -21,11 +21,13 @@ import System.Threading
 internal partial class StatementBinder {
     /// The narrowing frames an `if` condition implies for its then- and
     /// else-branches. Shared by the `if` statement and, for its guard, the
-    /// `if let` statement (issue #4961 / ADR-0201).
-    private func ClassifyIfConditionNarrowing(condition BoundExpression)(
-        Then Dictionary[AccessPath, TypeSymbol]?,
-        Else Dictionary[AccessPath, TypeSymbol]?
-    ) {
+    /// `if let` statement (issue #4961 / ADR-0201). [`removedFacts`](paramref) are the facts that the
+    /// condition's own effects removed (ADR-0208 R18), so a type test of such a path is classified against the
+    /// type the path has now.
+    private func ClassifyIfConditionNarrowing(
+        condition BoundExpression,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+    )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
         // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
         // is intentionally deferred for the nil-guard classifier.
@@ -39,16 +41,16 @@ internal partial class StatementBinder {
         // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
         // nullable / `[NotNullWhen]` frames computed above so a condition
         // that combines both styles narrows on both axes.
-        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition)
+        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts)
         return (MergeNarrowingFrames(thenNarrow, typeThen), MergeNarrowingFrames(elseNarrow, typeElse))
     }
 
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
             let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            let removedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
             ApplyHeaderCallableEffects(condition)
-            ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
-            let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition)
+            let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition, removedFacts)
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
@@ -120,9 +122,9 @@ internal partial class StatementBinder {
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+        let initRemovedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
         ApplyHeaderCallableEffects(initCondition)
-        ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
-        let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition)
+        let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition, initRemovedFacts)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
@@ -622,32 +624,39 @@ internal partial class StatementBinder {
     /// @returns A pair of narrowing frames — the first applies to the
     /// then-branch, the second to the else-branch. Either may be
     /// `null` if the corresponding branch has no narrowing.
-    private func TryClassifyTypeTestNarrowing(condition BoundExpression)(
-        Then Dictionary[AccessPath, TypeSymbol]?,
-        Else Dictionary[AccessPath, TypeSymbol]?
-    ) {
+    private func TryClassifyTypeTestNarrowing(
+        condition BoundExpression,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+    )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         switch condition {
             case isExpr is BoundIsExpression {
                 {
+                    let operandType = TypeTestOperandTypeAfterEffects(isExpr.Expression, removedFacts)
                     if isExpr.Pattern is BoundNotPattern notPattern {
                         return (
                             nil,
                             TryClassifyPatternNarrowing(
                                 isExpr.Expression,
                                 notPattern.Pattern,
-                                allowReadOnlyGlobals: false
+                                allowReadOnlyGlobals: false,
+                                operandType
                             )
                         )
                     }
                     return (
-                        TryClassifyPatternNarrowing(isExpr.Expression, isExpr.Pattern, allowReadOnlyGlobals: false),
+                        TryClassifyPatternNarrowing(
+                            isExpr.Expression,
+                            isExpr.Pattern,
+                            allowReadOnlyGlobals: false,
+                            operandType
+                        ),
                         nil
                     )
                 }
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
-                    let (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand)
+                    let (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand, removedFacts)
                     return (inElse, inThen)
                 }
             }
@@ -656,8 +665,8 @@ internal partial class StatementBinder {
                     // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
                     // The else frame is intentionally dropped — either operand could have been
                     // the false one, so we cannot single out a per-variable narrowing.
-                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left)
-                    let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right)
+                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts)
+                    let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
                     if combinedThen == nil || combinedThen.Count == 0 {
                         return (nil, nil)
@@ -674,8 +683,8 @@ internal partial class StatementBinder {
                     //     (canonical example: `x is T || x is T` keeps `{x → T}`).
                     //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
                     //     were false, so both negative narrowings apply.
-                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left)
-                    let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(binary.Right)
+                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts)
+                    let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
                     let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
                     if (combinedThen == nil || combinedThen.Count == 0) &&
@@ -687,6 +696,32 @@ internal partial class StatementBinder {
             }
         }
         return (nil, nil)
+    }
+
+    /// ADR-0208 R18 (#5534): the condition is bound before its effects apply, so the operand of a type test reads
+    /// the fact from before the condition ran. When the condition's effects removed that fact (the operand still
+    /// has the removed type), the test is classified against the declared type of the path, the type the path has
+    /// after the effects. Otherwise the bound type is the current one and `nil` keeps it.
+    private func TypeTestOperandTypeAfterEffects(
+        operand BoundExpression,
+        removedFacts Dictionary[AccessPath, TypeSymbol]?
+    ) TypeSymbol? {
+        if removedFacts == nil {
+            return nil
+        }
+        if operand is BoundVariableExpression variable {
+            return if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) &&
+                operand.Type == removedType {
+                variable.Variable.Type
+            } else {
+                default(TypeSymbol?)
+            }
+        }
+        if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
+            removedFacts.TryGetValue(path!!, out var removedMemberType) && currentType == removedMemberType {
+            return MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
+        }
+        return nil
     }
 
     private func TryClassifyNilGuard(condition BoundExpression)(
@@ -1956,10 +1991,13 @@ internal partial class StatementBinder {
             return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null
         }
 
+        /// [`operandType`](paramref) replaces the bound type of [`discriminant`](paramref) when the narrowing
+        /// facts changed after it was bound (ADR-0208 R18).
         internal func TryClassifyPatternNarrowing(
             discriminant BoundExpression,
             pattern BoundPattern?,
-            allowReadOnlyGlobals bool = true
+            allowReadOnlyGlobals bool = true,
+            operandType TypeSymbol? = nil
         ) Dictionary[AccessPath, TypeSymbol]? {
             if pattern == nil {
                 return nil
@@ -1990,7 +2028,7 @@ internal partial class StatementBinder {
                     expression: "memberPath"
                 )
             }
-            let discriminantType = discriminant.Type
+            let discriminantType = operandType ?? discriminant.Type
             var narrowedType TypeSymbol? = nil
             switch pattern {
                 case typePattern is BoundTypePattern {
@@ -2008,8 +2046,18 @@ internal partial class StatementBinder {
                     // Issue #992: `and` — both sub-patterns hold, so the union of
                     // their narrowings is sound.
                     {
-                        let left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left, allowReadOnlyGlobals)
-                        let right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right, allowReadOnlyGlobals)
+                        let left = TryClassifyPatternNarrowing(
+                            discriminant,
+                            binaryPattern.Left,
+                            allowReadOnlyGlobals,
+                            operandType
+                        )
+                        let right = TryClassifyPatternNarrowing(
+                            discriminant,
+                            binaryPattern.Right,
+                            allowReadOnlyGlobals,
+                            operandType
+                        )
                         return MergeNarrowingFrames(left, right)
                     }
                 }
@@ -2018,8 +2066,18 @@ internal partial class StatementBinder {
                     // (same variable, same type) survive. This keeps the smart-cast
                     // sound: `x is Cat or x is Dog` narrows nothing.
                     {
-                        let left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left, allowReadOnlyGlobals)
-                        let right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right, allowReadOnlyGlobals)
+                        let left = TryClassifyPatternNarrowing(
+                            discriminant,
+                            binaryPattern.Left,
+                            allowReadOnlyGlobals,
+                            operandType
+                        )
+                        let right = TryClassifyPatternNarrowing(
+                            discriminant,
+                            binaryPattern.Right,
+                            allowReadOnlyGlobals,
+                            operandType
+                        )
                         return IntersectNarrowingFrames(left, right)
                     }
                 }

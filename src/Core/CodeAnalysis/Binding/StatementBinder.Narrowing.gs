@@ -31,6 +31,8 @@ internal partial class StatementBinder {
     private var effects AssignedRootsCollector? = nil
     // Member-mutation facts are a pure function of a statement's syntax.
     private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
+    // ADR-0208 R18: reused for each condition; read only before the branches are bound.
+    private var conditionRemovedFacts Dictionary[AccessPath, TypeSymbol]?
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -354,7 +356,8 @@ internal partial class StatementBinder {
 
     private func InvalidateNarrowingsForAssignedVariables(
         statementSyntax SyntaxNode,
-        boundStatement BoundStatement? = nil
+        boundStatement BoundStatement? = nil,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     ) {
         EnsureClosureAssignedNames(statementSyntax)
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
@@ -482,6 +485,10 @@ internal partial class StatementBinder {
             }
             if toRemove != nil {
                 for key in toRemove {
+                    // The frames are visited innermost first, so the recorded type is the one a read saw.
+                    if removedFacts != nil && !removedFacts.ContainsKey(key) {
+                        removedFacts[key] = frame[key]
+                    }
                     frame.Remove(key)
                 }
             }
@@ -597,6 +604,10 @@ internal partial class StatementBinder {
         }
         var mayMutateMemberPaths = false
         switch node {
+            // ADR-0208 R18 (#5534): creating a closure runs none of its body. A call of the closure is a call.
+            case FunctionLiteralExpressionSyntax, LambdaExpressionSyntax {
+                return false
+            }
             case CallExpressionSyntax,
             MemberFieldAssignmentExpressionSyntax,
             MemberIndexAssignmentExpressionSyntax,
@@ -1798,10 +1809,24 @@ internal partial class StatementBinder {
     /// before either branch is bound. The condition runs first, so a call, a getter or an assignment in it can end a
     /// fact that the branches would otherwise read. The same rule as a catch filter (row R10) and the one rule of
     /// (cref:InvalidateNarrowingsForAssignedVariables). The facts that the condition itself proves are classified
-    /// after this call, so a test after the effect (`Check(h) && x != nil`) still narrows its branch.
-    private func ApplyConditionEffectsToNarrowings(syntax SyntaxNode, condition BoundExpression) {
-        if HasAnyActiveNarrowings() {
-            InvalidateNarrowingsForAssignedVariables(syntax, BoundExpressionStatement(nil, condition))
+    /// after this call, so a test after the effect (`Check(h) && x != nil`) still narrows its branch. The
+    /// effects are read with the callable aliases from before the condition, as for a statement, so this runs
+    /// before (cref:ApplyHeaderCallableEffects). Returns the removed facts with the type a read saw, or `nil`.
+    private func ApplyConditionEffectsToNarrowings(syntax SyntaxNode, condition BoundExpression) Dictionary[
+        AccessPath,
+        TypeSymbol
+    ]? {
+        if !HasAnyActiveNarrowings() {
+            return nil
+        }
+        let removedFacts = conditionRemovedFacts ?? Dictionary[AccessPath, TypeSymbol]()
+        conditionRemovedFacts = removedFacts
+        removedFacts.Clear()
+        InvalidateNarrowingsForAssignedVariables(syntax, BoundExpressionStatement(nil, condition), removedFacts)
+        return if removedFacts.Count == 0 {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            removedFacts
         }
     }
 

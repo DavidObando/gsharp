@@ -953,11 +953,19 @@ Details per row:
   an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
   already removed: the old statement check follows the syntax of calls). `ApplyConditionEffectsToNarrowings`
   runs `InvalidateNarrowingsForAssignedVariables` on the bound condition right after it is bound, for the `if`
-  statement and for `if init; cond`, before the condition's own narrowing is classified. This is the ordering
+  statement and for `if init; cond`, before the condition's own narrowing is classified. Three consequences
+  keep safe code compiling. (1) The condition was bound before its effects, so a type test of a path whose fact
+  the effects removed (`Check(h) && x is C` after a guard on `x`) is classified against the path's declared type,
+  the type it has after the effects, as a nil test already is. (2) The effects are read with the callable aliases
+  from before the condition, as for a statement, and the aliases are updated after them, so a call of an alias
+  that the condition reassigns later (`action() && (action = callback) is {} a`) keeps its classification.
+  (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or
+  lambda: creating a closure runs none of its body, and a call of it is a call. This also applies to a statement
+  (`action = func() { ... }` no longer removes member-path facts). This is the ordering
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
   tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
   `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
-  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows v01 to v09.
+  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows v01 to v17.
 - **R16 (#5231, maintainer decision: the stable-getter list).** The construct
   table already lists `BoundClrPropertyAccessExpression` as `call`, but the
   collector did not apply it: `AssignedRootsCollector.VisitExpression` killed
