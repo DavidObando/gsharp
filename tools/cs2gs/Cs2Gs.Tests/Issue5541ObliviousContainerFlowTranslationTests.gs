@@ -272,6 +272,96 @@ public static class Use
             }, []string{"Explicit", "2", "Returned", "1"})
     }
 
+    /// Review of #5571: a construction that states a nullable type argument makes its
+    /// element reads nullable even when no storage holds the container.
+    @Fact
+    func A_Construction_Without_Storage_Reads_Nullable_Elements() {
+        this.Check("Review1", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Read(string p) { return new List<string>(Node.Holes(p))[0].Length + (new List<string>(Node.Holes(p))[1] == null ? 10 : 0); }
+    public static int Throws(string p) { try { return new List<string>(Node.Holes(p))[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{"List[string?](Node.Holes(p)!!)[0]!!.Length"}, []string{"Read", "12", "Throws", "-1"})
+    }
+
+    /// Review of #5571: a base method that implements an interface member only through
+    /// a derived class shares the interface member's signature.
+    @Fact
+    func An_Inherited_Interface_Implementation_Shares_The_Signature() {
+        this.Check("Review2", `using ObLib;
+
+public interface IGet { string[] Get(string p); }
+public class Base { public string[] Get(string p) { return Node.Holes(p); } }
+public class Derived : Base, IGet { }
+
+public static class Use
+{
+    public static int Interface(string p) { IGet g = new Derived(); return g.Get(p)[1] == null ? 1 : 0; }
+    public static int Direct(string p) { Base b = new Base(); return b.Get(p)[0].Length; }
+}`, []string{
+                "func Get(p string) []string?;",
+                "func Get(p string) []string? {"
+            }, []string{"Interface", "1", "Direct", "2"})
+    }
+
+    /// Review of #5571: a target-typed construction states the same nullable type
+    /// argument as an explicit one.
+    @Fact
+    func A_Target_Typed_Construction_States_Nullable_Type_Arguments() {
+        this.Check("Review3", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Copy(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> copy = new(lines);
+        return copy[0].Length + (copy[1] == null ? 10 : 0);
+    }
+}`, []string{"let copy = List[string?](lines)", "return copy[0]!!.Length"}, []string{"Copy", "12"})
+    }
+
+    /// Review of #5571: a type parameter whose constraint rejects a `T?` argument keeps
+    /// its type argument and the argument's `!!`, for a call and a construction.
+    @Fact
+    func A_Constrained_Type_Parameter_Keeps_A_Non_Null_Argument() {
+        this.Check("Review4", `using ObLib;
+
+public class Box<T> where T : class
+{
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+
+public static class Use
+{
+    static T Keep<T>(T x) where T : class { return x; }
+    public static int Explicit(string p) { string[] lines; lines = Node.Lines(p); return Keep<string>(lines[0]).Length; }
+    public static int Constructed(string p) { string[] lines; lines = Node.Lines(p); return new Box<string>(lines[0]).Value.Length; }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); try { return Keep<string>(lines[1]).Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "Keep[string](lines[0]!!)",
+                "Box[string](lines[0]!!)"
+            }, []string{"Explicit", "2", "Constructed", "2", "Throws", "-1"})
+    }
+
+    /// Review of #5571: an expanded `params` argument passes a nil element through, so
+    /// the parameter's element is nullable.
+    @Fact
+    func An_Expanded_Params_Argument_Passes_A_Nil_Element() {
+        this.Check("Review5", `using ObLib;
+
+public static class Use
+{
+    static int Count(params string[] values) { return values[0] == null ? 1 : 0; }
+    public static int Expanded(string p) { string[] lines; lines = Node.Holes(p); return Count(lines[1]); }
+}`, []string{"private func Count(values ...string?) int32 {", "return Count(lines[1])\n"}, []string{"Expanded", "1"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
