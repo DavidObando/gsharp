@@ -47,12 +47,7 @@ internal partial class ExpressionBinder {
         // The enum-member folder (DeclarationBinder.TryFoldEnumMemberValue,
         // issue #1912) already carried this rule; mirror it for the general
         // expression position so the two agree.
-        if syntax
-            .OperatorToken
-            .Kind == SyntaxKind.MinusToken &&
-            syntax.Operand is LiteralExpressionSyntax{Value: uint32 negatedMagnitude} &&
-            negatedMagnitude == uint32(int32.MaxValue) +
-            uint32(1) {
+        if IsNegatedInt32MinValueLiteral(syntax.OperatorToken.Kind, syntax.Operand) {
             return BoundLiteralExpression(nil, int32.MinValue, TypeSymbol.Int32)
         }
         var boundOperand = BindExpression(syntax.Operand)
@@ -3277,7 +3272,16 @@ internal partial class ExpressionBinder {
             expression is BoundClrMethodGroupExpression &&
             expression.ResolvedMethod == nil
 
-        private func TryGetPromotedCharUnaryType(
+        /// Issue #3684: whether a unary minus applies directly to the decimal literal `2147483648`, which the lexer
+        /// types as `uint32`; together they are `int32.MinValue`, as in C#. Also read by the #5520 literal
+        /// initializer test (`DeclarationBinder.IsLiteralInitializerSyntax`).
+        internal func IsNegatedInt32MinValueLiteral(operatorKind SyntaxKind, operand ExpressionSyntax) bool ->
+        operatorKind == SyntaxKind.MinusToken &&
+            operand is LiteralExpressionSyntax{Value: uint32 negatedMagnitude} &&
+            negatedMagnitude == uint32(int32.MaxValue) +
+            uint32(1)
+
+        internal func TryGetPromotedCharUnaryType(
             operatorKind SyntaxKind,
             operandType TypeSymbol,
             out promotedType TypeSymbol?
