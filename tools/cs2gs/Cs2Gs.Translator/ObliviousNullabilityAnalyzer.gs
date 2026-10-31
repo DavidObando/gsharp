@@ -621,14 +621,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         for key in keys {
             pending.Push(key)
         }
-        // A declaration seen through its project's emitted reference assembly
-        // has only an assembly key; resolve it back to the project's source
-        // declaration so its file key (and the linked projects) are reached too.
-        if original.DeclaringSyntaxReferences.Length == 0 {
-            for sourceKey in SourceDeclarationKeys(original, graphs) {
-                pending.Push(sourceKey)
-            }
-        }
         while pending.Count != 0 {
             let current = pending.Pop()
             if !visited.Add(current) {
@@ -636,6 +628,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             for alias in NullArgumentAliasKeys(current, graphs) {
                 pending.Push(alias)
+            }
+            // An assembly-keyed node (a call bound through an emitted reference
+            // assembly) resolves back to its source declaration at every step.
+            if !current.StartsWith("@", StringComparison.Ordinal) {
+                let split = current.IndexOf('|')
+                if split > 0 {
+                    for sourceKey in SourceDeclarationKeys(
+                        current.Substring(0, split),
+                        current.Substring(split + 1),
+                        graphs
+                    ) {
+                        pending.Push(sourceKey)
+                    }
+                }
             }
             for graph in graphs {
                 if graph.Seeds.Contains(current) {
@@ -2034,8 +2040,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             ContainingSymbol: IMethodSymbol{AssociatedSymbol: IPropertySymbol setterProperty}
         }: setterProperty.OriginalDefinition
         case parameter is IParameterSymbol: ReducedExtensionParameter(parameter).OriginalDefinition
+        // A getter's return IS the property.
+        case method is IMethodSymbol{
+            MethodKind: MethodKind.PropertyGet,
+            AssociatedSymbol: IPropertySymbol getterProperty
+        }: OriginalNullArgumentDeclaration(getterProperty)
         case method is IMethodSymbol: (method.ReducedFrom ?? method).OriginalDefinition
-        case property is IPropertySymbol: property.OriginalDefinition
+        // A positional record's property and its constructor parameter are one declaration.
+        case property is IPropertySymbol: PositionalParameter(property.OriginalDefinition) ??
+            property.OriginalDefinition
         case field is IFieldSymbol: field.OriginalDefinition
         default: default(ISymbol?)
     }
@@ -2110,6 +2123,30 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    // The primary-constructor parameter a positional record property is
+    // synthesized from, or null for any other property.
+    private func PositionalParameter(property IPropertySymbol) ISymbol? {
+        if property.ContainingType is not{IsRecord: true} record ||
+            property
+            .DeclaringSyntaxReferences
+            .FirstOrDefault()
+            ?.GetSyntax() is not ParameterSyntax declaring {
+            return default(ISymbol?)
+        }
+        for constructor in record.InstanceConstructors {
+            for parameter in constructor.Parameters {
+                if parameter.Name == property.Name &&
+                    parameter
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() == declaring {
+                    return parameter
+                }
+            }
+        }
+        return default(ISymbol?)
+    }
+
     // The property a positional-record constructor parameter synthesizes: same
     // name, declared by the very `ParameterSyntax` the parameter is. Null for
     // every other parameter.
@@ -2119,6 +2156,18 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let syntax = parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
         if syntax == nil {
+            // Seen through an emitted reference assembly there is no syntax: a
+            // record constructor parameter that has a same-named, same-typed
+            // property is taken as positional (conservative: it only ever makes
+            // the parameter ineligible).
+            for member in method.ContainingType.GetMembers(parameter.Name) {
+                if member is IPropertySymbol metadataProperty && SymbolEqualityComparer.Default.Equals(
+                    metadataProperty.Type,
+                    parameter.Type
+                ) {
+                    return metadataProperty
+                }
+            }
             return default(IPropertySymbol?)
         }
         for member in method.ContainingType.GetMembers(parameter.Name) {
@@ -2222,17 +2271,24 @@ internal shared class ObliviousNullabilityAnalyzer {
     // reference assembly's view) stands for, found by documentation id in the run
     // compilation with the same assembly identity.
     private func SourceDeclarationKeys(metadataSymbol ISymbol, graphs List[NullArgumentGraph]) List[string] {
-        let keys = List[string]()
-        let identity = metadataSymbol.ContainingAssembly?.Identity
-        if identity == nil {
-            return keys
-        }
+        let identity = metadataSymbol.ContainingAssembly?.Identity.GetDisplayName()
         let id = NullArgumentId(metadataSymbol)
-        if id == nil {
-            return keys
+        return if identity == nil || id == nil {
+            List[string]()
+        } else {
+            SourceDeclarationKeys(identity, id, graphs)
         }
+    }
+
+    private func SourceDeclarationKeys(identity string, id string, graphs List[NullArgumentGraph]) List[string] {
+        let keys = List[string]()
         for graph in graphs {
-            if graph.Owner is not CSharpCompilation csharp || !graph.Owner.Assembly.Identity.Equals(identity) {
+            if graph.Owner is not CSharpCompilation csharp ||
+                graph
+                .Owner
+                .Assembly
+                .Identity
+                .GetDisplayName() != identity {
                 continue
             }
             var source ISymbol? = nil
@@ -2247,7 +2303,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
             }
             if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
-                keys.AddRange(NullArgumentKeys(source))
+                keys.AddRange(NullArgumentKeys(OriginalNullArgumentDeclaration(source)))
             }
         }
         return keys
@@ -2426,19 +2482,21 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 } else if (node is ReturnStatementSyntax{Expression: {} returned} && IsForwardedValueShape(returned)) {
                     // `return p;` / `return stored;` / `return Other(..);` hands a
-                    // value on as the method's result: the result must be as
+                    // value on as the member's result: the result must be as
                     // nullable as what it returns.
-                    if EnclosingNamedMethod(node) is {} declaration && model.GetDeclaredSymbol(
-                        declaration
-                    ) is {} method {
-                        AddEdge(method, model.GetSymbolInfo(Unwrap(returned)).Symbol)
+                    if ReturnOwner(node) is {} declaration && model.GetDeclaredSymbol(declaration) is {} member {
+                        AddEdge(member, model.GetSymbolInfo(Unwrap(returned)).Symbol)
                     }
-                } else if (
-                    node is ArrowExpressionClauseSyntax{Parent: MethodDeclarationSyntax arrowMethod} arrow &&
-                        IsForwardedValueShape(arrow.Expression)
-                ) {
-                    if model.GetDeclaredSymbol(arrowMethod) is {} method {
-                        AddEdge(method, model.GetSymbolInfo(Unwrap(arrow.Expression)).Symbol)
+                } else if (node is ArrowExpressionClauseSyntax arrow && IsForwardedValueShape(arrow.Expression)) {
+                    if arrow.Parent is {} arrowOwner &&
+                        (
+                        arrowOwner is MethodDeclarationSyntax ||
+                            arrowOwner is PropertyDeclarationSyntax ||
+                            arrowOwner is IndexerDeclarationSyntax ||
+                            arrowOwner is AccessorDeclarationSyntax
+                    ) &&
+                        model.GetDeclaredSymbol(arrowOwner) is {} member {
+                        AddEdge(member, model.GetSymbolInfo(Unwrap(arrow.Expression)).Symbol)
                     }
                 } else if CallArgumentList(node) is {} list && list.Arguments.Any(
                     (a ArgumentSyntax) -> a.RefKindKeyword.IsKind(SyntaxKind.None) &&
@@ -2481,6 +2539,22 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) is IdentifierNameSyntax or
         MemberAccessExpressionSyntax or
         InvocationExpressionSyntax
+
+    // The member declaration whose body directly contains the `return` `node`:
+    // a method, or an accessor (whose symbol normalizes to its property).
+    private func ReturnOwner(node SyntaxNode) SyntaxNode? {
+        let function = node.Ancestors().FirstOrDefault(
+            (n SyntaxNode) -> n is BaseMethodDeclarationSyntax ||
+                n is AccessorDeclarationSyntax ||
+                n is LocalFunctionStatementSyntax ||
+                n is AnonymousFunctionExpressionSyntax
+        )
+        return if function is MethodDeclarationSyntax || function is AccessorDeclarationSyntax {
+            function
+        } else {
+            default(SyntaxNode?)
+        }
+    }
 
     // The method declaration whose body directly contains `node`: not a lambda
     // or a local function nested in it, whose `return` is not the method's.
