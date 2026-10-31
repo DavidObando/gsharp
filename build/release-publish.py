@@ -397,7 +397,10 @@ def cmd_finalize(args: argparse.Namespace) -> int:
         data = json.loads(view.stdout)
         body, assets = data.get("body") or "", {a["name"] for a in data.get("assets", [])}
     absent = sorted(set(expected_assets(args.version)) - assets)
-    row("GitHub release assets", view.returncode == 0 and not absent, ", ".join(absent) or view.stderr.strip())
+    if view.returncode != 0:
+        row("GitHub release assets", False, f"cannot read the release: {view.stderr.strip()}")
+    else:
+        row("GitHub release assets", not absent, ", ".join(absent))
 
     table = "| Destination | State | Detail |\n| --- | --- | --- |\n" + "".join(
         f"| {name} | {'ok' if ok else 'MISSING'} | {detail} |\n" for name, ok, detail in rows)

@@ -608,7 +608,18 @@ class FinalizeTests(unittest.TestCase):
         self.assertEqual(self.edits(), [])
 
     def test_a_failed_un_draft_fails_the_job(self) -> None:
-        self.assertEqual(self.finalize(edit_exit="1").returncode, 1)
+        result = self.finalize(edit_exit="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("the release stays a draft", result.stderr)
+        self.assertEqual(len(self.edits()), 1)
+
+    def test_an_unreadable_release_is_reported_as_such_not_as_missing_assets(self) -> None:
+        (self.root / "view.json").unlink()
+        self.gh.write_text('#!/bin/sh\necho "HTTP 404: release not found" >&2\nexit 1\n')
+        result = self.finalize()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot read the release: HTTP 404", result.stdout)
+        self.assertNotIn(".nupkg", result.stdout.split("GitHub release assets")[1])
 
     def test_verify_writes_the_extension_versions(self) -> None:
         make_packages(self.root / "n", version=self.VERSION)
