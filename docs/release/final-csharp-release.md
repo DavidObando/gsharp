@@ -200,8 +200,8 @@ jobs that were skipped behind the failed one. Read the failure by job:
 |---|---|---|
 | `publish-verify` | Nothing was published. Read which step failed. | The `Verify the artifacts against the tag` step failed: the artifacts or the tag are wrong by construction; fix on `main` and push a new tag. A checkout or artifact download step failed: re-run failed jobs. |
 | `publish-github-release` | A draft release with some assets. The NuGet chain and the extensions go on. | Re-run failed jobs: upload uses `--clobber`. |
-| `publish-nuget-compiler` | Zero to six RID packages on nuget.org. The SDK, the extensions and finalize are skipped. | Re-run failed jobs: `--skip-duplicate` pushes only what is missing. |
-| `publish-nuget-sdk` | RID packages, and part of the SDK and tools, are on nuget.org. The extensions are skipped. | Re-run failed jobs. |
+| `publish-nuget-compiler` | Zero to six RID packages on nuget.org. The SDK and the extension jobs are skipped; `publish-finalize` runs and fails, naming the skipped jobs and the missing packages. | Re-run failed jobs: `--skip-duplicate` pushes only what is missing. |
+| `publish-nuget-sdk` | RID packages, and part of the SDK and tools, are on nuget.org. The extension jobs are skipped; `publish-finalize` runs and fails. | Re-run failed jobs. |
 | `publish-vscode-marketplace` | Everything else publishes. A timeout after the upload does not matter: the re-run finds the version and succeeds. | Re-run failed jobs. The Visual Studio job needs no re-run. |
 | `publish-visual-studio-marketplace` | Everything else is published. | Re-run failed jobs. |
 | `publish-finalize` | Either a check failed (the job summary marks the destination `MISSING`, or a query hit the network; the release stays a draft), or the checks passed and `gh release edit` failed (the log says the state of the release is unknown: the edit may have applied on the server). | Failed check: fix or re-run the named job, then re-run failed jobs. Failed edit: check the release (`gh release view <tag> --json isDraft,body`), then re-run failed jobs; finalize reads the release again and repeats the edit. |
@@ -234,9 +234,13 @@ every re-run stops at the same file. Instead:
 2. Push each missing `.nupkg` by hand from the artifact, in the order above:
    `dotnet nuget push <file>.nupkg --no-symbols --skip-duplicate --source
    https://api.nuget.org/v3/index.json --api-key <key>`.
-3. The extension jobs and finalize stay skipped behind the failed job: use the
-   manual publication below, then un-draft the release after checking every
-   destination. Record the symbol-server answer in #5530.
+3. The extension jobs stay skipped behind the failed job, and every re-run of
+   `publish-finalize` fails, because it requires those jobs to succeed. A
+   manual upload does not change their results. Use the manual publication
+   below, check every destination, add the "Publication notes" that finalize
+   would write (ADR-0218 section 2) to the release body, then un-draft the
+   release by hand (`gh release edit <tag> --draft=false`). Record the
+   symbol-server answer in #5530.
 
 Manual publication is the last resort when a run is older than 30 days or has
 been re-run 50 times. For VS Code use `npx @vscode/vsce@3.9.2 publish --packagePath vscode-gsharp.vsix --skip-duplicate` with the artifact
