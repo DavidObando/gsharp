@@ -985,6 +985,43 @@ namespace Demo
         Assert.DoesNotContain("e.Item!!", printed[0])
     }
 
+    /// Row 41: a local deconstructed from a promoted positional member.
+    @Fact
+    func DeconstructedLocalOfPromotedPositionalMember_IsAssertedOnDereference() {
+        let printed = TranslateEnabled(("Entry.cs", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Make() => new Entry(null!, 0);
+        public static int Hash(Entry entry)
+        {
+            var (item, _) = entry;
+            return item.GetHashCode();
+        }
+        public static int HashTyped(Entry entry)
+        {
+            (Node item, int id) = entry;
+            return item.GetHashCode() + id;
+        }
+        public static int HashAll(System.Collections.Generic.List<Entry> entries)
+        {
+            var sum = 0;
+            foreach ((Node item, int id) in entries)
+            {
+                sum += Take(item) + id;
+            }
+            return sum;
+        }
+        private static int Take(Node node) => node.GetHashCode();
+    }
+}`))
+        Assert.DoesNotContain("item.GetHashCode()", printed[0])
+        Assert.Contains("Take(item!!)", printed[0])
+    }
+
     /// Row 40.
     @Fact
     func EmittedReferencePositionalRecordWithFixedProperty_IsNotTreatedAsWidened() {
