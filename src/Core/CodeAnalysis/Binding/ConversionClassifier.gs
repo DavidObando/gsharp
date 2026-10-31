@@ -1037,6 +1037,12 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
+        // Issue #4316: a `nil` from a block, a conditional or a switch converts at each result (see
+        // `TryConvertEachResult`), so the effects before the `nil` still run.
+        if expression.Type == TypeSymbol.Null &&
+            TryConvertEachResult(diagnosticLocation, expression, type!!, allowExplicit) is {} convertedResults {
+            return convertedResults
+        }
         // Issue #504: lower `nil → Nullable<value-type>` to a
         // BoundDefaultExpression of the target Nullable<T>. Value-type
         // Nullable<T> is a CLR struct distinct from T; emitting `ldnull`
@@ -3322,49 +3328,10 @@ internal class ConversionClassifier {
             }
             return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
         }
-        // Issue #4316: a tuple with a `nil` element (`(nil, int32)`) has no runtime representation, so
-        // the temp below cannot take its type. Each value the source can produce converts instead: a
-        // block's trailing value, a conditional's arms and a switch's results. The condition, the
-        // discriminant and the statements stay where they are and run once.
-        if sourceTuple.HasNilElement {
-            switch expression {
-                case block is BoundBlockExpression {
-                    return BoundBlockExpression(
-                        block.Syntax,
-                        block.Statements,
-                        BindConversion(diagnosticLocation, block.Expression, targetTuple, allowExplicit)
-                    )
-                }
-                case conditional is BoundConditionalExpression {
-                    return BoundConditionalExpression(
-                        conditional.Syntax,
-                        conditional.Condition,
-                        BindConversion(diagnosticLocation, conditional.WhenTrue, targetTuple, allowExplicit),
-                        BindConversion(diagnosticLocation, conditional.WhenFalse, targetTuple, allowExplicit),
-                        targetTuple
-                    )
-                }
-                case switchExpression is BoundSwitchExpression {
-                    let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpression.Arms.Length)
-                    for arm in switchExpression.Arms {
-                        arms.Add(
-                            BoundSwitchExpressionArm(
-                                arm.Syntax,
-                                arm.Pattern,
-                                arm.Guard,
-                                BindConversion(diagnosticLocation, arm.Result, targetTuple, allowExplicit)
-                            )
-                        )
-                    }
-                    return BoundSwitchExpression(
-                        switchExpression.Syntax,
-                        switchExpression.Discriminant,
-                        arms.MoveToImmutable(),
-                        targetTuple
-                    )
-                }
-                default { }
-            }
+        // Issue #4316: a `(nil, int32)` source cannot be spilled into a temp of its own type.
+        if sourceTuple.HasNilElement &&
+            TryConvertEachResult(diagnosticLocation, expression, targetTuple, allowExplicit) is {} converted {
+            return converted
         }
         // General path: evaluate the source once into a temp local, then build
         // a tuple literal of converted `ItemN` accesses off that local.
@@ -3384,6 +3351,65 @@ internal class ConversionClassifier {
         }
         let rebuilt = BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedElements.ToImmutable())
         return BoundBlockExpression(expression.Syntax, ImmutableArray.Create[BoundStatement](declaration), rebuilt)
+    }
+
+    /// Issue #4316: `nil` and a tuple with a `nil` element (`(nil, int32)`) have no runtime
+    /// representation, so no temp, result local or slot may take that type. A source of such a type
+    /// that has several possible values converts each of them instead: a block's trailing value,
+    /// both conditional arms and every switch result. The block statements, the condition, the
+    /// discriminant and the guards stay where they are and run once; each result goes back through
+    /// `BindConversion`, so nested forms recurse down to the `nil` literals.
+    /// @param diagnosticLocation The conversion site.
+    /// @param expression The source, typed `nil` or a tuple with a `nil` element.
+    /// @param type The target type.
+    /// @param allowExplicit Whether explicit conversions are allowed.
+    /// @returns The source with each result converted, or `null` when the source has no such results.
+    private func TryConvertEachResult(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        type TypeSymbol,
+        allowExplicit bool
+    ) BoundExpression? {
+        switch expression {
+            case block is BoundBlockExpression {
+                return BoundBlockExpression(
+                    block.Syntax,
+                    block.Statements,
+                    BindConversion(diagnosticLocation, block.Expression, type, allowExplicit)
+                )
+            }
+            case conditional is BoundConditionalExpression {
+                return BoundConditionalExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    BindConversion(diagnosticLocation, conditional.WhenTrue, type, allowExplicit),
+                    BindConversion(diagnosticLocation, conditional.WhenFalse, type, allowExplicit),
+                    type
+                )
+            }
+            case switchExpression is BoundSwitchExpression {
+                let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpression.Arms.Length)
+                for arm in switchExpression.Arms {
+                    arms.Add(
+                        BoundSwitchExpressionArm(
+                            arm.Syntax,
+                            arm.Pattern,
+                            arm.Guard,
+                            BindConversion(diagnosticLocation, arm.Result, type, allowExplicit)
+                        )
+                    )
+                }
+                return BoundSwitchExpression(
+                    switchExpression.Syntax,
+                    switchExpression.Discriminant,
+                    arms.MoveToImmutable(),
+                    type
+                )
+            }
+            default {
+                return nil
+            }
+        }
     }
 
     private func BindContextualOpenLiteral(

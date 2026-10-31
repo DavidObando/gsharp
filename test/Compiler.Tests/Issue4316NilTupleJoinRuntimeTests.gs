@@ -13,10 +13,10 @@ import Xunit
 /// Issue #4316: tuple arms that hold a `nil` element join element by element, and the joined value
 /// runs as the arms say. Each arm's condition runs once, the arm that runs supplies the value, and
 /// an expression that produces `nil` still runs its effects when the `nil` lands in a `T?` slot.
-/// @remarks Mutation witnesses: with the conditional and switch cases of
-/// `ConversionClassifier.BindTupleConversion` disabled, the nested rows fail with GS9998; with the
-/// `nil`-to-`T?` lowering replacing the whole expression by `default(T?)` (the old lowering), the
-/// effect counts read 0.
+/// @remarks Mutation witnesses: with `ConversionClassifier.TryConvertEachResult` declining every
+/// source, the nested and switch-element rows fail with GS9998; with the old `nil`-to-`T?`
+/// lowering (no per-result conversion, the whole expression replaced by `default(T?)`), the effect
+/// counts read 0.
 open class Issue4316NilTupleJoinRuntimeTests {
     /// The joined tuples hold the values of the arm that ran, and every effect runs exactly once.
     @Fact
@@ -71,6 +71,18 @@ func Untargeted(ctr Ctr, c bool, d bool) (int32?, int32) {
     return t
 }
 
+func Count(ctr Ctr, i int32) int32 {
+    ctr.n++
+    return i
+}
+
+func SwitchElement(ctr Ctr, c bool, i int32) (int32?, int32) {
+    let t = c ? (1, 1) : (switch Count(ctr, i) {
+        default: nil
+    }, 2)
+    return t
+}
+
 func Main() {
     let ctr = Ctr()
     let a = Nested(ctr, false, 0)
@@ -87,12 +99,16 @@ func Main() {
     ctr.n = 0
     let k = Untargeted(ctr, false, true)
     Console.WriteLine("untargeted ${k.Item1 == nil} ${k.Item2} ticks=${ctr.n}")
+    ctr.n = 0
+    let m = SwitchElement(ctr, false, 4)
+    Console.WriteLine("switch ${m.Item1 == nil} ${m.Item2} ticks=${ctr.n}")
 }
 `)
         Assert.Contains("nested True 2 x 1 3 ticks=5", output)
         Assert.Contains("block True 2 a 3", output)
         Assert.Contains("targeted True 2 ticks=1", output)
         Assert.Contains("untargeted True 2 ticks=1", output)
+        Assert.Contains("switch True 2 ticks=1", output)
     }
 
     shared {
@@ -137,9 +153,19 @@ func Main() {
                 psi.ArgumentList.Add(rtConfig)
                 psi.ArgumentList.Add(dllPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                if !proc.WaitForExit(30_000) {
+                    try {
+                        proc.Kill(entireProcessTree: true)
+                    } catch (InvalidOperationException) {
+                        // The process exited between the timeout and the kill.
+
+                    }
+                    Assert.Fail("dotnet exec timed out")
+                }
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, "exited ${proc.ExitCode}\n" + stdout + "\n" + stderr)
                 return stdout
             } finally {
