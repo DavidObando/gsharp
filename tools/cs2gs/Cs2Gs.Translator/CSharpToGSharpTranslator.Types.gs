@@ -467,11 +467,26 @@ partial class CSharpToGSharpTranslator {
                 // target, so `.Where((d T?) -> d != nil)` infers the whole
                 // sequence as `sequence[T?]` and every downstream member
                 // access runs on a nullable receiver.
-                return this.MapParameter(
+                let mapped = this.MapParameter(
                     symbol,
                     parameter,
                     promoteNullability: !this.LambdaParameterAnnotationFeedsTypeInference(parameter)
                 )
+                // Issue #5541: a lambda parameter that receives an element of oblivious
+                // container storage states the element's nullable positions.
+                let promoted = this.PromoteObliviousContainerStorage(mapped.Type, symbol)
+                return if object.ReferenceEquals(promoted, mapped.Type) {
+                    mapped
+                } else {
+                    Parameter(
+                        mapped.Name,
+                        promoted!!,
+                        mapped.IsVariadic,
+                        mapped.RefKind,
+                        mapped.DefaultValue,
+                        mapped.Attributes
+                    )
+                }
             }
             let type GTypeReference? = if parameter.Type != nil {
                 this.MapTypeSyntax(parameter.Type)

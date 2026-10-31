@@ -2645,9 +2645,22 @@ partial class CSharpToGSharpTranslator {
             // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
             // has no nested reference position is left bare.
             let type ITypeSymbol? = this.context.GetTypeInfo(expression).Type
-            if HasNestedReferencePosition(type) {
+            return !HasNestedReferencePosition(type) && this.ReadsPlatformTypedImportTopLevel(expression)
+        }
+
+        // Whether gsc types the top level of [`expression`](paramref) `T!`: it reads a
+        // frozen oblivious member, or an element of one.
+        private func ReadsPlatformTypedImportTopLevel(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            var expression = expression
+            while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                expression = parenthesized.Expression
+            }
+            if expression == nil {
                 return false
             }
+            let type ITypeSymbol? = this.context.GetTypeInfo(expression).Type
             if expression is ElementAccessExpressionSyntax elementAccess &&
                 !(elementAccess.Expression is ConditionalAccessExpressionSyntax) &&
                 this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(elementAccess.Expression).Symbol) &&
@@ -3610,6 +3623,11 @@ partial class CSharpToGSharpTranslator {
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                 ) {
+                    // Issue #5541: gsc gives `a ?? b` a non-null top level when `b` is a
+                    // platform-typed (`T!`) read of frozen oblivious metadata.
+                    if this.ReadsPlatformTypedImportTopLevel(binary.Right) {
+                        return true
+                    }
                     return if UnwrapTranslatedValue(translated) is BinaryExpression{Operator: "??"} translatedBinary {
                         this.GSharpExpressionIsStaticallyNonNull(binary.Right, translatedBinary.Right)
                     } else {
