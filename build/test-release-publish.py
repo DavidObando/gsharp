@@ -420,12 +420,15 @@ class Marketplace(http.server.BaseHTTPRequestHandler):
 
 
 class Feed(http.server.BaseHTTPRequestHandler):
-    """A flat container: 200 for ids in `have`, 404 otherwise."""
+    """A flat container: 200 only for `/<id>/<version>/<id>.nuspec` with an id in `have` at `version`, 404 otherwise."""
     have: set[str] = set()
+    version = ""
 
     def do_GET(self) -> None:
-        package = self.path.strip("/").split("/")[0]
-        self.send_response(200 if package in Feed.have else 404)
+        parts = self.path.strip("/").split("/")
+        found = (len(parts) == 3 and parts[0] in Feed.have and parts[1] == Feed.version
+                 and parts[2] == f"{parts[0]}.nuspec")
+        self.send_response(200 if found else 404)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -492,13 +495,11 @@ class FinalizeTests(unittest.TestCase):
             self.addCleanup(server.shutdown)
         ids = [f"Gsharp.NET.Sdk.Compiler.{r}" for r in RIDS] + list(OTHERS)
         Feed.have = {i.lower() for i in ids}
+        Feed.version = self.VERSION
         # The fake serves one list for both extensions: the VS Code and the Visual Studio version.
         Marketplace.versions = [{"version": self.VERSION, "properties": []},
                                 {"version": "0.5.300.9261", "properties": []}]
-        self.assets = [f"Gsharp.NET.Sdk.Compiler.{r}.{self.VERSION}.nupkg" for r in RIDS]
-        self.assets += [f"{o}.{self.VERSION}.nupkg" for o in OTHERS]
-        self.assets += [f"{o}.{self.VERSION}.snupkg" for o in OTHERS if o != "Gsharp.Templates"]
-        self.assets += ["vscode-gsharp.vsix", "GSharp.VisualStudio.vsix"]
+        self.assets = self.release_assets(self.VERSION)
         self.body = "## Changes\n"
         self.log = self.root / "gh.log"
         self.gh = self.root / "gh"
@@ -513,13 +514,20 @@ class FinalizeTests(unittest.TestCase):
         self.gh.chmod(self.gh.stat().st_mode | stat.S_IXUSR)
         self.write_view()
 
+    @staticmethod
+    def release_assets(version: str) -> list[str]:
+        assets = [f"Gsharp.NET.Sdk.Compiler.{r}.{version}.nupkg" for r in RIDS]
+        assets += [f"{o}.{version}.nupkg" for o in OTHERS]
+        assets += [f"{o}.{version}.snupkg" for o in OTHERS if o != "Gsharp.Templates"]
+        return assets + ["vscode-gsharp.vsix", "GSharp.VisualStudio.vsix"]
+
     def write_view(self) -> None:
         (self.root / "view.json").write_text(json.dumps(
             {"body": self.body, "assets": [{"name": n} for n in self.assets]}))
 
     def finalize(self, prerelease: str = "false", unverified: str = "", vs: str = "success", vscode: str = "success",
-                 release: str = "success", edit_exit: str = "0") -> subprocess.CompletedProcess:
-        return run("finalize", "--tag", "v0.5.300", "--repo", "o/r", "--version", self.VERSION,
+                 release: str = "success", edit_exit: str = "0", version: str = VERSION) -> subprocess.CompletedProcess:
+        return run("finalize", "--tag", "v0.5.300", "--repo", "o/r", "--version", version,
                    "--prerelease", prerelease, "--vscode-version", self.VERSION,
                    "--visual-studio-version", "0.5.300.9261", "--unverified", unverified,
                    "--github-release", release, "--vscode", vscode, "--visual-studio", vs,
@@ -614,11 +622,30 @@ class FinalizeTests(unittest.TestCase):
         self.assertIn("Gsharp.Repl.0.5.300.snupkg", result.stdout)
         self.assertEqual(self.edits(), [])
 
-    def test_a_failed_un_draft_fails_the_job(self) -> None:
+    def test_a_failed_un_draft_fails_the_job_and_does_not_claim_a_release_state(self) -> None:
+        # A failed edit may still have applied on the server, so the job cannot know whether the release is a draft.
         result = self.finalize(edit_exit="1")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("the release stays a draft", result.stderr)
+        self.assertIn("the state of the release is unknown", result.stderr)
+        self.assertIn("Re-run the failed jobs", result.stderr)
+        self.assertNotIn("stays a draft", result.stderr)
+        self.assertNotIn("is public", result.stdout)
         self.assertEqual(len(self.edits()), 1)
+
+    def test_the_feed_check_asks_for_the_package_version(self) -> None:
+        # A prerelease tag: the packages are <number>-g<sha>, the VS Code version is the bare <number>.
+        version = "0.5.300-g1a2b3c4"
+        Marketplace.versions = [{"version": self.VERSION, "properties": [
+            {"key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true"}]}]
+        self.assets = self.release_assets(version)
+        self.write_view()
+        Feed.version = self.VERSION
+        result = self.finalize(prerelease="true", vs="skipped", version=version)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nuget.org (12 packages) | MISSING", result.stdout)
+        self.assertEqual(self.edits(), [])
+        Feed.version = version
+        self.assertEqual(self.finalize(prerelease="true", vs="skipped", version=version).returncode, 0)
 
     def test_an_unreadable_release_is_reported_as_such_not_as_missing_assets(self) -> None:
         (self.root / "view.json").unlink()

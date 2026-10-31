@@ -417,7 +417,9 @@ def cmd_finalize(args: argparse.Namespace) -> int:
     edit = subprocess.run([args.gh, "release", "edit", args.tag, "--repo", args.repo, "--notes-file", str(notes),
                            "--draft=false"], check=False)
     if edit.returncode != 0:
-        print("gh release edit failed; the release stays a draft", file=sys.stderr)
+        # A failed edit can still have applied on the server; only a new read can tell the state.
+        print("gh release edit failed; the state of the release is unknown. "
+              "Re-run the failed jobs: publish-finalize reads the release again and repeats the edit.", file=sys.stderr)
         return 1
     print(f"{args.tag} is public")
     return 0
