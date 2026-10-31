@@ -301,7 +301,28 @@ open class Adr0208NarrowingCorpusTests {
                 "t10_5231_interface_count_kills_R16",
                 "t11_5231_static_getter_kills_R16",
                 "t12_5231_lazy_value_in_a_property_pattern_R16",
-                "t13_5231_string_length_in_a_property_pattern_R16"
+                "t13_5231_string_length_in_a_property_pattern_R16",
+                "u01_5520_static_field_read_member_path",
+                "u02_5520_static_field_read_by_reference_parameter",
+                "u03_5520_literal_only_type_keeps_member_path",
+                "u04_5520_literal_only_type_keeps_by_reference_parameter",
+                "u05_5520_const_read_keeps_member_path",
+                "u06_5520_construction_keeps_member_path",
+                "u07_5520_instance_member_read_keeps_member_path",
+                "u08_5520_static_property_read",
+                "u09_5520_static_field_write",
+                "u10_5520_static_event_subscription",
+                "u11_5520_literal_field_of_a_type_with_a_call_initializer",
+                "u12_5520_struct_static_field_read",
+                "u13_5520_generic_static_field_read",
+                "u14_5520_derived_reads_base_field",
+                "u15_5520_derived_initializer_does_not_count_for_a_base_member",
+                "u16_5520_static_method_reads_own_field",
+                "u17_5520_instance_method_reads_static_field",
+                "u18_5520_static_field_read_in_a_loop",
+                "u19_5520_type_without_initializers_keeps_member_path",
+                "u20_5520_plain_local_keeps_the_fact_across_a_static_read",
+                "u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact"
             },
             names
         )
@@ -2740,7 +2761,7 @@ func Run() int32 {
 }
 var g C? = C{}
 var cleaner () -> void = func() { g = nil }
-Console.WriteLine(Run())`, "", "nre", "", "known limitation: a beforefieldinit field initializer is not classified, see #5520"}
+Console.WriteLine(Run())`, "GS0158@18:14", "reject", "", "R11"}
             yield[]object{"s12_5504_field_initializer_only_call_R15", `import System
 
 class C {
@@ -2763,7 +2784,7 @@ func Run() int32 {
     return x.Value
 }
 var cleaner () -> void = func() { }
-Console.WriteLine(Run())`, "", "nre", "", "known limitation: a beforefieldinit field initializer is not classified, see #5520"}
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
             yield[]object{"s13_5504_struct_field_read_R11", `import System
 
 class C {
@@ -3288,6 +3309,482 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"u01_5520_static_field_read_member_path", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.Count
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
+            yield[]object{"u02_5520_static_field_read_by_reference_parameter", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = Trigger.Count
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0]))`, "GS0158@20:14", "reject", "", "R12"}
+            yield[]object{"u03_5520_literal_only_type_keeps_member_path", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = 5
+        var Neg int32 = -1
+        var Wrapped int32 = (2)
+        var Name string = "x"
+        var Nothing C? = nil
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.Count + Trigger.Neg + Trigger.Wrapped + Trigger.Name.Length
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
+            yield[]object{"u04_5520_literal_only_type_keeps_by_reference_parameter", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = Trigger.Count
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0]))`, "", "run", "1", "R12"}
+            yield[]object{"u05_5520_const_read_keeps_member_path", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        const K int32 = 3
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.K
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
+            yield[]object{"u06_5520_construction_keeps_member_path", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    var Id int32
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let t = Trigger{}
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
+            yield[]object{"u07_5520_instance_member_read_keeps_member_path", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    var Id int32
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box, t Trigger) string {
+    if b.Pet == nil { return "" }
+    let n = t.Id
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal()), Trigger{}))`, "", "run", "a", "R15"}
+            yield[]object{"u08_5520_static_property_read", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Seed int32 = Touch()
+        prop Auto int32 { get; set }
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.Auto
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
+            yield[]object{"u09_5520_static_field_write", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    Trigger.Count = 7
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
+            yield[]object{"u10_5520_static_event_subscription", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Seed int32 = Touch()
+        event Changed () -> void
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    Trigger.Changed += func() { }
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
+            yield[]object{"u11_5520_literal_field_of_a_type_with_a_call_initializer", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var A int32 = 1
+        var B int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.A
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
+            yield[]object{"u12_5520_struct_static_field_read", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+struct Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.Count
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
+            yield[]object{"u13_5520_generic_static_field_read", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger[T] {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger[int32].Count
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
+            yield[]object{"u14_5520_derived_reads_base_field", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+open class Base {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+class Derived : Base { }
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Derived.Count
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
+            yield[]object{"u15_5520_derived_initializer_does_not_count_for_a_base_member", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+open class Base {
+    shared {
+        var Count int32 = 1
+    }
+}
+class Derived : Base {
+    shared {
+        var Own int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Derived.Count
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
+            yield[]object{"u16_5520_static_method_reads_own_field", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+        func Peek(b Box) string {
+            if b.Pet == nil { return "" }
+            let n = Trigger.Count
+            return b.Pet.Name
+        }
+    }
+}
+func Run(b Box) string -> Trigger.Peek(b)
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@18:26", "reject", "", "R15"}
+            yield[]object{"u17_5520_instance_method_reads_static_field", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    var Id int32
+    func Peek(b Box) string {
+        if b.Pet == nil { return "" }
+        let n = Trigger.Count
+        return b.Pet.Name
+    }
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string -> Trigger{}.Peek(b)
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@17:22", "reject", "", "R15"}
+            yield[]object{"u18_5520_static_field_read_in_a_loop", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    for var i = 0; i < 2; i++ {
+        let n = Trigger.Count
+    }
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@22:18", "reject", "", "R15"}
+            yield[]object{"u19_5520_type_without_initializers_keeps_member_path", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    let n = Trigger.Count
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
+            yield[]object{"u20_5520_plain_local_keeps_the_fact_across_a_static_read", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(s string?) int32 {
+    if s == nil { return 0 }
+    let n = Trigger.Count
+    return s.Length
+}
+Console.WriteLine(Run("ab"))`, "", "run", "2", "R12"}
+            yield[]object{"u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let f = func() int32 { return Trigger.Count }
+    return a.Value
+}
+var xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0]))`, "", "run", "1", "R12"}
             yield[]object{"r1_5482_ref_alias_of_closure_replaced_callable", `import System
 
 class C {

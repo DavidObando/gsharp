@@ -998,10 +998,41 @@ Details per row:
   read or write and to a static event subscription. The type that counts is the type that declares the member (an
   inherited member triggers the base, a hiding member triggers the hiding type). A `shared { init }` block of a
   class or of a value type counts. A constant, an enum member and a static method call (already a call) need no
-  rule. Known limitation (#5520): the initializer of a `shared` field of a `beforefieldinit` type also runs at
-  the first static field access (probe s12 throws `NullReferenceException`), but counting it adds `GS0158` and
-  `GS0154` in `src/Core` (a static read kills member-path and by-reference facts), so it keeps the fact for now.
-  Corpus rows s01 to s27 (issue #5504).
+  rule. Issue #5520 completes the type-initializer classification with the wide rule (maintainer decision): the
+  initializer of a `shared` field of a `beforefieldinit` type runs at the first static member access, so a
+  static field, property or event access of a type with a non-literal `shared` field initializer counts as a
+  call. It kills member-path and by-reference facts as well as the R11 and R15 roots
+  (`MarkMayMutateGlobalRoots`), exactly like a call. `DeclaresNonLiteralSharedFieldInitializer` is the one
+  declaration-pass fact (like `DeclaresStaticInitializerBlock`, it does not depend on binding order), and
+  `TypeInitializationRunsUserCode(type, atStaticMemberAccess)` is still the one decision. A literal is a
+  literal token, possibly parenthesized or under a unary operator (`-1`); anything else (a call, a name, a
+  construction) is non-literal, on purpose, so the answer is syntactic. Constructing the type does not run
+  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and u01 to u21 (issue #5520).
+
+  Contract of #5520 (each row is a compiler corpus row; the mutation witness is the change that makes the row
+  fail):
+
+  | shape | before | after | row | mutation witness |
+  | --- | --- | --- | --- | --- |
+  | static field read, non-literal `shared` initializer, closure-assigned local or mutable global | accepted, `NullReferenceException` | `GS0158` | s12 (R11, R15) | return `false` for `DeclaresNonLiteralSharedFieldInitializer` |
+  | the same read, fact on a member path | accepted | `GS0158` | u01 | the same |
+  | the same read, fact on a `ref` parameter | accepted | `GS0158` | u02 | the same |
+  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, u03, u04 | treat any initializer as non-literal |
+  | `const` read | accepted | accepted | u05, s07 | count a constant |
+  | construction (`Trigger{}`) | accepted | accepted | s27, u06 | count construction |
+  | instance member read | accepted | accepted | u07 | count an instance member |
+  | static property read, write; static field write; static event subscription | accepted | `GS0158` | u08, u09, u10 | ignore the node kind |
+  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | u11 | test the accessed field, not the type |
+  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | u12, u13, u14 | read the constructed type or the derived type |
+  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | u15 | read the access type, not the declaring type |
+  | access in a body of the type itself (static or instance) | accepted | `GS0158` | u16, u17 | exempt the type's own bodies |
+  | access in a loop between guard and use | accepted | `GS0158` | u18 | skip the loop collector |
+  | `shared` field without an initializer | accepted | accepted | u19 | count a field with no initializer |
+  | plain local (no closure assigns it) across a static read | accepted | accepted | u20 | kill every local at the access |
+  | static read only inside a function literal that is not called | accepted | accepted | u21 | count accesses inside nested function bodies |
+
+  The `src/Core` reads of `TypeSymbol.Error` and `TypeSymbol.Void` between a guard and a use now read the guarded
+  value from a local (`UserTokenResolver`, `LambdaBinder`). The translator mirrors the rule (cs2gs, same PR).
   The external-callable alias set follows the same rule (#5482): a call that
   `MayRunEscapedClosure` drops an alias when a closure can assign the alias
   or the plain variable in its `ref` chain, not only when the alias's own

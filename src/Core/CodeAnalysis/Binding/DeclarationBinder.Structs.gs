@@ -2465,6 +2465,26 @@ internal partial class DeclarationBinder {
         BindStructSharedEvents(syntax, $package, structSymbol, memberBinding)
     }
 
+    /// Issue #5520: whether a `shared` field initializer runs no code: a literal, possibly parenthesized or under a
+    /// unary operator (`-1`). Anything else (a call, a name, a construction) is user code or may be (ADR-0208 R11
+    /// and R15 read it through `DeclaresNonLiteralSharedFieldInitializer`).
+    private func IsLiteralInitializerSyntax(initializer ExpressionSyntax) bool {
+        var current = initializer
+        for var depth = 0; depth < 64; depth++ {
+            if current is LiteralExpressionSyntax {
+                return true
+            }
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            } else if current is UnaryExpressionSyntax unary {
+                current = unary.Operand
+            } else {
+                return false
+            }
+        }
+        return false
+    }
+
     private func BindStructSharedFields(
         syntax StructDeclarationSyntax,
         structSymbol StructSymbol,
@@ -2576,8 +2596,11 @@ internal partial class DeclarationBinder {
                 Binder.AttachDocumentation(fieldSymbol, fieldSyntax)
                 // Issue #262 / issue #1070: defer initializer binding to the
                 // consolidated pass so it can see all sibling static/const members.
-                if fieldSyntax.Initializer != nil {
-                    pendingStaticFieldInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType))
+                if fieldSyntax.Initializer is {} staticInitializer {
+                    pendingStaticFieldInitializers.Add((fieldSymbol, staticInitializer, fieldType))
+                    if !IsLiteralInitializerSyntax(staticInitializer) {
+                        structSymbol.DeclaresNonLiteralSharedFieldInitializer = true
+                    }
                 } else if MagicCollectionZeroValue.MightNeedZeroValue(fieldType) {
                     // Issue #3310 / ADR-0159 (extended by #3319 for
                     // struct-typed fields): a candidate zero-value static

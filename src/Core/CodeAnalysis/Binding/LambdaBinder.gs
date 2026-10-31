@@ -2652,7 +2652,10 @@ internal class LambdaBinder {
         internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
 
         protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
-            if node.Expression == nil {
+            // Read once into a local: `TypeSymbol.Void` below is a static access (ADR-0208, #5520) that ends the
+            // narrowing of the member path `node.Expression`.
+            let value = node.Expression
+            if value == nil {
                 return node
             }
             // Void return type: a `return expr` carrying a value is invalid;
@@ -2664,9 +2667,9 @@ internal class LambdaBinder {
             }
             // Issue #4965 (ADR-0202): convert any `return` nested inside the
             // operand first (`return if c { return a } else { b }`).
-            let operand = RewriteExpression(node.Expression)
+            let operand = RewriteExpression(value)
             if operand.Type == returnType {
-                return if object.ReferenceEquals(operand, node.Expression) {
+                return if object.ReferenceEquals(operand, value) {
                     cast[BoundStatement](node)
                 } else {
                     cast[BoundStatement](BoundReturnStatement(node.Syntax, operand, node.IsRef))
