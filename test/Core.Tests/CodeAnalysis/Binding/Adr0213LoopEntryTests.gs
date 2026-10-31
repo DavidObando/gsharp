@@ -540,8 +540,8 @@ class H {
     func Run(flag bool) string {
         if g == nil { return "" }
         for {
-            if flag == true { return P }
             if flag == true { return g }
+            if flag == true { return P }
         }
     }
 }
@@ -558,8 +558,8 @@ func Run(flag bool) string {
     if g == nil { return "" }
     let a = V{}
     for {
-        if flag == true { return a + a }
         if flag == true { return g }
+        if flag == true { return a + a }
     }
 }
 func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
@@ -574,8 +574,8 @@ class H {
     func Run(flag bool) string {
         if g == nil { return "" }
         for {
-            if flag == true { P++ }
             if flag == true { return g }
+            if flag == true { P++ }
         }
     }
 }
@@ -595,8 +595,8 @@ func Run(flag bool) string {
     if g == nil { return "" }
     let token = Token{N: 1}
     for {
-        if token == nil { return "t" }
         if flag == true { return g }
+        if token == nil { return "t" }
     }
 }
 func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
@@ -608,14 +608,14 @@ func operator implicit (f Flag) bool {
     g = nil
     return true
 }
-func Run(done Flag) string {
+func Run(done Flag, flag bool) string {
     if g == nil { return "" }
     for {
+        if flag == true { return g }
         if done { return "d" }
-        return g
     }
 }
-func Main() { Console.WriteLine(Run(Flag{})) }`, "GS0155")
+func Main() { Console.WriteLine(Run(Flag{}, true)) }`, "GS0155")
             return rows
         }
     }
