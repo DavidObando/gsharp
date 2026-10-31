@@ -3311,6 +3311,15 @@ internal class ConversionClassifier {
             }
             return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
         }
+        // A block keeps its statements and converts its trailing value, so the temp below never takes
+        // the block's own type, whose `nil` element (`(nil, int32)`) has no runtime representation.
+        if expression is BoundBlockExpression block && block.Expression.Type is TupleTypeSymbol {
+            return BoundBlockExpression(
+                block.Syntax,
+                block.Statements,
+                BindTupleConversion(diagnosticLocation, block.Expression, sourceTuple, targetTuple, allowExplicit)
+            )
+        }
         // General path: evaluate the source once into a temp local, then build
         // a tuple literal of converted `ItemN` accesses off that local.
         let temp = LocalVariableSymbol("<>tupleConv", isReadOnly: true, type: sourceTuple)

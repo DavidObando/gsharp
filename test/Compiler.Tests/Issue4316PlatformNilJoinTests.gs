@@ -48,6 +48,40 @@ func F(c bool, i int32) int32 {
         }
     }
 
+    /// Tuple arms join each element across every arm: a `string!` element joined with `nil` and
+    /// `string` stays `string!` whatever the arm order, and a block arm whose trailing tuple holds a
+    /// `nil` element emits (the conversion applies to the trailing tuple, not to a temp of the
+    /// block's `(nil, int32)` type).
+    /// @param joinExpression The G# expression that joins the arms.
+    /// @param use The expression that consumes `joined` at a non-null `string` parameter.
+    @Theory
+    @InlineData("switch i { case 0: (nil, 1)\n case 1: (\"x\", 2)\n default: (Ob.Field, 3) }", "joined.Item1")
+    @InlineData("switch i { case 0: (Ob.Field, 1)\n case 1: (nil, 2)\n default: (\"x\", 3) }", "joined.Item1")
+    @InlineData("c ? (Ob.Field, 1) : (nil, 2)", "joined.Item1")
+    @InlineData("if c { (\"a\", 1) } else {\n let n = 2\n (nil, n) }", "joined.Item1 ?? \"d\"")
+    func ATupleJoinWithNilElements_KeepsPlatformElementsAndEmits(joinExpression string, use string) {
+        let directory = Directory.CreateTempSubdirectory("gsc_4316_tuple_").FullName
+        try {
+            let libraryPath = EmitObliviousLibrary(directory)
+            let probe = Path.Combine(directory, "probe.gs")
+            File.WriteAllText(probe, `package P
+import Adr0186.Switch.Library
+
+func Take(s string) int32 -> 0
+
+func F(c bool, i int32) int32 {
+    let joined = ` + joinExpression + `
+    return Take(` + use + `)
+}`)
+            let (exit, output, error) = RunGscWith(directory, []string{probe, "/r:" + libraryPath})
+            Assert.True(exit == 0, output + error)
+        } finally {
+            try {
+                Directory.Delete(directory, recursive: true)
+            } catch (IOException) { }
+        }
+    }
+
     shared {
         private func EmitObliviousLibrary(directory string) string {
             const source = `namespace Adr0186.Switch.Library;

@@ -362,18 +362,20 @@ internal partial class ExpressionBinder {
         }
 
         /// Issue #4316: tuple arms that hold a `nil` element join element by element, with the same
-        /// join as a scalar arm. `c ? (Box(), 1) : (nil, 2)` is `(Box?, int32)` exactly as
-        /// `c ? Box() : nil` is `Box?`, because `nil` no longer converts to a bare `Box`.
+        /// join as scalar arms. `c ? (Box(), 1) : (nil, 2)` is `(Box?, int32)` exactly as
+        /// `c ? Box() : nil` is `Box?`, because `nil` no longer converts to a bare `Box`. Each element
+        /// joins the elements of every arm at once, so the arm order cannot change the result and a
+        /// `T!` or `T?` element keeps its annotation.
         /// @param arms The tuple arm types, without `nil`, `never` or nullable wrappers.
         /// @returns The element-wise join, or `null` when an arm is not a tuple of the same arity,
         /// no arm holds a `nil` element, or an element has no common type.
         private func JoinTupleArmsWithNilElements(arms IReadOnlyList[TypeSymbol]) TypeSymbol? {
-            if arms.Count < 2 || arms[0] is not TupleTypeSymbol {
+            if arms.Count < 2 || arms[0] is not TupleTypeSymbol first {
                 return nil
             }
             var holdsNil = false
             for arm in arms {
-                if arm is not TupleTypeSymbol tuple || tuple.Arity != cast[TupleTypeSymbol](arms[0]).Arity {
+                if arm is not TupleTypeSymbol tuple || tuple.Arity != first.Arity {
                     return nil
                 }
                 holdsNil = holdsNil || HoldsNilElement(tuple)
@@ -381,36 +383,42 @@ internal partial class ExpressionBinder {
             if !holdsNil {
                 return nil
             }
-            var joined = cast[TupleTypeSymbol](arms[0])
-            for var k = 1; k < arms.Count; k++ {
-                let next = cast[TupleTypeSymbol](arms[k])
-                let elements = ImmutableArray.CreateBuilder[TypeSymbol](joined.Arity)
-                let names = ImmutableArray.CreateBuilder[string?](joined.Arity)
-                var anyName = false
-                for var i = 0; i < joined.Arity; i++ {
-                    let element = ComputeConditionalResultType(joined.ElementTypes[i], next.ElementTypes[i], nil)
-                    if element == nil || element == TypeSymbol.Null {
-                        return nil
-                    }
-                    elements.Add(element)
-                    // A name survives only when both arms give the element the same name.
-                    let name string? = if joined.HasNames &&
-                        next.HasNames &&
-                        joined.ElementNames[i] == next.ElementNames[i] {
-                        joined.ElementNames[i]
-                    } else {
-                        nil
-                    }
-                    anyName = anyName || name != nil
-                    names.Add(name)
-                }
-                joined = if anyName {
-                    TupleTypeSymbol.Get(elements.MoveToImmutable(), names.MoveToImmutable())
+            let elements = ImmutableArray.CreateBuilder[TypeSymbol](first.Arity)
+            let names = ImmutableArray.CreateBuilder[string?](first.Arity)
+            var anyName = false
+            for var i = 0; i < first.Arity; i++ {
+                let column = List[TypeSymbol](arms.Count)
+                var name string? = if first.HasNames {
+                    first.ElementNames[i]
                 } else {
-                    TupleTypeSymbol.Get(elements.MoveToImmutable())
+                    nil
                 }
+                for arm in arms {
+                    let tuple = cast[TupleTypeSymbol](arm)
+                    column.Add(tuple.ElementTypes[i])
+                    // A name survives only when every arm gives the element the same name.
+                    if !tuple.HasNames || tuple.ElementNames[i] != name {
+                        name = nil
+                    }
+                }
+                // Two arms join as a conditional does; more join as a switch does.
+                let element = if column.Count == 2 {
+                    ComputeConditionalResultType(column[0], column[1], nil)
+                } else {
+                    ComputeBestCommonType(column)
+                }
+                if element == nil || element == TypeSymbol.Null {
+                    return nil
+                }
+                elements.Add(element)
+                anyName = anyName || name != nil
+                names.Add(name)
             }
-            return joined
+            return if anyName {
+                TupleTypeSymbol.Get(elements.MoveToImmutable(), names.MoveToImmutable())
+            } else {
+                TupleTypeSymbol.Get(elements.MoveToImmutable())
+            }
         }
 
         private func HoldsNilElement(tuple TupleTypeSymbol) bool {
