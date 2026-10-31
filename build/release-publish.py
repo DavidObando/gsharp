@@ -257,6 +257,10 @@ def cmd_nuget_push(args: argparse.Namespace, sleep=time.sleep) -> int:
     files = push_files(args.nupkgs, args.group)
     for path in files:
         command = [args.dotnet, "nuget", "push", str(path), "--api-key", api_key, "--source", args.source, "--skip-duplicate"]
+        if path.suffix == ".nupkg":
+            # A .nupkg push also pushes the .snupkg beside it; --no-symbols leaves that to the explicit push of
+            # the .snupkg, so each symbol package is pushed once per run (ADR-0218 section 4).
+            command.append("--no-symbols")
         for attempt in range(1, args.attempts + 1):
             if subprocess.run(command, check=False).returncode == 0:
                 break

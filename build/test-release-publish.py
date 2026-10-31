@@ -358,6 +358,13 @@ class NugetPushTests(unittest.TestCase):
             self.assertIn("nuget push", line)
             self.assertIn("--api-key secret --source https://api.nuget.org/v3/index.json --skip-duplicate", line)
 
+    def test_symbols_are_pushed_only_by_the_explicit_snupkg_push(self) -> None:
+        self.assertEqual(self.push("sdk").returncode, 0)
+        lines = self.log.read_text().splitlines()
+        for line in lines:
+            with self.subTest(line=line.split()[0]):
+                self.assertEqual("--no-symbols" in line.split(), line.split()[0].endswith(".nupkg"))
+
     def test_symbol_package_is_pushed_when_the_primary_package_already_exists(self) -> None:
         result = self.push("sdk", FAKE_CONFLICT="Gsharp.Repl.0.5.212.nupkg")
         self.assertEqual(result.returncode, 0)
