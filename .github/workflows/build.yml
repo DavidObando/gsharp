@@ -1352,7 +1352,8 @@ jobs:
             -publishManifest "$PWD\src\vs-gsharp\vs-publish.json" `
             -personalAccessToken $env:VS_MARKETPLACE_PAT
           if ($LASTEXITCODE -ne 0) {
-            throw "Visual Studio Marketplace publishing failed with exit code $LASTEXITCODE."
+            # The upload may have been accepted before the client lost the answer; the query below decides.
+            Write-Warning "VsixPublisher failed with exit code $LASTEXITCODE; the marketplace query below decides."
           }
 
           python build/release-publish.py marketplace-version gsharplang.GSharp-VisualStudio --version $env:VERSION --wait-minutes 5

@@ -198,13 +198,13 @@ jobs that were skipped behind the failed one. Read the failure by job:
 
 | Failed job | Meaning | Recovery |
 |---|---|---|
-| `publish-verify` | The artifacts or the tag are wrong by construction. Nothing was published. | Fix on `main` and push a new tag. |
+| `publish-verify` | Nothing was published. Read which step failed. | The `Verify the artifacts against the tag` step failed: the artifacts or the tag are wrong by construction; fix on `main` and push a new tag. A checkout or artifact download step failed: re-run failed jobs. |
 | `publish-github-release` | A draft release with some assets. The NuGet chain and the extensions go on. | Re-run failed jobs: upload uses `--clobber`. |
 | `publish-nuget-compiler` | Zero to six RID packages on nuget.org. The SDK, the extensions and finalize are skipped. | Re-run failed jobs: `--skip-duplicate` pushes only what is missing. |
 | `publish-nuget-sdk` | RID packages, and part of the SDK and tools, are on nuget.org. The extensions are skipped. | Re-run failed jobs. |
 | `publish-vscode-marketplace` | Everything else publishes. A timeout after the upload does not matter: the re-run finds the version and succeeds. | Re-run failed jobs. The Visual Studio job needs no re-run. |
 | `publish-visual-studio-marketplace` | Everything else is published. | Re-run failed jobs. |
-| `publish-finalize` | A destination is missing, or the network failed. The release stays a draft. The job summary lists each destination. | Fix or re-run the named job, then re-run failed jobs. |
+| `publish-finalize` | Either a check failed (the job summary marks the destination `MISSING`, or a query hit the network; the release stays a draft), or the checks passed and `gh release edit` failed (the log says the state of the release is unknown: the edit may have applied on the server). | Failed check: fix or re-run the named job, then re-run failed jobs. Failed edit: check the release (`gh release view <tag> --json isDraft,body`), then re-run failed jobs; finalize reads the release again and repeats the edit. |
 
 A skipped `publish-visual-studio-marketplace` on a prerelease tag is not a
 failure.
@@ -212,13 +212,31 @@ failure.
 A re-run uses the workflow and the scripts of the tagged commit. A defect in
 them is not fixed by a re-run: fix it on `main` and push a new tag.
 
-Each `.snupkg` is pushed once per run: the `.nupkg` push passes `--no-symbols`,
-and the `.snupkg` push follows it explicitly with `--skip-duplicate`. A re-run
-of `publish-nuget-sdk` therefore pushes symbol packages that may already be on
-the symbol server. Whether that server answers 409 (a warning with
-`--skip-duplicate`) is unverified until a tag run shows it (ADR-0218). If the
-re-run fails on a `.snupkg` push with any other answer, don't repeat it; the
-packages themselves are already on nuget.org.
+Each `.snupkg` is pushed once per attempt: the `.nupkg` push passes
+`--no-symbols`, and the `.snupkg` push follows it explicitly with
+`--skip-duplicate`. The SDK group pushes in this order, each package followed
+by its symbols: `Gsharp.NET.Sdk`, `Gsharp.Templates` (no symbols),
+`Gsharp.Repl`, `Gsharp.Gsfmt`, `Gsharp.Cs2Gs`,
+`GSharp.CodeAnalysis.Analyzers.Testing`. A push that fails three times stops
+the job, so the packages after it are not pushed. A re-run of
+`publish-nuget-sdk` pushes again symbol packages that may already be on the
+symbol server. Whether that server answers 409 (a warning with
+`--skip-duplicate`) is unverified until a tag run shows it (ADR-0218).
+
+If a re-run fails on a `.snupkg` push with any other answer, don't repeat it:
+every re-run stops at the same file. Instead:
+
+1. Check the whole inventory. `python3 build/check-rid-packages.py --packages
+   <dir> --require-sdk` (with the `nuget-packages` artifact in `<dir>`) covers
+   the SDK and the six RID packages. For the other five ids, query
+   `https://api.nuget.org/v3-flatcontainer/<id-lowercase>/index.json` for the
+   version.
+2. Push each missing `.nupkg` by hand from the artifact, in the order above:
+   `dotnet nuget push <file>.nupkg --no-symbols --skip-duplicate --source
+   https://api.nuget.org/v3/index.json --api-key <key>`.
+3. The extension jobs and finalize stay skipped behind the failed job: use the
+   manual publication below, then un-draft the release after checking every
+   destination. Record the symbol-server answer in #5530.
 
 Manual publication is the last resort when a run is older than 30 days or has
 been re-run 50 times. For VS Code use `npx @vscode/vsce@3.9.2 publish --packagePath vscode-gsharp.vsix --skip-duplicate` with the artifact

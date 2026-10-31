@@ -464,6 +464,17 @@ class PublishJobTests(unittest.TestCase):
         for name in ("publish-github-release", "publish-nuget-compiler", "publish-nuget-sdk"):
             self.assertIn("name: nuget-packages", job(self.text, name))
 
+    def test_the_marketplace_query_not_the_publisher_exit_code_decides(self):
+        # A lost answer after an accepted upload must not fail the job: only the final query may.
+        vscode = job(self.text, "publish-vscode-marketplace")
+        self.assertRegex(vscode, r"vsce@[\d.]+ publish [^\n]*\\\n\s*\|\| echo ")
+        self.assertTrue(vscode.rstrip().endswith("query --wait-minutes 5"))
+        studio = job(self.text, "publish-visual-studio-marketplace")
+        after = studio[studio.index("& $publisher publish"):]
+        final = after.index("--wait-minutes 5")
+        self.assertNotIn("throw", after[:final])
+        self.assertIn("throw", after[final:])
+
     def test_the_vsix_job_asks_tag_kind_for_the_pre_release_flag(self):
         block = job(self.text, "vsix")
         self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
