@@ -2393,34 +2393,41 @@ internal partial class ExpressionBinder {
             out _,
             out _
         ) {
-            let functionTarget = target!!
             return BindLambdaWithCandidateTarget(
                 lambdaSyntax,
                 candidateParameterLists,
                 (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, paramOffset, sourceArgIndex, argName),
-                () -> BindLambdaWithDelegateTarget(argumentSyntax, lambdaSyntax, functionTarget, nominalTarget)
+                target!!,
+                false,
+                (literal BoundExpression) -> ConvertLiteralToNominalDelegate(argumentSyntax, literal, nominalTarget)
             )
         }
         return BindExpression(inner)
     }
 
     /// Issue #5569: binds a function literal against the delegate target that the delegate candidates agree on.
-    /// When another candidate takes a value at this position that the literal's natural type converts to, the
-    /// target bind is speculative. If the literal does not convert to the target, its diagnostics are discarded
-    /// and the literal keeps its natural type. The delegate candidates are then not applicable, and overload
-    /// resolution can select the other candidate, as in C#. The target bind and its diagnostics stay when no
-    /// such candidate exists or the natural bind also fails, so a single delegate candidate reports the same
-    /// error. Each path binds the literal again from syntax, so only one bound literal reaches the call.
+    /// When another candidate takes a value at this position that is not a delegate, the bind is speculative: the
+    /// literal binds once with its return conversions deferred (see `LambdaBinder.BindLambdaExpression`). A
+    /// literal whose `return` value does not convert to the target keeps its natural function type when such a
+    /// candidate accepts that type. The delegate candidates are then not applicable, and overload resolution can
+    /// select the other candidate, as in C#. The target conversion diagnostics are kept until the call ends (see
+    /// (cref:ReportDiscardedLiteralTargetDiagnostics)). With only delegate candidates, the bind is the ordinary
+    /// target bind, so a single delegate candidate reports the same error. The literal binds once in each case,
+    /// so nested literals cost linear work.
     /// @param lambdaSyntax The function literal.
     /// @param candidateParameterLists The parameter lists of the candidates.
     /// @param slotOf Gives the parameter index of the literal in a candidate, or -1.
-    /// @param bindWithTarget Binds the literal against the agreed delegate target.
+    /// @param target The agreed delegate function type.
+    /// @param inferReturnTypeFromBody Whether the target's return slot is only a placeholder.
+    /// @param convertToTarget Converts a target-typed literal to the nominal delegate of the slot.
     /// @returns The bound literal.
     private func BindLambdaWithCandidateTarget(
         lambdaSyntax LambdaExpressionSyntax,
         candidateParameterLists IReadOnlyList[[]ParameterInfo],
         slotOf([]ParameterInfo) -> int32,
-        bindWithTarget() -> BoundExpression
+        target FunctionTypeSymbol,
+        inferReturnTypeFromBody bool,
+        convertToTarget(BoundExpression) -> BoundExpression
     ) BoundExpression {
         let alternatives = List[Type]()
         for parameters in candidateParameterLists {
@@ -2437,33 +2444,36 @@ internal partial class ExpressionBinder {
             }
         }
         if alternatives.Count == 0 {
-            return bindWithTarget()
+            return convertToTarget(
+                lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: inferReturnTypeFromBody)
+            )
         }
-        let mark = Diagnostics.Count
-        let targeted = bindWithTarget()
-        if !HasErrorSince(mark, targeted) {
-            return targeted
+        var keepsNaturalType = false
+        let literal = lambdas.BindLambdaExpression(
+            lambdaSyntax,
+            target,
+            inferReturnTypeFromBody: inferReturnTypeFromBody,
+            acceptsNaturalType: (naturalType TypeSymbol) -> {
+                keepsNaturalType = GetEffectiveArgumentClrTypeForOverloadResolution(naturalType) is {} naturalClrType &&
+                    alternatives
+                    .Any(
+                    (slotType Type) -> ClrOverloadResolution.ClassifyImplicit(
+                        slotType,
+                        naturalClrType
+                    ) != ClrOverloadResolution
+                        .ImplicitConversionKind
+                        .None
+                )
+                return keepsNaturalType
+            },
+            discardedTargetDiagnostics: literalTargetDiagnostics
+        )
+        return if keepsNaturalType {
+            literal
+        } else {
+            convertToTarget(literal)
         }
-        let targetDiagnostics = Diagnostics.Skip(mark).ToImmutableArray()
-        Diagnostics.TruncateTo(mark)
-        let natural = BindExpression(lambdaSyntax)
-        if !HasErrorSince(mark, natural) &&
-            GetEffectiveArgumentClrTypeForOverloadResolution(natural.Type) is {} naturalType &&
-            alternatives
-            .Any(
-            (slotType Type) -> ClrOverloadResolution.ClassifyImplicit(slotType, naturalType) != ClrOverloadResolution
-                .ImplicitConversionKind
-                .None
-        ) {
-            literalTargetDiagnostics.Add(targetDiagnostics)
-            return natural
-        }
-        Diagnostics.TruncateTo(mark)
-        return bindWithTarget()
     }
-
-    private func HasErrorSince(mark int32, bound BoundExpression) bool -> bound is BoundErrorExpression ||
-        HasErrorDiagnosticSince(mark)
 
     private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.Skip(mark).Any(
         (diagnostic Diagnostic) -> diagnostic.IsError
@@ -2514,18 +2524,15 @@ internal partial class ExpressionBinder {
         }
     }
 
-    private func BindLambdaWithDelegateTarget(
+    private func ConvertLiteralToNominalDelegate(
         argumentSyntax ExpressionSyntax,
-        lambdaSyntax LambdaExpressionSyntax,
-        target FunctionTypeSymbol,
+        literal BoundExpression,
         nominalTarget TypeSymbol?
-    ) BoundExpression {
-        let literal = lambdas.BindLambdaExpression(lambdaSyntax, target)
-        return if nominalTarget != nil && ShouldConvertToNominalDelegate(nominalTarget) {
-            conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
-        } else {
-            literal
-        }
+    ) BoundExpression -> if nominalTarget != nil &&
+        ShouldConvertToNominalDelegate(nominalTarget) {
+        conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
+    } else {
+        literal
     }
 
     /// Issue #569: resolves a nested type constructor call when the call

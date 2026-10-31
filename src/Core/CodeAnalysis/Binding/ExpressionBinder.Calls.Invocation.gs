@@ -665,22 +665,13 @@ internal partial class ExpressionBinder {
                                 slotIndex,
                                 probe.ReceiverParameterOffset
                             ),
-                            () -> {
-                                let literal = lambdas.BindLambdaExpression(
-                                    lambdaSyntax,
-                                    target.FunctionType,
-                                    inferReturnTypeFromBody: inferReturn
-                                )
-                                return if ShouldConvertToNominalDelegate(target.DelegateType) {
-                                    conversions.BindConversion(
-                                        ce.Arguments[slotIndex].Location,
-                                        literal,
-                                        target.DelegateType
-                                    )
-                                } else {
-                                    literal
-                                }
-                            }
+                            target.FunctionType,
+                            inferReturn,
+                            (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                                ce.Arguments[slotIndex],
+                                literal,
+                                target.DelegateType
+                            )
                         )
                     }
                 }
@@ -795,10 +786,11 @@ internal partial class ExpressionBinder {
                         lambdaSyntax,
                         CollectProbeParameterLists(probe.Methods),
                         (parameters[]ParameterInfo) -> MapSourceArgumentToParameter(parameters, ce, slotIndex, offset),
-                        () -> BindLambdaWithDelegateTarget(
+                        target.FunctionType,
+                        false,
+                        (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
                             ce.Arguments[slotIndex],
-                            lambdaSyntax,
-                            target.FunctionType,
+                            literal,
                             target.DelegateType
                         )
                     )
@@ -1774,17 +1766,17 @@ internal partial class ExpressionBinder {
                     if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
                         // target: non-null whenever hasClosedTarget is true
                         // ([NotNullWhen(true)] on TryResolveDelegateTargetFromCandidates).
-                        let functionTarget = target!!
                         let slotIndex = argSlot
                         boundArguments.Add(
                             BindLambdaWithCandidateTarget(
                                 lambdaSyntax,
                                 delegateTargetCandidateParams!!,
                                 (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
-                                () -> BindLambdaWithDelegateTarget(
+                                target!!,
+                                false,
+                                (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
                                     argument,
-                                    lambdaSyntax,
-                                    functionTarget,
+                                    literal,
                                     nominalTarget
                                 )
                             )
