@@ -519,6 +519,55 @@ internal partial class StatementBinder {
         return BindErrorStatement()
     }
 
+    /// Issue #5569: binds a target-typed return value of a speculative lambda body. The value binds with the
+    /// target type first. When that reports an error, the value binds again with its natural type from the same
+    /// flow state, and the target-typed value and its diagnostics wait in [`deferredReturns`](paramref) for the
+    /// lambda binder's decision. The caller passes only values without a function literal, so the second bind
+    /// reaches no other speculative literal, and each value binds at most twice. Each bind has its own scope, so
+    /// a variable that the value declares is not declared twice.
+    /// @param syntax The return statement.
+    /// @param value The return value.
+    /// @param targetType The lambda's target return type.
+    /// @param deferredReturns The state of the lambda body.
+    /// @returns The bound value: the target-typed one, or the natural one when target typing failed.
+    private func BindDeferredTargetTypedReturn(
+        syntax ReturnStatementSyntax,
+        value ExpressionSyntax,
+        targetType TypeSymbol,
+        deferredReturns LambdaBinder.DeferredReturnState
+    ) BoundExpression {
+        let mark = Diagnostics.Count
+        let narrowed = binderCtx.NarrowedVariables.ToList()
+        let targetTyped = BindInChildScope(() -> bindExpressionWithTargetType(value, targetType))
+        let targetDiagnostics = Diagnostics.Skip(mark).ToImmutableArray()
+        if !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
+            return targetTyped
+        }
+        Diagnostics.TruncateTo(mark)
+        let narrowedAfterTarget = binderCtx.NarrowedVariables.ToList()
+        binderCtx.NarrowedVariables.Clear()
+        binderCtx.NarrowedVariables.AddRange(narrowed)
+        let natural = BindInChildScope(() -> bindExpression(value, false))
+        if Diagnostics.Skip(mark).Any((diagnostic Diagnostic) -> diagnostic.IsError) {
+            Diagnostics.TruncateTo(mark)
+            Diagnostics.AddRange(targetDiagnostics)
+            binderCtx.NarrowedVariables.Clear()
+            binderCtx.NarrowedVariables.AddRange(narrowedAfterTarget)
+            return targetTyped
+        }
+        deferredReturns.Hold(syntax, targetTyped, targetDiagnostics)
+        return natural
+    }
+
+    private func BindInChildScope(bind() -> BoundExpression) BoundExpression {
+        $scope = BoundScope($scope)
+        try {
+            return bind()
+        } finally {
+            $scope = $scope.Pop()
+        }
+    }
+
     private func BindReturnStatement(syntax ReturnStatementSyntax) BoundStatement {
         // ADR-0055 Tier 4: returning an interpolated string where the function's
         // declared type is IFormattable/FormattableString lowers to
@@ -575,14 +624,21 @@ internal partial class StatementBinder {
                 function!!.Type != TypeSymbol.Void &&
                 function!!.Type != TypeSymbol
                 .Error {
-                expression = bindExpressionWithTargetType(
-                    Invariant.Required(
-                        syntax.Expression,
-                        "a target-typed return has an expression",
-                        expression: "syntax.Expression"
-                    ),
-                    function!!.Type
+                let value = Invariant.Required(
+                    syntax.Expression,
+                    "a target-typed return has an expression",
+                    expression: "syntax.Expression"
                 )
+                expression = if function!!.DeferredReturns is {} deferredReturns &&
+                    !targetTypesLambdaReturn &&
+                    !value
+                    .DescendantNodesAndSelf().Any(
+                    (node SyntaxNode) -> node is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax
+                ) {
+                    BindDeferredTargetTypedReturn(syntax, value, function!!.Type, deferredReturns)
+                } else {
+                    bindExpressionWithTargetType(value, function!!.Type)
+                }
             } else {
                 expression = if syntax.Expression == nil {
                     default(BoundExpression?)

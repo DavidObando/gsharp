@@ -399,7 +399,8 @@ class Program {
 `, "OOOOOOFFF")
     }
 
-    /// Issue #5569: each speculative literal binds its body once, so nested literals cost linear work. Before,
+    /// Issue #5569: each speculative literal binds its body once, and a target-typed return value at most twice,
+    /// so nested literals cost linear work. Before,
     /// a literal whose `return` value did not convert bound its body again with its natural type, so each
     /// nesting level doubled the work of the levels inside it. At depth 24 that compile does not finish within the
     /// 30-second driver bound; now it takes the same time as depth 1. Roslyn itself binds such nesting
@@ -411,19 +412,180 @@ class Program {
         let shapes = []string{"Calls.M(|, 1)", "Calls.In(|, 1)", "C(|, 1).Kind", "InCtor(|, 1).Kind"}
         let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
         let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
-        for shape in shapes {
-            source
-                .Append("    Console.Write(")
-                .Append(NestBlockLiterals(shape, 24, "() -> { ", "return \"s\" }"))
-                .Append(")\n")
-            oracle
-                .Append("        Console.Write(")
-                .Append(NestBlockLiterals(OracleShape(shape), 2, "() => { ", "return \"s\"; }"))
-                .Append(");\n")
+        // The second form returns a target-typed conditional, whose value also binds again with its natural type.
+        let returns = []string{"\"s\"", "true ? \"s\" : \"t\""}
+        for returned in returns {
+            for shape in shapes {
+                source
+                    .Append("    Console.Write(")
+                    .Append(NestBlockLiterals(shape, 24, "() -> { ", "return " + returned + " }"))
+                    .Append(")\n")
+                oracle
+                    .Append("        Console.Write(")
+                    .Append(NestBlockLiterals(OracleShape(shape), 2, "() => { ", "return " + returned + "; }"))
+                    .Append(");\n")
+            }
         }
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "OOOO")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOO")
+    }
+
+    /// Issue #5569: a target-typed return value (conditional, `switch`, `if` or block) that does not convert to
+    /// the delegate's result binds again with its natural type, so the `object` overload applies, as in C#. The
+    /// C# oracle writes the `if` form as a conditional and the block form as a local. Values that convert still
+    /// select the delegate.
+    @Fact
+    func TargetTypedReturnValue_ThatDoesNotConvert_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let k = 1
+    Console.Write(Calls.M(() -> { return true ? "s" : "t" }, 1))
+    Console.Write(Calls.In(() -> { return true ? "s" : "t" }, 1))
+    Console.Write(C(() -> { return true ? "s" : "t" }, 1).Kind)
+    Console.Write(InCtor(() -> { return true ? "s" : "t" }, 1).Kind)
+    Console.Write(Calls.M(() -> { return switch k { case 1: "a" default: "b" } }, 1))
+    Console.Write(Calls.In(() -> { return switch k { case 1: "a" default: "b" } }, 1))
+    Console.Write(C(() -> { return switch k { case 1: "a" default: "b" } }, 1).Kind)
+    Console.Write(InCtor(() -> { return switch k { case 1: "a" default: "b" } }, 1).Kind)
+    Console.Write(Calls.M(() -> { return if true { "a" } else { "b" } }, 1))
+    Console.Write(Calls.In(() -> { return if true { "a" } else { "b" } }, 1))
+    Console.Write(C(() -> { return if true { "a" } else { "b" } }, 1).Kind)
+    Console.Write(InCtor(() -> { return if true { "a" } else { "b" } }, 1).Kind)
+    Console.Write(Calls.M(() -> { return {
+        let q = "s"
+        q
+    } }, 1))
+    Console.Write(Calls.In(() -> { return {
+        let q = "s"
+        q
+    } }, 1))
+    Console.Write(C(() -> { return {
+        let q = "s"
+        q
+    } }, 1).Kind)
+    Console.Write(InCtor(() -> { return {
+        let q = "s"
+        q
+    } }, 1).Kind)
+    Console.Write(Calls.M(() -> { return true ? 1 : 2 }, 1))
+    Console.Write(Calls.In(() -> { return switch k { case 1: 1 default: 2 } }, 1))
+    Console.Write(C(() -> { return if true { 1 } else { 2 } }, 1).Kind)
+    Console.Write(InCtor(() -> { return {
+        let q = 1
+        q
+    } }, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var k = 1;
+        Console.Write(Calls.M(() => { return true ? "s" : "t"; }, 1));
+        Console.Write(Calls.In(() => { return true ? "s" : "t"; }, 1));
+        Console.Write(new C(() => { return true ? "s" : "t"; }, 1).Kind);
+        Console.Write(new InCtor(() => { return true ? "s" : "t"; }, 1).Kind);
+        Console.Write(Calls.M(() => { return k switch { 1 => "a", _ => "b" }; }, 1));
+        Console.Write(Calls.In(() => { return k switch { 1 => "a", _ => "b" }; }, 1));
+        Console.Write(new C(() => { return k switch { 1 => "a", _ => "b" }; }, 1).Kind);
+        Console.Write(new InCtor(() => { return k switch { 1 => "a", _ => "b" }; }, 1).Kind);
+        Console.Write(Calls.M(() => { return true ? "a" : "b"; }, 1));
+        Console.Write(Calls.In(() => { return true ? "a" : "b"; }, 1));
+        Console.Write(new C(() => { return true ? "a" : "b"; }, 1).Kind);
+        Console.Write(new InCtor(() => { return true ? "a" : "b"; }, 1).Kind);
+        Console.Write(Calls.M(() => { var q = "s"; return q; }, 1));
+        Console.Write(Calls.In(() => { var q = "s"; return q; }, 1));
+        Console.Write(new C(() => { var q = "s"; return q; }, 1).Kind);
+        Console.Write(new InCtor(() => { var q = "s"; return q; }, 1).Kind);
+        Console.Write(Calls.M(() => { return true ? 1 : 2; }, 1));
+        Console.Write(Calls.In(() => { return k switch { 1 => 1, _ => 2 }; }, 1));
+        Console.Write(new C(() => { return true ? 1 : 2; }, 1).Kind);
+        Console.Write(new InCtor(() => { var q = 1; return q; }, 1).Kind);
+    }
+}
+`, "OOOOOOOOOOOOOOOOFFFF")
+    }
+
+    /// Issue #5569: an explicit parameter type or a parameter count that the delegate does not accept makes the
+    /// delegate candidates inapplicable, so the `object` overload applies, as in C#. The target bind stops
+    /// before the body, so the natural bind is the only body bind.
+    @Fact
+    func ExplicitlyTypedLiteral_ThatTheDelegateDoesNotAccept_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.PV((x int32) -> { return x }, 1))
+    Console.Write(Calls.P((x int32) -> { return x }, 1))
+    Console.Write(PCtor((x int32) -> { return x }, 1).Kind)
+    Console.Write(PInCtor((x int32) -> { return x }, 1).Kind)
+    Console.Write(Calls.PV((x int32, y int32) -> { return x }, 1))
+    Console.Write(Calls.PV((x int64) -> { return x }, 1))
+    Console.Write(Calls.P((x int64) -> { return x }, 1))
+    Console.Write(PCtor((x int64) -> { return x }, 1).Kind)
+    Console.Write(PInCtor((x int64) -> { return x }, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.PV((int x) => { return x; }, 1));
+        Console.Write(Calls.P((int x) => { return x; }, 1));
+        Console.Write(new PCtor((int x) => { return x; }, 1).Kind);
+        Console.Write(new PInCtor((int x) => { return x; }, 1).Kind);
+        Console.Write(Calls.PV((int x, int y) => { return x; }, 1));
+        Console.Write(Calls.PV((long x) => { return x; }, 1));
+        Console.Write(Calls.P((long x) => { return x; }, 1));
+        Console.Write(new PCtor((long x) => { return x; }, 1).Kind);
+        Console.Write(new PInCtor((long x) => { return x; }, 1).Kind);
+    }
+}
+`, "OOOOOF2F2F2F2")
+    }
+
+    /// Issue #5569 control: with no other candidate, a target-typed block return value keeps the target bind and
+    /// its diagnostic.
+    @Fact
+    func BlockReturnValue_AtTheOnlyCandidate_ReportsTheConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.One(() -> { return {
+        let q = "s"
+        q
+    } }))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.One(() => { var q = "s"; return q; }));
+    }
+}
+`, "CS0029", line: 6, column: 9, length: 1, oracleCompanion: "CS1662")
+    }
+
+    /// Issue #5569 control: with no other candidate, an explicit parameter type that the delegate does not accept
+    /// keeps its diagnostic.
+    @Fact
+    func ExplicitParameter_AtTheOnlyCandidate_ReportsTheParameter() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.POne((x int32) -> { return x }))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.POne((int x) => { return x; }));
+    }
+}
+`, "CS1678", line: 4, column: 33, length: 5, diagnostic: "GS0156", oracleCompanion: "CS1661")
     }
 
     /// Issue #5569 control: with no other candidate, the block-bodied literal keeps the target bind and its
@@ -826,7 +988,7 @@ class Program {
         using let stream = MemoryStream()
         let emitted = compilation.Emit(stream)
         Assert.False(emitted.Success)
-        // A companion is a second oracle error that Roslyn reports at the same location for the same defect.
+        // A companion is a second oracle error that Roslyn reports for the same defect.
         let oracleError = Assert.Single(
             emitted.Diagnostics.Where(
                 (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error &&
@@ -834,10 +996,7 @@ class Program {
             )
         )
         if oracleCompanion != nil {
-            let companion = Assert.Single(
-                emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == oracleCompanion)
-            )
-            Assert.Equal(oracleError.Location.SourceSpan, companion.Location.SourceSpan)
+            Assert.Single(emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == oracleCompanion))
         }
         Assert.Equal(oracleDiagnostic, oracleError.Id)
         output.WriteLine("Oracle diagnostic: " + oracleError.ToString())
@@ -1013,6 +1172,9 @@ namespace FunctionControl {
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
         public static string One(System.Func<long> f) => "F";
+        public static string PV(System.Func<long, long> f, int x) => "F" + f(2);
+        public static string PV(object o, long x) => "O";
+        public static string POne(System.Func<long, long> f) => "F";
         public static string RR(ref readonly System.Func<long> f, int x) => "F";
         public static string RR(object o, long x) => "O";
         public static string P(in System.Func<long, long> f, int x) => "F" + f(2);
@@ -1047,6 +1209,16 @@ namespace FunctionControl {
     public static class InGeneric {
         public static string Of<T>(T x, in System.Func<T, int> f) => "G" + f(x);
         public static string Each<T>(this System.Collections.Generic.List<T> l, in System.Func<T, int> f) => "E" + f(l[0]);
+    }
+    public class PCtor {
+        public string Kind;
+        public PCtor(System.Func<long, long> f, int x) { Kind = "F" + f(2); }
+        public PCtor(object o, long x) { Kind = "O"; }
+    }
+    public class PInCtor {
+        public string Kind;
+        public PInCtor(in System.Func<long, long> f, int x) { Kind = "F" + f(2); }
+        public PInCtor(object o, long x) { Kind = "O"; }
     }
     public class InCtor {
         public string Kind;
