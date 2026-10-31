@@ -388,6 +388,7 @@ partial class CSharpToGSharpTranslator {
             awaitedType ITypeSymbol,
             symbol IMethodSymbol?
         ) GTypeReference? {
+            var type = this.PromoteObliviousAwaitedResult(type, awaitedType, symbol)
             if type == nil || type.IsNullable || symbol == nil {
                 return type
             }
