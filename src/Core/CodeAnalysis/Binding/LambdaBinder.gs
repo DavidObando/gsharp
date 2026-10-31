@@ -1012,7 +1012,7 @@ internal class LambdaBinder {
                 return natural!!
             }
             Diagnostics.AddRange(arityDiagnostics)
-            return BindLambdaExpression(syntax, targetFunctionType, inferReturnTypeFromBody)
+            return BoundErrorExpression(nil)
         }
         if targetFunctionType != nil && !arityMatchesTarget {
             Diagnostics.ReportWrongArgumentCount(
@@ -2522,6 +2522,14 @@ internal class LambdaBinder {
     /// Each such return statement binds its value again with the natural type, so the body can give either
     /// function type after one bind of its statements.
     internal class DeferredReturnState {
+        /// Gets or sets a value indicating whether a return value binds its target-typed pass now. A return
+        /// nested in it binds with the target type only.
+        internal prop InTargetPass bool
+
+        /// Gets or sets a value indicating whether a return value binds its natural pass now. A return nested in it
+        /// binds with its natural type only.
+        internal prop InNaturalPass bool
+
         private let operands List[
             (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
         ] = List[(Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])]()

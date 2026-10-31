@@ -410,8 +410,10 @@ class Program {
     func NestedBlockLiterals_ThatSelectObject_BindInLinearWork() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
         let shapes = []string{"Calls.M(|, 1)", "Calls.In(|, 1)", "C(|, 1).Kind", "InCtor(|, 1).Kind"}
-        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
-        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n")
+        let oracle = StringBuilder(
+            "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        var flag = true;\n"
+        )
         // The second form returns a target-typed conditional, whose value also binds again with its natural type.
         let returns = []string{"\"s\"", "true ? \"s\" : \"t\""}
         for returned in returns {
@@ -425,6 +427,72 @@ class Program {
                     .Append(NestBlockLiterals(OracleShape(shape), 2, "() => { ", "return " + returned + "; }"))
                     .Append(");\n")
             }
+        }
+        // The third form returns a block that returns the next block from a branch (review of PR #5564). Each
+        // nested return binds in the pass of the value that contains it.
+        for shape in shapes {
+            source
+                .Append("    Console.Write(")
+                .Append(shape.Replace("|", "() -> { return " + NestReturnBlocks(24) + " }"))
+                .Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(
+                OracleShape(shape).Replace(
+                    "|",
+                    "() => { if (flag) { if (flag) { return \"s\"; } return \"s\"; } return \"s\"; }"
+                )
+            )
+                .Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOO")
+    }
+
+    /// Issue #5569 control (review of PR #5564): a literal whose parameter count no candidate's delegate accepts
+    /// stops at the outermost level with one diagnostic, also when it is nested. The target bind does not run
+    /// again after the natural bind, so 24 levels finish within the driver bound. Roslyn also reports one error
+    /// at the outermost literal; its oracle uses depth 2 because Roslyn binds such nesting exponentially.
+    @Fact
+    func NestedLiterals_ThatNoCandidateAccepts_ReportOnce() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let literal = NestRejectedLiterals(24, "(x int32)", "->")
+        Reject(
+            fixture,
+            "import System\nimport FunctionControl\nfunc Main() {\n    Console.Write(Calls.N(" + literal + ", 1))\n}\n",
+            "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        Console.Write(Calls.N(" +
+                NestRejectedLiterals(2, "(int x)", "=>") +
+                ", 1));\n    }\n}\n",
+            "CS1593",
+            line: 4,
+            column: 27,
+            length: literal.Length,
+            diagnostic: "GS0144"
+        )
+    }
+
+    /// Issue #5569 (review of PR #5564): a return value that binds again with its natural type starts from the
+    /// binder state before the value. A narrowing that the target pass removed is back, and a label that the
+    /// target pass declared is not declared twice.
+    @Fact
+    func RetriedReturnValue_StartsFromTheStateBeforeTheValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let shapes = []string{"Calls.M(|, 1)", "Calls.In(|, 1)", "C(|, 1).Kind", "InCtor(|, 1).Kind"}
+        let narrowing = "() -> {\n        var x string? = \"a\"\n        if x != nil {\n            return {\n                let n = x.Length\n                x = nil\n                \"s\"\n            }\n        }\n        return \"t\"\n    }"
+        let label = "() -> {\n        return {\n            L: Console.Write(\"\")\n            \"s\"\n        }\n    }"
+        let oracleNarrowing = "() => { string? x = \"a\"; if (x != null) { var n = x.Length; x = null; return \"s\"; } return \"t\"; }"
+        let oracleLabel = "() => { L: Console.Write(\"\"); return \"s\"; }"
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
+        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        for shape in shapes {
+            source.Append("    Console.Write(").Append(shape.Replace("|", narrowing)).Append(")\n")
+            source.Append("    Console.Write(").Append(shape.Replace("|", label)).Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(OracleShape(shape).Replace("|", oracleNarrowing))
+                .Append(");\n")
+            oracle.Append("        Console.Write(").Append(OracleShape(shape).Replace("|", oracleLabel)).Append(");\n")
         }
         source.Append("}\n")
         oracle.Append("    }\n}\n")
@@ -949,6 +1017,31 @@ class Program {
         return call
     }
 
+    /// Issue #5569: a block value that, at each level, returns the next block from a branch, then gives `"s"`.
+    /// @param depth The number of levels.
+    /// @returns The block value.
+    private func NestReturnBlocks(depth int32) string {
+        var value = "{ \"s\" }"
+        for var level = 0; level < depth; level++ {
+            value = "{\nif flag {\nreturn " + value + "\n}\n\"s\"\n}"
+        }
+        return value
+    }
+
+    /// Issue #5569: an expression-bodied literal with one parameter, nested [`depth`](paramref) times, at a
+    /// candidate set whose delegate takes no parameter. No candidate accepts any level.
+    /// @param depth The number of enclosing levels.
+    /// @param parameter The parameter list.
+    /// @param arrow The lambda arrow.
+    /// @returns The outermost literal.
+    private func NestRejectedLiterals(depth int32, parameter string, arrow string) string {
+        var literal = parameter + " " + arrow + " x"
+        for var level = 0; level < depth; level++ {
+            literal = parameter + " " + arrow + " Calls.N(" + literal + ", 1).Length"
+        }
+        return literal
+    }
+
     private func StatementEnd(bodyStart string) string -> if bodyStart.Contains("=>") {
         "; "
     } else {
@@ -1172,6 +1265,8 @@ namespace FunctionControl {
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
         public static string One(System.Func<long> f) => "F";
+        public static string N(System.Func<long> f, int x) => "F";
+        public static string N(string s, long x) => "S";
         public static string PV(System.Func<long, long> f, int x) => "F" + f(2);
         public static string PV(object o, long x) => "O";
         public static string POne(System.Func<long, long> f) => "F";

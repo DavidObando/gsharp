@@ -284,55 +284,8 @@ internal partial class StatementBinder {
         if !HasActiveNarrowings(inheritedNarrowingFrameCount) {
             return BindCore(out breakLabel, out continueLabel)
         }
-        let diagnosticCount = Diagnostics.Count
-        let narrowingSnapshots = binderCtx
-            .NarrowedVariables
-            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
-            .ToArray()
-        let pendingEarlyExitFrames = binderCtx.PendingEarlyExitFrames.ToArray()
-        let pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray()
-        let definedUserLabels = binderCtx.DefinedUserLabels.ToArray()
-        let pendingGotoAssignmentStarts = Dictionary[string, int32](binderCtx.PendingGotoAssignmentStarts)
-        let externalCallableAliasesSnapshot = externalCallableAliases.ToArray()
-        let assignmentNarrowingGenerations = Dictionary[VariableSymbol, int32](binderCtx.AssignmentNarrowingGenerations)
-        let assignmentNarrowingGeneration = binderCtx.AssignmentNarrowingGeneration
-        let pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
-            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
-            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
-                .Value
-                .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
-                .ToList()
-        )
-        let backwardGotoNarrowingStates = binderCtx.BackwardGotoNarrowingStates.ToDictionary(
-            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Key,
-            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Value.Clone()
-        )
-        let reachableUserLabelsSnapshot = binderCtx.ReachableUserLabels.ToArray()
-        let deferredUnreachableGotoEdgesSnapshot = binderCtx.DeferredUnreachableGotoEdges.ToArray()
-        let potentialReachabilityLabelSnapshot = binderCtx.PotentialReachabilityLabel
-        let userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray()
-        let boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray()
-        let finallyEntryExternalCallableAliasesSnapshot = finallyEntryExternalCallableAliases.ToArray()
-        let finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray()
-        let activeFinallyClausesSnapshot = activeFinallyClauses.ToArray()
-        let activeCleanupStatementsSnapshot = activeCleanupStatements.ToArray()
-        let activeCleanupRegionsSnapshot = activeCleanupRegions.ToArray()
-        let syntheticLocalCounter = binderCtx.SyntheticLocalCounter
-        let RestoreDictionary[TKey, TValue] = func (
-            destination Dictionary[TKey, TValue],
-            snapshot[]KeyValuePair[TKey, TValue]
-        ) {
-            destination.Clear()
-            for entry in snapshot {
-                destination.Add(entry.Key, entry.Value)
-            }
-        }
-        let RestoreSet[T] = func (destination HashSet[T], snapshot[]T) {
-            destination.Clear()
-            for item in snapshot {
-                destination.Add(item)
-            }
-        }
+        let saved = CaptureSpeculativeBindState()
+        let narrowingSnapshots = saved.NarrowingFrames
         // Issue #2943: first bind supplies exact assignment symbols and lowered
         // control flow. If a write can reach the back-edge, restore speculative
         // state, remove only inherited narrowings, and bind the body again.
@@ -354,7 +307,7 @@ internal partial class StatementBinder {
             backEdgeTail,
             firstBreakLabel,
             firstContinueLabel,
-            externalCallableAliasesSnapshot,
+            saved.ExternalCallableAliases,
             backEdgeCondition
         )
         let narrowingInvalidations = CollectInheritedNarrowingInvalidations(
@@ -364,7 +317,7 @@ internal partial class StatementBinder {
             narrowingSnapshots
         )
         if narrowingInvalidations.Count == 0 && loopEntryExternalCallableAliases.SetEquals(
-            externalCallableAliasesSnapshot
+            saved.ExternalCallableAliases
         ) {
             NarrowingComparison.EndSpeculation(speculation, true)
             // ADR-0213 slice L0: the walker's lower bound against the analysis above. Report only.
@@ -381,56 +334,233 @@ internal partial class StatementBinder {
         }
         // ADR-0208 section 18: counts the loop bodies that this design binds twice.
         CompilationMeasurements.Count("narrowing.loop-rebinds")
-        Diagnostics.TruncateTo(diagnosticCount)
-        for var i = 0; i < narrowingSnapshots.Length; i++ {
+        RestoreSpeculativeBindState(saved)
+        InvalidateInheritedNarrowings(narrowingInvalidations)
+        RestoreItems(externalCallableAliases, loopEntryExternalCallableAliases.ToArray())
+        return BindCore(out breakLabel, out continueLabel)
+    }
+
+    /// The function-wide binder state that a speculative bind can change: diagnostics, narrowing frame
+    /// contents, pending exit and goto narrowing states, labels and jumps, callable aliases, assignment
+    /// generations, reachability, finally and cleanup bookkeeping, and the synthetic local counter. A loop
+    /// body (issue #2943) and a speculative lambda return value (issue #5569) bind again after a restore.
+    private sealed class SpeculativeBindState {
+        internal let DiagnosticCount int32
+        internal let NarrowingFrames[]Dictionary[AccessPath, TypeSymbol]
+        internal let PendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]
+        internal let PendingSwitchExitFrames[]KeyValuePair[
+            BoundPatternSwitchStatement,
+            Dictionary[AccessPath, TypeSymbol]
+        ]
+        internal let DefinedUserLabels[]string
+        internal let PendingGotoAssignmentStarts[]KeyValuePair[string, int32]
+        internal let ExternalCallableAliases[]VariableSymbol
+        internal let AssignmentNarrowingGenerations[]KeyValuePair[VariableSymbol, int32]
+        internal let AssignmentNarrowingGeneration int32
+        internal let PendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]]
+        internal let BackwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState]
+        internal let ReachableUserLabels[]string
+        internal let DeferredUnreachableGotoEdges[](
+            SourceLabel string?,
+            TargetLabel string,
+            Snapshot GotoNarrowingSnapshot
+        )
+        internal let PotentialReachabilityLabel string?
+        internal let UserLabels[]KeyValuePair[string, BoundLabel]
+        internal let UnresolvedGotoLabels[]KeyValuePair[string, TextLocation]
+        internal let UserLabelHandlerRegions[]KeyValuePair[string, ImmutableArray[SyntaxNode]]
+        internal let UserGotoHandlerRegions[](
+            LabelName string,
+            Location TextLocation,
+            SourceRegions ImmutableArray[SyntaxNode]
+        )
+        internal let BoundFinallyBlocks[]KeyValuePair[FinallyClauseSyntax, BoundStatement]
+        internal let FinallyEntryExternalCallableAliases[]KeyValuePair[
+            FinallyClauseSyntax,
+            ImmutableArray[VariableSymbol]
+        ]
+        internal let FinallyFlowSummaries[]KeyValuePair[BoundStatement, FinallyFlowSummary]
+        internal let ActiveFinallyClauses[]FinallyClauseSyntax
+        internal let ActiveCleanupStatements[]BoundStatement
+        internal let ActiveCleanupRegions[]GotoCleanupRegion
+        internal let CurrentStatementListFallsThrough bool
+        internal let SyntheticLocalCounter int32
+
+        init(
+            diagnosticCount int32,
+            narrowingFrames[]Dictionary[AccessPath, TypeSymbol],
+            pendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]],
+            pendingSwitchExitFrames[]KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]],
+            definedUserLabels[]string,
+            pendingGotoAssignmentStarts[]KeyValuePair[string, int32],
+            externalCallableAliases[]VariableSymbol,
+            assignmentNarrowingGenerations[]KeyValuePair[VariableSymbol, int32],
+            assignmentNarrowingGeneration int32,
+            pendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]],
+            backwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState],
+            reachableUserLabels[]string,
+            deferredUnreachableGotoEdges[](SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot),
+            potentialReachabilityLabel string?,
+            userLabels[]KeyValuePair[string, BoundLabel],
+            unresolvedGotoLabels[]KeyValuePair[string, TextLocation],
+            userLabelHandlerRegions[]KeyValuePair[string, ImmutableArray[SyntaxNode]],
+            userGotoHandlerRegions[](LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]),
+            boundFinallyBlocks[]KeyValuePair[FinallyClauseSyntax, BoundStatement],
+            finallyEntryExternalCallableAliases[]KeyValuePair[FinallyClauseSyntax, ImmutableArray[VariableSymbol]],
+            finallyFlowSummaries[]KeyValuePair[BoundStatement, FinallyFlowSummary],
+            activeFinallyClauses[]FinallyClauseSyntax,
+            activeCleanupStatements[]BoundStatement,
+            activeCleanupRegions[]GotoCleanupRegion,
+            currentStatementListFallsThrough bool,
+            syntheticLocalCounter int32
+        ) {
+            DiagnosticCount = diagnosticCount
+            NarrowingFrames = narrowingFrames
+            PendingEarlyExitFrames = pendingEarlyExitFrames
+            PendingSwitchExitFrames = pendingSwitchExitFrames
+            DefinedUserLabels = definedUserLabels
+            PendingGotoAssignmentStarts = pendingGotoAssignmentStarts
+            ExternalCallableAliases = externalCallableAliases
+            AssignmentNarrowingGenerations = assignmentNarrowingGenerations
+            AssignmentNarrowingGeneration = assignmentNarrowingGeneration
+            PendingGotoNarrowingSnapshots = pendingGotoNarrowingSnapshots
+            BackwardGotoNarrowingStates = backwardGotoNarrowingStates
+            ReachableUserLabels = reachableUserLabels
+            DeferredUnreachableGotoEdges = deferredUnreachableGotoEdges
+            PotentialReachabilityLabel = potentialReachabilityLabel
+            UserLabels = userLabels
+            UnresolvedGotoLabels = unresolvedGotoLabels
+            UserLabelHandlerRegions = userLabelHandlerRegions
+            UserGotoHandlerRegions = userGotoHandlerRegions
+            BoundFinallyBlocks = boundFinallyBlocks
+            FinallyEntryExternalCallableAliases = finallyEntryExternalCallableAliases
+            FinallyFlowSummaries = finallyFlowSummaries
+            ActiveFinallyClauses = activeFinallyClauses
+            ActiveCleanupStatements = activeCleanupStatements
+            ActiveCleanupRegions = activeCleanupRegions
+            CurrentStatementListFallsThrough = currentStatementListFallsThrough
+            SyntheticLocalCounter = syntheticLocalCounter
+        }
+    }
+
+    /// Captures the binder state that (cref:RestoreSpeculativeBindState) puts back. Narrowing frames keep
+    /// their identity; only their contents are copied.
+    /// @returns The captured state.
+    private func CaptureSpeculativeBindState() SpeculativeBindState -> SpeculativeBindState(
+        Diagnostics.Count,
+        binderCtx
+            .NarrowedVariables
+            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
+            .ToArray(),
+        binderCtx.PendingEarlyExitFrames.ToArray(),
+        binderCtx.PendingSwitchExitFrames.ToArray(),
+        binderCtx.DefinedUserLabels.ToArray(),
+        binderCtx.PendingGotoAssignmentStarts.ToArray(),
+        externalCallableAliases.ToArray(),
+        binderCtx.AssignmentNarrowingGenerations.ToArray(),
+        binderCtx.AssignmentNarrowingGeneration,
+        binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
+            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
+            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
+                .Value
+                .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
+                .ToList()
+        ),
+        binderCtx.BackwardGotoNarrowingStates.ToDictionary(
+            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Key,
+            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Value.Clone()
+        ),
+        binderCtx.ReachableUserLabels.ToArray(),
+        binderCtx.DeferredUnreachableGotoEdges.ToArray(),
+        binderCtx.PotentialReachabilityLabel,
+        binderCtx.UserLabels.ToArray(),
+        binderCtx.UnresolvedGotoLabels.ToArray(),
+        userLabelHandlerRegions.ToArray(),
+        userGotoHandlerRegions.ToArray(),
+        boundFinallyBlocks.ToArray(),
+        finallyEntryExternalCallableAliases.ToArray(),
+        finallyFlowSummaries.ToArray(),
+        activeFinallyClauses.ToArray(),
+        activeCleanupStatements.ToArray(),
+        activeCleanupRegions.ToArray(),
+        currentStatementListFallsThrough,
+        binderCtx.SyntheticLocalCounter
+    )
+
+    /// Puts back the state that (cref:CaptureSpeculativeBindState) captured, and removes the diagnostics
+    /// reported after it. The narrowing frames must be the frames of the capture.
+    /// @param state The captured state.
+    private func RestoreSpeculativeBindState(state SpeculativeBindState) {
+        Diagnostics.TruncateTo(state.DiagnosticCount)
+        for var i = 0; i < state.NarrowingFrames.Length; i++ {
             let frame = binderCtx.NarrowedVariables[i]
             frame.Clear()
-            for entry in narrowingSnapshots[i] {
+            for entry in state.NarrowingFrames[i] {
                 frame.Add(entry.Key, entry.Value)
             }
         }
-        RestoreDictionary(binderCtx.PendingEarlyExitFrames, pendingEarlyExitFrames)
-        RestoreDictionary(binderCtx.PendingSwitchExitFrames, pendingSwitchExitFrames)
-        RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels)
-        RestoreDictionary(binderCtx.PendingGotoAssignmentStarts, pendingGotoAssignmentStarts.ToArray())
-        RestoreSet(externalCallableAliases, externalCallableAliasesSnapshot)
-        RestoreDictionary(binderCtx.AssignmentNarrowingGenerations, assignmentNarrowingGenerations.ToArray())
-        this.binderCtx.AssignmentNarrowingGeneration = assignmentNarrowingGeneration
+        RestoreEntries(binderCtx.PendingEarlyExitFrames, state.PendingEarlyExitFrames)
+        RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
+        RestoreItems(binderCtx.DefinedUserLabels, state.DefinedUserLabels)
+        RestoreEntries(binderCtx.PendingGotoAssignmentStarts, state.PendingGotoAssignmentStarts)
+        RestoreItems(externalCallableAliases, state.ExternalCallableAliases)
+        RestoreEntries(binderCtx.AssignmentNarrowingGenerations, state.AssignmentNarrowingGenerations)
+        this.binderCtx.AssignmentNarrowingGeneration = state.AssignmentNarrowingGeneration
         binderCtx.PendingGotoNarrowingSnapshots.Clear()
-        for entry in pendingGotoNarrowingSnapshots {
-            binderCtx.PendingGotoNarrowingSnapshots.Add(entry.Key, entry.Value)
+        for entry in state.PendingGotoNarrowingSnapshots {
+            binderCtx.PendingGotoNarrowingSnapshots.Add(
+                entry.Key,
+                entry.Value.Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone()).ToList()
+            )
         }
         binderCtx.BackwardGotoNarrowingStates.Clear()
-        for entry in backwardGotoNarrowingStates {
-            binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value)
+        for entry in state.BackwardGotoNarrowingStates {
+            binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value.Clone())
         }
-        RestoreSet(binderCtx.ReachableUserLabels, reachableUserLabelsSnapshot)
+        RestoreItems(binderCtx.ReachableUserLabels, state.ReachableUserLabels)
         binderCtx.DeferredUnreachableGotoEdges.Clear()
-        binderCtx.DeferredUnreachableGotoEdges.AddRange(deferredUnreachableGotoEdgesSnapshot)
-        this.binderCtx.PotentialReachabilityLabel = potentialReachabilityLabelSnapshot
+        binderCtx.DeferredUnreachableGotoEdges.AddRange(state.DeferredUnreachableGotoEdges)
+        this.binderCtx.PotentialReachabilityLabel = state.PotentialReachabilityLabel
+        RestoreEntries(binderCtx.UserLabels, state.UserLabels)
+        RestoreEntries(binderCtx.UnresolvedGotoLabels, state.UnresolvedGotoLabels)
+        RestoreEntries(userLabelHandlerRegions, state.UserLabelHandlerRegions)
         userGotoHandlerRegions.Clear()
-        for region in userGotoHandlerSnapshot {
+        for region in state.UserGotoHandlerRegions {
             userGotoHandlerRegions.Add(region)
         }
-        RestoreDictionary(boundFinallyBlocks, boundFinallyBlocksSnapshot)
-        RestoreDictionary(finallyEntryExternalCallableAliases, finallyEntryExternalCallableAliasesSnapshot)
-        RestoreDictionary(finallyFlowSummaries, finallyFlowSummariesSnapshot)
-        activeFinallyClauses.Clear()
-        for var i = activeFinallyClausesSnapshot.Length - 1; i >= 0; i-- {
-            activeFinallyClauses.Push(activeFinallyClausesSnapshot[i])
+        RestoreEntries(boundFinallyBlocks, state.BoundFinallyBlocks)
+        RestoreEntries(finallyEntryExternalCallableAliases, state.FinallyEntryExternalCallableAliases)
+        RestoreEntries(finallyFlowSummaries, state.FinallyFlowSummaries)
+        RestoreStack(activeFinallyClauses, state.ActiveFinallyClauses)
+        RestoreStack(activeCleanupStatements, state.ActiveCleanupStatements)
+        RestoreStack(activeCleanupRegions, state.ActiveCleanupRegions)
+        currentStatementListFallsThrough = state.CurrentStatementListFallsThrough
+        this.binderCtx.SyntheticLocalCounter = state.SyntheticLocalCounter
+    }
+
+    private func RestoreEntries[TKey, TValue](
+        destination Dictionary[TKey, TValue],
+        snapshot[]KeyValuePair[TKey, TValue]
+    ) {
+        destination.Clear()
+        for entry in snapshot {
+            destination.Add(entry.Key, entry.Value)
         }
-        activeCleanupStatements.Clear()
-        for var i = activeCleanupStatementsSnapshot.Length - 1; i >= 0; i-- {
-            activeCleanupStatements.Push(activeCleanupStatementsSnapshot[i])
+    }
+
+    private func RestoreItems[T](destination HashSet[T], snapshot[]T) {
+        destination.Clear()
+        for item in snapshot {
+            destination.Add(item)
         }
-        activeCleanupRegions.Clear()
-        for var i = activeCleanupRegionsSnapshot.Length - 1; i >= 0; i-- {
-            activeCleanupRegions.Push(activeCleanupRegionsSnapshot[i])
+    }
+
+    // A stack copies to an array top first, so the pushes run from the bottom.
+    private func RestoreStack[T](destination Stack[T], snapshot[]T) {
+        destination.Clear()
+        for var i = snapshot.Length - 1; i >= 0; i-- {
+            destination.Push(snapshot[i])
         }
-        this.binderCtx.SyntheticLocalCounter = syntheticLocalCounter
-        InvalidateInheritedNarrowings(narrowingInvalidations)
-        RestoreSet(externalCallableAliases, loopEntryExternalCallableAliases.ToArray())
-        return BindCore(out breakLabel, out continueLabel)
     }
 
     private func BindBreakStatement(syntax BreakStatementSyntax) BoundStatement {
@@ -520,13 +650,15 @@ internal partial class StatementBinder {
     }
 
     /// Issue #5569: binds a target-typed return value of a speculative lambda body. The value binds with the
-    /// target type first. When that reports an error, the value binds again with its natural type from the same
-    /// flow state, and the target-typed value and its diagnostics wait in [`deferredReturns`](paramref) for the
-    /// lambda binder's decision. The caller passes only values without a function literal, so the second bind
-    /// reaches no other speculative literal, and each value binds at most twice. Each bind has its own scope, so
-    /// a variable that the value declares is not declared twice.
-    /// @param syntax The return statement.
+    /// target type first. When that reports an error, the binder state goes back to the state before the value
+    /// (see (cref:CaptureSpeculativeBindState)), and the value binds again with its natural type. The
+    /// target-typed value and its diagnostics wait in [`deferredReturns`](paramref) for the lambda binder's
+    /// decision. The binder keeps the state of the selected pass only. The caller passes only values without a
+    /// function literal, and a return nested in the value binds in the pass of the value without its own retry,
+    /// so each value binds at most twice and nested values do not multiply the work. Each pass has its own
+    /// scope, so a variable that the value declares is not declared twice.
     /// @param value The return value.
+    /// @param syntax The return statement.
     /// @param targetType The lambda's target return type.
     /// @param deferredReturns The state of the lambda body.
     /// @returns The bound value: the target-typed one, or the natural one when target typing failed.
@@ -536,34 +668,50 @@ internal partial class StatementBinder {
         targetType TypeSymbol,
         deferredReturns LambdaBinder.DeferredReturnState
     ) BoundExpression {
-        let mark = Diagnostics.Count
-        let narrowed = binderCtx.NarrowedVariables.ToList()
-        let targetTyped = BindInChildScope(() -> bindExpressionWithTargetType(value, targetType))
-        let targetDiagnostics = Diagnostics.Skip(mark).ToImmutableArray()
+        let beforeValue = CaptureSpeculativeBindState()
+        let targetTyped = BindReturnValuePass(
+            deferredReturns,
+            true,
+            () -> bindExpressionWithTargetType(value, targetType)
+        )
+        let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
         if !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
             return targetTyped
         }
-        Diagnostics.TruncateTo(mark)
-        let narrowedAfterTarget = binderCtx.NarrowedVariables.ToList()
-        binderCtx.NarrowedVariables.Clear()
-        binderCtx.NarrowedVariables.AddRange(narrowed)
-        let natural = BindInChildScope(() -> bindExpression(value, false))
-        if Diagnostics.Skip(mark).Any((diagnostic Diagnostic) -> diagnostic.IsError) {
-            Diagnostics.TruncateTo(mark)
+        let afterTarget = CaptureSpeculativeBindState()
+        RestoreSpeculativeBindState(beforeValue)
+        // Synthetic local names stay unique across both passes.
+        this.binderCtx.SyntheticLocalCounter = afterTarget.SyntheticLocalCounter
+        let natural = BindReturnValuePass(deferredReturns, false, () -> bindExpression(value, false))
+        if Diagnostics.Skip(beforeValue.DiagnosticCount).Any((diagnostic Diagnostic) -> diagnostic.IsError) {
+            let naturalCounter = binderCtx.SyntheticLocalCounter
+            Diagnostics.TruncateTo(beforeValue.DiagnosticCount)
             Diagnostics.AddRange(targetDiagnostics)
-            binderCtx.NarrowedVariables.Clear()
-            binderCtx.NarrowedVariables.AddRange(narrowedAfterTarget)
+            RestoreSpeculativeBindState(afterTarget)
+            this.binderCtx.SyntheticLocalCounter = naturalCounter
             return targetTyped
         }
         deferredReturns.Hold(syntax, targetTyped, targetDiagnostics)
         return natural
     }
 
-    private func BindInChildScope(bind() -> BoundExpression) BoundExpression {
+    // Binds one pass of a speculative return value in its own scope, with the pass recorded for nested returns.
+    private func BindReturnValuePass(
+        deferredReturns LambdaBinder.DeferredReturnState,
+        targetPass bool,
+        bind() -> BoundExpression
+    ) BoundExpression {
         $scope = BoundScope($scope)
+        if targetPass {
+            deferredReturns.InTargetPass = true
+        } else {
+            deferredReturns.InNaturalPass = true
+        }
         try {
             return bind()
         } finally {
+            deferredReturns.InTargetPass = false
+            deferredReturns.InNaturalPass = false
             $scope = $scope.Pop()
         }
     }
@@ -629,7 +777,12 @@ internal partial class StatementBinder {
                     "a target-typed return has an expression",
                     expression: "syntax.Expression"
                 )
-                expression = if function!!.DeferredReturns is {} deferredReturns &&
+                let deferredReturns = function!!.DeferredReturns
+                expression = if deferredReturns?.InNaturalPass == true {
+                    // Issue #5569: a return nested in a value that binds with its natural type does the same.
+                    bindExpression(value, false)
+                } else if deferredReturns != nil &&
+                    !deferredReturns.InTargetPass &&
                     !targetTypesLambdaReturn &&
                     !value
                     .DescendantNodesAndSelf().Any(
