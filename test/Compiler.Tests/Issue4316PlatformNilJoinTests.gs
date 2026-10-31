@@ -50,8 +50,8 @@ func F(c bool, i int32) int32 {
 
     /// Tuple arms join each element across every arm: a `string!` element joined with `nil` and
     /// `string` stays `string!` whatever the arm order, and a block arm whose trailing tuple holds a
-    /// `nil` element emits (the conversion applies to the trailing tuple, not to a temp of the
-    /// block's `(nil, int32)` type).
+    /// `nil` element, or whose nested conditional or switch yields one, emits (the conversion applies
+    /// to each value the arm can produce, not to a temp of the `(nil, int32)` type).
     /// @param joinExpression The G# expression that joins the arms.
     /// @param use The expression that consumes `joined` at a non-null `string` parameter.
     @Theory
@@ -59,6 +59,8 @@ func F(c bool, i int32) int32 {
     @InlineData("switch i { case 0: (Ob.Field, 1)\n case 1: (nil, 2)\n default: (\"x\", 3) }", "joined.Item1")
     @InlineData("c ? (Ob.Field, 1) : (nil, 2)", "joined.Item1")
     @InlineData("if c { (\"a\", 1) } else {\n let n = 2\n (nil, n) }", "joined.Item1 ?? \"d\"")
+    @InlineData("c ? (\"x\", 1) : (i == 0 ? (nil, 2) : (nil, 3))", "joined.Item1 ?? \"d\"")
+    @InlineData("if c { (\"a\", 1) } else {\n let n = 2\n switch i { case 0: (nil, n)\n default: (nil, 3) } }", "joined.Item1 ?? \"d\"")
     func ATupleJoinWithNilElements_KeepsPlatformElementsAndEmits(joinExpression string, use string) {
         let directory = Directory.CreateTempSubdirectory("gsc_4316_tuple_").FullName
         try {

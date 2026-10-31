@@ -378,7 +378,7 @@ internal partial class ExpressionBinder {
                 if arm is not TupleTypeSymbol tuple || tuple.Arity != first.Arity {
                     return nil
                 }
-                holdsNil = holdsNil || HoldsNilElement(tuple)
+                holdsNil = holdsNil || tuple.HasNilElement
             }
             if !holdsNil {
                 return nil
@@ -419,15 +419,6 @@ internal partial class ExpressionBinder {
             } else {
                 TupleTypeSymbol.Get(elements.MoveToImmutable())
             }
-        }
-
-        private func HoldsNilElement(tuple TupleTypeSymbol) bool {
-            for element in tuple.ElementTypes {
-                if element == TypeSymbol.Null || element is TupleTypeSymbol nested && HoldsNilElement(nested) {
-                    return true
-                }
-            }
-            return false
         }
 
         /// Enumerates the candidate supertypes of [`type`](paramref) ordered
