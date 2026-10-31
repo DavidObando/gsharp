@@ -480,6 +480,31 @@ namespace Demo
         Assert.DoesNotContain("!!", printed)
     }
 
+    /// A positional record property is also read by the record's synthesized `Deconstruct`, whose
+    /// locals G# infers from the property and asserts at their later reads. A deconstruction
+    /// therefore pins the positional parameter, and the program passes the null on as C# does.
+    @Fact
+    func ADeconstructedPositionalProperty_Pins() {
+        let compilation = CompileFiles("App", nil, ("Entry.cs", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class Use
+    {
+        public static string Run()
+        {
+            (Node item, int id) = new Entry(null!, 0);
+            return new Sink().Take(item) + id;
+        }
+    }
+}`))
+        let printed = TranslateFile(compilation, "Entry.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.DoesNotContain("Item Node?", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

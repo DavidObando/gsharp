@@ -2182,6 +2182,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         let scopes = HashSet[SyntaxNode]()
         let scopeList = List[SyntaxNode]()
         var readsIndexers = false
+        // Issue #5574: records whose positional parameters are candidates, with
+        // those candidates: a synthesized `Deconstruct` reads every one of them.
+        let deconstructed = Dictionary[INamedTypeSymbol, List[string]](SymbolEqualityComparer.Default)
         for candidate in candidates {
             if !declarations.TryGetValue(candidate, out var symbols) {
                 continue
@@ -2208,6 +2211,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 parameterNames.Add(parameter.Name)
                 if parameter.ContainingSymbol is IMethodSymbol method && PositionalProperty(parameter, method) != nil {
                     memberNames.Add(parameter.Name)
+                    let record = method.ContainingType.OriginalDefinition
+                    if !deconstructed.TryGetValue(record, out var positional) {
+                        positional = List[string]()
+                        deconstructed[record] = positional
+                    }
+                    positional.Add(candidate)
                 }
                 for reference in parameter.ContainingSymbol.DeclaringSyntaxReferences {
                     let body = reference.GetSyntax()
@@ -2220,6 +2229,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         let Visit = func (owner Compilation, nodes sequence[SyntaxNode], names HashSet[string], indexers bool) {
             var model SemanticModel? = nil
             for node in nodes {
+                if deconstructed.Count != 0 &&
+                    DeconstructingMethod(node, owner, ref model) is IMethodSymbol{
+                    IsImplicitlyDeclared: true,
+                    ContainingType: {} deconstructedType
+                } &&
+                    deconstructed
+                    .TryGetValue(deconstructedType.OriginalDefinition, out var positionalCandidates) {
+                    // The deconstructed locals are G#-inferred from the widened
+                    // properties and asserted at their later reads (#5508).
+                    for positionalCandidate in positionalCandidates {
+                        AddNullArgumentRead(reads, positionalCandidate, (false, default(string?)))
+                    }
+                    continue
+                }
                 if indexers && node is ElementAccessExpressionSyntax element {
                     model = model ?? owner.GetSemanticModel(element.SyntaxTree)
                     CollectNullArgumentRead(element, model, run, candidates, reads)
@@ -2255,7 +2278,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     Visit(graph.Owner, linked.DescendantNodes(), parameterNames, false)
                 }
             }
-            if memberNames.Count != 0 || readsIndexers {
+            if memberNames.Count != 0 || readsIndexers || deconstructed.Count != 0 {
                 for tree in graph.Owner.SyntaxTrees {
                     Visit(graph.Owner, tree.GetRoot().DescendantNodes(), memberNames, readsIndexers)
                 }
@@ -2301,6 +2324,29 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         AddNullArgumentRead(reads, candidate, ClassifyNullArgumentRead(expression, model, run))
+    }
+
+    // Issue #5574: the `Deconstruct` a deconstruction or positional pattern
+    // `node` calls, or null for any other node.
+    private func DeconstructingMethod(node SyntaxNode, owner Compilation, ref model SemanticModel?) IMethodSymbol? {
+        let isDeconstruction = node is AssignmentExpressionSyntax{
+            Left: TupleExpressionSyntax or DeclarationExpressionSyntax
+        } ||
+            node is ForEachVariableStatementSyntax ||
+            node is RecursivePatternSyntax{PositionalPatternClause: {}}
+        if !isDeconstruction {
+            return nil
+        }
+        let current = model ?? owner.GetSemanticModel(node.SyntaxTree)
+        model = current
+        return switch node {
+            case assignment is AssignmentExpressionSyntax: current.GetDeconstructionInfo(assignment).Method
+            case loop is ForEachVariableStatementSyntax: current.GetDeconstructionInfo(loop).Method
+            case pattern is RecursivePatternSyntax: (
+                current.GetOperation(pattern) as IRecursivePatternOperation
+            )?.DeconstructSymbol as IMethodSymbol
+            default: default(IMethodSymbol?)
+        }
     }
 
     private func AddNullArgumentRead(

@@ -987,7 +987,9 @@ namespace Demo
         Assert.DoesNotContain("e.Item!!", printed[0])
     }
 
-    /// Row 41: a local deconstructed from a promoted positional member.
+    /// Row 41: a local deconstructed from a positional member that a call passes `null`. Since #5574
+    /// a deconstruction is a read of the positional property that keeps it non-null (G# infers the
+    /// locals from it and asserts their later reads), so the member stays `Node` and nothing asserts.
     @Fact
     func DeconstructedLocalOfPromotedPositionalMember_IsAssertedOnDereference() {
         let printed = TranslateEnabled(("Entry.cs", `
@@ -1020,8 +1022,8 @@ namespace Demo
         private static int Take(Node node) => node.GetHashCode();
     }
 }`))
-        Assert.DoesNotContain("item.GetHashCode()", printed[0])
-        Assert.Contains("Take(item!!)", printed[0])
+        Assert.DoesNotContain("Item Node?", printed[0])
+        Assert.DoesNotContain("Take(item!!)", printed[0])
     }
 
     /// Row 40. Issue #5574: `p` forwards into a parameter that its interface property fixes, so `p`
