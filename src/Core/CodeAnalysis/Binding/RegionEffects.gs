@@ -110,10 +110,12 @@ internal sealed class RegionCall {
         byReferenceNames List[string],
         byValueNames List[string],
         hasUnresolvedOperand bool,
-        position int32
+        position int32,
+        receiverName string? = nil
     ) {
         Kind = kind
         CalleeName = calleeName
+        ReceiverName = receiverName
         ByReferenceNames = byReferenceNames
         ByValueNames = byValueNames
         HasUnresolvedOperand = hasUnresolvedOperand
@@ -124,8 +126,13 @@ internal sealed class RegionCall {
         get;
     }
 
-    /// Gets the name of the callee for a named invocation, or `nil`.
+    /// Gets the name of the callee for a named invocation, or of the member for a member invocation, or `nil`.
     prop CalleeName string? {
+        get;
+    }
+
+    /// Gets the plain name of the receiver of a member invocation when the region does not declare it, or `nil`.
+    prop ReceiverName string? {
         get;
     }
 

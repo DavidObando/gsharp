@@ -941,10 +941,24 @@ internal sealed class RegionEffectScanner {
         let bareBefore = current.BareReads.ToArray()
         let callsBefore = current.Calls.Count
         current.AbsorbFlags(record, Active())
-        // A nested named call whose callee the enclosing region declares calls a function value.
+        // A nested named call whose callee the enclosing region declares calls a function value. A nested member
+        // call whose receiver the enclosing region declares has a receiver that the entry scope cannot resolve.
         for var i = callsBefore; i < current.Calls.Count; i++ {
             let call = current.Calls[i]
-            if call.Kind == RegionCallKind.NamedInvocation && call.CalleeName != nil && IsDeclared(call.CalleeName) {
+            if call.Kind == RegionCallKind.MemberInvocation &&
+                call.ReceiverName != nil &&
+                IsDeclared(call.ReceiverName) {
+                current.Calls[i] = RegionCall(
+                    RegionCallKind.MemberInvocation,
+                    call.CalleeName,
+                    call.ByReferenceNames,
+                    call.ByValueNames,
+                    call.HasUnresolvedOperand,
+                    call.Position
+                )
+            } else if call.Kind == RegionCallKind.NamedInvocation &&
+                call.CalleeName != nil &&
+                IsDeclared(call.CalleeName) {
                 current.Calls[i] = RegionCall(
                     RegionCallKind.ExpressionInvocation,
                     nil,
@@ -1598,6 +1612,11 @@ internal sealed class RegionEffectScanner {
         let byReference = List[string]()
         let byValue = List[string]()
         var unresolved = false
+        // The consumer resolves a plain receiver at the entry scope, to tell a function value from a method.
+        var receiverName string? = nil
+        if receiver != nil && receiverIsRoot && NameOf(receiver) is {} plainReceiver && !IsDeclared(plainReceiver) {
+            receiverName = plainReceiver
+        }
         if receiver != nil && receiverIsRoot {
             let receiverName = NameOf(receiver)
             if receiverName != nil {
@@ -1662,7 +1681,7 @@ internal sealed class RegionEffectScanner {
             current.Calls.Add(
                 RegionCall(
                     kind,
-                    if kind == RegionCallKind.NamedInvocation {
+                    if kind == RegionCallKind.NamedInvocation || kind == RegionCallKind.MemberInvocation {
                         call.Identifier.ValueText
                     } else {
                         default(string?)
@@ -1670,7 +1689,8 @@ internal sealed class RegionEffectScanner {
                     byReference,
                     byValue,
                     unresolved,
-                    call.Span.Start
+                    call.Span.Start,
+                    receiverName
                 )
             )
         }

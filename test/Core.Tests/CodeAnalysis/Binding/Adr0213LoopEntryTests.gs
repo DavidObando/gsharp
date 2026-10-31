@@ -1002,6 +1002,60 @@ class H {
     }
 }
 func Main() { }`, "GS0155")
+            Add("delegate-invoke-member-call-is-indirect (A3)", `package T
+import System
+func Run(ref text string?, callback Action) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        callback.Invoke()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("function-parameter-call-is-indirect (A3)", `package T
+import System
+func Run(ref text string?, callback Action) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        callback()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("function-typed-field-member-call-is-indirect (A3)", `package T
+import System
+class Holder {
+    var Cb () -> void = func() { }
+}
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+class Holder {
+    func Do() { }
+}
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Do()
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

@@ -11,6 +11,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Reflection
 
 /// ADR-0213 section 20, slice L0: the loop comparison. At each loop whose entry
 /// state holds a fact, the binder computes the lower bound `Lower(S, R)` of
@@ -291,12 +292,50 @@ internal partial class StatementBinder {
             case RegionCallKind.ExpressionInvocation, RegionCallKind.Construction, RegionCallKind.Other {
                 return true
             }
+            case RegionCallKind.MemberInvocation {
+                return MemberCallIsIndirect(call)
+            }
             default {
-                // A member call is a plain call here: ADR-0208 amendment A3 keeps by-reference storage
-                // across a call to a method. The walker does not tell a method from a function-typed field.
                 return false
             }
         }
+    }
+
+    // A member call is a plain call (ADR-0208 amendment A3 keeps by-reference storage across a call to a method),
+    // unless it invokes a function value: a delegate's `Invoke`, any member of a receiver of function type, or a
+    // field or property of the receiver's type. The receiver is resolved when it is a plain name of the entry
+    // scope; the member of any other receiver is taken for a method.
+    private func MemberCallIsIndirect(call RegionCall) bool {
+        let member = call.CalleeName
+        if member == nil || member == "Invoke" || member == "BeginInvoke" || member == "DynamicInvoke" {
+            return true
+        }
+        if call.ReceiverName == nil || $scope.TryLookupSymbol(call.ReceiverName) is not VariableSymbol receiver {
+            return false
+        }
+        let receiverType = StripAllNullability(receiver.Type)
+        if receiverType is FunctionTypeSymbol or
+            DelegateTypeSymbol ||
+            (receiverType?.ClrType is {} delegateClrType && ClrTypeUtilities.IsDelegateType(delegateClrType)) {
+            return true
+        }
+        if receiverType is StructSymbol declared {
+            for type in declared.GetHierarchy() {
+                for symbol in type.GetMembers() {
+                    if symbol.Name == member && symbol is not FunctionSymbol {
+                        return true
+                    }
+                }
+            }
+        }
+        if receiverType?.ClrType is {} clrType {
+            for clrMember in clrType.GetMember(member) {
+                if clrMember is FieldInfo or PropertyInfo {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private func StripAllNullability(type TypeSymbol?) TypeSymbol? -> StripNullability(type)

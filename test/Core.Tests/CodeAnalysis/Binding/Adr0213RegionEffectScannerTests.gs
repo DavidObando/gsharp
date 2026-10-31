@@ -97,7 +97,9 @@ open class Adr0213RegionEffectScannerTests {
         let effects = Scan("while c { list.TryGetValue(key, out found) }")
         let call = Assert.Single(effects.Calls)
         Assert.Equal(RegionCallKind.MemberInvocation, call.Kind)
-        Assert.Null(call.CalleeName)
+        // The member and a plain receiver let the consumer tell a function value from a method.
+        Assert.Equal("TryGetValue", call.CalleeName)
+        Assert.Equal("list", call.ReceiverName)
         Assert.Equal([]string{"list", "key"}, call.ByValueNames.ToArray())
         Assert.Equal([]string{"found"}, call.ByReferenceNames.ToArray())
     }
