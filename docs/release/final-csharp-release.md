@@ -76,7 +76,7 @@ Seven jobs, one per destination (ADR-0218). The only retry tool is "Re-run faile
 | `publish-verify` | `release-publish.py verify`: the package inventory (6 RID compiler packages, 6 other packages, 5 symbol packages), one version, tag against version, both VSIX versions and the pre-release marker, the template SDK pins. Fails before the first push. |
 | `publish-github-release` | Creates the release as a **draft** (`--prerelease` for a prerelease tag) and uploads every `.nupkg`, `.snupkg` and both `.vsix` with `--clobber`. |
 | `publish-nuget-compiler` | Pushes the six `Gsharp.NET.Sdk.Compiler.<rid>` packages with `--skip-duplicate`, then waits up to 30 minutes for them on the flat container. |
-| `publish-nuget-sdk` | Needs the previous job. Checks the six RID packages are on the feed, pushes `Gsharp.NET.Sdk` and the remaining packages, each `.nupkg` then its `.snupkg`, then checks the SDK is on the feed. |
+| `publish-nuget-sdk` | Needs the previous job. Checks the six RID packages are on the feed, pushes `Gsharp.NET.Sdk` and the remaining packages, each `.nupkg` (with `--no-symbols`) then its `.snupkg`, so each symbol package is pushed once, then checks the SDK is on the feed. |
 | `publish-vscode-marketplace` | Needs `publish-nuget-sdk`. Skips when the version is already published; otherwise `vsce@3.9.2 publish --skip-duplicate`, then asks the marketplace again. |
 | `publish-visual-studio-marketplace` | Needs `publish-nuget-sdk`. Skipped on any prerelease tag. Skips when the version is published; otherwise `VsixPublisher.exe publish`, then asks again. |
 | `publish-finalize` | Runs after a failure too. When every destination has the version it writes the "Publication notes" section of the release body (unverified platforms; no Visual Studio publication for a prerelease) and un-drafts the release. Otherwise it fails and names what is missing. |
@@ -207,31 +207,44 @@ jobs that were skipped behind the failed one. Read the failure by job:
 | `publish-finalize` | A destination is missing, or the network failed. The release stays a draft. The job summary lists each destination. | Fix or re-run the named job, then re-run failed jobs. |
 
 A skipped `publish-visual-studio-marketplace` on a prerelease tag is not a
-failure. Manual publication is the last resort when a run is older than 30 days or has
+failure.
+
+A re-run uses the workflow and the scripts of the tagged commit. A defect in
+them is not fixed by a re-run: fix it on `main` and push a new tag.
+
+Each `.snupkg` is pushed once per run: the `.nupkg` push passes `--no-symbols`,
+and the `.snupkg` push follows it explicitly with `--skip-duplicate`. A re-run
+of `publish-nuget-sdk` therefore pushes symbol packages that may already be on
+the symbol server. Whether that server answers 409 (a warning with
+`--skip-duplicate`) is unverified until a tag run shows it (ADR-0218). If the
+re-run fails on a `.snupkg` push with any other answer, don't repeat it; the
+packages themselves are already on nuget.org.
+
+Manual publication is the last resort when a run is older than 30 days or has
 been re-run 50 times. For VS Code use `npx @vscode/vsce@3.9.2 publish --packagePath vscode-gsharp.vsix --skip-duplicate` with the artifact
-of the tag run (`gh run download <run-id> -n vscode-gsharp-vsix`). 
+of the tag run (`gh run download <run-id> -n vscode-gsharp-vsix`).
 
-  To publish the Visual Studio VSIX by hand, download the `visual-studio-gsharp-vsix`
-  artifact of the tag run (`gh run download <run-id> -n visual-studio-gsharp-vsix`).
-  Then, on Windows with the Visual Studio SDK, run the same command as
-  the `publish-visual-studio-marketplace` job:
+To publish the Visual Studio VSIX by hand, download the `visual-studio-gsharp-vsix`
+artifact of the tag run (`gh run download <run-id> -n visual-studio-gsharp-vsix`).
+Then, on Windows with the Visual Studio SDK, run the same command as
+the `publish-visual-studio-marketplace` job:
 
-  ```powershell
-  # Read the PAT without echoing it or leaving it in shell history.
-  $pat = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Marketplace PAT')).Password
-  & $publisher publish -payload GSharp.VisualStudio.vsix `
-      -publishManifest src\vs-gsharp\vs-publish.json -personalAccessToken $pat
-  Remove-Variable pat
-  ```
+```powershell
+# Read the PAT without echoing it or leaving it in shell history.
+$pat = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Marketplace PAT')).Password
+& $publisher publish -payload GSharp.VisualStudio.vsix `
+    -publishManifest src\vs-gsharp\vs-publish.json -personalAccessToken $pat
+Remove-Variable pat
+```
 
-  `$publisher` is `VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe`
-  under the Visual Studio installation, located the same way as
-  that job. Don't paste the PAT into a shared terminal, a log, or
-  an issue.
+`$publisher` is `VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe`
+under the Visual Studio installation, located the same way as
+that job. Don't paste the PAT into a shared terminal, a log, or
+an issue.
 
-  Alternatively, upload the VSIX in the Marketplace publisher portal for
-  `gsharplang`. The failed job stays red in the run history; record the
-  manual publish in the release notes PR.
+Alternatively, upload the VSIX in the Marketplace publisher portal for
+`gsharplang`. The failed job stays red in the run history; record the
+manual publish in the release notes PR.
 
 ### 4. Post-publish verification
 
