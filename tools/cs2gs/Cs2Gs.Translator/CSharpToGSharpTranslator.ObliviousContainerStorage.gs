@@ -180,12 +180,7 @@ partial class CSharpToGSharpTranslator {
             for reference in local.DeclaringSyntaxReferences {
                 if reference.GetSyntax() is ForEachStatementSyntax forEach {
                     let container ISymbol? = this.context.GetSymbolInfo(forEach.Expression).Symbol
-                    let containerType ITypeSymbol? = StorageType(container?.OriginalDefinition)
-                    return this.ElementPositionIsPromoted(container, nil) &&
-                        (
-                        containerType is IArrayTypeSymbol ||
-                            containerType is INamedTypeSymbol{TypeArguments: {Length: 1}}
-                    )
+                    return this.ElementPositionIsPromoted(container, nil)
                 }
             }
             return false
@@ -203,41 +198,63 @@ partial class CSharpToGSharpTranslator {
             if value == nil || this.ObliviousContainerDestinations().Count == 0 {
                 return false
             }
-            var written ExpressionSyntax = value
-            while written.Parent is ParenthesizedExpressionSyntax parenthesized {
-                written = parenthesized
-            }
+            let written ExpressionSyntax = this.WrittenWholeValue(value)
             let parent SyntaxNode? = written.Parent
-            // `items.Add(value)`, `items.Insert(0, value)`, `map.Add(key, value)`.
-            if parent is ArgumentSyntax{
-                Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
-            } argument &&
-                invocation.Expression is MemberAccessExpressionSyntax target &&
+            // `items.Add(value)`, `items.Insert(0, value)`, `map.Add(key, value)` and an
+            // index argument such as `lookup[value]`.
+            if parent is ArgumentSyntax argument &&
                 this
                 .context
                 .SemanticModel
-                .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
-                parameter.ContainingSymbol is IMethodSymbol{ReducedFrom: nil} {
-                return this.ElementPositionIsPromoted(this.context.GetSymbolInfo(target.Expression).Symbol, parameter)
-            }
-            // `items[0] = value`, `lines[0] = value`, `map[key] = value`.
-            if parent is AssignmentExpressionSyntax{Left: ElementAccessExpressionSyntax access} assignment &&
-                assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && assignment.Right == written {
-                return this.ElementPositionIsPromoted(
-                    this.context.GetSymbolInfo(access.Expression).Symbol,
-                    this.context.GetSymbolInfo(access).Symbol
+                .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} {
+                let receiver ExpressionSyntax? = switch argument.Parent?.Parent {
+                    case invocation is InvocationExpressionSyntax: (
+                        if invocation.Expression is MemberAccessExpressionSyntax target &&
+                            parameter.ContainingSymbol is IMethodSymbol{ReducedFrom: nil} {
+                            target.Expression
+                        } else {
+                            default(ExpressionSyntax?)
+                        }
+                    )
+                    case access is ElementAccessExpressionSyntax: access.Expression
+                    default: default(ExpressionSyntax?)
+                }
+                return receiver != nil && this.ElementPositionIsPromoted(
+                    this.context.GetSymbolInfo(receiver).Symbol,
+                    parameter
                 )
             }
-            // `new List<T> { value }`, `new Dictionary<K, V> { { key, value } }` and
-            // `new Dictionary<K, V> { [key] = value }`.
+            if parent is AssignmentExpressionSyntax assignment && assignment.IsKind(
+                SyntaxKind.SimpleAssignmentExpression
+            ) &&
+                assignment.Right == written {
+                // `items[0] = value`, `lines[0] = value`, `map[key] = value`.
+                if assignment.Left is ElementAccessExpressionSyntax access {
+                    return this.ElementPositionIsPromoted(
+                        this.context.GetSymbolInfo(access.Expression).Symbol,
+                        this.context.GetSymbolInfo(access).Symbol
+                    )
+                }
+                // `box.Value = value`.
+                if assignment.Left is MemberAccessExpressionSyntax memberAccess {
+                    return this.ElementPositionIsPromoted(
+                        this.context.GetSymbolInfo(memberAccess.Expression).Symbol,
+                        this.context.GetSymbolInfo(memberAccess).Symbol
+                    )
+                }
+            }
+            // `new List<T> { value }`, `new Dictionary<K, V> { { key, value } }`,
+            // `new Dictionary<K, V> { [key] = value }` and `new Box<T> { Value = value }`.
             var element SyntaxNode = written
             var index = 0
             var member ISymbol? = nil
-            if parent is AssignmentExpressionSyntax{
-                Left: ImplicitElementAccessSyntax implicitAccess
-            } initializerAssignment &&
-                initializerAssignment.Right == written {
-                member = this.context.GetSymbolInfo(implicitAccess).Symbol
+            if parent is AssignmentExpressionSyntax initializerAssignment &&
+                initializerAssignment.Right == written &&
+                (
+                initializerAssignment.Left is ImplicitElementAccessSyntax ||
+                    initializerAssignment.Left is IdentifierNameSyntax
+            ) {
+                member = this.context.GetSymbolInfo(initializerAssignment.Left).Symbol
                 element = initializerAssignment
             } else if parent is InitializerExpressionSyntax complex && complex.IsKind(
                 SyntaxKind.ComplexElementInitializerExpression
@@ -269,6 +286,49 @@ partial class CSharpToGSharpTranslator {
                 this.ElementPositionIsPromoted(sink, member)
         }
 
+        // The type parameter of a container definition that its `IEnumerable<T>`
+        // enumerates, such as `T` of `List<T>`. A container that enumerates another type,
+        // such as `Tagged<T> : IEnumerable<int>` or `Dictionary<K, V>`, has none (-1).
+        private func EnumeratedTypeParameterOrdinal(definition INamedTypeSymbol?) int32 {
+            if definition == nil {
+                return -1
+            }
+            for implemented in definition.AllInterfaces.Prepend(definition) {
+                if implemented
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T &&
+                    implemented.TypeArguments[0] is ITypeParameterSymbol parameter &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(parameter.DeclaringType, definition) {
+                    return parameter.Ordinal
+                }
+            }
+            return -1
+        }
+
+        // The whole value that a write stores: an arm of a conditional or switch
+        // expression, the right operand of `??`, or a parenthesized value flows into the
+        // enclosing expression, unless a user-defined conversion converts it first.
+        private func WrittenWholeValue(value ExpressionSyntax) ExpressionSyntax {
+            var written ExpressionSyntax = value
+            while true {
+                let parent SyntaxNode? = written.Parent
+                let whole ExpressionSyntax? = switch parent {
+                    case parenthesized is ParenthesizedExpressionSyntax: parenthesized
+                    case conditional is ConditionalExpressionSyntax when conditional.Condition != written: conditional
+                    case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+                        coalesce.Right == written: coalesce
+                    case arm is SwitchExpressionArmSyntax when arm.Expression == written: arm.Parent as SwitchExpressionSyntax
+                    default: default(ExpressionSyntax?)
+                }
+                if whole == nil || this.context.SemanticModel.GetConversion(written).IsUserDefined {
+                    return written
+                }
+                written = whole
+            }
+        }
+
         // The element of an array, or a member result that is a type parameter of the
         // container type, is a recorded position of the storage. A nil member is the
         // single element position of a `foreach`. A parameter typed by a type parameter
@@ -293,7 +353,7 @@ partial class CSharpToGSharpTranslator {
                 .Equals(parameter.DeclaringType, containerDefinition) {
                 parameter.Ordinal
             } else if member == nil {
-                0
+                EnumeratedTypeParameterOrdinal(containerDefinition as INamedTypeSymbol)
             } else {
                 -1
             }

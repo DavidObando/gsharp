@@ -2668,7 +2668,8 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.BranchResultAcceptsNil(value, out var branch) || this.NullForgivingTargetAcceptsNil(
                     targetType,
-                    targetSymbol
+                    targetSymbol,
+                    value
                 ) ||
                     (
                     targetSymbol is IParameterSymbol parameterTarget &&
@@ -5300,7 +5301,8 @@ partial class CSharpToGSharpTranslator {
 
         private func NullForgivingTargetAcceptsNil(
             targetType ITypeSymbol?,
-            targetSymbol ISymbol?
+            targetSymbol ISymbol?,
+            writtenValue Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
         ) bool -> targetType?.NullableAnnotation == Microsoft
             .CodeAnalysis
             .NullableAnnotation
@@ -5311,7 +5313,8 @@ partial class CSharpToGSharpTranslator {
             (
             targetType != nil && targetType.IsReferenceType == true && !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbol
+                targetSymbol,
+                writtenValue
             )
         )
 
@@ -5572,11 +5575,14 @@ partial class CSharpToGSharpTranslator {
             if !(this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter}) {
                 return false
             }
-            return this.ParameterWillRemainNonNullableReference(parameter)
+            return this.ParameterWillRemainNonNullableReference(parameter, argument.Expression)
         }
 
-        private func ParameterWillRemainNonNullableReference(parameter IParameterSymbol) bool {
-            return this.TargetWillRemainNonNullableReference(parameter.Type, parameter)
+        private func ParameterWillRemainNonNullableReference(
+            parameter IParameterSymbol,
+            argumentValue Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+        ) bool {
+            return this.TargetWillRemainNonNullableReference(parameter.Type, parameter, argumentValue)
         }
 
         /// Issue #5516: whether [`node`](paramref) sits in a file with `#nullable enable annotations`

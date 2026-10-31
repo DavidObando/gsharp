@@ -148,7 +148,9 @@ public static class Use
     /// parameter without `!!`, and a carrier (`...[]List[T]`, `...IEnumerable[T]`) is
     /// promoted as whole storage. A nil element written into such storage or into a
     /// construction stored there, by a call, an element write or a collection
-    /// initializer, stays nil. A non-null element dereference, return, or argument gets
+    /// initializer, an index argument, a member write or an arm of a conditional, stays
+    /// nil. A container that enumerates another type keeps its `foreach` variable. A
+    /// non-null element dereference, return, or argument gets
     /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
     /// element throws (cref:NullReferenceException) at the same use as in C#. The
     /// emitted image has no diagnostics and passes strict ILVerify before it runs.
@@ -428,6 +430,51 @@ public static class Use
         return table["c"] == null ? added : 0;
     }
 
+    public static int WriteThroughArms(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        string none = null;
+        items.Add(p.Length > 0 ? lines[1] : p);
+        items.Add(none ?? lines[1]);
+        return items[2] == null && items[3] == null ? 1 : 0;
+    }
+
+    public static int WriteMembers(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Box<string> box;
+        box = Node.MakeBox(p);
+        box.Value = lines[1];
+        var written = box.Value == null ? 1 : 0;
+        box = new Box<string> { Value = lines[1] };
+        return box.Value == null ? written : 0;
+    }
+
+    public static int IndexArgument(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Lookup<string> lookup;
+        lookup = Node.Look(p);
+        return lookup[lines[1]];
+    }
+
+    public static int OtherEnumeration(string p)
+    {
+        Tagged<string> tagged;
+        tagged = Node.Tag(p);
+        var total = 0;
+        foreach (var n in tagged)
+        {
+            total += n.GetHashCode();
+        }
+        return total;
+    }
+
     public static int ParamsElementThrows(string p)
     {
         string[] lines;
@@ -515,6 +562,10 @@ public static class Use
         Assert.Equal(1, Invoke(consumer, "WriteElements", "ab"))
         Assert.Equal(1, Invoke(consumer, "WriteInitializer", "ab"))
         Assert.Equal(1, Invoke(consumer, "WriteMap", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteThroughArms", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteMembers", "ab"))
+        Assert.Equal(1, Invoke(consumer, "IndexArgument", "ab"))
+        Assert.Equal(7, Invoke(consumer, "OtherEnumeration", "ab"))
         Assert.Equal(-1, Invoke(consumer, "ParamsElementThrows", "ab"))
         Assert.Equal(2, Invoke(consumer, "InterfaceView", "ab"))
         Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
@@ -570,6 +621,11 @@ public static class Use
             "items = List[string?]{ lines[1] }\n",
             "table[\"k\"] = lines[1]\n",
             "table.Add(\"a\", lines[1])\n",
+            "items.Add(if p.Length > 0 { lines[1] } else { p })\n",
+            "items.Add(none ?? lines[1])\n",
+            "box.Value = lines[1]\n",
+            "return lookup[lines[1]]\n",
+            "total += n.GetHashCode()\n",
             "private func Groups(values ...[]List[string?]?) int32 {",
             "private func SequenceNils(values ...IEnumerable[string?]) int32 {",
             "private func CountNils(values IReadOnlyList[string?]) int32 {",
@@ -1033,6 +1089,8 @@ public class Node
     public static string[] Holes(string p) { return new[] { p, null }; }
     public static T[] Empty<T>() { return new T[0]; }
     public static Box<string> MakeBox(string p) { var box = new Box<string>(); box.Value = p; return box; }
+    public static Lookup<string> Look(string p) { return new Lookup<string>(); }
+    public static Tagged<string> Tag(string p) { return new Tagged<string>(); }
     public static System.Collections.Generic.List<string> Items(string p) { return new System.Collections.Generic.List<string> { p, p }; }
     public static System.Collections.Generic.Dictionary<string, string> Map(string p) { return new System.Collections.Generic.Dictionary<string, string> { { "k", p } }; }
     public static System.Collections.Generic.List<string>[] Groups(string p) { return new[] { new System.Collections.Generic.List<string> { p, null } }; }
@@ -1056,6 +1114,17 @@ public class Box<T>
 {
     public T Value;
     public T Get() { return Value; }
+}
+
+public class Lookup<T>
+{
+    public int this[T key] { get { return key == null ? 1 : 0; } }
+}
+
+public class Tagged<T> : System.Collections.Generic.IEnumerable<int>
+{
+    public System.Collections.Generic.IEnumerator<int> GetEnumerator() { yield return 7; }
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() { return GetEnumerator(); }
 }
 
 public class Holder
