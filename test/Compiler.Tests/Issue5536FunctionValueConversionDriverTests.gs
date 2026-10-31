@@ -355,6 +355,70 @@ class Program {
 `, "OOO")
     }
 
+    /// Issue #5569: a block-bodied literal is bound against a delegate target speculatively when another candidate
+    /// takes its natural type. A literal whose `return` value does not convert makes the delegate candidates
+    /// inapplicable, so the `object` overload applies, as in C#. This holds for by-value and `in` slots, methods,
+    /// constructors, reduced extensions and generic receivers. A literal that converts still selects the delegate.
+    @Fact
+    func BlockLiteral_ThatDoesNotConvertToTheDelegate_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+class Pt {
+    var X int32 = 3
+}
+func Main() {
+    Console.Write(Calls.In(() -> { return "s" }, 1))
+    Console.Write(Calls.M(() -> { return "s" }, 1))
+    Console.Write(InCtor(() -> { return "s" }, 1).Kind)
+    Console.Write(C(() -> { return "s" }, 1).Kind)
+    Console.Write(InReceiver().X(() -> { return "s" }, 1))
+    Console.Write(LitBox[Pt]().M((p Pt) -> { return "s" }))
+    Console.Write(Calls.In(() -> { return 1 }, 1))
+    Console.Write(InCtor(() -> { return 1 }, 1).Kind)
+    Console.Write(LitBox[Pt]().M((p Pt) -> { return p.X }))
+}
+`, `using System;
+using FunctionControl;
+class Pt {
+    public int X = 3;
+}
+class Program {
+    static void Main() {
+        Console.Write(Calls.In(() => { return "s"; }, 1));
+        Console.Write(Calls.M(() => { return "s"; }, 1));
+        Console.Write(new InCtor(() => { return "s"; }, 1).Kind);
+        Console.Write(new C(() => { return "s"; }, 1).Kind);
+        Console.Write(new InReceiver().X(() => { return "s"; }, 1));
+        Console.Write(new LitBox<Pt>().M((Pt p) => { return "s"; }));
+        Console.Write(Calls.In(() => { return 1; }, 1));
+        Console.Write(new InCtor(() => { return 1; }, 1).Kind);
+        Console.Write(new LitBox<Pt>().M((Pt p) => { return p.X; }));
+    }
+}
+`, "OOOOOOFFF")
+    }
+
+    /// Issue #5569 control: with no other candidate, the block-bodied literal keeps the target bind and its
+    /// diagnostic at the `return` value.
+    @Fact
+    func BlockLiteral_AtTheOnlyCandidate_ReportsTheReturnConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.One(() -> { return "s" }))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.One(() => { return "s"; }));
+    }
+}
+`, "CS0029", line: 4, column: 44, length: 3, oracleCompanion: "CS1662")
+    }
+
     /// Issue #5543 controls: a by-value delegate slot, a source `in` slot and an explicit address keep their
     /// selection. A function value still needs a delegate that it can keep (#5536).
     @Fact
@@ -689,7 +753,8 @@ class Program {
         line int32,
         column int32,
         length int32,
-        diagnostic string = "GS0155"
+        diagnostic string = "GS0155",
+        oracleCompanion string? = nil
     ) {
         output.WriteLine("Contract source:\n" + Contract)
         output.WriteLine("Oracle source:\n" + oracle)
@@ -707,9 +772,19 @@ class Program {
         using let stream = MemoryStream()
         let emitted = compilation.Emit(stream)
         Assert.False(emitted.Success)
+        // A companion is a second oracle error that Roslyn reports at the same location for the same defect.
         let oracleError = Assert.Single(
-            emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+            emitted.Diagnostics.Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error &&
+                    diagnostic.Id != oracleCompanion
+            )
         )
+        if oracleCompanion != nil {
+            let companion = Assert.Single(
+                emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == oracleCompanion)
+            )
+            Assert.Equal(oracleError.Location.SourceSpan, companion.Location.SourceSpan)
+        }
         Assert.Equal(oracleDiagnostic, oracleError.Id)
         output.WriteLine("Oracle diagnostic: " + oracleError.ToString())
         for path in OutputPaths(fixture) {
@@ -883,6 +958,7 @@ namespace FunctionControl {
         public static string M(object o, long x) => "O";
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
+        public static string One(System.Func<long> f) => "F";
         public static string RR(ref readonly System.Func<long> f, int x) => "F";
         public static string RR(object o, long x) => "O";
         public static string P(in System.Func<long, long> f, int x) => "F" + f(2);
@@ -899,6 +975,10 @@ namespace FunctionControl {
     public static class InE {
         public static string X(this InReceiver r, in System.Func<long> f, int x) => "F";
         public static string X(this InReceiver r, object o, long x) => "O";
+    }
+    public class LitBox<T> {
+        public string M(System.Func<T, long> f) => "F";
+        public string M(object o) => "O";
     }
     public class InBox<T> {
         public string M(T x, in System.Func<T, int> f) => "B" + f(x);

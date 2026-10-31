@@ -1601,6 +1601,32 @@ internal partial class ExpressionBinder {
         symbolicTypeArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
         resultTypeOverride TypeSymbol? = nil
     ) bool {
+        let pending = literalTargetDiagnostics.Count
+        let mark = Diagnostics.Count
+        let bound = TryBindClrConstructorFromTypeCore(
+            clrType,
+            syntax,
+            out result,
+            out noApplicableOverload,
+            out boundArgumentsOnFailure,
+            openGenericDefinition,
+            symbolicTypeArgs,
+            resultTypeOverride
+        )
+        ReportDiscardedLiteralTargetDiagnostics(pending, noApplicableOverload || HasErrorDiagnosticSince(mark))
+        return bound
+    }
+
+    private func TryBindClrConstructorFromTypeCore(
+        clrType Type,
+        syntax CallExpressionSyntax,
+        @NotNullWhen(true) out result BoundExpression?,
+        out noApplicableOverload bool,
+        out boundArgumentsOnFailure ImmutableArray[BoundExpression],
+        openGenericDefinition Type? = nil,
+        symbolicTypeArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        resultTypeOverride TypeSymbol? = nil
+    ) bool {
         result = nil
         noApplicableOverload = false
         boundArgumentsOnFailure = default(ImmutableArray[BoundExpression])
@@ -2367,9 +2393,125 @@ internal partial class ExpressionBinder {
             out _,
             out _
         ) {
-            return BindLambdaWithDelegateTarget(argumentSyntax, lambdaSyntax, target!!, nominalTarget)
+            let functionTarget = target!!
+            return BindLambdaWithCandidateTarget(
+                lambdaSyntax,
+                candidateParameterLists,
+                (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, paramOffset, sourceArgIndex, argName),
+                () -> BindLambdaWithDelegateTarget(argumentSyntax, lambdaSyntax, functionTarget, nominalTarget)
+            )
         }
         return BindExpression(inner)
+    }
+
+    /// Issue #5569: binds a function literal against the delegate target that the delegate candidates agree on.
+    /// When another candidate takes a value at this position that the literal's natural type converts to, the
+    /// target bind is speculative. If the literal does not convert to the target, its diagnostics are discarded
+    /// and the literal keeps its natural type. The delegate candidates are then not applicable, and overload
+    /// resolution can select the other candidate, as in C#. The target bind and its diagnostics stay when no
+    /// such candidate exists or the natural bind also fails, so a single delegate candidate reports the same
+    /// error. Each path binds the literal again from syntax, so only one bound literal reaches the call.
+    /// @param lambdaSyntax The function literal.
+    /// @param candidateParameterLists The parameter lists of the candidates.
+    /// @param slotOf Gives the parameter index of the literal in a candidate, or -1.
+    /// @param bindWithTarget Binds the literal against the agreed delegate target.
+    /// @returns The bound literal.
+    private func BindLambdaWithCandidateTarget(
+        lambdaSyntax LambdaExpressionSyntax,
+        candidateParameterLists IReadOnlyList[[]ParameterInfo],
+        slotOf([]ParameterInfo) -> int32,
+        bindWithTarget() -> BoundExpression
+    ) BoundExpression {
+        let alternatives = List[Type]()
+        for parameters in candidateParameterLists {
+            let index = slotOf(parameters)
+            if index < 0 || index >= parameters.Length {
+                continue
+            }
+            let slotType = ConversionClassifier.GetPlainValueClrParameterType(parameters[index])
+            if !slotType.IsByRef && !slotType.ContainsGenericParameters && !MemberLookup.TryGetLambdaTargetFunctionType(
+                slotType,
+                out _
+            ) {
+                alternatives.Add(slotType)
+            }
+        }
+        if alternatives.Count == 0 {
+            return bindWithTarget()
+        }
+        let mark = Diagnostics.Count
+        let targeted = bindWithTarget()
+        if !HasErrorSince(mark, targeted) {
+            return targeted
+        }
+        let targetDiagnostics = Diagnostics.Skip(mark).ToImmutableArray()
+        Diagnostics.TruncateTo(mark)
+        let natural = BindExpression(lambdaSyntax)
+        if !HasErrorSince(mark, natural) &&
+            GetEffectiveArgumentClrTypeForOverloadResolution(natural.Type) is {} naturalType &&
+            alternatives
+            .Any(
+            (slotType Type) -> ClrOverloadResolution.ClassifyImplicit(slotType, naturalType) != ClrOverloadResolution
+                .ImplicitConversionKind
+                .None
+        ) {
+            literalTargetDiagnostics.Add(targetDiagnostics)
+            return natural
+        }
+        Diagnostics.TruncateTo(mark)
+        return bindWithTarget()
+    }
+
+    private func HasErrorSince(mark int32, bound BoundExpression) bool -> bound is BoundErrorExpression ||
+        HasErrorDiagnosticSince(mark)
+
+    private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.Skip(mark).Any(
+        (diagnostic Diagnostic) -> diagnostic.IsError
+    )
+
+    /// Issue #5569: ends a call bind that (cref:BindLambdaWithCandidateTarget) can make speculative. When the call
+    /// failed, the diagnostics of each discarded literal target bind are reported, as for a call with no other
+    /// candidate. A call that binds keeps none of them.
+    /// @param pending The count of (cref:literalTargetDiagnostics) when the call bind started.
+    /// @param failed Whether the call bind failed.
+    private func ReportDiscardedLiteralTargetDiagnostics(pending int32, failed bool) {
+        if literalTargetDiagnostics.Count <= pending {
+            return
+        }
+        if failed {
+            for var i = pending; i < literalTargetDiagnostics.Count; i++ {
+                Diagnostics.AddRange(literalTargetDiagnostics[i])
+            }
+        }
+        literalTargetDiagnostics.RemoveRange(pending, literalTargetDiagnostics.Count - pending)
+    }
+
+    /// Issue #5569: the parameter index of a source argument in a candidate, by name or by position.
+    /// @param parameters The candidate's parameters.
+    /// @param paramOffset The number of leading parameters that no source argument fills.
+    /// @param sourceArgIndex The source argument index.
+    /// @param argName The argument name, when the argument is named.
+    /// @returns The parameter index, or -1 when the candidate has no such parameter.
+    private func FindCandidateSlot(
+        parameters[]ParameterInfo,
+        paramOffset int32,
+        sourceArgIndex int32,
+        argName string?
+    ) int32 {
+        if !string.IsNullOrEmpty(argName) {
+            for var p = 0; p < parameters.Length; p++ {
+                if string.Equals(parameters[p].Name, argName, StringComparison.Ordinal) {
+                    return p
+                }
+            }
+            return -1
+        }
+        let index = sourceArgIndex + paramOffset
+        return if index < 0 || index >= parameters.Length {
+            -1
+        } else {
+            index
+        }
     }
 
     private func BindLambdaWithDelegateTarget(
