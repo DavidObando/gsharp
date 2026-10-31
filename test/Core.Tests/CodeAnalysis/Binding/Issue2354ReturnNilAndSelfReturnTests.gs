@@ -12,7 +12,9 @@ import System.Collections.Immutable
 import System.Linq
 import Xunit
 
-/// Issue #2345 follow-up (deferred finding #2): a plain G# `class` could not
+/// Issue #2345 follow-up (deferred finding #2). Issue #4316 reversed the `return nil` half:
+/// `nil` converts only to a `?` slot, so the `return nil` tests below now expect GS0155.
+/// The original report: a plain G# `class` could not
 /// `return nil` for its own non-nullable type (`GS0155: Cannot convert type
 /// 'nil' to '<Class>'`), and a method declared inside a GENERIC class
 /// could not `return this` for its own generic self-type (`GS0155: Cannot
@@ -27,7 +29,7 @@ import Xunit
 /// `object`) that are ALWAYS nullable at the CLR level regardless of an
 /// explicit `?` spelling. The rule is now scoped to genuine value types
 /// via a new, deliberately NARROW predicate,
-/// `Conversion.IsNilAssignableWithoutNullableWrapper` (a `class`, an
+/// the nil rule of `Conversion.Classify` (the old predicate was removed by #4316) (a `class`, an
 /// interface, or a reference-constrained type parameter — NOT the wider
 /// `Conversion.IsReferenceLikeTarget`, which also matches general
 /// CLR-backed reference types like `string`/`object`/function types that
@@ -72,29 +74,31 @@ class Box {
     }
 
     @Fact
-    func GenericClass_ReturnNil_OwnGenericType_Binds() {
+    func GenericClass_ReturnNil_OwnGenericType_ReportsGS0155() {
+        // Issue #4316: `nil` converts only to a `?` slot, so a bare generic
+        // class return type refuses it like every other reference type.
         const source = `package p
 class Box[T] {
     func Nothing() Box[T] {
         return nil
     }
 }`
-        Assert.Empty(GetErrors(source))
+        Assert.Contains(GetErrors(source), (d Diagnostic) -> d.Id == "GS0155")
     }
 
     @Fact
-    func NonGenericClass_ReturnNil_Binds() {
+    func NonGenericClass_ReturnNil_ReportsGS0155() {
         const source = `package p
 class Box {
     func Nothing() Box {
         return nil
     }
 }`
-        Assert.Empty(GetErrors(source))
+        Assert.Contains(GetErrors(source), (d Diagnostic) -> d.Id == "GS0155")
     }
 
     @Fact
-    func Interface_ReturnNil_Binds() {
+    func Interface_ReturnNil_ReportsGS0155() {
         const source = `package p
 interface Greeter {
     func Greet() string;
@@ -104,18 +108,13 @@ class Box {
         return nil
     }
 }`
-        Assert.Empty(GetErrors(source))
+        Assert.Contains(GetErrors(source), (d Diagnostic) -> d.Id == "GS0155")
     }
 
     @Fact
     func ObjectReturnType_ReturnNil_StillReportsGS0155() {
-        // Negative control: `object` is reached only via
-        // `IsReferenceLikeTarget`'s general CLR-backed fallback, not the
-        // narrower `IsNilAssignableWithoutNullableWrapper` predicate used for
-        // the nil-conversion rule, so it must keep requiring an explicit
-        // `object?` — this mirrors how `string`/function-typed slots keep
-        // rejecting a bare `nil` (issues #2159 / #715) and proves the fix
-        // did not over-broaden past genuine G#-declared reference types.
+        // Control: `object` always required an explicit `object?`, like
+        // `string` and function-typed slots (issues #2159 / #715).
         const source = `package p
 class Box {
     func AsObject() object {

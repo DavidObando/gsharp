@@ -102,6 +102,20 @@ class TupleTypeSymbol : TypeSymbol {
         }
     }
 
+    /// Issue #4316: whether an element, at any depth, is the `nil` type (`(nil, int32)`, the type of
+    /// a tuple literal that holds a bare `nil`). Such a tuple has no runtime representation until it
+    /// converts to a tuple whose element is a `T?`.
+    prop HasNilElement bool {
+        get {
+            for elementType in ElementTypes {
+                if elementType == TypeSymbol.Null || elementType is TupleTypeSymbol nested && nested.HasNilElement {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
     /// Finds the zero-based position of a declared element name (ordinal,
     /// case-sensitive), or returns `false`.
     /// @param name The element name to find.

@@ -42,7 +42,7 @@ import Xunit
 /// `nil` is legal. That half is answered by
 /// `TypeParameterSymbol.DependentBoundProvesReferenceType`, a separate
 /// depth-bounded walk read by exactly one consumer
-/// (`Conversion.IsNilAssignableWithoutNullableWrapper`), so the forty
+/// (`NullabilityImportRule`, since #4316), so the forty
 /// `ClassConstraint` consumers are untouched. The rows for both
 /// directions live in `Issue4062DependentBoundReferenceTypeTests`.
 ///

@@ -18,7 +18,7 @@ import Xunit
 /// prove the fix is not merely binder-level — the emitter's parallel
 /// `IsReferenceCompatible` self-instantiation-identity check (mirroring
 /// `Conversion.AreSameConstructedStructIdentity`) and its
-/// `Conversion.IsNilAssignableWithoutNullableWrapper`-driven `nil`
+/// the nil rule of `Conversion.Classify` (the old predicate was removed by #4316)-driven `nil`
 /// no-op path both produce correct, verifiable IL that runs and returns the
 /// expected values.
 open class Issue2354ReturnNilAndSelfReturnEmitTests {
@@ -45,7 +45,7 @@ func Main() {
     func GenericClass_ReturnNil_ProducesNullReference() {
         let source = `package p
 class Box[T] {
-    func Nothing() Box[T] {
+    func Nothing() Box[T]? {
         return nil
     }
 }
@@ -62,7 +62,7 @@ func Main() {
     func NonGenericClass_ReturnNil_ProducesNullReference() {
         let source = `package p
 class Box {
-    func Nothing() Box {
+    func Nothing() Box? {
         return nil
     }
 }
@@ -101,11 +101,11 @@ class Box {
     var X int32
     init(x int32) { X = x }
 }
-func Guard(b Box) bool {
+func Guard(b Box?) bool {
     return b == nil
 }
 func Main() {
-    var none Box = nil
+    var none Box? = nil
     var some = Box(1)
     System.Console.WriteLine(Guard(none))
     System.Console.WriteLine(Guard(some))

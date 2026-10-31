@@ -327,10 +327,14 @@ internal partial class ExpressionBinder {
                         break
                     }
                 }
+                if common == nil {
+                    common = JoinTupleArmsWithNilElements(significant)
+                }
             }
             // Issue #1151: when a `nil` arm was present and the common type of the
             // remaining arms is a non-nullable value type `T`, unify to `T?`.
-            if common != nil && hasNullArm {
+            // A `T!` arm already admits `nil`, so the join stays `T!` (restored below) unless an arm is `T?`.
+            if common != nil && hasNullArm && (!hasPlatformArm || hasNullableArm) {
                 common = LiftForNilArm(common)
             }
             // Issue #2202: when at least one arm was itself a nullable `T?`, the
@@ -355,6 +359,66 @@ internal partial class ExpressionBinder {
                 common = PlatformTypeSymbol.Get(common)
             }
             return common
+        }
+
+        /// Issue #4316: tuple arms that hold a `nil` element join element by element, with the same
+        /// join as scalar arms. `c ? (Box(), 1) : (nil, 2)` is `(Box?, int32)` exactly as
+        /// `c ? Box() : nil` is `Box?`, because `nil` no longer converts to a bare `Box`. Each element
+        /// joins the elements of every arm at once, so the arm order cannot change the result and a
+        /// `T!` or `T?` element keeps its annotation.
+        /// @param arms The tuple arm types, without `nil`, `never` or nullable wrappers.
+        /// @returns The element-wise join, or `null` when an arm is not a tuple of the same arity,
+        /// no arm holds a `nil` element, or an element has no common type.
+        private func JoinTupleArmsWithNilElements(arms IReadOnlyList[TypeSymbol]) TypeSymbol? {
+            if arms.Count < 2 || arms[0] is not TupleTypeSymbol first {
+                return nil
+            }
+            var holdsNil = false
+            for arm in arms {
+                if arm is not TupleTypeSymbol tuple || tuple.Arity != first.Arity {
+                    return nil
+                }
+                holdsNil = holdsNil || tuple.HasNilElement
+            }
+            if !holdsNil {
+                return nil
+            }
+            let elements = ImmutableArray.CreateBuilder[TypeSymbol](first.Arity)
+            let names = ImmutableArray.CreateBuilder[string?](first.Arity)
+            var anyName = false
+            for var i = 0; i < first.Arity; i++ {
+                let column = List[TypeSymbol](arms.Count)
+                var name string? = if first.HasNames {
+                    first.ElementNames[i]
+                } else {
+                    nil
+                }
+                for arm in arms {
+                    let tuple = cast[TupleTypeSymbol](arm)
+                    column.Add(tuple.ElementTypes[i])
+                    // A name survives only when every arm gives the element the same name.
+                    if !tuple.HasNames || tuple.ElementNames[i] != name {
+                        name = nil
+                    }
+                }
+                // Two arms join as a conditional does; more join as a switch does.
+                let element = if column.Count == 2 {
+                    ComputeConditionalResultType(column[0], column[1], nil)
+                } else {
+                    ComputeBestCommonType(column)
+                }
+                if element == nil || element == TypeSymbol.Null {
+                    return nil
+                }
+                elements.Add(element)
+                anyName = anyName || name != nil
+                names.Add(name)
+            }
+            return if anyName {
+                TupleTypeSymbol.Get(elements.MoveToImmutable(), names.MoveToImmutable())
+            } else {
+                TupleTypeSymbol.Get(elements.MoveToImmutable())
+            }
         }
 
         /// Enumerates the candidate supertypes of [`type`](paramref) ordered

@@ -1037,6 +1037,12 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
+        // Issue #4316: a `nil` from a block, a conditional or a switch converts at each result (see
+        // `TryConvertEachResult`), so the effects before the `nil` still run.
+        if expression.Type == TypeSymbol.Null &&
+            TryConvertEachResult(diagnosticLocation, expression, type!!, allowExplicit) is {} convertedResults {
+            return convertedResults
+        }
         // Issue #504: lower `nil → Nullable<value-type>` to a
         // BoundDefaultExpression of the target Nullable<T>. Value-type
         // Nullable<T> is a CLR struct distinct from T; emitting `ldnull`
@@ -1061,9 +1067,8 @@ internal class ConversionClassifier {
         //
         // Issue #4027: the BARE (unwrapped) open type parameter needs exactly
         // the same lowering, and #814 reached only the `T?` spelling. A
-        // reference-constrained `[T class]` slot accepts `nil` — that is
-        // deliberate (#2354), and `Conversion.IsNilAssignableWithoutNullableWrapper`
-        // is the predicate that admits it — but the ARGUMENT was still emitted
+        // reference-constrained `[T class]` slot accepted `nil` (since
+        // #4316 only `T?` does, and the lowering below serves both) — but the ARGUMENT was still emitted
         // as a bare `ldnull`, whose stack type is `Nullobjref` where the slot's
         // signature type is `!!T`. ECMA-335 III.1.8.1.3 has no rule that lets a
         // null reference match a generic-parameter slot, constraint or no
@@ -1087,7 +1092,18 @@ internal class ConversionClassifier {
                 )
             )
         ) {
-            return BoundDefaultExpression(nil, type!!)
+            // A `nil` that an expression with effects produces (`if c { Log()\n nil } else { nil }`)
+            // still runs that expression; only a bare `nil` is replaced outright.
+            let zero = BoundDefaultExpression(nil, type!!)
+            return if StatementBinder.IsNilLiteral(expression) {
+                cast[BoundExpression](zero)
+            } else {
+                BoundBlockExpression(
+                    expression.Syntax,
+                    ImmutableArray.Create[BoundStatement](BoundExpressionStatement(expression.Syntax, expression)),
+                    zero
+                )
+            }
         }
         // Issue #1256: element-wise tuple conversion lowering. When the source
         // and target are tuple types of the same arity and the classifier above
@@ -3312,6 +3328,11 @@ internal class ConversionClassifier {
             }
             return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
         }
+        // Issue #4316: a `(nil, int32)` source cannot be spilled into a temp of its own type.
+        if sourceTuple.HasNilElement &&
+            TryConvertEachResult(diagnosticLocation, expression, targetTuple, allowExplicit) is {} converted {
+            return converted
+        }
         // General path: evaluate the source once into a temp local, then build
         // a tuple literal of converted `ItemN` accesses off that local.
         let temp = LocalVariableSymbol("<>tupleConv", isReadOnly: true, type: sourceTuple)
@@ -3332,13 +3353,73 @@ internal class ConversionClassifier {
         return BoundBlockExpression(expression.Syntax, ImmutableArray.Create[BoundStatement](declaration), rebuilt)
     }
 
+    /// Issue #4316: `nil` and a tuple with a `nil` element (`(nil, int32)`) have no runtime
+    /// representation, so no temp, result local or slot may take that type. A source of such a type
+    /// that has several possible values converts each of them instead: a block's trailing value,
+    /// both conditional arms and every switch result. The block statements, the condition, the
+    /// discriminant and the guards stay where they are and run once; each result goes back through
+    /// `BindConversion`, so nested forms recurse down to the `nil` literals.
+    /// @param diagnosticLocation The conversion site.
+    /// @param expression The source, typed `nil` or a tuple with a `nil` element.
+    /// @param type The target type.
+    /// @param allowExplicit Whether explicit conversions are allowed.
+    /// @returns The source with each result converted, or `null` when the source has no such results.
+    private func TryConvertEachResult(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        type TypeSymbol,
+        allowExplicit bool
+    ) BoundExpression? {
+        switch expression {
+            case block is BoundBlockExpression {
+                return BoundBlockExpression(
+                    block.Syntax,
+                    block.Statements,
+                    BindConversion(diagnosticLocation, block.Expression, type, allowExplicit)
+                )
+            }
+            case conditional is BoundConditionalExpression {
+                return BoundConditionalExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    BindConversion(diagnosticLocation, conditional.WhenTrue, type, allowExplicit),
+                    BindConversion(diagnosticLocation, conditional.WhenFalse, type, allowExplicit),
+                    type
+                )
+            }
+            case switchExpression is BoundSwitchExpression {
+                let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpression.Arms.Length)
+                for arm in switchExpression.Arms {
+                    arms.Add(
+                        BoundSwitchExpressionArm(
+                            arm.Syntax,
+                            arm.Pattern,
+                            arm.Guard,
+                            BindConversion(diagnosticLocation, arm.Result, type, allowExplicit)
+                        )
+                    )
+                }
+                return BoundSwitchExpression(
+                    switchExpression.Syntax,
+                    switchExpression.Discriminant,
+                    arms.MoveToImmutable(),
+                    type
+                )
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
     private func BindContextualOpenLiteral(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         targetType TypeSymbol
     ) BoundExpression {
         if StatementBinder.IsNilLiteral(expression) {
-            return if targetType is NullableTypeSymbol || Conversion.IsReferenceLikeTarget(targetType) {
+            // Issue #4316: only a `T?` target takes the bare `nil`; any other target asks the shared rule.
+            return if targetType is NullableTypeSymbol {
                 cast[BoundExpression](BoundDefaultExpression(expression.Syntax, targetType))
             } else {
                 BindConversion(diagnosticLocation, expression, targetType)

@@ -158,7 +158,7 @@ func F(x Expr, values []int32) int32 {
         }
     }
 }
-Console.WriteLine(F(nil, []int32{7}))`)
+Console.WriteLine(F(default(Expr), []int32{7}))`)
             yield Case("NestedFixed", `func F(x DateTimeKind, values []int32) int32 {
     switch x {
         case DateTimeKind.Unspecified {

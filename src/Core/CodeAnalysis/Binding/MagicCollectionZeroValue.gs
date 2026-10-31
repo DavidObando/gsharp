@@ -433,7 +433,7 @@ internal shared class MagicCollectionZeroValue {
             missingDeclarationShape = requiresDeclarationShape
             return nil
         }
-        let ownerType = if receiverType != nil {
+        let ownerType TypeSymbol? = if receiverType != nil {
             MemberLookup.GetProjectionReceiverImportedType(receiverType) ?? receiverType.StripToBareShape()
         } else {
             nil

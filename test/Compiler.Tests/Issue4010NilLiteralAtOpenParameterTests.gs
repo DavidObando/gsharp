@@ -27,7 +27,7 @@ import Xunit
 /// <b>Fix.</b> A `nil` argument is routed to
 /// `Conversion.Classify` whether or not the parameter is open. That is not
 /// a closed-world judgement smuggled into an open pair: `Classify(nil, X)`
-/// answers from `Conversion.IsNilAssignableWithoutNullableWrapper`, which
+/// answers from the nil rule of `Conversion.Classify` (the old predicate was removed by #4316), which
 /// decides on `X`'s SYMBOL KIND alone — a G#-declared class, an interface,
 /// a reference-CONSTRAINED type parameter and any nullable target accept
 /// `nil`; a `chan[T]`, `[]T`, `map[K,V]`,
@@ -127,7 +127,7 @@ open class Issue4010NilLiteralAtOpenParameterTests {
     /// [expected value 'T']`. That was a PRE-EXISTING emit defect, not a
     /// consequence of #4010's change — `Classify(nil, [T class])` is
     /// `Implicit` (via
-    /// `Conversion.IsNilAssignableWithoutNullableWrapper`'s
+    /// the nil rule of `Conversion.Classify` (the old predicate was removed by #4316)'s
     /// reference-constrained arm) before and after it, so the argument reached
     /// emit by the same path and the same bytes came out. It was filed as
     /// #4027 and the row was kept unverified because it is the control that
@@ -143,7 +143,7 @@ open class Issue4010NilLiteralAtOpenParameterTests {
         const Source = `package Demo
 import System
 
-func takesClassT[T class](x T) int32 { if x == nil { return 1 } else { return 2 } }
+func takesClassT[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
 func fwdClassT[T class]() int32 { return takesClassT[T](nil) }
 
 Console.WriteLine(fwdClassT[string]())`
@@ -278,11 +278,11 @@ func takesNullableChan[T](c chan[T]?) int32 { return 4 }
 func fwdNullableChan[T]() int32 { return takesNullableChan[T](nil) }
 
 class Node[T] { public var V T }
-func takesNode[T](n Node[T]) int32 { return 5 }
+func takesNode[T](n Node[T]?) int32 { return 5 }
 func fwdNode[T]() int32 { return takesNode[T](nil) }
 
 interface IThing[T] { func Do() int32; }
-func takesIface[T](i IThing[T]) int32 { return 6 }
+func takesIface[T](i IThing[T]?) int32 { return 6 }
 func fwdIface[T]() int32 { return takesIface[T](nil) }
 
 Console.WriteLine(fwdNullableT[int32]())

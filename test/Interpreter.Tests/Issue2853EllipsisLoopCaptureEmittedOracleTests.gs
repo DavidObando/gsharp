@@ -136,10 +136,10 @@ mutate()`, expected: 3377)
 }
 
 func mutate() int32 {
-    var counter = Counter()
-    var read = () -> { return counter.Value }
+    var counter Counter? = Counter()
+    var read = () -> { return counter!!.Value }
     counter = nil
-    counter.Value = 5
+    counter!!.Value = 5
     return read()
 }
 

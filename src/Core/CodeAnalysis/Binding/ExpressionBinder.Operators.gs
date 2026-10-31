@@ -3066,17 +3066,18 @@ internal partial class ExpressionBinder {
             return ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target)
         }
 
-        /// Issue #1151: lifts a non-nullable value type to its nullable form when it
-        /// is unified with a `nil` arm in an if/switch-expression. A value type
-        /// `T` becomes `T?` so the value arm can be lifted and the nil arm
-        /// can become the null `T?`. Reference types already legally hold
-        /// `nil`, and already-nullable types are idempotent, so both are
-        /// returned unchanged.
+        /// Issues #1151 and #4316: the join of a `nil` arm and a non-nullable arm `T` is `T?`, so a
+        /// value type lifts to `Nullable<T>` and a reference type takes the nullable annotation. The
+        /// join carries the `nil`, so no context has to supply a target for it. A `T!`, a `T?` and a
+        /// type that cannot hold `nil` (an unconstrained type parameter) stay as they are.
         /// @param type The non-nil arm's type.
-        /// @returns `T?` for a non-nullable value type `T`; otherwise [`type`](paramref).
+        /// @returns The nullable form of [`type`](paramref) when `nil` can join it; otherwise [`type`](paramref).
         private func LiftForNilArm(type TypeSymbol?) TypeSymbol? {
-            if !(type is NullableTypeSymbol) && type?.ClrType is {IsValueType: true} {
-                return NullableTypeSymbol.Get(type!!)
+            if type == nil || type is NullableTypeSymbol || type is PlatformTypeSymbol {
+                return type
+            }
+            if type.ClrType is {IsValueType: true} || Conversion.IsReferenceLikeTarget(type) {
+                return NullableTypeSymbol.Get(type)
             }
             return type
         }

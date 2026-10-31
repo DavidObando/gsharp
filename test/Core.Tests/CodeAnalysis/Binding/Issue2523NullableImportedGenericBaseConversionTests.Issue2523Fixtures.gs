@@ -37,15 +37,15 @@ shared class QueryExtensions2523 { }
 @ExtensionOwner(typeof(QueryExtensions2523))
 func (source IQuery2523[TEntity]) Include2523[TEntity, TProperty](
     selector Expression[(TEntity) -> TProperty]
-) IChain2523[TEntity, TProperty, string, string] -> nil
+) IChain2523[TEntity, TProperty, string, string] -> throw NotImplementedException()
 
 @ExtensionOwner(typeof(QueryExtensions2523))
 func (source IQuery2523[TEntity]) IncludePair2523[TEntity, TProperty](
     first Expression[(TEntity) -> TProperty],
     second Expression[(TEntity) -> TProperty]
-) IChain2523[TEntity, TProperty, string, string] -> nil
+) IChain2523[TEntity, TProperty, string, string] -> throw NotImplementedException()
 
 @ExtensionOwner(typeof(QueryExtensions2523))
 func (source IQuery2523[TEntity]) ThenInclude2523[TEntity, TPrevious, TNext](
     selector Expression[(TPrevious) -> TNext]
-) IChain2523[TEntity, TNext, string, string] -> nil
+) IChain2523[TEntity, TNext, string, string] -> throw NotImplementedException()

@@ -339,6 +339,19 @@ data class BoundBinaryOperator : IEquatable[BoundBinaryOperator] {
                         leftUnderlying!!
                     )
                 }
+                // Issue #4316: `x ?? nil` on a nullable reference `x` is `x`. The join of `T?` and
+                // `nil` is `T?`, as in a conditional, so the result keeps the left operand's type.
+                if rightType == TypeSymbol.Null && leftType is NullableTypeSymbol && Conversion.IsReferenceLikeTarget(
+                    leftUnderlying!!
+                ) {
+                    return BoundBinaryOperator(
+                        syntaxKind,
+                        BoundBinaryOperatorKind.NullCoalesce,
+                        leftType,
+                        rightType,
+                        leftType
+                    )
+                }
                 if leftType == TypeSymbol.Null {
                     return BoundBinaryOperator(
                         syntaxKind,
