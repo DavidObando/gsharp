@@ -325,6 +325,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             this.Owner = owner
             this.Seeds = seeds
             this.Incoming = Dictionary[string, List[string]](StringComparer.Ordinal)
+            this.Symbols = Dictionary[string, ISymbol](StringComparer.Ordinal)
+        }
+
+        // Issue #5574: the declaration each seed and edge key stands for, so the
+        // run can find the reads of a declaration it is about to widen.
+        prop Symbols Dictionary[string, ISymbol] {
+            get;
+        }
+
+        // Issue #5574: the run-wide answer this graph took part in (see
+        // `NullArgumentRunFor`).
+        prop Run NullArgumentRun? {
+            get;
+            set;
         }
 
         prop Owner Compilation {
@@ -342,6 +356,29 @@ internal shared class ObliviousNullabilityAnalyzer {
         prop ForwardingBuilt bool {
             get;
             set;
+        }
+    }
+
+    // Issue #5574: the null-argument decision for one run (a set of
+    // compilations): the canonical keys of the declarations that are widened,
+    // and the alias classes the keys were reduced to.
+    private class NullArgumentRun {
+        init(members List[NullArgumentGraph]) {
+            this.Members = members
+            this.Widened = HashSet[string](StringComparer.Ordinal)
+            this.Canonical = Dictionary[string, string](StringComparer.Ordinal)
+        }
+
+        prop Members List[NullArgumentGraph] {
+            get;
+        }
+
+        prop Widened HashSet[string] {
+            get;
+        }
+
+        prop Canonical Dictionary[string, string] {
+            get;
         }
     }
 
@@ -566,6 +603,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// local, or any expression is not forwarding: the author asserted or
     /// changed it.
     ///
+    /// <b>Every read of a widened declaration must take the null.</b> A
+    /// declaration widens only when each read of it is a dereference or a null
+    /// test (where C# and G# fail or branch alike) or hands the value to a slot
+    /// that is nullable or widens too; any other read would need a `!!` that
+    /// throws on the null C# passes on (#5574: `ContainsTypeParameter(null)`
+    /// forwarded `type` to a local function and threw). The run decides this
+    /// once, as a greatest fixed point (`ComputeNullArgumentRun`).
+    ///
     /// <b>Signature-fixed declarations are left alone.</b> A parameter or
     /// property of a virtual, abstract, overriding or interface-implementing
     /// member does not own its nullability (repainting it is gsc's
@@ -616,45 +661,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         for graph in graphs {
             EnsureNullArgumentForwarding(graph)
         }
-        let visited = HashSet[string](StringComparer.Ordinal)
-        let pending = Stack[string]()
-        for key in keys {
-            pending.Push(key)
-        }
-        while pending.Count != 0 {
-            let current = pending.Pop()
-            if !visited.Add(current) {
-                continue
-            }
-            for alias in NullArgumentAliasKeys(current, graphs) {
-                pending.Push(alias)
-            }
-            // An assembly-keyed node (a call bound through an emitted reference
-            // assembly) resolves back to its source declaration at every step.
-            if !current.StartsWith("@", StringComparison.Ordinal) {
-                let split = current.IndexOf('|')
-                if split > 0 {
-                    for sourceKey in SourceDeclarationKeys(
-                        current.Substring(0, split),
-                        current.Substring(split + 1),
-                        graphs
-                    ) {
-                        pending.Push(sourceKey)
-                    }
-                }
-            }
-            for graph in graphs {
-                if graph.Seeds.Contains(current) {
-                    return true
-                }
-                if graph.Incoming.TryGetValue(current, out var sources) {
-                    for source in sources {
-                        pending.Push(source)
-                    }
-                }
-            }
-        }
-        return false
+        let run = NullArgumentRunFor(graphs)
+        return run.Widened.Contains(CanonicalNullArgumentKey(keys[0], run))
     }
 
     /// Issue #3848 (family B): whether [`symbol`](paramref) is an
@@ -2000,6 +2008,718 @@ internal shared class ObliviousNullabilityAnalyzer {
         return targets
     }
 
+    // Issue #5574: the run-wide decision for `graphs`, computed once and shared
+    // by every graph of the same set (the set, not the order, identifies a run).
+    private func NullArgumentRunFor(graphs List[NullArgumentGraph]) NullArgumentRun {
+        if graphs[0].Run is {} cached && cached.Members.Count == graphs.Count && graphs.All(
+            (g NullArgumentGraph) -> cached.Members.Contains(g)
+        ) {
+            return cached
+        }
+        let run = NullArgumentRun(List[NullArgumentGraph](graphs))
+        ComputeNullArgumentRun(run)
+        for graph in graphs {
+            graph.Run = run
+        }
+        return run
+    }
+
+    // Issue #5574: the canonical key of the declaration `key` stands for: the
+    // least key of its alias class (its assembly key, the linked-source path key,
+    // and the source declaration an emitted-reference key resolves to).
+    private func CanonicalNullArgumentKey(key string, run NullArgumentRun) string {
+        if run.Canonical.TryGetValue(key, out var known) {
+            return known
+        }
+        let members = List[string]()
+        let seen = HashSet[string](StringComparer.Ordinal)
+        let pending = Stack[string]()
+        pending.Push(key)
+        while pending.Count != 0 {
+            let current = pending.Pop()
+            if !seen.Add(current) {
+                continue
+            }
+            members.Add(current)
+            for alias in NullArgumentAliasKeys(current, run.Members) {
+                pending.Push(alias)
+            }
+            if !current.StartsWith("@", StringComparison.Ordinal) {
+                let split = current.IndexOf('|')
+                if split > 0 {
+                    for sourceKey in SourceDeclarationKeys(
+                        current.Substring(0, split),
+                        current.Substring(split + 1),
+                        run.Members
+                    ) {
+                        pending.Push(sourceKey)
+                    }
+                }
+            }
+        }
+        var canonical = members[0]
+        for member in members {
+            if string.CompareOrdinal(member, canonical) < 0 {
+                canonical = member
+            }
+        }
+        for member in members {
+            run.Canonical[member] = canonical
+        }
+        return canonical
+    }
+
+    // Issue #5574: the widened declarations of a run, as a greatest fixed point.
+    // Start from every declaration that the forwarding edges reach from a null
+    // argument; then repeatedly drop a declaration that has a read the null
+    // cannot pass (see `ClassifyNullArgumentRead`, whose slot reads depend on
+    // what else stays widened) and every declaration no longer reachable from a
+    // seed through declarations that stay. Each step only removes, so the result
+    // does not depend on the order of declarations, files or queries.
+    private func ComputeNullArgumentRun(run NullArgumentRun) {
+        let forward = Dictionary[string, HashSet[string]](StringComparer.Ordinal)
+        let seeds = HashSet[string](StringComparer.Ordinal)
+        let declarations = Dictionary[string, List[ISymbol]](StringComparer.Ordinal)
+        for graph in run.Members {
+            for seed in graph.Seeds {
+                seeds.Add(CanonicalNullArgumentKey(seed, run))
+            }
+            for entry in graph.Incoming {
+                let target = CanonicalNullArgumentKey(entry.Key, run)
+                for source in entry.Value {
+                    let from = CanonicalNullArgumentKey(source, run)
+                    if !forward.TryGetValue(from, out var targets) {
+                        targets = HashSet[string](StringComparer.Ordinal)
+                        forward[from] = targets
+                    }
+                    targets.Add(target)
+                }
+            }
+            for entry in graph.Symbols {
+                let canonical = CanonicalNullArgumentKey(entry.Key, run)
+                if !declarations.TryGetValue(canonical, out var symbols) {
+                    symbols = List[ISymbol]()
+                    declarations[canonical] = symbols
+                }
+                symbols.Add(entry.Value)
+                // A declaration seen through a run project's emitted reference is
+                // read in its source, so the source declaration joins it.
+                if entry.Value.DeclaringSyntaxReferences.Length == 0 {
+                    symbols.AddRange(SourceDeclarationsInRun(entry.Value, run.Members))
+                }
+            }
+        }
+        let IsEmitted = func (canonical string) bool {
+            if !declarations.TryGetValue(canonical, out var symbols) {
+                return false
+            }
+            return symbols.Any((symbol ISymbol) -> IsEmittedByRun(symbol, run.Members))
+        }
+        let Reach = func (allowed HashSet[string]?) HashSet[string] {
+            let reached = HashSet[string](StringComparer.Ordinal)
+            let pending = Stack[string]()
+            for seed in seeds {
+                if (allowed == nil || allowed.Contains(seed)) && IsEmitted(seed) {
+                    pending.Push(seed)
+                }
+            }
+            while pending.Count != 0 {
+                let current = pending.Pop()
+                if !reached.Add(current) || !forward.TryGetValue(current, out var targets) {
+                    continue
+                }
+                for target in targets {
+                    if (allowed == nil || allowed.Contains(target)) && IsEmitted(target) {
+                        pending.Push(target)
+                    }
+                }
+            }
+            return reached
+        }
+        let widened = Reach(nil)
+        if widened.Count == 0 {
+            return
+        }
+        let reads = CollectNullArgumentReads(run, widened, declarations)
+        var changed = true
+        while changed {
+            changed = false
+            let dropped = List[string]()
+            for candidate in widened {
+                if reads.TryGetValue(candidate, out var candidateReads) && candidateReads.Any(
+                    (read(Safe bool, Slot string?)) -> !read.Safe && (read.Slot == nil || !widened.Contains(read.Slot))
+                ) {
+                    dropped.Add(candidate)
+                }
+            }
+            for candidate in dropped {
+                widened.Remove(candidate)
+                changed = true
+            }
+            let reachable = Reach(widened)
+            if reachable.Count != widened.Count {
+                widened.IntersectWith(reachable)
+                changed = true
+            }
+        }
+        run.Widened.UnionWith(widened)
+    }
+
+    // Issue #5574: every read, in every compilation of the run, of the
+    // declarations in `candidates`, classified by `ClassifyNullArgumentRead`.
+    // A parameter is read only in its own member, so only that member is
+    // walked; a field, property or method (and a positional record parameter,
+    // through its property) can be read anywhere. Name filters keep the
+    // semantic model off other identifiers.
+    private func CollectNullArgumentReads(
+        run NullArgumentRun,
+        candidates HashSet[string],
+        declarations Dictionary[string, List[ISymbol]]
+    ) Dictionary[string, List[(Safe bool, Slot string?)]] {
+        let reads = Dictionary[string, List[(Safe bool, Slot string?)]](StringComparer.Ordinal)
+        let memberNames = HashSet[string](StringComparer.Ordinal)
+        let parameterNames = HashSet[string](StringComparer.Ordinal)
+        let scopes = HashSet[SyntaxNode]()
+        let scopeList = List[SyntaxNode]()
+        var readsIndexers = false
+        // Issue #5574: records whose positional parameters are candidates, with
+        // those candidates: a synthesized `Deconstruct` reads every one of them.
+        let deconstructed = Dictionary[INamedTypeSymbol, List[string]](SymbolEqualityComparer.Default)
+        for candidate in candidates {
+            if !declarations.TryGetValue(candidate, out var symbols) {
+                continue
+            }
+            for symbol in symbols {
+                if symbol is IPropertySymbol property {
+                    readsIndexers = readsIndexers || property.IsIndexer
+                    // A setter's or init accessor's `value` is the property itself.
+                    for reference in property
+                        .SetMethod
+                        ?.DeclaringSyntaxReferences ??
+                        ImmutableArray[SyntaxReference].Empty {
+                        let accessor = reference.GetSyntax()
+                        parameterNames.Add("value")
+                        if scopes.Add(accessor) {
+                            scopeList.Add(accessor)
+                        }
+                    }
+                }
+                if symbol is not IParameterSymbol parameter {
+                    memberNames.Add(symbol.Name)
+                    continue
+                }
+                parameterNames.Add(parameter.Name)
+                if parameter.ContainingSymbol is IMethodSymbol method && PositionalProperty(parameter, method) != nil {
+                    memberNames.Add(parameter.Name)
+                    let record = method.ContainingType.OriginalDefinition
+                    if !deconstructed.TryGetValue(record, out var positional) {
+                        positional = List[string]()
+                        deconstructed[record] = positional
+                    }
+                    positional.Add(candidate)
+                }
+                // A partial method's calls bind its defining part; the implementing
+                // part, which can name the parameter differently, has the body.
+                let owners = List[ISymbol]{parameter.ContainingSymbol}
+                if parameter.ContainingSymbol is IMethodSymbol partialMethod {
+                    for part in[]IMethodSymbol? {
+                        partialMethod.PartialImplementationPart,
+                        partialMethod.PartialDefinitionPart
+                    } {
+                        if part != nil && parameter.Ordinal < part.Parameters.Length {
+                            parameterNames.Add(part.Parameters[parameter.Ordinal].Name)
+                            owners.Add(part)
+                        }
+                    }
+                }
+                for partOwner in owners {
+                    for reference in partOwner.DeclaringSyntaxReferences {
+                        let body = reference.GetSyntax()
+                        if scopes.Add(body) {
+                            scopeList.Add(body)
+                        }
+                    }
+                }
+            }
+        }
+        let Visit = func (owner Compilation, nodes sequence[SyntaxNode], names HashSet[string], indexers bool) {
+            var model SemanticModel? = nil
+            for node in nodes {
+                if deconstructed.Count != 0 && DeconstructingMethods(node, owner, ref model) is {Count: > 0} methods {
+                    for method in methods {
+                        if SynthesizedDeconstructRecord(method, run) is {} record && deconstructed.TryGetValue(
+                            record,
+                            out var positionalCandidates
+                        ) {
+                            // The deconstructed locals are G#-inferred from the widened
+                            // properties and asserted at their later reads (#5508).
+                            for positionalCandidate in positionalCandidates {
+                                AddNullArgumentRead(reads, positionalCandidate, (false, default(string?)))
+                            }
+                        }
+                    }
+                    continue
+                }
+                if indexers && node is ElementAccessExpressionSyntax element {
+                    model = model ?? owner.GetSemanticModel(element.SyntaxTree)
+                    CollectNullArgumentRead(element, model, run, candidates, reads)
+                    continue
+                }
+                // An argument label names no read; a property pattern's label reads the property.
+                if node is not SimpleNameSyntax name || !names.Contains(name.Identifier.ValueText) ||
+                    name.Parent is NameColonSyntax{Parent: not SubpatternSyntax} ||
+                    name.Parent is NameEqualsSyntax {
+                    continue
+                }
+                model = model ?? owner.GetSemanticModel(name.SyntaxTree)
+                CollectNullArgumentRead(name, model, run, candidates, reads)
+            }
+        }
+        for graph in run.Members {
+            for member in scopeList {
+                // A linked source file is compiled by every project that links it,
+                // each with its own tree: walk the same member in each.
+                let path = member.SyntaxTree.FilePath
+                let tree SyntaxTree? = if graph.Owner.ContainsSyntaxTree(member.SyntaxTree) {
+                    member.SyntaxTree
+                } else if string.IsNullOrEmpty(path) {
+                    default(SyntaxTree?)
+                } else {
+                    graph.Owner.SyntaxTrees.FirstOrDefault((t SyntaxTree) -> t.FilePath == path)
+                }
+                if tree != nil {
+                    let linked SyntaxNode = if object.ReferenceEquals(tree, member.SyntaxTree) {
+                        member
+                    } else {
+                        tree.GetRoot().FindNode(member.Span)
+                    }
+                    Visit(graph.Owner, linked.DescendantNodes(), parameterNames, false)
+                }
+            }
+            if memberNames.Count != 0 || readsIndexers || deconstructed.Count != 0 {
+                for tree in graph.Owner.SyntaxTrees {
+                    Visit(graph.Owner, tree.GetRoot().DescendantNodes(), memberNames, readsIndexers)
+                }
+            }
+        }
+        return reads
+    }
+
+    private func CollectNullArgumentRead(
+        name ExpressionSyntax,
+        model SemanticModel,
+        run NullArgumentRun,
+        candidates HashSet[string],
+        reads Dictionary[string, List[(Safe bool, Slot string?)]]
+    ) {
+        if model.GetSymbolInfo(name)
+            .Symbol is not{} read ||
+            OriginalNullArgumentDeclaration(read) is not{} original ||
+            NullArgumentKeys(original) is not{Count: > 0} keys {
+            return
+        }
+        let candidate = CanonicalNullArgumentKey(keys[0], run)
+        if !candidates.Contains(candidate) {
+            return
+        }
+        // The whole read: `holder.Stored`, and a call's result for a method.
+        var expression ExpressionSyntax = name
+        if name.Parent is MemberAccessExpressionSyntax access && access.Name == name {
+            expression = access
+        }
+        if read is IMethodSymbol {
+            if expression.Parent is not InvocationExpressionSyntax invocation || invocation.Expression != expression {
+                AddNullArgumentRead(reads, candidate, (false, default(string?)))
+                return
+            }
+            expression = invocation
+        }
+        // A `nameof` reads no value, and a plain store into the declaration is a write.
+        if IsInsideNameof(expression) ||
+            expression.Parent is AssignmentExpressionSyntax store &&
+            store.Left == expression &&
+            store.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+            return
+        }
+        AddNullArgumentRead(reads, candidate, ClassifyNullArgumentRead(expression, model, run))
+    }
+
+    // Issue #5574: every `Deconstruct` a deconstruction or positional pattern
+    // `node` calls, nested deconstructions included; empty for any other node.
+    private func DeconstructingMethods(node SyntaxNode, owner Compilation, ref model SemanticModel?) List[
+        IMethodSymbol
+    ] {
+        let methods = List[IMethodSymbol]()
+        let isDeconstruction = node is AssignmentExpressionSyntax{
+            Left: TupleExpressionSyntax or DeclarationExpressionSyntax
+        } ||
+            node is ForEachVariableStatementSyntax ||
+            node is RecursivePatternSyntax{PositionalPatternClause: {}}
+        if !isDeconstruction {
+            return methods
+        }
+        let current = model ?? owner.GetSemanticModel(node.SyntaxTree)
+        model = current
+        switch node {
+            case assignment is AssignmentExpressionSyntax {
+                AddDeconstructingMethods(current.GetDeconstructionInfo(assignment), methods)
+            }
+            case loop is ForEachVariableStatementSyntax {
+                AddDeconstructingMethods(current.GetDeconstructionInfo(loop), methods)
+            }
+            case pattern is RecursivePatternSyntax {
+                // A nested positional pattern is a node of its own.
+                let deconstruct = (current.GetOperation(pattern) as IRecursivePatternOperation)?.DeconstructSymbol
+                if deconstruct is IMethodSymbol deconstructMethod {
+                    methods.Add(deconstructMethod)
+                }
+            }
+        }
+        return methods
+    }
+
+    private func AddDeconstructingMethods(info DeconstructionInfo, methods List[IMethodSymbol]) {
+        if info.Method is {} method {
+            methods.Add(method)
+        }
+        for nested in info.Nested {
+            AddDeconstructingMethods(nested, methods)
+        }
+    }
+
+    // Issue #5574: the record whose synthesized `Deconstruct` `method` is, or
+    // null. Seen through a run project's emitted reference the method is not
+    // marked implicitly declared, so it is matched through the record's source
+    // declaration, which is also the key its positional candidates use.
+    private func SynthesizedDeconstructRecord(method IMethodSymbol, run NullArgumentRun) INamedTypeSymbol? {
+        let record = method.ContainingType.OriginalDefinition
+        if method.IsImplicitlyDeclared {
+            return record
+        }
+        if method.DeclaringSyntaxReferences.Length != 0 || !record.IsRecord {
+            return nil
+        }
+        for source in SourceDeclarationsInRun(record, run.Members) {
+            if source is INamedTypeSymbol sourceRecord && sourceRecord.GetMembers(method.Name).Any(
+                (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
+                    synthesized
+                    .Parameters
+                    .Length == method
+                    .Parameters
+                    .Length
+            ) {
+                return sourceRecord.OriginalDefinition
+            }
+        }
+        return nil
+    }
+
+    private func AddNullArgumentRead(
+        reads Dictionary[string, List[(Safe bool, Slot string?)]],
+        candidate string,
+        read(Safe bool, Slot string?)
+    ) {
+        if !reads.TryGetValue(candidate, out var list) {
+            list = List[(Safe bool, Slot string?)]()
+            reads[candidate] = list
+        }
+        list.Add(read)
+    }
+
+    private func IsInsideNameof(expression ExpressionSyntax) bool -> expression
+        .Ancestors()
+        .OfType[InvocationExpressionSyntax]()
+        .Any(
+        (invocation InvocationExpressionSyntax) -> invocation.Expression is IdentifierNameSyntax{
+            Identifier: {ValueText: "nameof"}
+        }
+    )
+
+    // Issue #5574: what a read of a widened declaration does with the value. A
+    // dereference (`x.M`, `x[i]`, `foreach`), a comparison or null test
+    // (`x == y`, `x is …`, `x ?? y`, `x?.M`, `switch (x)`) and the author's own
+    // `x!` take the null as C# does or are asserted either way: G#'s `!!`
+    // before a dereference throws where C# throws. A read that a null test
+    // guards (`if (x != null) …`) takes it too; a pattern that captures the
+    // value (`x is var y`) does not. A read handed to a slot (an argument, a store, a
+    // `return`, an arrow body, a reduced extension's receiver, a user-defined
+    // operator's operand) takes the null
+    // when the slot is nullable — `(true, nil)` — or when the slot is a
+    // declaration this rule widens too — `(false, slot)`, decided by the fixed
+    // point. Anything else — a local, a lambda result, an interpolation, a `!`,
+    // a cast — is `(false, nil)`: the translation would assert it.
+    private func ClassifyNullArgumentRead(expression ExpressionSyntax, model SemanticModel, run NullArgumentRun)(
+        Safe bool,
+        Slot string?
+    ) {
+        var value SyntaxNode = expression
+        while value.Parent is ParenthesizedExpressionSyntax parenthesized {
+            value = parenthesized
+        }
+        let unsafe = (false, default(string?))
+        // A read that a null test guards never sees the null, in C# or in G#.
+        if IsNullGuardDominatedRead(expression, model) {
+            return (true, default(string?))
+        }
+        // A user-defined conversion receives the value first: its input is the slot.
+        if value is ExpressionSyntax converted && model.GetConversion(converted) is {
+            IsUserDefined: true,
+            MethodSymbol: {} conversionOperator
+        } &&
+            conversionOperator
+            .Parameters
+            .Length > 0 {
+            return ClassifyNullArgumentSlot(conversionOperator.Parameters[0], run)
+        }
+        switch value.Parent {
+            case _ is ExpressionStatementSyntax {
+                // A discarded result (`Identity(p);`) goes nowhere.
+                return (true, default(string?))
+            }
+            case access is MemberAccessExpressionSyntax when access.Expression == value {
+                // `x.Ext()` hands `x` to the extension's `this` parameter.
+                if access.Parent is InvocationExpressionSyntax call && call.Expression == access && model.GetSymbolInfo(
+                    call
+                )
+                    .Symbol is IMethodSymbol{ReducedFrom: {} unreduced} &&
+                    unreduced
+                    .Parameters
+                    .Length > 0 {
+                    return ClassifyNullArgumentSlot(unreduced.Parameters[0], run)
+                }
+                return (true, default(string?))
+            }
+            case element is ElementAccessExpressionSyntax when element.Expression == value {
+                return (true, default(string?))
+            }
+            case conditional is ConditionalAccessExpressionSyntax when conditional.Expression == value {
+                return (true, default(string?))
+            }
+            case binary is BinaryExpressionSyntax {
+                // A user-defined operator is a call: the operand is its argument.
+                if model.GetSymbolInfo(binary)
+                    .Symbol is IMethodSymbol{MethodKind: MethodKind.UserDefinedOperator} userOperator &&
+                    userOperator
+                    .Parameters
+                    .Length == 2 {
+                    let operand = if binary.Left == value {
+                        userOperator.Parameters[0]
+                    } else {
+                        userOperator.Parameters[1]
+                    }
+                    return ClassifyNullArgumentSlot(operand, run)
+                }
+                // A reference comparison takes a `T?` operand; `x ?? y` tests `x`.
+                return if binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression) ||
+                    binary.IsKind(SyntaxKind.CoalesceExpression) && binary.Left == value {
+                    (true, default(string?))
+                } else {
+                    unsafe
+                }
+            }
+            case suppression is PostfixUnaryExpressionSyntax when suppression.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                // The author's `x!` is asserted (`x!!`) whether or not `x` widens.
+                return (true, default(string?))
+            }
+            case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                SyntaxKind.CoalesceAssignmentExpression
+            ) &&
+                coalesceAssignment.Left == value {
+                return (true, default(string?))
+            }
+            // A pattern tests the value, but a `var` pattern also captures it, null
+            // included, into a local.
+            case pattern is IsPatternExpressionSyntax when pattern.Expression == value {
+                return if CapturesTheInput(pattern.Pattern) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
+            }
+            case subpattern is NameColonSyntax when subpattern.Parent is SubpatternSyntax property {
+                return if CapturesTheInput(property.Pattern) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
+            }
+            case switchStatement is SwitchStatementSyntax when switchStatement.Expression == value {
+                return if switchStatement.Sections.Any(
+                    (section SwitchSectionSyntax) -> section.Labels.Any(
+                        (label SwitchLabelSyntax) -> label is CasePatternSwitchLabelSyntax casePattern &&
+                            CapturesTheInput(casePattern.Pattern)
+                    )
+                ) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
+            }
+            case switchExpression is SwitchExpressionSyntax when switchExpression.GoverningExpression == value {
+                return if switchExpression.Arms.Any((arm SwitchExpressionArmSyntax) -> CapturesTheInput(arm.Pattern)) {
+                    unsafe
+                } else {
+                    (true, default(string?))
+                }
+            }
+            case loop is ForEachStatementSyntax when loop.Expression == value {
+                return (true, default(string?))
+            }
+            case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                SyntaxKind.SimpleAssignmentExpression
+            ) &&
+                assignment.Right == value {
+                return ClassifyNullArgumentSlot(model.GetSymbolInfo(assignment.Left).Symbol, run)
+            }
+            case argument is ArgumentSyntax when argument.RefKindKeyword.IsKind(SyntaxKind.None) {
+                return if model.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} {
+                    ClassifyNullArgumentSlot(parameter, run)
+                } else {
+                    unsafe
+                }
+            }
+            case returnStatement is ReturnStatementSyntax {
+                let function = returnStatement.Ancestors().FirstOrDefault(
+                    (n SyntaxNode) -> n is BaseMethodDeclarationSyntax ||
+                        n is AccessorDeclarationSyntax ||
+                        n is LocalFunctionStatementSyntax ||
+                        n is AnonymousFunctionExpressionSyntax
+                )
+                return if function is AnonymousFunctionExpressionSyntax || function == nil {
+                    unsafe
+                } else {
+                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(function), run)
+                }
+            }
+            case arrow is ArrowExpressionClauseSyntax {
+                return if arrow.Parent is {} owner {
+                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(owner), run)
+                } else {
+                    unsafe
+                }
+            }
+            default {
+                return unsafe
+            }
+        }
+    }
+
+    // Issue #5574: whether `pattern` binds the value it tests itself to a
+    // variable (`var x`, also under `or` or parentheses), which then holds a
+    // null the test let through. A subpattern binds a part, which is a read
+    // of its own.
+    private func CapturesTheInput(pattern PatternSyntax) bool -> switch pattern {
+        case capture is VarPatternSyntax: capture.Designation is not DiscardDesignationSyntax
+        case binaryPattern is BinaryPatternSyntax: CapturesTheInput(binaryPattern.Left) ||
+            CapturesTheInput(binaryPattern.Right)
+        case parenthesized is ParenthesizedPatternSyntax: CapturesTheInput(parenthesized.Pattern)
+        default: false
+    }
+
+    // Issue #5574: a slot that receives a read. A nullable slot takes the null;
+    // a declaration the rule may widen takes it exactly when it stays widened;
+    // a local, and every other non-null slot, does not.
+    private func ClassifyNullArgumentSlot(slot ISymbol?, run NullArgumentRun)(Safe bool, Slot string?) {
+        if slot == nil || slot is ILocalSymbol {
+            return (false, default(string?))
+        }
+        if !KeepsNonNullContract(slot, run.Members) {
+            return (true, default(string?))
+        }
+        if OriginalNullArgumentDeclaration(slot) is {} original &&
+            IsNullArgumentCandidate(original) &&
+            IsEmittedByRun(original, run.Members) &&
+            NullArgumentKeys(original) is {Count: > 0} keys {
+            return (false, CanonicalNullArgumentKey(keys[0], run))
+        }
+        return (false, default(string?))
+    }
+
+    // Issue #5574: whether `slot` (as the call or store binds it) is a non-null
+    // reference in the emitted G#: not `T?`, not a value or open type, not a
+    // declaration whose attribute contract widens it (`[AllowNull]`, a `null`
+    // data row), and not an oblivious contract this run does not emit (G# reads
+    // that as `T!`, which takes `nil`). The attributes are read on the slot as
+    // the call binds it, as the translation reads them: a sibling's
+    // `[AllowNull]` seen through its emitted reference is a non-null store
+    // target there (#5577). An async result is the awaited value.
+    private func KeepsNonNullContract(slot ISymbol, graphs List[NullArgumentGraph]) bool {
+        let declaration ISymbol? = OriginalNullArgumentDeclaration(slot) ?? slot.OriginalDefinition
+        if HasAllowNullWriteContract(declaration) || HasNullDataRowArgument(declaration) {
+            return false
+        }
+        let type ITypeSymbol? = switch slot {
+            case parameter is IParameterSymbol: parameter.Type
+            case field is IFieldSymbol: field.Type
+            case property is IPropertySymbol: property.Type
+            case method is IMethodSymbol when method.IsAsync ||
+                IsTaskLike(method.ReturnType): if method.ReturnType is INamedTypeSymbol{
+                TypeArguments: {Length: 1} arguments
+            } {
+                arguments[0]
+            } else {
+                default(ITypeSymbol?)
+            }
+            case method is IMethodSymbol: method.ReturnType
+            default: default(ITypeSymbol?)
+        }
+        if type is not{IsReferenceType: true} reference ||
+            reference.NullableAnnotation == Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .Annotated {
+            return false
+        }
+        return reference.NullableAnnotation != Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .None ||
+            IsEmittedByRun(slot.OriginalDefinition, graphs)
+    }
+
+    // Issue #5574: the source declarations, in the run's compilations, that a
+    // declaration seen through a run project's emitted reference stands for.
+    private func SourceDeclarationsInRun(symbol ISymbol, graphs List[NullArgumentGraph]) List[ISymbol] {
+        let sources = List[ISymbol]()
+        let identity = symbol.ContainingAssembly?.Identity
+        let id = NullArgumentId(symbol)
+        if identity == nil || id == nil {
+            return sources
+        }
+        for graph in graphs {
+            if graph.Owner is not CSharpCompilation csharp || !csharp.Assembly.Identity.Equals(identity) {
+                continue
+            }
+            var source ISymbol? = nil
+            if id.StartsWith("P:M:", StringComparison.Ordinal) {
+                let separator = id.LastIndexOf('#')
+                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
+                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
+                IMethodSymbol method && ordinal < method.Parameters.Length {
+                    source = method.Parameters[ordinal]
+                }
+            } else {
+                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
+            }
+            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
+                sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+            }
+        }
+        return sources
+    }
+
+    // Issue #5574: `IsDeclaredInThisRun` for the run as a whole: a source
+    // declaration, or one whose assembly identity is a run compilation's.
+    private func IsEmittedByRun(symbol ISymbol, graphs List[NullArgumentGraph]) bool {
+        if symbol.DeclaringSyntaxReferences.Length != 0 {
+            return true
+        }
+        let identity = symbol.ContainingAssembly?.Identity
+        return identity != nil && graphs.Any((g NullArgumentGraph) -> g.Owner.Assembly.Identity.Equals(identity))
+    }
+
     // Issue #5508: whether this run EMITS the declaration. A source declaration
     // is; so is a declaration another project of the run owns that this
     // compilation sees through that project's emitted reference assembly (its
@@ -2079,6 +2799,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     // migration is NOT asked here: a call bound through a reference assembly is
     // still evidence about the source declaration in the sibling project.
     private func IsNullArgumentCandidate(symbol ISymbol?) bool {
+        if IsSdkRuntimeDeclaration(symbol) {
+            return false
+        }
         switch symbol {
             case parameter is IParameterSymbol {
                 if parameter.Ordinal < 0 ||
@@ -2121,6 +2844,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return false
             }
         }
+    }
+
+    // Issue #5574: a declaration of a runtime assembly that the G# SDK places on
+    // every compilation's references (`Gsharp.Runtime.Values`,
+    // `Gsharp.Runtime.Channels`, `Gsharp.Extensions`). A G# consumer can bind to
+    // the SDK's copy instead of the migrated project (`slice[string].FromArray`
+    // binds to the SDK's `Slice`, ADR-0187 section 6), whose signature this
+    // migration does not change, so a call's null cannot widen the declaration.
+    private func IsSdkRuntimeDeclaration(symbol ISymbol?) bool {
+        let name = symbol?.ContainingAssembly?.Name
+        return name == "Gsharp.Runtime.Values" || name == "Gsharp.Runtime.Channels" || name == "Gsharp.Extensions"
     }
 
     // The primary-constructor parameter a positional record property is
@@ -2411,6 +3145,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     // such argument.
     private func ComputeNullArgumentSeeds(compilation Compilation) NullArgumentGraph {
         let seeds = HashSet[string](StringComparer.Ordinal)
+        let symbols = Dictionary[string, ISymbol](StringComparer.Ordinal)
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
             for node in tree.GetRoot().DescendantNodes() {
@@ -2430,12 +3165,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                         IsNullArgumentCandidate(original) {
                         for key in NullArgumentKeys(original) {
                             seeds.Add(key)
+                            symbols[key] = original
                         }
                     }
                 }
             }
         }
-        return NullArgumentGraph(compilation, seeds)
+        let graph = NullArgumentGraph(compilation, seeds)
+        for entry in symbols {
+            graph.Symbols[entry.Key] = entry.Value
+        }
+        return graph
     }
 
     // Pass 2: the pure-forwarding edges, built once per compilation, and only
@@ -2451,12 +3191,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         let AddEdge = func (target ISymbol?, source ISymbol?) {
             let targetOriginal = OriginalNullArgumentDeclaration(target)
             let sourceOriginal = OriginalNullArgumentDeclaration(source)
-            if targetOriginal != nil &&
-                sourceOriginal != nil &&
-                IsNullArgumentCandidate(targetOriginal) &&
-                IsNullArgumentCandidate(sourceOriginal) {
-                let sourceKeys = NullArgumentKeys(sourceOriginal)
-                for targetKey in NullArgumentKeys(targetOriginal) {
+            if targetOriginal is {} targetDeclaration &&
+                sourceOriginal is {} sourceDeclaration &&
+                IsNullArgumentCandidate(targetDeclaration) &&
+                IsNullArgumentCandidate(sourceDeclaration) {
+                let sourceKeys = NullArgumentKeys(sourceDeclaration)
+                for sourceKey in sourceKeys {
+                    graph.Symbols[sourceKey] = sourceDeclaration
+                }
+                for targetKey in NullArgumentKeys(targetDeclaration) {
+                    graph.Symbols[targetKey] = targetDeclaration
                     if !graph.Incoming.TryGetValue(targetKey, out var sources) {
                         sources = List[string]()
                         graph.Incoming[targetKey] = sources
