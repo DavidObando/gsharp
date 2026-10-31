@@ -297,7 +297,7 @@ internal partial class DeclarationBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments)
+                delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(boundArguments)
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -648,7 +648,7 @@ internal partial class DeclarationBinder {
             }
             applicabilityArgumentTypes[i] = argumentType
         }
-        let delegateRefKindCheck = ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments)
+        let delegateArgumentCheck = ExpressionBinder.MakeDelegateArgumentCheck(boundArguments)
         let compatible = List[(Constructor ConstructorInfo, Parameters[]ParameterInfo)]()
         for constructor in constructors {
             let parameters = constructor.GetParameters()
@@ -674,10 +674,13 @@ internal partial class DeclarationBinder {
             if !deferredTargetsMatch {
                 continue
             }
-            let refKindCheck(int32, Type) -> bool? = (index int32, targetType Type) -> if deferredSet.Contains(index) {
-                true
+            let delegateCheck(int32, Type) -> ClrOverloadResolution.ImplicitConversionKind? = (
+                index int32,
+                targetType Type
+            ) -> if deferredSet.Contains(index) {
+                nil
             } else {
-                delegateRefKindCheck?(index, targetType)
+                delegateArgumentCheck?(index, targetType)
             }
             let resolution = ClrOverloadResolution.Resolve[ConstructorInfo](
                 []ConstructorInfo{constructor},
@@ -688,7 +691,7 @@ internal partial class DeclarationBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateRefKindArgumentCheck: refKindCheck
+                delegateArgumentCheck: delegateCheck
             )
             if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved {
                 compatible.Add((constructor, parameters))
