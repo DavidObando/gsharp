@@ -326,7 +326,9 @@ open class Adr0208NarrowingCorpusTests {
                 "u22_5520_literal_initializer_through_a_user_defined_conversion",
                 "u23_5520_nil_initializer_through_a_user_defined_conversion",
                 "u24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact",
-                "u25_5520_literal_under_an_extension_unary_operator"
+                "u25_5520_literal_under_an_extension_unary_operator",
+                "u26_5520_int32_min_value_literal_keeps_the_fact",
+                "u27_5520_negated_char_literal_keeps_the_fact"
             },
             names
         )
@@ -3891,6 +3893,44 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
+            yield[]object{"u26_5520_int32_min_value_literal_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Seed int32 = -2147483648
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Seed
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
+            yield[]object{"u27_5520_negated_char_literal_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Trigger {
+    shared {
+        var Seed int32 = -'a'
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Seed
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
             yield[]object{"r1_5482_ref_alias_of_closure_replaced_callable", `import System
 
 class C {

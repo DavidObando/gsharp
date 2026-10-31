@@ -2480,16 +2480,17 @@ internal partial class DeclarationBinder {
                 if literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
                     return unaryOperators.Count == 0 && (fieldType is NullableTypeSymbol || !fieldType.IsValueType)
                 }
-                // The operators apply from the innermost outwards; each must be predefined for its operand type.
-                var operandType TypeSymbol? = BuiltInLiteralType(literal.Value)
-                for var index = unaryOperators.Count - 1; index >= 0 && operandType != nil; index-- {
-                    operandType = BoundUnaryOperator.Bind(unaryOperators[index], operandType)?.Type
-                }
-                return operandType != nil && IsBuiltInLiteralTarget(fieldType)
+                return PredefinedUnaryResultType(unaryOperators, BuiltInLiteralType(literal.Value)) != nil &&
+                    IsBuiltInLiteralTarget(fieldType)
             }
             if current is ParenthesizedExpressionSyntax parenthesized {
                 current = parenthesized.Expression
             } else if current is UnaryExpressionSyntax unary {
+                // `-2147483648` is the `int32` literal `int32.MinValue`, as the expression binder reads it.
+                if ExpressionBinder.IsNegatedInt32MinValueLiteral(unary.OperatorToken.Kind, unary.Operand) {
+                    return PredefinedUnaryResultType(unaryOperators, TypeSymbol.Int32) != nil &&
+                        IsBuiltInLiteralTarget(fieldType)
+                }
                 unaryOperators.Add(unary.OperatorToken.Kind)
                 current = unary.Operand
             } else {
@@ -2497,6 +2498,22 @@ internal partial class DeclarationBinder {
             }
         }
         return false
+    }
+
+    /// Issue #5520: the result type of [`operators`](paramref) (outermost first) applied from the innermost outwards
+    /// to [`operandType`](paramref), or `nil` when one of them is not predefined for its operand. A `char` operand
+    /// is promoted to `int32` first, as the expression binder does.
+    private func PredefinedUnaryResultType(operators List[SyntaxKind], operandType TypeSymbol?) TypeSymbol? {
+        var current = operandType
+        for var index = operators.Count - 1; index >= 0 && current != nil; index-- {
+            var operand = current
+            if ExpressionBinder.TryGetPromotedCharUnaryType(operators[index], operand, out var promoted) &&
+                promoted != nil {
+                operand = promoted
+            }
+            current = BoundUnaryOperator.Bind(operators[index], operand)?.Type
+        }
+        return current
     }
 
     /// Issue #5520: the built-in type of a literal value (as `BoundLiteralExpression` infers it), or `nil` when the

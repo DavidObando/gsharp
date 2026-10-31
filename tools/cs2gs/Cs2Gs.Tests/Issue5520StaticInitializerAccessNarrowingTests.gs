@@ -226,6 +226,33 @@ public class Demo
         AssertCompilesWithGsc(printed)
     }
 
+    /// `-2147483648` is the `int32` literal `int32.MinValue` for gsc too, so the read stays bare and the translation
+    /// compiles. Mutation witness: the compiler's literal initializer test omits the `int32.MinValue` rule.
+    @Fact
+    func OutParameter_ReadAfterAStaticFieldWithTheInt32MinValueLiteral_StaysBare() {
+        let printed = Translate(`
+public sealed class Limits
+{
+    public static int Min = -2147483648;
+}
+public class Demo
+{
+    static string? Pick() => null;
+    public static int Run(out string? text)
+    {
+        text = Pick();
+        if (text is null)
+        {
+            return 0;
+        }
+        var n = Limits.Min;
+        return n + text.Length;
+    }
+}`)
+        Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
     /// Mutation witness for this row and the constant and construction rows: `NodeRunsStaticTypeInitializer` counts
     /// every name and member access.
     @Fact
