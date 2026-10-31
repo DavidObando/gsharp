@@ -1056,6 +1056,21 @@ func Run(ref text string?, holder Holder) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("chained-delegate-invoke-is-indirect (A3)", `package T
+import System
+class Holder {
+    var Cb Action = Action(func() { })
+}
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Cb.Invoke()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }
