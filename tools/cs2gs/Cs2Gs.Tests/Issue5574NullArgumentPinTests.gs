@@ -259,6 +259,101 @@ namespace Demo
         Assert.Contains("Forward(maybe!!", TranslateFile(c, "Go.cs", siblings))
     }
 
+    /// A sibling project's `[AllowNull]` slot seen through its emitted reference assembly is a
+    /// non-null store target for this translation (it bridges a `Node?` stored into it, #5577), so it pins
+    /// the parameter stored into it, and no `p!!` throws on the null the C# stores.
+    @Fact
+    func AnAllowNullSlotThroughAnEmittedReference_PinsAsTheTranslationReadsIt() {
+        let library = CompileFiles("Lib", nil, ("Holder.cs", `
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { }
+    public class Holder { [AllowNull] public virtual Node Stored { get; set; } = new Node(); }
+}`))
+        let image = MemoryStream()
+        Assert.True(library.Emit(image).Success)
+        image.Position = 0
+        let app = CompileFiles("App", MetadataReference.CreateFromStream(image), ("Use.cs", `
+namespace Demo
+{
+    public static class Use
+    {
+        public static void Put(Holder h, Node p) { h.Stored = p; }
+        public static void Go(Holder h) => Put(h, null!);
+        public static void Maybe(Holder h, Node? m) { h.Stored = m; }
+    }
+}`))
+        let printed = TranslateFile(app, "Use.cs", []CSharpCompilation{library, app})
+        Assert.Contains("Put(h Holder, p Node)", printed)
+        Assert.DoesNotContain("p!!", printed)
+    }
+
+    /// An async result is the awaited value: a `Task<Node?>` result takes the null and does not
+    /// pin, while a `Task<Node>` result keeps its non-null contract and does.
+    @Fact
+    func AnAsyncResult_PinsByItsAwaitedType() {
+        let printed = TranslateBound(("Async.cs", `
+using System.Threading.Tasks;
+namespace Demo
+{
+    public class Node { }
+    public static class Forwarders
+    {
+        public static async Task<Node?> Open(Node p) { await Task.Yield(); return p; }
+        public static async Task<Node> Closed(Node q) { await Task.Yield(); return q; }
+        public static void Go() { _ = Open(null!); _ = Closed(null!); }
+    }
+}`))
+        Assert.Contains("Open(p Node?)", printed)
+        Assert.Contains("Closed(q Node)", printed)
+        Assert.DoesNotContain("q!!", printed)
+    }
+
+    /// A local function's result never widens, so returning a captured parameter from it pins the
+    /// parameter, in both body forms, and the translation returns the null as C# does.
+    @Fact
+    func ACapturedParameterReturnedFromALocalFunction_IsPinned() {
+        let compilation = CompileFiles("App", nil, ("Check.cs", `
+namespace Demo
+{
+    public class Node { }
+    public static class Checks
+    {
+        public static bool Arrow(Node p) { Node Local() => p; return Local() is null; }
+        public static bool Block(Node q) { Node Local() { return q; } return Local() is null; }
+        public static string Run() => Arrow(null!) + " " + Block(null!);
+    }
+}`))
+        let printed = TranslateFile(compilation, "Check.cs", []CSharpCompilation{compilation})
+        Assert.Equal("True True", CompileAndRun([]string{printed}, "Demo.Checks.Run()").Trim())
+        Assert.DoesNotContain("p!!", printed)
+        Assert.DoesNotContain("q!!", printed)
+    }
+
+    /// A widened field read as an argument to a slot that keeps a non-null contract pins the field
+    /// and the parameter stored into it, and the translation passes the null on as C# does.
+    @Fact
+    func AStoredValueReadIntoAFixedSlot_PinsTheStoreAndItsParameter() {
+        let compilation = CompileFiles("App", nil, ("Holder.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public class Holder
+    {
+        private readonly Node stored;
+        public Holder(Node node) { stored = node; }
+        public string Run(Sink s) => s.Take(stored);
+        public static string Probe() => new Holder(null!).Run(new Sink());
+    }
+}`))
+        let printed = TranslateFile(compilation, "Holder.cs", []CSharpCompilation{compilation})
+        Assert.Equal("taken", CompileAndRun([]string{printed}, "Demo.Holder.Probe()").Trim())
+        Assert.DoesNotContain("stored!!", printed)
+        Assert.DoesNotContain("node Node?", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)
