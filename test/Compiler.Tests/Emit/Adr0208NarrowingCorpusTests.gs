@@ -1472,7 +1472,7 @@ func Run() int32 {
     }
     return 0
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14", "nre", "", "#5249, header effects before the branches (slice 4): GS0158 after"}
+func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14 GS0158@10:18", "reject", "", "R18 (#5534, #5249): header effects before the branches; threw NullReferenceException before"}
             yield[]object{"h7_getter_in_exiting_branch_kills_member_path", `open class Animal { var Name string = "a" }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box {
