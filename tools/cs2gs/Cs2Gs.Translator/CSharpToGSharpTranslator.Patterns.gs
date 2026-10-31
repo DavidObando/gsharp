@@ -3106,6 +3106,13 @@ partial class CSharpToGSharpTranslator {
                 this.IsWidenedArrayElementLocal(arrayLocal) {
                 elementType = MakeNullable(elementType)
             }
+            // Issue #5537: an array stored in oblivious container storage has its
+            // element type.
+            if elementType != nil && elementType.IsNullable == false && this.ObliviousContainerSinkPromotesArrayElement(
+                creation
+            ) {
+                elementType = MakeNullable(elementType)
+            }
             return ArrayAllocationExpression(elementType, length)
         }
 

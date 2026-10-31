@@ -4066,8 +4066,12 @@ internal partial class DeclarationBinder {
                 for (fieldSym, fieldSyntaxNode) in zeroValueStaticFields {
                     let zeroValue BoundExpression? = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(
                         fieldSyntaxNode,
-                        fieldSym.Type
+                        fieldSym.Type,
+                        out var missingDeclarationShape
                     )
+                    if missingDeclarationShape {
+                        Diagnostics.ReportNoApplicableOverload(fieldSyntaxNode.Location, fieldSym.Type.ToString())
+                    }
                     if zeroValue != nil {
                         staticInitBuilder[fieldSym] = zeroValue
                     }
@@ -4129,8 +4133,12 @@ internal partial class DeclarationBinder {
                 for (fieldSym, fieldSyntaxNode) in zeroValueInstanceFields {
                     let zeroValue BoundExpression? = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(
                         fieldSyntaxNode,
-                        fieldSym.Type
+                        fieldSym.Type,
+                        out var missingDeclarationShape
                     )
+                    if missingDeclarationShape {
+                        Diagnostics.ReportNoApplicableOverload(fieldSyntaxNode.Location, fieldSym.Type.ToString())
+                    }
                     if zeroValue != nil {
                         instanceInitBuilder[fieldSym] = zeroValue
                     }

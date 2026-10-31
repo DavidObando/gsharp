@@ -440,7 +440,7 @@ internal class AssemblyAttributeEmitter {
                 (p ParameterSymbol) -> {
                     var token = 0
                     var backingField FieldSymbol? = nil
-                    let hasBacking = if type.UsesConstructorOwnedDataConstruction {
+                    let hasBacking = if type.UsesConstructorOwnedDataConstruction || type.IsClass && type.IsData {
                         ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, p.Name, out backingField)
                     } else {
                         fieldsByName.TryGetValue(p.Name, out backingField)
@@ -487,30 +487,26 @@ internal class AssemblyAttributeEmitter {
         }
     }
 
-    /// Issue #3329: emits the `GSharp.MagicCollectionFields` marker for
-    /// every VALUE-TYPE struct with at least one ADR-0159 magic-collection
-    /// field (map/slice/fixed array/sequence) — independent of
-    /// (cref:EmitGSharpTypeSemantics)'s `data struct`/primary-
-    /// constructor gate, so a PLAIN field-only struct is covered too. A
-    /// struct literal for a type referenced from ANOTHER assembly (or, for
-    /// the REPL, an EARLIER submission) cannot see the declaring
-    /// compilation's own (cref:StructSymbol.InstanceFieldInitializers)
-    /// (only that compilation ever binds the struct's own field
-    /// declarations); this marker lets it reconstruct the exact same sound
-    /// zero value instead of silently leaving such a field at its raw CLR
-    /// default (typically a null reference — the class of bug fixed by
-    /// #3329). A class literal needs no marker: constructing it always calls
-    /// its REAL parameterless constructor, which already runs these
-    /// initializers in-type.
+    /// Records collection declaration shapes for struct fields and a data class's own primary storage.
+    /// Imported primary arguments need these shapes before the selected constructor runs.
+    /// ADR-0218 excludes class body fields and inherited storage.
     private func EmitGSharpMagicCollectionFieldMarkers(assemblyHandle AssemblyDefinitionHandle) {
         for type in this.emitCtx.Program.Structs {
-            if type.IsClass || !this.cache.StructTypeDefs.TryGetValue(type, out var handle) {
+            if type.IsClass && !type.IsData || !this.cache.StructTypeDefs.TryGetValue(type, out var handle) {
                 continue
+            }
+            let primaryFields = HashSet[FieldSymbol](ReferenceEqualityComparer.Instance)
+            if type.IsClass {
+                for parameter in type.PrimaryConstructorParameters {
+                    if ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, parameter.Name, out var field) {
+                        primaryFields.Add(field)
+                    }
+                }
             }
             let entries = type
                 .Fields
                 .Concat(
-                if type.UsesConstructorOwnedDataConstruction {
+                if type.UsesConstructorOwnedDataConstruction || type.IsClass && type.IsData {
                     type
                         .Properties
                         .Where(
@@ -524,6 +520,7 @@ internal class AssemblyAttributeEmitter {
                     Enumerable.Empty[FieldSymbol]()
                 }
             )
+                .Where((field FieldSymbol) -> !type.IsClass || primaryFields.Contains(field))
                 .Select((f FieldSymbol) -> (Field: f, Kind: MagicCollectionZeroValue.ClassifyForMarker(f.Type)))
                 .Where((e(Field FieldSymbol, Kind string?)) -> e.Item2 != nil)
                 .Select((e(Field FieldSymbol, Kind string?)) -> "${e.Item1.Name}:${e.Item2}")

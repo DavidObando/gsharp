@@ -145,6 +145,18 @@ jobs:
         # String.Split(char, StringSplitOptions) fails on .NET Framework MSBuild.
         run: python3 build/check-netstandard-member-refs.py out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg
 
+      - name: Test the release publish script
+        run: python3 build/test-release-publish.py
+
+      - name: Verify the packed NuGet packages
+        # A component-scoped PR packs only the SDK and templates, so the full
+        # inventory is required only when the whole solution was built.
+        if: github.event_name != 'pull_request' || fromJSON(needs.select.outputs.plan).full
+        # ADR-0218: the package inventory (six RID compiler packages, six other
+        # packages, five symbol packages), one version across them, and the SDK's
+        # PackageDownload version. The tag run checks the same list before it pushes.
+        run: python3 build/release-publish.py verify --nuget-only --nupkgs out/bin/Release/nupkgs
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v5
         with:
@@ -1089,14 +1101,24 @@ jobs:
 
   ci:
     if: always()
+    permissions:
+      # actions: read lets ci-selection.py list the smoke legs of this run through the jobs API.
+      contents: read
+      actions: read
+    outputs:
+      unverified_rids: ${{ steps.check.outputs.unverified_rids }}
     needs: [select, build, discover-tests, tests, test-partition, harness, format, e2e, ilverify, release-version-refs, cs2gs-corpus, vscode-extension, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke, go2gs, go2gs-windows, go2gs-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Require every selected build job to succeed
+        id: check
         env:
           PLAN: ${{ needs.select.outputs.plan }}
           NEEDS: ${{ toJSON(needs) }}
+          # ADR-0218: advisory only on a release tag; PRs and main still require it.
+          ADVISORY_JOBS: r2r-compiler-smoke
+          GH_TOKEN: ${{ github.token }}
         run: python3 build/ci-selection.py --check build
 
   publish:

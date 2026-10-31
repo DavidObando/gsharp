@@ -1816,7 +1816,7 @@ internal partial class ExpressionBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(boundArguments)
+                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments)
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {

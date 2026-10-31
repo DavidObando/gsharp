@@ -1318,7 +1318,7 @@ internal partial class ExpressionBinder {
                 nativeConversions: conversions
             ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
-            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+            delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             deferredInferenceArgs: BuildOpenLiteralInferenceFlags(arguments),
@@ -1636,7 +1636,7 @@ internal partial class ExpressionBinder {
         // resolution (including generic inference) can run.
         let argTypes = [arguments.Length + 1]Type?
         let CheckUserClassInterface = func (source Type, target Type) bool {
-            return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
+            return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target, argumentOffset: 1)
         }
         let deferredInferenceArgs = [arguments.Length + 1]bool
         argTypes[0] = receiverClrType
@@ -1877,7 +1877,7 @@ internal partial class ExpressionBinder {
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
                 structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
                 erasedArgumentMismatchCheck: ExtensionErasedMismatchCheck,
-                delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
+                delegateArgumentCheck: MakeDelegateArgumentCheck(arguments, receiver: receiver),
                 methodGroupInference: MakeMethodGroupInference(
                     arguments,
                     GetEffectiveArgumentClrTypeForOverloadResolution,
@@ -3633,7 +3633,7 @@ internal partial class ExpressionBinder {
                 nativeConversions: conversions
             ),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
-            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+            delegateArgumentCheck: MakeDelegateArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgTypes,
@@ -4383,10 +4383,11 @@ internal partial class ExpressionBinder {
             boundArguments ImmutableArray[BoundExpression],
             argTypes[]Type?,
             source Type,
-            target Type
+            target Type,
+            argumentOffset int32 = 0
         ) bool {
             for var i = 0; i < boundArguments.Length; i++ {
-                if !ClrTypeUtilities.AreSame(argTypes[i], source) {
+                if !ClrTypeUtilities.AreSame(argTypes[i + argumentOffset], source) {
                     continue
                 }
                 if boundArguments[i].Type is StructSymbol{IsClass: true} ss {

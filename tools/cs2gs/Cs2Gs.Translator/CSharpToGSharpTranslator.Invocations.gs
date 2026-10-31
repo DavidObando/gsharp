@@ -1847,7 +1847,7 @@ partial class CSharpToGSharpTranslator {
             var targetRequiresNonNull bool
             if targetParameter != nil && targetType != nil {
                 targetRequiresNonNull = (
-                    this.TargetWillRemainNonNullableReference(targetType, targetParameter) &&
+                    this.TargetWillRemainNonNullableReference(targetType, targetParameter, argument.Expression) &&
                         !targetIsPromotedMigratedSibling &&
                         !this.IsObliviousImportedInferredTypeParameterTarget(targetParameter, argument.Expression)
                 ) ||
@@ -1867,7 +1867,11 @@ partial class CSharpToGSharpTranslator {
                 !isFlowNarrowedLocal &&
                 this.GetUserDefinedConversionInputOperator(argument.Expression, targetType, out _) == nil &&
                 this
-                .ReceiverNeedsNullForgiveness(argument.Expression) {
+                .ReceiverNeedsNullForgiveness(
+                argument.Expression,
+                widenedSinkNeedsNonNull: true,
+                widenedSinkInfersType: this.SinkInfersTypeFromValue(targetParameter, argument.Expression)
+            ) {
                 let unbridged GExpression? = this.TranslateExpression(argument.Expression)
                 return this.ReportStoreBridge(
                     argument.Expression,
@@ -2743,6 +2747,7 @@ partial class CSharpToGSharpTranslator {
                 cast[GTypeReference](NamedTypeReference(creation.Type.ToString()))
             }
             type = this.PromoteCreationTupleArguments(type, typeSymbol, creation)
+            type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
                 creation.ArgumentList?.Arguments ?? default(Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax])
@@ -3158,8 +3163,11 @@ partial class CSharpToGSharpTranslator {
                 IsNullOrSuppressedNull(valueExpression) ||
                 this.PlatformTypedImportNeedsNoBridge(valueExpression) || !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbolForPromotionCheck
-            ) {
+                targetSymbolForPromotionCheck,
+                valueExpression
+            ) ||
+                // A member whose arms are already asserted (issue #5516) is non-null as a whole.
+            this.GSharpExpressionIsStaticallyNonNull(valueExpression, translatedValue) {
                 return translatedValue
             }
             // Issue #3676: in a nullable-ENABLED compilation the promoted value
@@ -3171,7 +3179,7 @@ partial class CSharpToGSharpTranslator {
             // C# accepted the initializer only by trusting the generated
             // annotation, so asserting restores the contract it assumed.
             return if (
-                this.NullableReferenceValueMayBeNull(valueExpression) ||
+                this.NullableReferenceValueMayBeNull(valueExpression, respectDeclaredCallResults: true) ||
                     (
                     if this.IsObliviousCompilation() {
                         this.IsNullablePromotedValue(valueExpression)
@@ -3187,6 +3195,9 @@ partial class CSharpToGSharpTranslator {
                     targetSymbolForPromotionCheck,
                     targetType
                 )
+            } else if this.IsClosureAssignedVariable(this.context.GetSymbolInfo(valueExpression).Symbol) &&
+                this.IsFlowNarrowedInCSharpOnly(valueExpression, translatedValue) {
+                EnsureNonNullAssertion(translatedValue)
             } else {
                 translatedValue
             }

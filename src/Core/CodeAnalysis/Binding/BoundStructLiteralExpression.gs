@@ -202,7 +202,7 @@ class BoundStructLiteralExpression : BoundExpression {
             checkAccessibility bool = true,
             suppliedPrimaryInputs IEnumerable[string]? = nil
         ) bool {
-            if !type.UsesConstructorOwnedDataConstruction {
+            if !type.UsesConstructorOwnedDataConstruction && !UsesPrimaryConstructor(type) {
                 return true
             }
             var valid = true
@@ -224,35 +224,7 @@ class BoundStructLiteralExpression : BoundExpression {
                     )
                         .Any((candidate System.Reflection.ConstructorInfo) -> candidate.GetParameters().Length == 0)
                 }
-                if valid &&
-                    type.HasDataConstructionPrimary &&
-                    (suppliedPrimaryInputs != nil || syntax is StructLiteralExpressionSyntax) {
-                    let suppliedNames = suppliedPrimaryInputs ??
-                        (
-                        cast[StructLiteralExpressionSyntax](syntax)
-                            .Initializers
-                            .Where(
-                            (initializer FieldInitializerSyntax) ->
-                            initializer.Value is not CollectionInitializerExpressionSyntax{Target: nil}
-                        )
-                            .Select((initializer FieldInitializerSyntax) -> initializer.FieldIdentifier.ValueText)
-                    )
-                    for parameter in type.PrimaryConstructorParameters {
-                        if !suppliedNames.Contains(parameter.Name) &&
-                            parameter
-                            .Type
-                            .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
-                            parameter
-                            .Type
-                            .ClrType
-                            ?.IsArray == true &&
-                            MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) == nil {
-                            valid = false
-                            break
-                        }
-                    }
-                }
-            } else if !type.HasDataConstructionPrimary {
+            } else if !UsesPrimaryConstructor(type) {
                 let constructor = type.EffectiveExplicitConstructors.FirstOrDefault(
                     (candidate ConstructorSymbol) -> candidate.Parameters.IsEmpty
                 )
@@ -261,6 +233,43 @@ class BoundStructLiteralExpression : BoundExpression {
                     type,
                     currentFunction
                 )
+            }
+            if valid &&
+                UsesPrimaryConstructor(type) &&
+                (suppliedPrimaryInputs != nil || syntax is StructLiteralExpressionSyntax) {
+                let suppliedNames = suppliedPrimaryInputs ??
+                    (
+                    cast[StructLiteralExpressionSyntax](syntax)
+                        .Initializers
+                        .Where(
+                        (initializer FieldInitializerSyntax) ->
+                        initializer.Value is not CollectionInitializerExpressionSyntax{Target: nil}
+                    )
+                        .Select((initializer FieldInitializerSyntax) -> initializer.FieldIdentifier.ValueText)
+                )
+                for parameter in type.PrimaryConstructorParameters {
+                    if suppliedNames.Contains(parameter.Name) {
+                        continue
+                    }
+                    let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                        syntax,
+                        type,
+                        parameter,
+                        out var missingDeclarationShape
+                    )
+                    if missingDeclarationShape ||
+                        parameter
+                        .Type
+                        .ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                        parameter
+                        .Type
+                        .ClrType
+                        ?.IsArray == true &&
+                        zero == nil {
+                        valid = false
+                        break
+                    }
+                }
             }
             if !valid {
                 let location = if syntax is StructLiteralExpressionSyntax literal {
@@ -292,8 +301,17 @@ class BoundStructLiteralExpression : BoundExpression {
                 }
                 // Defaults are children of the bound literal, so rewriting and
                 // slot planning see exactly the nodes that emission will consume.
-                let value = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(syntax, type, parameter) ??
-                    BoundDefaultExpression(syntax, parameter.Type)
+                let zero = MagicCollectionZeroValue.TrySynthesizePrimaryArgument(
+                    syntax,
+                    type,
+                    parameter,
+                    out var missingDeclarationShape
+                )
+                let value = if missingDeclarationShape {
+                    BoundErrorExpression(syntax)
+                } else {
+                    zero ?? BoundDefaultExpression(syntax, parameter.Type)
+                }
                 builder ??= initializers.ToBuilder()
                 builder!!.Add(
                     if member is FieldSymbol field {
