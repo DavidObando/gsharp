@@ -301,41 +301,102 @@ internal partial class StatementBinder {
         }
     }
 
-    // A member call is a plain call (ADR-0208 amendment A3 keeps by-reference storage across a call to a method),
-    // unless it invokes a function value: a delegate's `Invoke`, any member of a receiver of function type, or a
-    // field or property of the receiver's type. The receiver is resolved when it is a plain name of the entry
-    // scope; the member of any other receiver is taken for a method.
+    // A member call is a plain call (ADR-0208 amendment A3 keeps by-reference storage across a call to a method)
+    // when the member is surely a method. A receiver that is a plain name of the entry scope, a variable or a type,
+    // is resolved: every member of that name on its declared type, and on the type its entry fact narrows it to,
+    // must be a method, so a member of a delegate (`Invoke`), a field or a property of function type, an extension
+    // method and an element of a tuple count as a function value. The member of any other receiver (an element,
+    // a member chain, a call result) is taken for a method, as in slice L0, unless it invokes a delegate.
     private func MemberCallIsIndirect(call RegionCall) bool {
         let member = call.CalleeName
-        if member == nil || member == "Invoke" || member == "BeginInvoke" || member == "DynamicInvoke" {
+        let receiverName = call.ReceiverName
+        if member == nil {
             return true
         }
-        if call.ReceiverName == nil || $scope.TryLookupSymbol(call.ReceiverName) is not VariableSymbol receiver {
-            return false
+        if receiverName == nil {
+            return member == "Invoke" || member == "BeginInvoke" || member == "DynamicInvoke"
         }
-        let receiverType = StripAllNullability(receiver.Type)
-        if receiverType is FunctionTypeSymbol or
-            DelegateTypeSymbol ||
-            (receiverType?.ClrType is {} delegateClrType && ClrTypeUtilities.IsDelegateType(delegateClrType)) {
-            return true
+        let symbol = $scope.TryLookupSymbol(receiverName)
+        if symbol is VariableSymbol receiver {
+            if !MemberIsOnlyMethod(StripAllNullability(receiver.Type), member) {
+                return true
+            }
+            let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(receiver))
+            return narrowed != nil && !MemberIsOnlyMethod(StripAllNullability(narrowed), member)
         }
-        if receiverType is StructSymbol declared {
-            for type in declared.GetHierarchy() {
-                for symbol in type.GetMembers() {
-                    if symbol.Name == member && symbol is not FunctionSymbol {
+        let type = if symbol is TypeSymbol named {
+            named
+        } else if symbol == nil {
+            ResolveConstructedType(receiverName)
+        } else {
+            default(TypeSymbol?)
+        }
+        return !MemberIsOnlyMethod(type, member)
+    }
+
+    // Whether the type has a member of the name and every such member is a method.
+    private func MemberIsOnlyMethod(type TypeSymbol?, member string) bool {
+        switch type {
+            case nil {
+                return false
+            }
+            case FunctionTypeSymbol, DelegateTypeSymbol, TupleTypeSymbol {
+                return false
+            }
+            case declared is StructSymbol {
+                var found = false
+                for level in declared.GetHierarchy() {
+                    for symbol in level.GetMembers() {
+                        if symbol.Name == member {
+                            if symbol is not FunctionSymbol {
+                                return false
+                            }
+                            found = true
+                        }
+                    }
+                }
+                if found {
+                    return true
+                }
+                return declared
+                    .GetHierarchy()
+                    .Last()
+                    .ImportedBaseType is {} importedBase &&
+                    MemberIsOnlyMethod(importedBase, member)
+            }
+            case contract is InterfaceSymbol {
+                for property in contract.Properties {
+                    if property.Name == member {
+                        return false
+                    }
+                }
+                for method in contract.Methods {
+                    if method.Name == member {
                         return true
                     }
                 }
+                return false
             }
-        }
-        if receiverType?.ClrType is {} clrType {
-            for clrMember in clrType.GetMember(member) {
-                if clrMember is FieldInfo or PropertyInfo {
-                    return true
+            default {
+                if type?.ClrType is not{} clrType || ClrTypeUtilities.IsDelegateType(clrType) {
+                    return false
                 }
+                let members = clrType.GetMember(
+                    member,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
+                    BindingFlags.FlattenHierarchy
+                )
+                if members.Length == 0 {
+                    return false
+                }
+                for clrMember in members {
+                    if clrMember is not MethodInfo {
+                        return false
+                    }
+                }
+                return true
             }
         }
-        return false
     }
 
     private func StripAllNullability(type TypeSymbol?) TypeSymbol? -> StripNullability(type)

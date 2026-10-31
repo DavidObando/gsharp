@@ -1071,6 +1071,48 @@ func Run(ref text string?, holder Holder) int32 {
     return n
 }
 func Main() { }`, "GS0158")
+            Add("interface-property-member-call-is-indirect (A3)", `package T
+import System
+interface IHolder {
+    prop Cb Action { get; }
+}
+class Holder : IHolder {
+    var cb Action = Action(func() { })
+    prop Cb Action { get { return cb } }
+}
+func Run(ref text string?, holder IHolder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("tuple-element-member-call-is-indirect (A3)", `package T
+import System
+func Run(ref text string?, pair (Cb Action, N int32)) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        pair.Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("static-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+func Run(ref text string?, values []int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n = Math.Max(n, 1) + n
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

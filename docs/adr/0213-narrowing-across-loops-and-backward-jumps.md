@@ -1279,10 +1279,14 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   `!`, `&&` or `||`). The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of a
   tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a
-  function value, which is an indirect call (A3), also when a nested loop's record is composed. A member call is
-  indirect when it invokes a delegate (`Invoke`, `BeginInvoke`, `DynamicInvoke`), when its receiver is a plain name
-  of the entry scope whose type is a function or delegate type, or when the member is a field or property of that
-  receiver's type or a base of it. The member of any other receiver is taken for a method, as in slice L0.
+  function value, which is an indirect call (A3), also when a nested loop's record is composed. A member call
+  whose receiver is a plain name of the entry scope (a variable or a type) is a plain call (A3) only when every
+  member of that name on the receiver's declared type, and on the type its entry fact narrows it to, is a method;
+  otherwise it invokes a function value, which is indirect: a member of a delegate (`callback.Invoke()`), a field or
+  property of function type (class, interface or tuple element), an extension method. The member of any other
+  receiver (an element, a member chain, a call result) is taken for a method, as in slice L0 and the A3 rows
+  (`frames[i].TryGetValue(path, out found)`), unless it is `Invoke`, `BeginInvoke` or `DynamicInvoke`
+  (`holder.Cb.Invoke()`). A function-typed field called through a chain (`a.b.Cb()`) stays a plain call.
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.
