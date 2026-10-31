@@ -988,6 +988,32 @@ internal class LambdaBinder {
         let bindLambdaBodyExpression = bindLambdaBodyExpression!!
         let isAsync = syntax.IsAsync
         let arityMatchesTarget = targetFunctionType != nil && targetFunctionType.Arity == syntax.Parameters.Count
+        // Issue #5569: a speculative literal whose parameters are all written can fall back to its natural type.
+        let naturalTypeAvailable = acceptsNaturalType != nil && syntax.Parameters.All(
+            (parameter ParameterSyntax) -> parameter.Type != nil
+        )
+        if naturalTypeAvailable && targetFunctionType != nil && !arityMatchesTarget {
+            let arityMark = Diagnostics.Count
+            Diagnostics.ReportWrongArgumentCount(
+                syntax.Location,
+                "lambda",
+                targetFunctionType.Arity,
+                syntax.Parameters.Count
+            )
+            let arityDiagnostics = Diagnostics.Skip(arityMark).ToImmutableArray()
+            Diagnostics.TruncateTo(arityMark)
+            if TryBindNaturalFallback(
+                syntax,
+                arityDiagnostics,
+                acceptsNaturalType!!,
+                discardedTargetDiagnostics,
+                out var natural
+            ) {
+                return natural!!
+            }
+            Diagnostics.AddRange(arityDiagnostics)
+            return BindLambdaExpression(syntax, targetFunctionType, inferReturnTypeFromBody)
+        }
         if targetFunctionType != nil && !arityMatchesTarget {
             Diagnostics.ReportWrongArgumentCount(
                 syntax.Location,
@@ -1000,6 +1026,8 @@ internal class LambdaBinder {
         let parameterSymbols = ImmutableArray.CreateBuilder[ParameterSymbol](syntax.Parameters.Count)
         let seen = HashSet[string]()
         var hasIncompatibleExplicitParameter = false
+        // Issue #5569: the parameter diagnostics that only the target causes, for a speculative literal.
+        let parameterTargetDiagnostics = List[Diagnostic]()
         var needsExplicitParameterAdapter = false
         let exactTargetParameterSlots = [syntax.Parameters.Count]bool
         // ADR-0185: every destructured parameter's pattern, recorded here so
@@ -1237,10 +1265,15 @@ internal class LambdaBinder {
                     )
                 )
                 if !compatible {
+                    let parameterMark = Diagnostics.Count
                     if conversion.Exists {
                         Diagnostics.ReportCannotConvertImplicitly(p.Type!!.Location, targetParameterType, parameterType)
                     } else {
                         Diagnostics.ReportCannotConvert(p.Type!!.Location, targetParameterType, parameterType)
+                    }
+                    if naturalTypeAvailable {
+                        parameterTargetDiagnostics.AddRange(Diagnostics.Skip(parameterMark))
+                        Diagnostics.TruncateTo(parameterMark)
                     }
                     hasIncompatibleExplicitParameter = true
                 } else if !runtimeEquivalent && !structurallyCompatibleDelegate {
@@ -1272,6 +1305,20 @@ internal class LambdaBinder {
             parameterTypes.Add(parameterType)
         }
         if hasIncompatibleExplicitParameter {
+            // Issue #5569: the target bind stops here without binding the body, so the natural bind is the only one.
+            if parameterTargetDiagnostics.Count > 0 {
+                let held = parameterTargetDiagnostics.ToImmutableArray()
+                if TryBindNaturalFallback(
+                    syntax,
+                    held,
+                    acceptsNaturalType!!,
+                    discardedTargetDiagnostics,
+                    out var natural
+                ) {
+                    return natural!!
+                }
+                Diagnostics.AddRange(held)
+            }
             return BoundErrorExpression(nil)
         }
         // ADR-0101 follow-up / issue #812: enforce variadic structural rules.
@@ -1305,7 +1352,11 @@ internal class LambdaBinder {
             !isAsync &&
             placeholderReturnType != TypeSymbol.Error &&
             placeholderReturnType != TypeSymbol.Void
-        placeholder.DefersReturnConversion = defersReturnConversion
+        placeholder.DeferredReturns = if defersReturnConversion {
+            DeferredReturnState()
+        } else {
+            default(DeferredReturnState?)
+        }
         let outerScope = Scope
         let outerFunction = getCurrentFunction()
         Scope = BoundScope(outerScope)
@@ -1427,9 +1478,17 @@ internal class LambdaBinder {
         if defersReturnConversion {
             // Issue #5569: convert the returns as an eager target bind does. When a return does not convert, the
             // literal keeps its natural type only if no other error occurred and another candidate accepts it.
+            // The return values whose target typing failed bound again with their natural type; the target-typed
+            // values and their diagnostics are in the placeholder's state.
+            let deferredReturns = Invariant.Required(
+                placeholder.DeferredReturns,
+                "a deferred return conversion has a state",
+                expression: "placeholder.DeferredReturns"
+            )
+            let targetBody = deferredReturns.WithTargetOperands(boundBody)
             let trialMark = Diagnostics.Count
-            let converted = ApplyInferredReturnTypeConversion(boundBody, syntax, placeholderReturnType, true)
-            let targetDiagnostics = Diagnostics.Skip(trialMark).ToImmutableArray()
+            let converted = ApplyInferredReturnTypeConversion(targetBody, syntax, placeholderReturnType, true)
+            let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.Skip(trialMark))
             Diagnostics.TruncateTo(trialMark)
             let naturalReturnType = if targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
                 InferLambdaReturnType(boundBody, syntax, nil, isAsync)
@@ -2428,6 +2487,115 @@ internal class LambdaBinder {
     // rewrite is a single pass and stops at nested function literals
     // (BoundTreeRewriter's default RewriteFunctionLiteralExpression keeps
     // the nested body opaque).
+    /// Issue #5569: binds a speculative literal with its natural type after the target bind failed before its
+    /// body bound (a parameter count or an explicit parameter type that the target does not accept). The body
+    /// binds once.
+    /// @param syntax The function literal.
+    /// @param targetDiagnostics The diagnostics of the failed target bind.
+    /// @param acceptsNaturalType Whether another candidate accepts the natural function type.
+    /// @param discardedTargetDiagnostics Receives the target diagnostics when the natural type is kept.
+    /// @param natural The natural literal, on success.
+    /// @returns `true` when the literal keeps its natural type.
+    private func TryBindNaturalFallback(
+        syntax LambdaExpressionSyntax,
+        targetDiagnostics ImmutableArray[Diagnostic],
+        acceptsNaturalType(TypeSymbol) -> bool,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        @NotNullWhen(true) out natural BoundExpression?
+    ) bool {
+        let mark = Diagnostics.Count
+        let bound = BindLambdaExpression(syntax)
+        if !(bound is BoundErrorExpression) && !Diagnostics.Skip(mark).Any(
+            (diagnostic Diagnostic) -> diagnostic.IsError
+        ) &&
+            acceptsNaturalType(bound.Type) {
+            discardedTargetDiagnostics?.Add(targetDiagnostics)
+            natural = bound
+            return true
+        }
+        Diagnostics.TruncateTo(mark)
+        natural = nil
+        return false
+    }
+
+    /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
+    /// Each such return statement binds its value again with the natural type, so the body can give either
+    /// function type after one bind of its statements.
+    internal class DeferredReturnState {
+        private let operands List[
+            (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ] = List[(Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])]()
+
+        /// Records the target-typed value of a return statement and the diagnostics of its target typing.
+        /// @param syntax The return statement.
+        /// @param value The target-typed value.
+        /// @param diagnostics The diagnostics of the target typing.
+        internal func Hold(
+            syntax ReturnStatementSyntax,
+            value BoundExpression,
+            diagnostics ImmutableArray[Diagnostic]
+        ) {
+            operands.Add((syntax, value, diagnostics))
+        }
+
+        /// Gets the diagnostics of every held target typing, in source order.
+        /// @returns The diagnostics.
+        internal func OperandDiagnostics() ImmutableArray[Diagnostic] {
+            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+            for operand in operands {
+                builder.AddRange(operand.Diagnostics)
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Puts the held target-typed values back into a bound body.
+        /// @param body The bound body with the natural values.
+        /// @returns The body with the target-typed values.
+        internal func WithTargetOperands(body BoundExpression) BoundExpression {
+            if operands.Count == 0 {
+                return body
+            }
+            let rewriter = TargetOperandRewriter(operands)
+            if body is BoundBlockExpression block {
+                let statements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
+                for statement in block.Statements {
+                    statements.Add(rewriter.RewriteStatement(statement))
+                }
+                return BoundBlockExpression(
+                    block.Syntax,
+                    statements.ToImmutable(),
+                    rewriter.RewriteTail(block.Expression)
+                )
+            }
+            return rewriter.RewriteTail(body)
+        }
+
+        private class TargetOperandRewriter : BoundTreeRewriter {
+            private let operands List[
+                (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+            ]
+
+            init(
+                operands List[
+                    (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+                ]
+            ) {
+                this.operands = operands
+            }
+
+            internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+            protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
+                for operand in operands {
+                    if object.ReferenceEquals(operand.Syntax, node.Syntax) {
+                        return BoundReturnStatement(node.Syntax, operand.Value, node.IsRef)
+                    }
+                }
+                return base.RewriteReturnStatement(node)
+            }
+        }
+    }
+
     private func ApplyInferredReturnTypeConversion(
         boundBody BoundExpression,
         syntax LambdaExpressionSyntax,
