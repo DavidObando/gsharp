@@ -1074,7 +1074,8 @@ internal partial class ExpressionBinder {
                     candidateUsable = false
                     break
                 }
-                let openParameterType = openParameters[paramIndex].ParameterType
+                // Issue #5543: a lambda is a plain value, so an `in` slot targets its pointee.
+                let openParameterType = ConversionClassifier.GetPlainValueClrParameterType(openParameters[paramIndex])
                 var mappedDelegate TypeSymbol?
                 var functionType FunctionTypeSymbol?
                 // Issue #3666: set when the delegate's RETURN shape was closed
@@ -1190,7 +1191,9 @@ internal partial class ExpressionBinder {
                     // only the erased CLR shape.
                     if mappedDelegate is ImportedTypeSymbol{OpenDefinition: {} mappedOpenDefinition} mappedImported &&
                         paramIndex < closedParameters.Length &&
-                        closedParameters[paramIndex].ParameterType is {} closedParameterType &&
+                        ConversionClassifier.GetPlainValueClrParameterType(
+                        closedParameters[paramIndex]
+                    ) is {} closedParameterType &&
                         !closedParameterType.ContainsGenericParameters &&
                         !closedParameterType.IsSameAs(mappedImported.ClrType) &&
                         closedParameterType.IsGenericType &&
@@ -4182,7 +4185,8 @@ internal partial class ExpressionBinder {
             if paramIndex < 0 || paramIndex >= openParams.Length {
                 return false
             }
-            var openParamType = openParams[paramIndex].ParameterType
+            // Issue #5543: a lambda is a plain value, so an `in` slot targets its pointee.
+            var openParamType Type? = ConversionClassifier.GetPlainValueClrParameterType(openParams[paramIndex])
             // Issue #2365: an `Expression<TDelegate>` parameter is not itself a
             // delegate (it exposes no `Invoke`), so unwrap it to the wrapped open
             // delegate type first. Both a direct delegate parameter and an
