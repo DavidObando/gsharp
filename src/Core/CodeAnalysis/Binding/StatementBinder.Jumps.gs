@@ -625,6 +625,9 @@ internal partial class StatementBinder {
             }
         } else if function == nil {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location)
+        } else if function!!.DefersReturnConversion {
+            // Issue #5569: the lambda binder converts the value, and reports a missing value, after the body.
+
         } else if function!!.IsReturnTypeInferred {
             // ADR-0076 / issue #716: arrow-lambda binding deferred return-type
             // resolution to a post-bind pass. The expression has been bound,

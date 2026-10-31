@@ -399,6 +399,33 @@ class Program {
 `, "OOOOOOFFF")
     }
 
+    /// Issue #5569: each speculative literal binds its body once, so nested literals cost linear work. Before,
+    /// a literal whose `return` value did not convert bound its body again with its natural type, so each
+    /// nesting level doubled the work of the levels inside it. At depth 24 that compile does not finish within the
+    /// 30-second driver bound; now it takes the same time as depth 1. Roslyn itself binds such nesting
+    /// exponentially (CS9236), so its oracle uses depth 2 of the same shape, which gives the same output because
+    /// no literal runs.
+    @Fact
+    func NestedBlockLiterals_ThatSelectObject_BindInLinearWork() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let shapes = []string{"Calls.M(|, 1)", "Calls.In(|, 1)", "C(|, 1).Kind", "InCtor(|, 1).Kind"}
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
+        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        for shape in shapes {
+            source
+                .Append("    Console.Write(")
+                .Append(NestBlockLiterals(shape, 24, "() -> { ", "return \"s\" }"))
+                .Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(NestBlockLiterals(OracleShape(shape), 2, "() => { ", "return \"s\"; }"))
+                .Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOO")
+    }
+
     /// Issue #5569 control: with no other candidate, the block-bodied literal keeps the target bind and its
     /// diagnostic at the `return` value.
     @Fact
@@ -743,6 +770,33 @@ class Program {
     }
 }
 `, "Truem74")
+    }
+
+    /// Issue #5569: nests a block-bodied literal [`depth`](paramref) times. Each level writes the call of the
+    /// level inside it and then returns a string, which does not convert to the delegate's `int64` result.
+    /// @param shape The call, with `|` in place of the literal.
+    /// @param depth The number of enclosing levels.
+    /// @param bodyStart The text that starts a literal body.
+    /// @param bodyEnd The `return` statement and the end of a literal body.
+    /// @returns The nested call.
+    private func NestBlockLiterals(shape string, depth int32, bodyStart string, bodyEnd string) string {
+        var call = shape.Replace("|", bodyStart + bodyEnd)
+        for var level = 0; level < depth; level++ {
+            call = shape.Replace("|", bodyStart + "Console.Write(" + call + ")" + StatementEnd(bodyStart) + bodyEnd)
+        }
+        return call
+    }
+
+    private func StatementEnd(bodyStart string) string -> if bodyStart.Contains("=>") {
+        "; "
+    } else {
+        "\n"
+    }
+
+    private func OracleShape(shape string) string -> if shape.StartsWith("Calls.", StringComparison.Ordinal) {
+        shape
+    } else {
+        "new " + shape
     }
 
     private func Reject(

@@ -547,6 +547,12 @@ class FunctionSymbol : Symbol {
     /// Defaults to `false`.
     prop IsReturnTypeInferred bool
 
+    /// Gets or sets a value indicating whether the return statements of a lambda body keep their value
+    /// unconverted (issue #5569). The lambda binder converts them after the body, so one body bind can give
+    /// the target function type or the natural one. Unlike (cref:IsReturnTypeInferred), the declared return
+    /// type still target-types the return values. Defaults to `false`.
+    prop DefersReturnConversion bool
+
     /// Gets or sets the resolved `@DllImport` metadata for a P/Invoke
     /// function declaration (ADR-0086 / issue #727). Non-null when the
     /// function is a well-formed P/Invoke stub; the emitter consumes the
