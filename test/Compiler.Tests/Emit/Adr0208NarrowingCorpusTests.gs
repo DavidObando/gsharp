@@ -323,7 +323,9 @@ open class Adr0208NarrowingCorpusTests {
                 "u19_5520_type_without_initializers_keeps_member_path",
                 "u20_5520_plain_local_keeps_the_fact_across_a_static_read",
                 "u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact",
-                "u22_5520_literal_initializer_through_a_user_defined_conversion"
+                "u22_5520_literal_initializer_through_a_user_defined_conversion",
+                "u23_5520_nil_initializer_through_a_user_defined_conversion",
+                "u24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact"
             },
             names
         )
@@ -3813,6 +3815,58 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R15"}
+            yield[]object{"u23_5520_nil_initializer_through_a_user_defined_conversion", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Token {
+    var Raw int32
+}
+func operator implicit(value string?) Token {
+    cleaner()
+    return Token{Raw: 1}
+}
+class Trigger {
+    shared {
+        var Seed Token = nil
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Seed
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R15"}
+            yield[]object{"u24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Token {
+    var Raw int32
+}
+func operator implicit(value string?) Token {
+    cleaner()
+    return Token{Raw: 1}
+}
+class Trigger {
+    shared {
+        var Spare Token? = nil
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Spare
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "", "run", "1", "R15"}
             yield[]object{"r1_5482_ref_alias_of_closure_replaced_callable", `import System
 
 class C {

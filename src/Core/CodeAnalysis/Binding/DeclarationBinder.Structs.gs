@@ -2465,16 +2465,20 @@ internal partial class DeclarationBinder {
         BindStructSharedEvents(syntax, $package, structSymbol, memberBinding)
     }
 
-    /// Issue #5520: whether a `shared` field initializer runs no code: `nil`, or a literal of a built-in field type,
-    /// possibly parenthesized or under a unary operator (`-1`). A literal of another field type can call a
-    /// user-defined conversion (`var Seed Token = 1`), and anything else (a call, a name, a construction) is user
-    /// code or may be, so it counts (ADR-0208 R11 and R15 read it through
-    /// `DeclaresNonLiteralSharedFieldInitializer`). The answer reads only the syntax and the declared field type.
+    /// Issue #5520: whether a `shared` field initializer runs no code: `nil` into a reference or `T?` field type, or
+    /// a literal of a built-in field type, possibly parenthesized or under a unary operator (`-1`). A literal of
+    /// another field type, or `nil` into a value type, can call a user-defined conversion (`var Seed Token = 1`,
+    /// `var Seed Token = nil`), and anything else (a call, a name, a construction) is user code or may be, so it
+    /// counts (ADR-0208 R11 and R15 read it through `DeclaresNonLiteralSharedFieldInitializer`). The answer reads
+    /// only the syntax and the declared field type.
     private func IsLiteralInitializerSyntax(initializer ExpressionSyntax, fieldType TypeSymbol) bool {
         var current = initializer
         for var depth = 0; depth < 64; depth++ {
             if current is LiteralExpressionSyntax literal {
-                return literal.LiteralToken.Kind == SyntaxKind.NilKeyword || IsBuiltInLiteralTarget(fieldType)
+                if literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
+                    return fieldType is NullableTypeSymbol || !fieldType.IsValueType
+                }
+                return IsBuiltInLiteralTarget(fieldType)
             }
             if current is ParenthesizedExpressionSyntax parenthesized {
                 current = parenthesized.Expression

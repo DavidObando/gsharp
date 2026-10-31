@@ -196,6 +196,36 @@ public class Demo
         AssertCompilesWithGsc(printed)
     }
 
+    /// A static event subscription alone between the guard and the read. Mutation witness: an event does not count
+    /// in `NodeRunsStaticTypeInitializer`.
+    @Fact
+    func OutParameter_ReadAfterAStaticEventSubscription_IsAsserted() {
+        let printed = Translate(`
+public sealed class Hub
+{
+    public static readonly object Gate = new object();
+    public static event System.Action? Changed;
+    public static void Raise() => Changed?.Invoke();
+}
+public class Demo
+{
+    static string? Pick() => null;
+    static void Handler() { }
+    public static int Run(out string? text)
+    {
+        text = Pick();
+        if (text is null)
+        {
+            return 0;
+        }
+        Hub.Changed += Handler;
+        return text.Length;
+    }
+}`)
+        Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
     /// Mutation witness for this row and the constant and construction rows: `NodeRunsStaticTypeInitializer` counts
     /// every name and member access.
     @Fact
