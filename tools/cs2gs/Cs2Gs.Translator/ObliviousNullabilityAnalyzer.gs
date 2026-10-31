@@ -325,6 +325,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             this.Owner = owner
             this.Seeds = seeds
             this.Incoming = Dictionary[string, List[string]](StringComparer.Ordinal)
+            this.Outgoing = Dictionary[string, List[ISymbol]](StringComparer.Ordinal)
         }
 
         prop Owner Compilation {
@@ -336,6 +337,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
 
         prop Incoming Dictionary[string, List[string]] {
+            get;
+        }
+
+        // Issue #5574: every slot a candidate's value is handed to unchanged, keyed by the
+        // candidate. A slot that keeps a non-null contract pins the candidate (see
+        // `IsPinnedNonNull`).
+        prop Outgoing Dictionary[string, List[ISymbol]] {
             get;
         }
 
@@ -566,6 +574,12 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// local, or any expression is not forwarding: the author asserted or
     /// changed it.
     ///
+    /// <b>A forward into a slot that stays non-null pins the value.</b> A
+    /// declaration whose value goes on unchanged to a slot this rule does not
+    /// widen (a local function, a virtual or interface member, a library
+    /// method) keeps its type, and so does every value that reaches it: G#
+    /// would need a `!!` there that throws on the null C# passes on (#5574).
+    ///
     /// <b>Signature-fixed declarations are left alone.</b> A parameter or
     /// property of a virtual, abstract, overriding or interface-implementing
     /// member does not own its nullability (repainting it is gsc's
@@ -616,6 +630,14 @@ internal shared class ObliviousNullabilityAnalyzer {
         for graph in graphs {
             EnsureNullArgumentForwarding(graph)
         }
+        // Issue #5574: a declaration whose value reaches a slot that stays
+        // non-null is not widened, and no value is widened through it.
+        let pins = Dictionary[string, bool](StringComparer.Ordinal)
+        for key in keys {
+            if IsPinnedNonNull(key, compilation, siblingCompilations, graphs, pins) {
+                return false
+            }
+        }
         let visited = HashSet[string](StringComparer.Ordinal)
         let pending = Stack[string]()
         for key in keys {
@@ -623,7 +645,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         while pending.Count != 0 {
             let current = pending.Pop()
-            if !visited.Add(current) {
+            if !visited.Add(current) || IsPinnedNonNull(current, compilation, siblingCompilations, graphs, pins) {
                 continue
             }
             for alias in NullArgumentAliasKeys(current, graphs) {
@@ -2000,6 +2022,89 @@ internal shared class ObliviousNullabilityAnalyzer {
         return targets
     }
 
+    // Issue #5574: whether the declaration `key` stands for is PINNED non-null:
+    // it hands its value on unchanged (`Walk(type, match)`, `Stored = p`,
+    // `return p`) to a slot that keeps a non-null contract, so widening it
+    // would only move the null to that slot, where G# needs a `!!` that throws
+    // on the very null the C# passes on (`ContainsTypeParameter(null)` returns
+    // false in C#; a widened `type` forwarded to the non-widenable local
+    // function `AnyTypeParameter(type!!, match)` threw). A slot keeps its
+    // contract when it is non-null and this rule does not widen it: it is not a
+    // candidate, this run does not emit it, or it is pinned itself. The answer
+    // is memoized per query in `pins`; a cycle reads as not pinned.
+    private func IsPinnedNonNull(
+        key string,
+        compilation CSharpCompilation,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?,
+        graphs List[NullArgumentGraph],
+        pins Dictionary[string, bool]
+    ) bool {
+        if pins.TryGetValue(key, out var known) {
+            return known
+        }
+        pins[key] = false
+        var pinned = false
+        for graph in graphs {
+            if pinned || !graph.Outgoing.TryGetValue(key, out var slots) {
+                continue
+            }
+            for slot in slots {
+                if !KeepsNonNullContract(slot, compilation, siblingCompilations) {
+                    continue
+                }
+                let slotOriginal = OriginalNullArgumentDeclaration(slot)
+                if slotOriginal != nil &&
+                    IsNullArgumentCandidate(slotOriginal) &&
+                    IsDeclaredInThisRun(compilation, slotOriginal, siblingCompilations) &&
+                    !NullArgumentKeys(slotOriginal).Any(
+                    (slotKey string) -> IsPinnedNonNull(slotKey, compilation, siblingCompilations, graphs, pins)
+                ) {
+                    continue
+                }
+                pinned = true
+                break
+            }
+        }
+        pins[key] = pinned
+        return pinned
+    }
+
+    // Issue #5574: whether `slot` (as the call or store binds it) is a non-null
+    // reference in the emitted G#: not `T?`, not a value or open type, not a
+    // method type parameter that G# infers from the value, and not an
+    // oblivious contract this run does not emit (G# reads that as `T!`, which
+    // takes `nil`).
+    private func KeepsNonNullContract(
+        slot ISymbol,
+        compilation CSharpCompilation,
+        siblingCompilations IReadOnlyList[CSharpCompilation]?
+    ) bool {
+        let type ITypeSymbol? = switch slot {
+            case parameter is IParameterSymbol: parameter.Type
+            case field is IFieldSymbol: field.Type
+            case property is IPropertySymbol: property.Type
+            case method is IMethodSymbol: method.ReturnType
+            default: default(ITypeSymbol?)
+        }
+        if type is not{IsReferenceType: true} reference ||
+            reference.NullableAnnotation == Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .Annotated {
+            return false
+        }
+        if slot is IParameterSymbol{
+            OriginalDefinition: {Type: ITypeParameterSymbol{TypeParameterKind: TypeParameterKind.Method}}
+        } {
+            return false
+        }
+        return reference.NullableAnnotation != Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .None ||
+            IsDeclaredInThisRun(compilation, slot.OriginalDefinition, siblingCompilations)
+    }
+
     // Issue #5508: whether this run EMITS the declaration. A source declaration
     // is; so is a declaration another project of the run owns that this
     // compilation sees through that project's emitted reference assembly (its
@@ -2079,6 +2184,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     // migration is NOT asked here: a call bound through a reference assembly is
     // still evidence about the source declaration in the sibling project.
     private func IsNullArgumentCandidate(symbol ISymbol?) bool {
+        if IsSdkRuntimeDeclaration(symbol) {
+            return false
+        }
         switch symbol {
             case parameter is IParameterSymbol {
                 if parameter.Ordinal < 0 ||
@@ -2121,6 +2229,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return false
             }
         }
+    }
+
+    // Issue #5574: a declaration of a runtime assembly that the G# SDK places on
+    // every compilation's references (`Gsharp.Runtime.Values`,
+    // `Gsharp.Runtime.Channels`, `Gsharp.Extensions`). A G# consumer can bind to
+    // the SDK's copy instead of the migrated project (`slice[string].FromArray`
+    // binds to the SDK's `Slice`, ADR-0187 section 6), whose signature this
+    // migration does not change, so a call's null cannot widen the declaration.
+    private func IsSdkRuntimeDeclaration(symbol ISymbol?) bool {
+        let name = symbol?.ContainingAssembly?.Name
+        return name == "Gsharp.Runtime.Values" || name == "Gsharp.Runtime.Channels" || name == "Gsharp.Extensions"
     }
 
     // The primary-constructor parameter a positional record property is
@@ -2451,6 +2570,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         let AddEdge = func (target ISymbol?, source ISymbol?) {
             let targetOriginal = OriginalNullArgumentDeclaration(target)
             let sourceOriginal = OriginalNullArgumentDeclaration(source)
+            if target != nil && sourceOriginal != nil && IsNullArgumentCandidate(sourceOriginal) {
+                for sourceKey in NullArgumentKeys(sourceOriginal) {
+                    if !graph.Outgoing.TryGetValue(sourceKey, out var slots) {
+                        slots = List[ISymbol]()
+                        graph.Outgoing[sourceKey] = slots
+                    }
+                    slots.Add(target)
+                }
+            }
             if targetOriginal != nil &&
                 sourceOriginal != nil &&
                 IsNullArgumentCandidate(targetOriginal) &&
