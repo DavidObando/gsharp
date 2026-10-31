@@ -3692,10 +3692,10 @@ internal class ReflectionMetadataEmitter {
                     this.functions.EmitFunction(fn, body, isEntryPoint: false)
                 }
             }
-            if this.emitCtx.Program.EntryPoint != nil && pkg == entryPointPackage && !entryPointIsClassOwned {
-                let entryBody = this.emitCtx.Program.Functions[this.emitCtx.Program.EntryPoint]
+            if this.emitCtx.Program.EntryPoint is {} entryPoint && pkg == entryPointPackage && !entryPointIsClassOwned {
+                let entryBody = this.emitCtx.Program.Functions[entryPoint]
                 this.functions.EmitFunction(
-                    this.emitCtx.Program.EntryPoint,
+                    entryPoint,
                     entryBody,
                     isEntryPoint: true,
                     isSynthesizedEntryPointStub: this.EntryPointNeedsSeparateStub

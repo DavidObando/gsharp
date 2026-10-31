@@ -848,6 +848,7 @@ compatibility note. "Probe" refers to section 4.
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
+| R17 | A write or read of an imported (CLR) property setter or indexer is a `call` too, unless the accessor is on the stable list (`IsStableClrAccessor`): the `List<T>` indexer (get and set) and `List<T>.Capacity` set, the `Span<T>` indexer, the `ReadOnlySpan<T>` indexer get, the `string` indexer get, the `StringBuilder` indexer (get and set) and `StringBuilder.Length` set. The same conditions as R16 apply (core library, not overridable). An index read on a receiver of an erased generic type (`List[T]` over a type parameter) is always a `call`, because it is emitted through the non-generic `IList` or `IDictionary` interface, which a subclass can reimplement; an index write and a `Span[T]` read over a type parameter keep the listed accessor. `Dictionary<K,V>` indexers are not stable: they call `GetHashCode` and `Equals` of the key. `var x C? = C{}; let oc = ObservableCollection[int32](); oc.Add(1); oc.CollectionChanged += (s, e) -> { x = nil }; if x == nil { return 0 }; oc[0] = 5; return x.Value` (bug [#5532](https://github.com/DavidObando/gsharp/issues/5532)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 
 Details per row:
 
@@ -947,6 +948,16 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
+  `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
+  `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only
+  (member paths and by-reference storage) and the indexer read as nothing, so a closure-assigned local
+  or a mutable global kept its fact across an `ObservableCollection<T>` indexer set that raises
+  `CollectionChanged`. `StatementBinder.ClrAccessRunsUserCode` is now the one predicate for the four
+  node kinds; it calls `IsStableClrAccessor(property, isSetter)`, which is `IsStableClrGetter`
+  generalised to setters and indexers with the same list discipline. The ordering of a condition's
+  effects before its branches (#5534) is a different decision and is not part of this row.
+  Corpus rows u01 to u13 (u13 reads the `List<T>` indexer between the guard and the use).
 - **R16 (#5231, maintainer decision: the stable-getter list).** The construct
   table already lists `BoundClrPropertyAccessExpression` as `call`, but the
   collector did not apply it: `AssignedRootsCollector.VisitExpression` killed
@@ -1012,7 +1023,7 @@ Details per row:
   type, can call a user-defined conversion, a unary operator that is not predefined (`-"x"`) calls a user-defined
   or extension operator, and anything else (a call, a name, a construction) is code, on purpose, so the answer
   reads only the syntax and the declared field type. Constructing the type does not run
-  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and u01 to u27 (issue #5520).
+  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and v01 to v27 (issue #5520).
 
   Contract of #5520 (each row is a compiler corpus row; the mutation witness is a product change that makes the row
   fail, recorded in the PR):
@@ -1020,26 +1031,26 @@ Details per row:
   | shape | before | after | row | mutation witness |
   | --- | --- | --- | --- | --- |
   | static field read, non-literal `shared` initializer, closure-assigned local or mutable global | accepted, `NullReferenceException` | `GS0158` | s12 (R11, R15) | no `shared` field initializer counts (`IsLiteralInitializerSyntax` is always true) |
-  | the same read, fact on a member path | accepted | `GS0158` | u01 | the same |
-  | the same read, fact on a `ref` parameter | accepted | `GS0158` | u02 | the same |
-  | static property read, static field write, static event subscription | accepted | `GS0158` | u08, u09, u10 | the same |
-  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | u11 | the same |
-  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | u12, u13, u14 | the same |
-  | access in a body of the type itself (static or instance) | accepted | `GS0158` | u16, u17 | the same |
-  | access in a loop between guard and use | accepted | `GS0158` | u18 | the same |
-  | literal initializer of a field type with a user-defined conversion (`var Seed Token = 1`) | accepted, `NullReferenceException` | `GS0158` | u22 | a literal counts as no code whatever the field type |
-  | `nil` initializer of a value type with a user-defined conversion (`var Seed Token = nil`) | accepted, `NullReferenceException` | `GS0158` | u23 | `nil` counts as no code whatever the field type |
-  | `nil` initializer of `T?` of that value type (`var Spare Token? = nil`) | accepted | accepted | u24 | `nil` counts as code whatever the field type |
-  | literal under an extension unary operator (`var Seed int32 = -"x"`) | accepted, `NullReferenceException` | `GS0158` | u25 | any unary operator over a literal counts as no code |
-  | `-2147483648` and `-'a'` (the expression binder's `int32.MinValue` and `char` promotion rules) | accepted | accepted | u26, u27 | the initializer test omits the `int32.MinValue` rule; it omits the `char` promotion |
-  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, u03, u04 | every initializer counts as non-literal; every static access counts |
-  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | u15 | the same |
-  | `shared` field without an initializer | accepted | accepted | u19 | every static access counts |
-  | `const` read | accepted | accepted | u05 | a constant counts as a static access |
-  | construction (`Trigger{}`) | accepted | accepted | s27, u06 | construction counts as a static access |
-  | instance member read | accepted | accepted | u07 | an instance field counts as a static access |
-  | plain local (no closure assigns it) across a static read | accepted | accepted | u20 | a node that runs user code drops every local |
-  | static read only inside a function literal that is not called | accepted | accepted | u21 | the collector walks a function literal body |
+  | the same read, fact on a member path | accepted | `GS0158` | v01 | the same |
+  | the same read, fact on a `ref` parameter | accepted | `GS0158` | v02 | the same |
+  | static property read, static field write, static event subscription | accepted | `GS0158` | v08, v09, v10 | the same |
+  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | v11 | the same |
+  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | v12, v13, v14 | the same |
+  | access in a body of the type itself (static or instance) | accepted | `GS0158` | v16, v17 | the same |
+  | access in a loop between guard and use | accepted | `GS0158` | v18 | the same |
+  | literal initializer of a field type with a user-defined conversion (`var Seed Token = 1`) | accepted, `NullReferenceException` | `GS0158` | v22 | a literal counts as no code whatever the field type |
+  | `nil` initializer of a value type with a user-defined conversion (`var Seed Token = nil`) | accepted, `NullReferenceException` | `GS0158` | v23 | `nil` counts as no code whatever the field type |
+  | `nil` initializer of `T?` of that value type (`var Spare Token? = nil`) | accepted | accepted | v24 | `nil` counts as code whatever the field type |
+  | literal under an extension unary operator (`var Seed int32 = -"x"`) | accepted, `NullReferenceException` | `GS0158` | v25 | any unary operator over a literal counts as no code |
+  | `-2147483648` and `-'a'` (the expression binder's `int32.MinValue` and `char` promotion rules) | accepted | accepted | v26, v27 | the initializer test omits the `int32.MinValue` rule; it omits the `char` promotion |
+  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, v03, v04 | every initializer counts as non-literal; every static access counts |
+  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | v15 | the same |
+  | `shared` field without an initializer | accepted | accepted | v19 | every static access counts |
+  | `const` read | accepted | accepted | v05 | a constant counts as a static access |
+  | construction (`Trigger{}`) | accepted | accepted | s27, v06 | construction counts as a static access |
+  | instance member read | accepted | accepted | v07 | an instance field counts as a static access |
+  | plain local (no closure assigns it) across a static read | accepted | accepted | v20 | a node that runs user code drops every local |
+  | static read only inside a function literal that is not called | accepted | accepted | v21 | the collector walks a function literal body |
 
   The `src/Core` reads of `TypeSymbol.Error` and `TypeSymbol.Void` between a guard and a use now read the guarded
   value from a local (`UserTokenResolver`, `LambdaBinder`). The translator mirrors the rule (cs2gs, same PR).

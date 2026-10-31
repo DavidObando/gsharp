@@ -302,33 +302,45 @@ open class Adr0208NarrowingCorpusTests {
                 "t11_5231_static_getter_kills_R16",
                 "t12_5231_lazy_value_in_a_property_pattern_R16",
                 "t13_5231_string_length_in_a_property_pattern_R16",
-                "u01_5520_static_field_read_member_path",
-                "u02_5520_static_field_read_by_reference_parameter",
-                "u03_5520_literal_only_type_keeps_member_path",
-                "u04_5520_literal_only_type_keeps_by_reference_parameter",
-                "u05_5520_const_read_keeps_member_path",
-                "u06_5520_construction_keeps_member_path",
-                "u07_5520_instance_member_read_keeps_member_path",
-                "u08_5520_static_property_read",
-                "u09_5520_static_field_write",
-                "u10_5520_static_event_subscription",
-                "u11_5520_literal_field_of_a_type_with_a_call_initializer",
-                "u12_5520_struct_static_field_read",
-                "u13_5520_generic_static_field_read",
-                "u14_5520_derived_reads_base_field",
-                "u15_5520_derived_initializer_does_not_count_for_a_base_member",
-                "u16_5520_static_method_reads_own_field",
-                "u17_5520_instance_method_reads_static_field",
-                "u18_5520_static_field_read_in_a_loop",
-                "u19_5520_type_without_initializers_keeps_member_path",
-                "u20_5520_plain_local_keeps_the_fact_across_a_static_read",
-                "u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact",
-                "u22_5520_literal_initializer_through_a_user_defined_conversion",
-                "u23_5520_nil_initializer_through_a_user_defined_conversion",
-                "u24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact",
-                "u25_5520_literal_under_an_extension_unary_operator",
-                "u26_5520_int32_min_value_literal_keeps_the_fact",
-                "u27_5520_negated_char_literal_keeps_the_fact"
+                "u01_5532_observable_collection_indexer_set_kills_a_closure_assigned_local_R17",
+                "u02_5532_list_indexer_set_keeps_a_closure_assigned_local_R17",
+                "u04_5532_dictionary_indexer_get_runs_the_key_code_R17",
+                "u05_5532_string_indexer_keeps_a_closure_assigned_local_R17",
+                "u06_5532_string_builder_length_set_keeps_a_closure_assigned_local_R17",
+                "u07_5532_string_builder_capacity_set_kills_R17",
+                "u08_5532_indexer_set_in_a_loop_R17",
+                "u09_5532_span_indexer_write_goes_through_the_ref_getter_R17",
+                "u10_5532_erased_generic_list_indexer_goes_through_the_interface_R17",
+                "u11_5532_generic_span_read_keeps_the_fact_R17",
+                "u12_5532_generic_list_write_keeps_the_fact_R17",
+                "u13_5532_list_indexer_get_keeps_a_closure_assigned_local_R17",
+                "v01_5520_static_field_read_member_path",
+                "v02_5520_static_field_read_by_reference_parameter",
+                "v03_5520_literal_only_type_keeps_member_path",
+                "v04_5520_literal_only_type_keeps_by_reference_parameter",
+                "v05_5520_const_read_keeps_member_path",
+                "v06_5520_construction_keeps_member_path",
+                "v07_5520_instance_member_read_keeps_member_path",
+                "v08_5520_static_property_read",
+                "v09_5520_static_field_write",
+                "v10_5520_static_event_subscription",
+                "v11_5520_literal_field_of_a_type_with_a_call_initializer",
+                "v12_5520_struct_static_field_read",
+                "v13_5520_generic_static_field_read",
+                "v14_5520_derived_reads_base_field",
+                "v15_5520_derived_initializer_does_not_count_for_a_base_member",
+                "v16_5520_static_method_reads_own_field",
+                "v17_5520_instance_method_reads_static_field",
+                "v18_5520_static_field_read_in_a_loop",
+                "v19_5520_type_without_initializers_keeps_member_path",
+                "v20_5520_plain_local_keeps_the_fact_across_a_static_read",
+                "v21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact",
+                "v22_5520_literal_initializer_through_a_user_defined_conversion",
+                "v23_5520_nil_initializer_through_a_user_defined_conversion",
+                "v24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact",
+                "v25_5520_literal_under_an_extension_unary_operator",
+                "v26_5520_int32_min_value_literal_keeps_the_fact",
+                "v27_5520_negated_char_literal_keeps_the_fact"
             },
             names
         )
@@ -3315,7 +3327,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "", "run", "1", "R15"}
-            yield[]object{"u01_5520_static_field_read_member_path", `import System
+            yield[]object{"v01_5520_static_field_read_member_path", `import System
 
 class C {
     var Value int32 = 1
@@ -3337,7 +3349,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
-            yield[]object{"u02_5520_static_field_read_by_reference_parameter", `import System
+            yield[]object{"v02_5520_static_field_read_by_reference_parameter", `import System
 
 class C {
     var Value int32 = 1
@@ -3360,7 +3372,7 @@ func Run(ref a C?) int32 {
 }
 var xs = []C?{C{}}
 Console.WriteLine(Run(ref xs[0]))`, "GS0158@20:14", "reject", "", "R12"}
-            yield[]object{"u03_5520_literal_only_type_keeps_member_path", `import System
+            yield[]object{"v03_5520_literal_only_type_keeps_member_path", `import System
 
 class C {
     var Value int32 = 1
@@ -3386,7 +3398,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
-            yield[]object{"u04_5520_literal_only_type_keeps_by_reference_parameter", `import System
+            yield[]object{"v04_5520_literal_only_type_keeps_by_reference_parameter", `import System
 
 class C {
     var Value int32 = 1
@@ -3409,7 +3421,7 @@ func Run(ref a C?) int32 {
 }
 var xs = []C?{C{}}
 Console.WriteLine(Run(ref xs[0]))`, "", "run", "1", "R12"}
-            yield[]object{"u05_5520_const_read_keeps_member_path", `import System
+            yield[]object{"v05_5520_const_read_keeps_member_path", `import System
 
 class C {
     var Value int32 = 1
@@ -3432,7 +3444,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
-            yield[]object{"u06_5520_construction_keeps_member_path", `import System
+            yield[]object{"v06_5520_construction_keeps_member_path", `import System
 
 class C {
     var Value int32 = 1
@@ -3455,7 +3467,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
-            yield[]object{"u07_5520_instance_member_read_keeps_member_path", `import System
+            yield[]object{"v07_5520_instance_member_read_keeps_member_path", `import System
 
 class C {
     var Value int32 = 1
@@ -3478,7 +3490,7 @@ func Run(b Box, t Trigger) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal()), Trigger{}))`, "", "run", "a", "R15"}
-            yield[]object{"u08_5520_static_property_read", `import System
+            yield[]object{"v08_5520_static_property_read", `import System
 
 class C {
     var Value int32 = 1
@@ -3501,7 +3513,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
-            yield[]object{"u09_5520_static_field_write", `import System
+            yield[]object{"v09_5520_static_field_write", `import System
 
 class C {
     var Value int32 = 1
@@ -3524,7 +3536,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
-            yield[]object{"u10_5520_static_event_subscription", `import System
+            yield[]object{"v10_5520_static_event_subscription", `import System
 
 class C {
     var Value int32 = 1
@@ -3547,7 +3559,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
-            yield[]object{"u11_5520_literal_field_of_a_type_with_a_call_initializer", `import System
+            yield[]object{"v11_5520_literal_field_of_a_type_with_a_call_initializer", `import System
 
 class C {
     var Value int32 = 1
@@ -3570,7 +3582,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
-            yield[]object{"u12_5520_struct_static_field_read", `import System
+            yield[]object{"v12_5520_struct_static_field_read", `import System
 
 class C {
     var Value int32 = 1
@@ -3592,7 +3604,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
-            yield[]object{"u13_5520_generic_static_field_read", `import System
+            yield[]object{"v13_5520_generic_static_field_read", `import System
 
 class C {
     var Value int32 = 1
@@ -3614,7 +3626,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
-            yield[]object{"u14_5520_derived_reads_base_field", `import System
+            yield[]object{"v14_5520_derived_reads_base_field", `import System
 
 class C {
     var Value int32 = 1
@@ -3637,7 +3649,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
-            yield[]object{"u15_5520_derived_initializer_does_not_count_for_a_base_member", `import System
+            yield[]object{"v15_5520_derived_initializer_does_not_count_for_a_base_member", `import System
 
 class C {
     var Value int32 = 1
@@ -3664,7 +3676,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
-            yield[]object{"u16_5520_static_method_reads_own_field", `import System
+            yield[]object{"v16_5520_static_method_reads_own_field", `import System
 
 class C {
     var Value int32 = 1
@@ -3687,7 +3699,7 @@ class Trigger {
 }
 func Run(b Box) string -> Trigger.Peek(b)
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@18:26", "reject", "", "R15"}
-            yield[]object{"u17_5520_instance_method_reads_static_field", `import System
+            yield[]object{"v17_5520_instance_method_reads_static_field", `import System
 
 class C {
     var Value int32 = 1
@@ -3711,7 +3723,7 @@ class Trigger {
 }
 func Run(b Box) string -> Trigger{}.Peek(b)
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@17:22", "reject", "", "R15"}
-            yield[]object{"u18_5520_static_field_read_in_a_loop", `import System
+            yield[]object{"v18_5520_static_field_read_in_a_loop", `import System
 
 class C {
     var Value int32 = 1
@@ -3735,7 +3747,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@22:18", "reject", "", "R15"}
-            yield[]object{"u19_5520_type_without_initializers_keeps_member_path", `import System
+            yield[]object{"v19_5520_type_without_initializers_keeps_member_path", `import System
 
 class C {
     var Value int32 = 1
@@ -3757,7 +3769,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R15"}
-            yield[]object{"u20_5520_plain_local_keeps_the_fact_across_a_static_read", `import System
+            yield[]object{"v20_5520_plain_local_keeps_the_fact_across_a_static_read", `import System
 
 class C {
     var Value int32 = 1
@@ -3774,7 +3786,7 @@ func Run(s string?) int32 {
     return s.Length
 }
 Console.WriteLine(Run("ab"))`, "", "run", "2", "R12"}
-            yield[]object{"u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact", `import System
+            yield[]object{"v21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -3792,7 +3804,7 @@ func Run(ref a C?) int32 {
 }
 var xs = []C?{C{}}
 Console.WriteLine(Run(ref xs[0]))`, "", "run", "1", "R12"}
-            yield[]object{"u22_5520_literal_initializer_through_a_user_defined_conversion", `import System
+            yield[]object{"v22_5520_literal_initializer_through_a_user_defined_conversion", `import System
 
 class C {
     var Value int32 = 1
@@ -3818,7 +3830,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R15"}
-            yield[]object{"u23_5520_nil_initializer_through_a_user_defined_conversion", `import System
+            yield[]object{"v23_5520_nil_initializer_through_a_user_defined_conversion", `import System
 
 class C {
     var Value int32 = 1
@@ -3844,7 +3856,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R15"}
-            yield[]object{"u24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact", `import System
+            yield[]object{"v24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -3870,7 +3882,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "", "run", "1", "R15"}
-            yield[]object{"u25_5520_literal_under_an_extension_unary_operator", `import System
+            yield[]object{"v25_5520_literal_under_an_extension_unary_operator", `import System
 
 class C {
     var Value int32 = 1
@@ -3893,7 +3905,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
-            yield[]object{"u26_5520_int32_min_value_literal_keeps_the_fact", `import System
+            yield[]object{"v26_5520_int32_min_value_literal_keeps_the_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -3912,7 +3924,7 @@ func Run() int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(Run())`, "", "run", "1", "R15"}
-            yield[]object{"u27_5520_negated_char_literal_keeps_the_fact", `import System
+            yield[]object{"v27_5520_negated_char_literal_keeps_the_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -4411,6 +4423,522 @@ func Run(ref a C?, xs []C?, s string) int32 {
 }
 var xs = []C?{C{}}
 Console.WriteLine(Run(ref xs[0], xs, "abc"))`, "", "run", "1", "R16"}
+            yield[]object{"u01_5532_observable_collection_indexer_set_kills_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let oc = ObservableCollection[int32]()
+    oc.Add(1)
+    oc.CollectionChanged += (s, e) -> { x = nil }
+    if x == nil { return 0 }
+    oc[0] = 5
+    return x.Value
+}
+Console.WriteLine(Run())`, "GS0158@41:14", "reject", "", "R17"}
+            yield[]object{"u02_5532_list_indexer_set_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let list = List[int32]{1, 2}
+    if x == nil { return 0 }
+    list[0] = 5
+    return x.Value + list[0]
+}
+Console.WriteLine(Run())`, "", "run", "6", "R17"}
+            yield[]object{"u04_5532_dictionary_indexer_get_runs_the_key_code_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class Key {
+    var Hook () -> void = func() { }
+    override func GetHashCode() int32 {
+        Hook()
+        return 1
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run() int32 {
+    var x C? = C{}
+    let key = Key()
+    let d = Dictionary[Key, int32]()
+    d[key] = 7
+    key.Hook = func() { x = nil }
+    if x == nil { return 0 }
+    let v = d[key]
+    return x.Value + v
+}
+Console.WriteLine(Run())`, "GS0158@50:14", "reject", "", "R17"}
+            yield[]object{"u05_5532_string_indexer_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(s string) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let c = s[0]
+    return x.Value + cast[int32](c)
+}
+Console.WriteLine(Run("a"))`, "", "run", "98", "R17"}
+            yield[]object{"u06_5532_string_builder_length_set_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(sb StringBuilder) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    sb.Length = 1
+    return x.Value + sb.Length
+}
+Console.WriteLine(Run(StringBuilder("ab")))`, "", "run", "2", "R17"}
+            yield[]object{"u07_5532_string_builder_capacity_set_kills_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(sb StringBuilder) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    sb.Capacity = 64
+    return x.Value
+}
+Console.WriteLine(Run(StringBuilder("ab")))`, "GS0158@39:14", "reject", "", "R17"}
+            yield[]object{"u08_5532_indexer_set_in_a_loop_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(n int32) int32 {
+    var x C? = C{}
+    let oc = ObservableCollection[int32]()
+    oc.Add(1)
+    oc.CollectionChanged += (s, e) -> { x = nil }
+    if x == nil { return 0 }
+    var total int32 = 0
+    for var i = 0; i < n; i++ {
+        oc[0] = i
+        total = total + x.Value
+    }
+    return total
+}
+Console.WriteLine(Run(2))`, "GS0158@43:27", "reject", "", "R17"}
+            yield[]object{"u09_5532_span_indexer_write_goes_through_the_ref_getter_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var arr = []int32{1, 2}
+    let span = Span[int32](arr)
+    if x == nil { return 0 }
+    span[0] = 5
+    return x.Value + arr[0]
+}
+Console.WriteLine(Run())`, "", "run", "6", "R17"}
+            yield[]object{"u10_5532_erased_generic_list_indexer_goes_through_the_interface_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run[T](items List[T]) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let first = items[0]
+    return x.Value
+}
+Console.WriteLine(Run[int32](List[int32]{1}))`, "GS0158@39:14", "reject", "", "R17"}
+            yield[]object{"u11_5532_generic_span_read_keeps_the_fact_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run[T](items Span[T]) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    let first = items[0]
+    return x.Value
+}
+var arr = []int32{1, 2}
+Console.WriteLine(Run[int32](Span[int32](arr)))`, "", "run", "1", "R17"}
+            yield[]object{"u12_5532_generic_list_write_keeps_the_fact_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run[T](items List[T], value T) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    items[0] = value
+    return x.Value
+}
+Console.WriteLine(Run[int32](List[int32]{1}, 5))`, "", "run", "1", "R17"}
+            yield[]object{"u13_5532_list_indexer_get_keeps_a_closure_assigned_local_R17", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let list = List[int32]{1, 2}
+    if x == nil { return 0 }
+    let first = list[0]
+    return x.Value + first
+}
+Console.WriteLine(Run())`, "", "run", "2", "R17"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
