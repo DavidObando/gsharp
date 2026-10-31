@@ -207,10 +207,16 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("default(List[string])", printed, StringComparison.Ordinal)
+        // Issue #5508: a parameter that a call passes a `null` literal is
+        // widened to `T?`, so the literal stays `nil` there. The params
+        // carrier cannot be widened (`...T`), so its element keeps the typed
+        // default.
+        Assert.Contains("PutList[T](value List[T]?)", printed, StringComparison.Ordinal)
+        Assert.Contains("PutList[string](nil)", printed, StringComparison.Ordinal)
         Assert.Contains("default([]string)", printed, StringComparison.Ordinal)
         Assert.Contains("PutArray[string](default(string), \"x\")", printed, StringComparison.Ordinal)
-        Assert.Contains("default(Outer[string].Inner)", printed, StringComparison.Ordinal)
+        Assert.Contains("PutNested[T](value Outer[T].Inner?)", printed, StringComparison.Ordinal)
+        Assert.Contains("PutNested[string](nil)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal)
     }
 

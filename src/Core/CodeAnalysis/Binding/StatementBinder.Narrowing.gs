@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import System
+import System.Collections
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
@@ -2109,8 +2110,9 @@ internal partial class StatementBinder {
             if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
                 MayMutateMemberPaths = true
             }
-            // ADR-0208 R16 (#5231): an imported getter that is not on the stable list is a call, like a source getter.
-            if StatementBinder.ClrPropertyReadRunsUserCode(node) {
+            // ADR-0208 R16 and R17 (#5231, #5532): an imported accessor that is not on the stable list is a call,
+            // like a source accessor.
+            if StatementBinder.ClrAccessRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
             }
             let sourceConstructionRunsUserCode = (
@@ -5065,18 +5067,60 @@ internal partial class StatementBinder {
         ) bool -> node is BoundClrPropertyAccessExpression{Member: var member} &&
             ClrMemberReadRunsUserCode(member)
 
+        /// ADR-0208 R16 and R17 (#5231, #5532): the one predicate that every imported accessor goes through. It is
+        /// true when [`node`](paramref) reads or writes an imported property or indexer whose accessor can run user
+        /// code and is not on the stable list (cref:IsStableClrAccessor): a property read, a property write, an
+        /// indexer read or an indexer write. The collector reads this, and so do the loop and `finally` summaries.
+        internal func ClrAccessRunsUserCode(node BoundExpression) bool -> (
+            node is BoundClrPropertyAccessExpression{Member: var member} && ClrMemberReadRunsUserCode(member)
+        ) ||
+            (
+            node is BoundClrPropertyAssignmentExpression{Member: PropertyInfo setter} &&
+                !IsStableClrAccessor(setter, isSetter: true)
+        ) ||
+            (
+            node is BoundClrIndexExpression{Indexer: var getter} indexRead &&
+                (!IsStableClrAccessor(getter, isSetter: false) || ClrIndexReadIsErasedInterfaceCall(indexRead))
+        ) ||
+            (
+            node is BoundClrIndexAssignmentExpression{Indexer: var indexer} &&
+                !IsStableClrAccessor(indexer, isSetter: true)
+        )
+
+        /// ADR-0208 R17 (#5532): an index read on a receiver of an erased generic type (`List[T]` over a type
+        /// parameter) is emitted as a call through the non-generic `IList` or `IDictionary` interface, which a
+        /// subclass can reimplement. The listed accessor is then not the one that runs. This mirrors the test of
+        /// `EmitClrIndex`: only a read, only a type that satisfies `IList` (with an `int32` index) or `IDictionary`
+        /// (so not a `Span<T>`), and only one index argument. A write is always emitted on the concrete setter.
+        private func ClrIndexReadIsErasedInterfaceCall(node BoundClrIndexExpression) bool {
+            if node
+                .Target
+                .Type is not ImportedTypeSymbol{HasTypeParameterArgument: true} erased ||
+                erased.ClrType is not{} clrType ||
+                node
+                .Arguments
+                .Length != 1 {
+                return false
+            }
+            return (ClrLoadContext.Satisfies(clrType, typeof(IList)) && node.Arguments[0].Type == TypeSymbol.Int32) ||
+                ClrLoadContext.Satisfies(clrType, typeof(IDictionary))
+        }
+
         /// ADR-0208 R16 (#5231): the same decision for a member that is read without an access node, such as the
         /// member of an imported property pattern (`lazy is { Value: 1 }`).
         internal func ClrMemberReadRunsUserCode(member MemberInfo?) bool -> member is PropertyInfo property &&
             !IsStableClrGetter(property)
 
-        /// ADR-0208 R16 (#5231): the explicit list of imported getters that run no user code. A getter is stable
-        /// when the declaring type is in a core library assembly, the getter cannot be overridden (the type is
-        /// sealed or the accessor is not overridable: not virtual, or `final` as an interface implementation is, so
-        /// a call through an interface or an overridable member never qualifies), and the
-        /// property is in this list. The list is small on purpose: add a property only when its getter reads a
-        /// field and calls nothing, and name the corpus row that needs it.
-        internal func IsStableClrGetter(property PropertyInfo) bool {
+        internal func IsStableClrGetter(property PropertyInfo) bool -> IsStableClrAccessor(property, isSetter: false)
+
+        /// ADR-0208 R16 and R17 (#5231, #5532): the explicit list of imported accessors that run no user code. An
+        /// accessor is stable when the declaring type is in a core library assembly, the accessor cannot be
+        /// overridden (the type is sealed or the accessor is not overridable: not virtual, or `final` as an
+        /// interface implementation is, so a call through an interface or an overridable member never qualifies),
+        /// and the property is in this list. The list is small on purpose: add a property only when its accessor
+        /// reads or writes a field and calls nothing, and name the corpus row that needs it. `Dictionary<K,V>`
+        /// indexers are not on it: they call `GetHashCode` and `Equals` of the key.
+        internal func IsStableClrAccessor(property PropertyInfo, isSetter bool) bool {
             // The name test comes first: it costs one string compare, and almost every imported property is not on the
             // list. The reflection reads below run only for a name that is.
             let name = property.Name
@@ -5085,7 +5129,10 @@ internal partial class StatementBinder {
                 name != "Count" &&
                 name != "Key" &&
                 name != "Value" &&
-                name != "HasValue" {
+                name != "HasValue" &&
+                name != "Item" &&
+                name != "Chars" &&
+                name != "Capacity" {
                 return false
             }
             let declaring = property.DeclaringType
@@ -5099,27 +5146,46 @@ internal partial class StatementBinder {
             }
             var listed = false
             if name == "Length" {
-                listed = typeName is "System.String" or
-                    "System.Text.StringBuilder" or
-                    "System.Array" or
-                    "System.Span`1" or
-                    "System.ReadOnlySpan`1"
+                listed = if isSetter {
+                    typeName == "System.Text.StringBuilder"
+                } else {
+                    typeName is "System.String" or
+                        "System.Text.StringBuilder" or
+                        "System.Array" or
+                        "System.Span`1" or
+                        "System.ReadOnlySpan`1"
+                }
             } else if name == "IsEmpty" {
-                listed = typeName is "System.Span`1" or "System.ReadOnlySpan`1"
+                listed = !isSetter && typeName is "System.Span`1" or "System.ReadOnlySpan`1"
             } else if name == "Count" {
-                listed = typeName is "System.Collections.Generic.List`1" or
+                listed = !isSetter &&
+                    typeName is "System.Collections.Generic.List`1" or
                     "System.Collections.Generic.Dictionary`2" or
                     "System.Collections.Generic.HashSet`1"
             } else if name == "Key" || name == "Value" {
-                listed = typeName == "System.Collections.Generic.KeyValuePair`2"
+                listed = !isSetter && typeName == "System.Collections.Generic.KeyValuePair`2"
+            } else if name == "HasValue" {
+                listed = !isSetter && typeName == "System.Nullable`1"
+            } else if name == "Item" {
+                listed = typeName == "System.Collections.Generic.List`1" ||
+                    typeName == "System.Span`1" ||
+                    (!isSetter && typeName == "System.ReadOnlySpan`1")
+            } else if name == "Chars" {
+                listed = typeName == "System.Text.StringBuilder" || (!isSetter && typeName == "System.String")
             } else {
-                listed = typeName == "System.Nullable`1"
+                listed = isSetter && typeName == "System.Collections.Generic.List`1"
             }
             if !listed {
                 return false
             }
-            let getter = property.GetMethod
-            if getter == nil || (getter.IsVirtual && !getter.IsFinal && !declaring.IsSealed) {
+            // A `Span<T>` indexer has no setter: a write goes through the ref-returning getter, so the accessor
+            // that runs is the getter.
+            let accessor = if isSetter && property.SetMethod != nil {
+                property.SetMethod
+            } else {
+                property.GetMethod
+            }
+            if accessor == nil || (accessor.IsVirtual && !accessor.IsFinal && !declaring.IsSealed) {
                 return false
             }
             let assemblyName = declaring.Assembly.GetName().Name

@@ -42,38 +42,16 @@
     <Compile Include="../../Compiler/WorkerProtocol.gs" Link="WorkerProtocol.gs" />
   </ItemGroup>
 
-  <!-- Issue #4921: the task assembly is netstandard2.0 and ships to .NET Framework
-       MSBuild, so it must be compiled by the gsc built from THIS commit, not by the
-       bootstrap gsc that global.json pins. A bootstrap gsc older than a codegen fix
-       would otherwise put its defect (#4921: TypeRefs scoped at System.Private.CoreLib)
-       into the next release's task assembly and only the following release could be
-       clean. The pinned SDK's BuildTask still drives the build; only the compiler it
-       launches is redirected through GsharpCompilerFullPath, so there is no cycle with
-       this project's own BuildTask (the pinned one is used). The ProjectReference below
-       orders the in-tree Compiler before this project's CoreCompile; it is build-only.
-       The value is set in the project body because the SDK props only default it when
-       empty. A controlled graph that disables Directory.Build.props (stage-2
-       certification, build/selfhost-stage2.py, which requires every project to use the
-       compiler it supplies) keeps the supplied compiler: the repository layout the
-       path below assumes does not exist there.
-       The pinned CoreCompile does not list the compiler as an input, so
-       _GsharpTaskRecompileOnCompilerChange (below) discards the stale task assembly when
-       the compiler is newer: a compiler change then recompiles it. -->
-  <PropertyGroup Condition=" '$(ImportDirectoryBuildProps)' != 'false' ">
-    <GsharpCompilerFullPath>$(MSBuildThisFileDirectory)..\..\..\out\bin\$(Configuration)\Compiler\gsc.dll</GsharpCompilerFullPath>
-  </PropertyGroup>
-
+  <!-- The N-1 rule (CONTRIBUTING.md): the pinned SDK compiler builds this task assembly, as it builds
+       every other repository project. The task assembly is netstandard2.0 and ships to .NET Framework
+       MSBuild. The build job checks the packed task assembly for issue #4921 and issue #4924 defects
+       (build/check-netstandard-host-refs.py, build/check-netstandard-member-refs.py).
+       PackGsharpCompiler publishes the in-tree compiler through the build-only ProjectReference below.
+       A controlled graph that disables Directory.Build.props (build/selfhost-stage2.py) does not
+       include that ProjectReference. -->
   <ItemGroup Condition=" '$(ImportDirectoryBuildProps)' != 'false' ">
     <ProjectReference Include="../../Compiler/Compiler.gsproj" Private="false" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
-
-  <Target Name="_GsharpTaskRecompileOnCompilerChange" BeforeTargets="CoreCompile" Condition=" '$(ImportDirectoryBuildProps)' != 'false' ">
-    <PropertyGroup>
-      <_GsharpTaskIntermediate>@(IntermediateAssembly->'%(FullPath)')</_GsharpTaskIntermediate>
-    </PropertyGroup>
-    <Delete Files="$(_GsharpTaskIntermediate)"
-            Condition=" Exists('$(_GsharpTaskIntermediate)') And Exists('$(GsharpCompilerFullPath)') And $([System.IO.File]::GetLastWriteTime('$(GsharpCompilerFullPath)').Ticks) &gt; $([System.IO.File]::GetLastWriteTime('$(_GsharpTaskIntermediate)').Ticks) " />
-  </Target>
 
   <ItemGroup>
     <!-- Pack targets invoke these projects. Restore their assets in scoped graphs (#5006). -->

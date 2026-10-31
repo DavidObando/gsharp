@@ -32,7 +32,10 @@ internal partial class MethodBodyEmitter {
         if conv.Expression.Type == TypeSymbol.Null && this.TryEmitPointerLikeDefault(conv.Type) {
             return
         }
-        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) &&
+        if (
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) ||
+                IsRepresentationPreservingPlatformWidening(conv.Expression.Type, conv.Type)
+        ) &&
             !RequiresChannelConversionEmission(conv.Expression.Type, conv.Type) {
             this.EmitExpression(conv.Expression)
             return
@@ -104,6 +107,31 @@ internal partial class MethodBodyEmitter {
         // null source, so a possibly-null function value stays correct.
         let delegateSourceType = UnwrapReferenceNullable(conv.Expression.Type)
         let delegateTargetType = UnwrapReferenceNullable(conv.Type)
+        // Issue #5536: a function value or method group keeps its delegate. The binder admits it only when
+        // `Conversion.KeepsFunctionValueDelegate` holds, or for an explicit checked cast. A checked cast is
+        // `castclass`, which keeps the reference or throws. A value that is already a valid target reference needs
+        // no IL. A method group is bound to the target delegate by the arms below.
+        if delegateSourceType is FunctionTypeSymbol && !(conv.Expression is BoundFunctionLiteralExpression) {
+            if !Conversion.KeepsFunctionValueDelegate(conv.Expression.Type, conv.Type) {
+                if !Conversion.HasCheckedReferenceConversion(conv.Expression.Type, conv.Type) ||
+                    !Conversion
+                    .ChecksFunctionValueDelegate(conv.Expression.Type, conv.Type) {
+                    throw InvalidOperationException(
+                        "Conversion from '${conv.Expression.Type.Name}' to '${conv.Type.Name}' needs a function literal."
+                    )
+                }
+                this.EmitExpression(conv.Expression)
+                this.il.OpCode(ILOpCode.Castclass)
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(delegateTargetType))
+                return
+            }
+            if !(conv.Expression is BoundMethodGroupExpression || conv.Expression is BoundClrMethodGroupExpression) &&
+                Conversion
+                .ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
+                this.EmitExpression(conv.Expression)
+                return
+            }
+        }
         // Issue #1330: a function literal converted to a delegate type closed
         // over an in-scope generic type parameter (e.g. `Comparison[TResult]`,
         // the parameter of `Comparer[TResult].Create(...)`). The target has no
@@ -190,20 +218,13 @@ internal partial class MethodBodyEmitter {
             this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, delegateTargetType.ClrType!!)
             return
         }
-        // Issue #1356: a function-typed value `(P...) -> R` flowing into a
-        // `(P...) -> R?` slot where the two differ only by a nullable annotation
-        // on the return type of the same underlying type (`T -> T?`). The
-        // nullable annotation is a binder-level concept only — a
-        // NullableTypeSymbol erases to its UnderlyingType.ClrType — so both
-        // function types materialise to the identical CLR delegate. The
-        // conversion is therefore a representation-preserving no-op: emit the
-        // source value unchanged. This is the only path that reaches here for a
-        // return type built over a bare type parameter `T`, whose ClrType is
-        // null during binding so the concrete CLR-delegate path above cannot
-        // fire.
-        if delegateSourceType is FunctionTypeSymbol fnNoOpFrom &&
-            delegateTargetType is FunctionTypeSymbol fnNoOpTo &&
-            IsRepresentationPreservingFunctionConversion(fnNoOpFrom, fnNoOpTo) {
+        // Issues #1356/#2542/#2618: reference nullability and reference variance
+        // keep the delegate. A method group gets its natural delegate here,
+        // which is already a valid target reference.
+        if delegateSourceType is FunctionTypeSymbol &&
+            delegateTargetType is FunctionTypeSymbol &&
+            Conversion
+            .ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
             this.EmitExpression(conv.Expression)
             return
         }
@@ -306,8 +327,7 @@ internal partial class MethodBodyEmitter {
         if to is NullableTypeSymbol toUserVtNullableLift && NullableLifting.RequiresSymbolicNullableGetValue(
             toUserVtNullableLift
         ) &&
-            Conversion
-            .ClassifyNonStructural(from, toUserVtNullableLift.UnderlyingType).IsIdentity {
+            HasNullableLiftStorageIdentity(from, toUserVtNullableLift.UnderlyingType) {
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(
                 if toUserVtNullableLift.UnderlyingType is TypeParameterSymbol {
@@ -323,14 +343,12 @@ internal partial class MethodBodyEmitter {
         // reference-compatibility shortcut below, which would otherwise
         // misclassify the lift as a no-op (the underlying primitive `T`
         // is trivially "compatible with" itself).
-        // Issue #2717: imported property and expression binding can mint
-        // distinct symbols for the same CLR T, so use the binder's identity
-        // classifier rather than symbol reference equality.
+        // Imported symbols and nullable reference arguments can differ while retaining the same runtime value storage.
+        // Keep semantic identity for equivalent tuple spellings, and runtime identity for annotation-only widening (issue #5413).
         if to is NullableTypeSymbol toValueNullableLift && ReflectionMetadataEmitter.IsValueTypeNullable(
             toValueNullableLift
         ) &&
-            Conversion
-            .ClassifyNonStructural(from, toValueNullableLift.UnderlyingType).IsIdentity {
+            HasNullableLiftStorageIdentity(from, toValueNullableLift.UnderlyingType) {
             // Issue #814 / ADR-0084 §L5: open `T → Nullable<T>` where T is an
             // open type parameter constrained to `struct`. The closed ctor
             // is unavailable (T has no CLR type), so we emit a MemberRef
@@ -1488,6 +1506,27 @@ internal partial class MethodBodyEmitter {
     }
 
     shared {
+        private func HasNullableLiftStorageIdentity(from TypeSymbol, to TypeSymbol) bool -> Conversion
+            .ClassifyNonStructural(from, to).IsIdentity || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            from,
+            to
+        ) ||
+            IsRepresentationPreservingPlatformWidening(from, to)
+
+        // Metadata-only widening must not remove a runtime nil check or change Nullable<V> storage.
+        private func IsRepresentationPreservingPlatformWidening(from TypeSymbol, to TypeSymbol) bool -> !(
+            from.ReferenceNullability == ReferenceNullabilityKind.Platform &&
+                to.ReferenceNullability == ReferenceNullabilityKind.NotNull
+        ) &&
+            NullableLifting.IsAnyValueTypeNullable(from as NullableTypeSymbol) ==
+        NullableLifting.IsAnyValueTypeNullable(to as NullableTypeSymbol) && Conversion.TryRelatePlatformContainer(
+            from,
+            to,
+            out var isImplicit,
+            out _
+        ) &&
+            isImplicit
+
         /// ADR-0174 D2: `chan[T]` to `in`/`out chan[T]` is a real
         /// conversion — `get_Reader` / `get_Writer` — even when the two
         /// sides look runtime-equivalent, which they do whenever the element is an
@@ -1532,68 +1571,6 @@ internal partial class MethodBodyEmitter {
                 }
                 return type
             }
-        }
-
-        // Issues #1356/#2542/#2618: reference nullability erases from parameter and
-        // return slots, and Func's return slot is CLR-covariant for reference
-        // upcasts. These conversions are representation-preserving no-ops.
-        private func IsRepresentationPreservingFunctionConversion(from FunctionTypeSymbol, to FunctionTypeSymbol) bool {
-            if from.Arity != to.Arity {
-                return false
-            }
-            for var i = 0; i < from.Arity; i++ {
-                if !HaveSameReferenceRepresentation(from.ParameterTypes[i], to.ParameterTypes[i]) &&
-                    !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    from.ParameterTypes[i],
-                    to.ParameterTypes[i]
-                ) {
-                    return false
-                }
-            }
-            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from.ReturnType, to.ReturnType) {
-                return true
-            }
-            if to.ReturnType is NullableTypeSymbol toNullableReturn &&
-                toNullableReturn.UnderlyingType == from.ReturnType {
-                return true
-            }
-            if !Conversion.IsReferenceLikeTarget(from.ReturnType) || !Conversion.IsReferenceLikeTarget(to.ReturnType) {
-                return false
-            }
-            let returnConversion = Conversion.ClassifyNonStructural(from.ReturnType, to.ReturnType)
-            return returnConversion.Exists && returnConversion.IsImplicit
-        }
-
-        private func HaveSameReferenceRepresentation(left TypeSymbol, right TypeSymbol) bool {
-            var left = left
-            var right = right
-            while left is NullabilityAnnotatedTypeSymbol leftAnnotated {
-                left = leftAnnotated.BaseType
-            }
-            while right is NullabilityAnnotatedTypeSymbol rightAnnotated {
-                right = rightAnnotated.BaseType
-            }
-            if left is NullableTypeSymbol leftReferenceNullable && Conversion.IsReferenceLikeTarget(
-                leftReferenceNullable.UnderlyingType
-            ) {
-                left = leftReferenceNullable.UnderlyingType
-            }
-            if right is NullableTypeSymbol rightReferenceNullable && Conversion.IsReferenceLikeTarget(
-                rightReferenceNullable.UnderlyingType
-            ) {
-                right = rightReferenceNullable.UnderlyingType
-            }
-            if left == right {
-                return true
-            }
-            if !Conversion.IsReferenceLikeTarget(left) || !Conversion.IsReferenceLikeTarget(right) {
-                return false
-            }
-            return Conversion.ClassifyNonStructural(left, right).IsImplicit && Conversion.ClassifyNonStructural(
-                right,
-                left
-            )
-                .IsImplicit
         }
 
         // Issue #4350: an open imported conversion operator is parented at the

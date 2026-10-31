@@ -553,7 +553,7 @@ class ImportedClassSymbol : Symbol {
                 arguments,
                 typeArgSymbols
             ),
-            delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
+            delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
                 arguments,
                 func (type TypeSymbol) Type? {

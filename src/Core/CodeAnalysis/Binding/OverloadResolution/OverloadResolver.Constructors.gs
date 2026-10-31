@@ -355,10 +355,7 @@ internal partial class OverloadResolver {
                 if ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type) {
                     continue
                 }
-                if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(
-                    argument.Type,
-                    parameter.Type
-                )
+                if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument, parameter.Type)
                     .IsImplicit {
                     if TryBindConstantNarrowingArgument(
                         argument,
@@ -634,7 +631,7 @@ internal partial class OverloadResolver {
             if ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type) {
                 continue
             }
-            if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument.Type, parameter.Type)
+            if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument, parameter.Type)
                 .IsImplicit {
                 if TryConvertLiteralArgumentToExpressionTree(
                     argument,
@@ -1307,8 +1304,7 @@ internal partial class OverloadResolver {
                 convertedArguments.Add(argument)
                 continue
             }
-            if argument.Type != paramType && !conversions.ClassifyArgumentConversion(argument.Type, paramType)
-                .IsImplicit {
+            if argument.Type != paramType && !conversions.ClassifyArgumentConversion(argument, paramType).IsImplicit {
                 if TryConvertLiteralArgumentToExpressionTree(
                     argument,
                     paramType,
@@ -2151,7 +2147,7 @@ internal partial class OverloadResolver {
                 convertedArgs.Add(argument)
                 continue
             }
-            if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument.Type, parameter.Type)
+            if argument.Type != parameter.Type && !conversions.ClassifyArgumentConversion(argument, parameter.Type)
                 .IsImplicit {
                 if TryConvertLiteralArgumentToExpressionTree(
                     argument,

@@ -8,6 +8,7 @@ import Gsharp.NET.Sdk.Tools
 import Microsoft.Build.Framework
 import Microsoft.Build.Utilities
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import Xunit
@@ -76,6 +77,25 @@ dotnet_diagnostic.GSA0001.severity = error
 `)
         let rooted = EditorConfigSeverityReader.ReadSeverities(Path.Combine(root.FullName, "sub"))
         Assert.False(rooted.ContainsKey("GSA0002"))
+    }
+
+    /// Issue #5413: a null line from the oblivious File.ReadAllLines result is not
+    /// an ordinary NullReferenceException. It stops the read with its own failure.
+    @Fact
+    func NullLine_StopsTheReadWithADistinctFailure() {
+        let severities = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+        let lines = []string? {
+            "[*] # comment",
+            "dotnet_diagnostic.GSA0001.severity = error",
+            nil,
+            "dotnet_diagnostic.GSA0002.severity = error"
+        }
+        let failure = Assert.Throws[InvalidDataException](
+            () -> EditorConfigSeverityReader.ParseLines("proj/.editorconfig", lines, severities)
+        )
+        Assert.Equal("The .editorconfig file 'proj/.editorconfig' supplied a null line.", failure.Message)
+        Assert.Equal("error", severities["GSA0001"])
+        Assert.False(severities.ContainsKey("GSA0002"))
     }
 
     @Fact
