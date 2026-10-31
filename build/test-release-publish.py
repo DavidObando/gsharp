@@ -584,6 +584,18 @@ class FinalizeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("VS Code Marketplace", result.stderr)
 
+    def test_a_missing_visual_studio_version_blocks_a_release_but_not_a_prerelease(self) -> None:
+        # The VS Code version is present; only the four-part Visual Studio version is absent.
+        Marketplace.versions = [{"version": self.VERSION, "properties": []}]
+        result = self.finalize()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Visual Studio Marketplace", result.stderr)
+        self.assertNotIn("VS Code Marketplace", result.stderr)
+        self.assertEqual(self.edits(), [])
+        Marketplace.versions = [{"version": self.VERSION, "properties": [
+            {"key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true"}]}]
+        self.assertEqual(self.finalize(prerelease="true", vs="skipped").returncode, 0)
+
     def test_a_marketplace_pre_release_flag_that_differs_blocks(self) -> None:
         self.assertEqual(self.finalize(prerelease="true", vs="skipped").returncode, 1)
 
