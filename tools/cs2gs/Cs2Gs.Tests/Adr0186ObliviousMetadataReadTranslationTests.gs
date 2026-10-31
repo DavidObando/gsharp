@@ -5,16 +5,21 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
+import GSourceText = GSharp.Core.CodeAnalysis.Text.SourceText
+import GSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Immutable
 import System.IO
 import System.Linq
+import System.Reflection
 import Xunit
 
 /// ADR-0186 step 6 (PR 0): a read of oblivious CLR metadata that no project in
@@ -97,12 +102,12 @@ class Adr0186ObliviousMetadataReadTranslationTests : IDisposable {
     }
 
     /// A container read keeps its `!!`. An oblivious method returning
-    /// `string[]` reads as `[]!string!`, which does not convert to
-    /// the enabled `[]string` it is assigned to; `!!` strips the top
-    /// level and the value converts. This is the netstandard2.0
+    /// `string[]` reads as `[]!string!`. `!!` strips only the top level, and
+    /// ADR-0186 §3 rule 3 gives `[]string!` no conversion to `[]string`, so the
+    /// local stores nullable elements: `[]string?` (#5537). This is the netstandard2.0
     /// `Gsharp.NET.Sdk` shape
-    /// (`lines = File.ReadAllLines(path)`, #4449) that the first cut of
-    /// this rule broke. The compile check fails if the assertion is dropped.
+    /// (`lines = File.ReadAllLines(path)`, #4449 and #5413 decision A). The compile
+    /// check fails if the local keeps `[]string` or the assertion is dropped.
     @Fact
     func A_Container_Read_Keeps_Its_Assertion() {
         let libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousContainerLib")
@@ -117,13 +122,517 @@ public static class Use
         return lines.Length;
     }
 }`, MetadataReference.CreateFromFile(libraryPath), NullableContextOptions.Enable)
-        Assert.Contains("Node.Lines(p)!!", printed, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             []string{printed + Environment.NewLine + "Use.Count(\"x\")"},
             EmittedOracleOptions{References: []string{libraryPath}}
         )
         Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics))
         Assert.Equal(2, result.Value)
+        Assert.Contains("var lines []string?", printed, StringComparison.Ordinal)
+        Assert.Contains("Node.Lines(p)!!", printed, StringComparison.Ordinal)
+    }
+
+    /// Issue #5537: every storage kind that receives an imported oblivious
+    /// container keeps nullable elements. Array and `List` locals, an inferred
+    /// local that is also assigned, a field, a parameter, a method return, and an
+    /// alias of such storage use the same rule. A construction stored there spells
+    /// the same element type. An indexer, field, property, or method result typed by
+    /// the container's type parameter is an element read. Only
+    /// the producer's platform positions change: a type-argument position keeps the
+    /// contract of the argument, and an array element that is a type parameter of the
+    /// call stays `[]T`. An array member is not an element read, and an inferred
+    /// local keeps its outer nullability. A `params` array, spelled `...T`, and a
+    /// generic interface that the container implements, such as `IEnumerable[T]`,
+    /// state the same nullable element, so stored arrays flow there without an
+    /// unchecked conversion. An expanded nil element passes to that `params`
+    /// parameter without `!!`, and a carrier (`...[]List[T]`, `...IEnumerable[T]`) is
+    /// promoted as whole storage. A nil element written into such storage or into a
+    /// construction stored there, by a call, an element write or a collection
+    /// initializer, an index argument, a member write or an arm of a conditional, stays
+    /// nil. A container that enumerates another type keeps its `foreach` variable. A
+    /// non-null element dereference, return, or argument gets
+    /// `!!`. A nullable return, a nullable argument, and a nil test do not. A nil
+    /// element throws (cref:NullReferenceException) at the same use as in C#. The
+    /// emitted image has no diagnostics and passes strict ILVerify before it runs.
+    @Fact
+    func Container_Storage_Keeps_Nullable_Elements() {
+        let libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousContainerStorageLib")
+        let printed = Translate(`using System.Collections.Generic;
+using ObLib;
+
+public class Store
+{
+    public string[] Lines = new string[0];
+
+    public void Load(string p)
+    {
+        Lines = Node.Lines(p);
+    }
+}
+
+public static class Use
+{
+    public static int ArrayLocal(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        string first = lines[1];
+        return lines[0].Length + first.Length;
+    }
+
+    public static int ListLocal(string p)
+    {
+        List<string> items;
+        items = Node.Items(p);
+        int total = 0;
+        foreach (string item in items)
+        {
+            total += item.Length;
+        }
+        return total + items[1].Length;
+    }
+
+    public static int Field(string p)
+    {
+        Store store = new Store();
+        store.Load(p);
+        return store.Lines[1].Length;
+    }
+
+    public static int Parameter(string[] values)
+    {
+        return values[0].Length;
+    }
+
+    public static int Argument(string p)
+    {
+        return Parameter(Node.Lines(p));
+    }
+
+    public static string[] Returned(string p)
+    {
+        return Node.Lines(p);
+    }
+
+    public static int Return(string p)
+    {
+        return Returned(p)[0].Length;
+    }
+
+    public static int TypeArgumentArray(string p)
+    {
+        string[] empty;
+        empty = Node.Empty<string>();
+        return empty.Length;
+    }
+
+    public static string? NullableReturn(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return lines[1];
+    }
+
+    private static int? MaybeLength(string? value)
+    {
+        return value?.Length;
+    }
+
+    public static int NullableArgument(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return MaybeLength(lines[1]) == null ? 1 : 0;
+    }
+
+    private static int Length(string value)
+    {
+        return value.Length;
+    }
+
+    public static string NonNullReturn(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        return lines[0];
+    }
+
+    public static int NonNullArgument(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        return Length(lines[0]);
+    }
+
+    public static int MixedWrites(string p)
+    {
+        string[] mixed = Node.Lines(p);
+        mixed = new[] { "ok" };
+        return mixed[0].Length;
+    }
+
+    public static int ReassignedInferredLocal(string p)
+    {
+        var items = new List<string>();
+        items = Node.Items(p);
+        return items[0].Length;
+    }
+
+    public static int NestedTypeArgument(string p)
+    {
+        List<List<string>> nested;
+        nested = Wrapping.Wrap(new List<string> { p });
+        return nested[0][0].Length;
+    }
+
+    public static int Alias(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        var alias = lines;
+        return alias[0].Length;
+    }
+
+    public static int MemberResult(string p)
+    {
+        Box<string> box;
+        box = Node.MakeBox(p);
+        return box.Value.Length + box.Get().Length;
+    }
+
+    public static int ArrayMember(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        return lines.Length.ToString().Length;
+    }
+
+    public static int NullableInferredLocal(string p)
+    {
+        var items = new List<string>();
+        items = Node.Items(p);
+        items = null;
+        return items == null ? 2 : -1;
+    }
+
+    private static int Nils(params string[] values)
+    {
+        int count = 0;
+        foreach (var value in values)
+        {
+            if (value == null) { count++; }
+        }
+        return count;
+    }
+
+    private static int SecondLength(params string[] values)
+    {
+        return values[1].Length;
+    }
+
+    public static int ParamsDirect(string p)
+    {
+        return Nils(Node.Holes(p));
+    }
+
+    public static int ParamsForward(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return Nils(lines);
+    }
+
+    public static int ParamsExpanded(string p)
+    {
+        return Nils("a", "b");
+    }
+
+    public static int ParamsExpandedNilElement(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return Nils(lines[1]);
+    }
+
+    private static int Groups(params List<string>[] values)
+    {
+        return values.Length + values[0].Count;
+    }
+
+    public static int ParamsCarrier(string p)
+    {
+        return Groups(Node.Groups(p));
+    }
+
+    private static int SequenceNils(params IEnumerable<string> values)
+    {
+        int count = 0;
+        foreach (var value in values)
+        {
+            if (value == null) { count++; }
+        }
+        return count;
+    }
+
+    public static int ParamsCollectionCarrier(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return SequenceNils(lines);
+    }
+
+    public static int WriteAdd(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        items.Add(lines[1]);
+        items.Insert(0, lines[1]);
+        return items[0] == null && items[3] == null ? 1 : 0;
+    }
+
+    public static int WriteElements(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        items[0] = lines[1];
+        string[] others;
+        others = Node.Lines(p);
+        others[0] = lines[1];
+        return items[0] == null && others[0] == null ? 1 : 0;
+    }
+
+    public static int WriteInitializer(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        items = new List<string> { lines[1] };
+        return items[0] == null ? 1 : 0;
+    }
+
+    public static int WriteMap(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Dictionary<string, string> table;
+        table = Node.Map(p);
+        table["k"] = lines[1];
+        table.Add("a", lines[1]);
+        var count = table["k"] == null && table["a"] == null ? 1 : 0;
+        table = new Dictionary<string, string> { { "b", lines[1] } };
+        var added = table["b"] == null ? count : 0;
+        table = new Dictionary<string, string> { ["c"] = lines[1] };
+        return table["c"] == null ? added : 0;
+    }
+
+    public static int WriteThroughArms(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> items;
+        items = Node.Items(p);
+        string none = null;
+        items.Add(p.Length > 0 ? lines[1] : p);
+        items.Add(none ?? lines[1]);
+        return items[2] == null && items[3] == null ? 1 : 0;
+    }
+
+    public static int WriteMembers(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Box<string> box;
+        box = Node.MakeBox(p);
+        box.Value = lines[1];
+        var written = box.Value == null ? 1 : 0;
+        box = new Box<string> { Value = lines[1] };
+        return box.Value == null ? written : 0;
+    }
+
+    public static int IndexArgument(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Lookup<string> lookup;
+        lookup = Node.Look(p);
+        return lookup[lines[1]];
+    }
+
+    public static int OtherEnumeration(string p)
+    {
+        Tagged<string> tagged;
+        tagged = Node.Tag(p);
+        var total = 0;
+        foreach (var n in tagged)
+        {
+            total += n.GetHashCode();
+        }
+        return total;
+    }
+
+    public static int ParamsElementThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        try
+        {
+            return SecondLength(lines);
+        }
+        catch (System.NullReferenceException)
+        {
+            return -1;
+        }
+    }
+
+    private static int CountNils(IReadOnlyList<string> values)
+    {
+        int count = 0;
+        foreach (var value in values)
+        {
+            if (value == null) { count++; }
+        }
+        return count;
+    }
+
+    public static int InterfaceView(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        IEnumerable<string> view = lines;
+        int count = 0;
+        foreach (var value in view)
+        {
+            if (value == null) { count++; }
+        }
+        return count + CountNils(lines);
+    }
+
+    public static int NilElementIsNotUsed(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        string? kept = lines[1];
+        return lines[1] == null && kept == null ? 1 : 0;
+    }
+
+    public static int NilElementThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        try
+        {
+            return lines[1].Length;
+        }
+        catch (System.NullReferenceException)
+        {
+            return -1;
+        }
+    }
+}`, MetadataReference.CreateFromFile(libraryPath), NullableContextOptions.Enable)
+        let consumer = this.CompileVerifyAndLoad(printed, libraryPath, "Adr0186ObliviousContainerStorageConsumer")
+        Assert.Equal(4, Invoke(consumer, "ArrayLocal", "ab"))
+        Assert.Equal(6, Invoke(consumer, "ListLocal", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Field", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Argument", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Return", "ab"))
+        Assert.Equal(0, Invoke(consumer, "TypeArgumentArray", "ab"))
+        Assert.Null(Invoke(consumer, "NullableReturn", "ab"))
+        Assert.Equal(1, Invoke(consumer, "NullableArgument", "ab"))
+        Assert.Equal("ab", Invoke(consumer, "NonNullReturn", "ab"))
+        Assert.Equal(2, Invoke(consumer, "NonNullArgument", "ab"))
+        Assert.Equal(2, Invoke(consumer, "MixedWrites", "ab"))
+        Assert.Equal(2, Invoke(consumer, "ReassignedInferredLocal", "ab"))
+        Assert.Equal(2, Invoke(consumer, "NestedTypeArgument", "ab"))
+        Assert.Equal(2, Invoke(consumer, "Alias", "ab"))
+        Assert.Equal(4, Invoke(consumer, "MemberResult", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ArrayMember", "ab"))
+        Assert.Equal(2, Invoke(consumer, "NullableInferredLocal", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsDirect", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsForward", "ab"))
+        Assert.Equal(0, Invoke(consumer, "ParamsExpanded", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsExpandedNilElement", "ab"))
+        Assert.Equal(3, Invoke(consumer, "ParamsCarrier", "ab"))
+        Assert.Equal(1, Invoke(consumer, "ParamsCollectionCarrier", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteAdd", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteElements", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteInitializer", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteMap", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteThroughArms", "ab"))
+        Assert.Equal(1, Invoke(consumer, "WriteMembers", "ab"))
+        Assert.Equal(1, Invoke(consumer, "IndexArgument", "ab"))
+        Assert.Equal(7, Invoke(consumer, "OtherEnumeration", "ab"))
+        Assert.Equal(-1, Invoke(consumer, "ParamsElementThrows", "ab"))
+        Assert.Equal(2, Invoke(consumer, "InterfaceView", "ab"))
+        Assert.Equal(1, Invoke(consumer, "NilElementIsNotUsed", "ab"))
+        Assert.Equal(-1, Invoke(consumer, "NilElementThrows", "ab"))
+        let normalized = printed.Replace("\r\n", "\n")
+        for expected in[]string{
+            "var lines []string?",
+            "lines = Node.Lines(p)!!",
+            "let first = lines[1]!!",
+            "return lines[0]!!.Length + first.Length",
+            "var items List[string?]",
+            "items = Node.Items(p)!!",
+            "total += item!!.Length",
+            "return total + items[1]!!.Length",
+            "var Lines []string? = [0]string?\n",
+            "return store.Lines[1]!!.Length",
+            "func Parameter(values []string?) int32 {",
+            "return values[0]!!.Length",
+            "return Parameter(Node.Lines(p)!!)",
+            "func Returned(p string) []string? {",
+            "return Returned(p)[0]!!.Length",
+            "var empty []string\n",
+            "let kept string? = lines[1]\n",
+            "return if lines[1] == nil && kept == nil { 1 } else { 0 }",
+            "return lines[1]!!.Length",
+            "return lines[1]\n",
+            "return if MaybeLength(lines[1]) == nil { 1 } else { 0 }",
+            "return lines[0]!!\n",
+            "return Length(lines[0]!!)",
+            "var mixed []string? = Node.Lines(p)!!",
+            "mixed = []string?{\"ok\"}",
+            "return mixed[0]!!.Length",
+            "var items List[string?] = List[string?]()",
+            "return items[0]!!.Length",
+            "var nested List[List[string]?]\n",
+            "return nested[0]!![0].Length",
+            "let alias []string? = lines",
+            "return alias[0]!!.Length",
+            "var box Box[string?]",
+            "return box.Value!!.Length + box.Get()!!.Length",
+            "return lines.Length.ToString().Length",
+            "var items List[string?]? = List[string?]()",
+            "private func Nils(values ...string?) int32 {",
+            "private func SecondLength(values ...string?) int32 {",
+            "return values[1]!!.Length",
+            "return Nils(Node.Holes(p)!!)",
+            "return Nils(lines)",
+            "return Nils(lines[1])",
+            "items.Add(lines[1])\n",
+            "items.Insert(0, lines[1])\n",
+            "items[0] = lines[1]\n",
+            "others[0] = lines[1]\n",
+            "items = List[string?]{ lines[1] }\n",
+            "table[\"k\"] = lines[1]\n",
+            "table.Add(\"a\", lines[1])\n",
+            "items.Add(if p.Length > 0 { lines[1] } else { p })\n",
+            "items.Add(none ?? lines[1])\n",
+            "box.Value = lines[1]\n",
+            "return lookup[lines[1]]\n",
+            "total += n.GetHashCode()\n",
+            "private func Groups(values ...[]List[string?]?) int32 {",
+            "private func SequenceNils(values ...IEnumerable[string?]) int32 {",
+            "private func CountNils(values IReadOnlyList[string?]) int32 {",
+            "IEnumerable[string?] = lines"
+        } {
+            Assert.Contains(expected, normalized, StringComparison.Ordinal)
+        }
     }
 
     /// A member declared in a project this run also migrates is not frozen
@@ -535,6 +1044,24 @@ public class Derived : Holder
         TranslationTestValidation.AssertBinds(resolver, printed)
     }
 
+    // Compiles the translation as a library, verifies it with the repository
+    // ilverify before it runs, and loads it. A skipped verification fails.
+    private func CompileVerifyAndLoad(printed string, libraryPath string, assemblyName string) Assembly {
+        let path = Path.Combine(this.directory, assemblyName + ".dll")
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        let compilation = GCompilation(resolver, []GSyntaxTree{GSyntaxTree.Parse(GSourceText.From(printed))})
+        compilation.IsLibrary = true
+        {
+            using let peStream = File.Create(path)
+            let emit = compilation.Emit(peStream, pdbStream: nil, refStream: nil, assemblyName: assemblyName)
+            Assert.True(emit.Success && emit.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", emit.Diagnostics))
+        }
+        let verification = IlVerifyRunner().Verify(path, []string{libraryPath})
+        Assert.True(verification.Status == IlVerifyStatus.Passed, verification.Output)
+        Assert.Empty(verification.Errors)
+        return EmittedFixture.Load(path)
+    }
+
     private func EmitObliviousLibrary(assemblyName string) string {
         Directory.CreateDirectory(this.directory)
         let path = Path.Combine(this.directory, assemblyName + ".dll")
@@ -559,6 +1086,14 @@ public class Node
     }
     public string Describe() { return "node"; }
     public static string[] Lines(string p) { return new[] { p, p }; }
+    public static string[] Holes(string p) { return new[] { p, null }; }
+    public static T[] Empty<T>() { return new T[0]; }
+    public static Box<string> MakeBox(string p) { var box = new Box<string>(); box.Value = p; return box; }
+    public static Lookup<string> Look(string p) { return new Lookup<string>(); }
+    public static Tagged<string> Tag(string p) { return new Tagged<string>(); }
+    public static System.Collections.Generic.List<string> Items(string p) { return new System.Collections.Generic.List<string> { p, p }; }
+    public static System.Collections.Generic.Dictionary<string, string> Map(string p) { return new System.Collections.Generic.Dictionary<string, string> { { "k", p } }; }
+    public static System.Collections.Generic.List<string>[] Groups(string p) { return new[] { new System.Collections.Generic.List<string> { p, null } }; }
     public static int[] Ints(bool nil) { return nil ? null : new[] { 1, 2 }; }
 }
 
@@ -573,6 +1108,23 @@ public static class Wrapping
     {
         return value == null;
     }
+}
+
+public class Box<T>
+{
+    public T Value;
+    public T Get() { return Value; }
+}
+
+public class Lookup<T>
+{
+    public int this[T key] { get { return key == null ? 1 : 0; } }
+}
+
+public class Tagged<T> : System.Collections.Generic.IEnumerable<int>
+{
+    public System.Collections.Generic.IEnumerator<int> GetEnumerator() { yield return 7; }
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() { return GetEnumerator(); }
 }
 
 public class Holder
@@ -615,6 +1167,11 @@ public static class Use
         }
     }
 }`
+
+        private func Invoke(consumer Assembly, method string, argument string) object? {
+            let use = consumer.GetTypes().Single((type Type) -> type.Name == "Use")
+            return use.GetMethod(method)!!.Invoke(nil, []object? {argument})
+        }
 
         private func Translate(source string, library MetadataReference, nullable NullableContextOptions) string {
             let tree = CSharpSyntaxTree.ParseText(

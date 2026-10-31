@@ -397,7 +397,10 @@ def cmd_finalize(args: argparse.Namespace) -> int:
         data = json.loads(view.stdout)
         body, assets = data.get("body") or "", {a["name"] for a in data.get("assets", [])}
     absent = sorted(set(expected_assets(args.version)) - assets)
-    row("GitHub release assets", view.returncode == 0 and not absent, ", ".join(absent) or view.stderr.strip())
+    if view.returncode != 0:
+        row("GitHub release assets", False, f"cannot read the release: {view.stderr.strip()}")
+    else:
+        row("GitHub release assets", not absent, ", ".join(absent))
 
     table = "| Destination | State | Detail |\n| --- | --- | --- |\n" + "".join(
         f"| {name} | {'ok' if ok else 'MISSING'} | {detail} |\n" for name, ok, detail in rows)
@@ -414,7 +417,9 @@ def cmd_finalize(args: argparse.Namespace) -> int:
     edit = subprocess.run([args.gh, "release", "edit", args.tag, "--repo", args.repo, "--notes-file", str(notes),
                            "--draft=false"], check=False)
     if edit.returncode != 0:
-        print("gh release edit failed; the release stays a draft", file=sys.stderr)
+        # A failed edit can still have applied on the server; only a new read can tell the state.
+        print("gh release edit failed; the state of the release is unknown. "
+              "Re-run the failed jobs: publish-finalize reads the release again and repeats the edit.", file=sys.stderr)
         return 1
     print(f"{args.tag} is public")
     return 0

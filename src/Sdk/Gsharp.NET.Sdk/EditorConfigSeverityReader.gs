@@ -48,7 +48,7 @@ internal shared class EditorConfigSeverityReader {
     private func IsRoot(editorConfigPath string) bool {
         try {
             for raw in File.ReadLines(editorConfigPath)!! {
-                let line = StripComment(raw!!)
+                let line = StripComment(RequireLine(editorConfigPath, raw))
                 if line.StartsWith("[", StringComparison.Ordinal) {
                     break
                 }
@@ -62,15 +62,25 @@ internal shared class EditorConfigSeverityReader {
     }
 
     private func ParseFile(editorConfigPath string, severities Dictionary[string, string]) {
-        var lines[]string
+        // The netstandard2.0 File.ReadAllLines result is oblivious. `!!` checks only the array.
+        // Keep the elements nullable, and examine each element before its non-null use (#5413).
+        var lines[]string?
         try {
             lines = File.ReadAllLines(editorConfigPath)!!
         } catch (IOException) {
             return
         }
+        ParseLines(editorConfigPath, lines, severities)
+    }
+
+    /// Applies the `dotnet_diagnostic` severities of one `.editorconfig` file.
+    /// @param editorConfigPath The file that supplied the lines.
+    /// @param lines The lines of the file.
+    /// @param severities The severities to update.
+    func ParseLines(editorConfigPath string, lines[]string?, severities Dictionary[string, string]) {
         var sectionAppliesToGs = false
         for raw in lines {
-            let line = StripComment(raw)
+            let line = StripComment(RequireLine(editorConfigPath, raw))
             if line.Length == 0 {
                 continue
             }
@@ -130,6 +140,14 @@ internal shared class EditorConfigSeverityReader {
         case "error": "error"
         default: default(string?)
     }
+
+    /// Returns a line of an `.editorconfig` file.
+    /// A null line is not a normal parse result, so it stops the read.
+    /// @param editorConfigPath The file that supplied the line.
+    /// @param raw The line.
+    /// @returns The non-null line.
+    private func RequireLine(editorConfigPath string, raw string?) string ->
+    raw ?? throw InvalidDataException("The .editorconfig file '$editorConfigPath' supplied a null line.")
 
     private func StripComment(line string) string {
         let comment = line.IndexOfAny([]char{'#', ';'})

@@ -184,26 +184,45 @@ func Main() int32 {
         using let artifacts = Issue3522ImportedNullableFieldEmitTests.TestArtifacts()
         const source = `package Issue3522.MetadataConsumer
 
+import System.Collections.Generic
 import Issue3522.Metadata
 
 func Main() int32 {
   let values = []string?{nil}
+  let items = List[string?]{nil}
+  let platformValues = ObliviousFields.Values
+  let platformItems = ObliviousFields.Items
 
   DirectFields.ScalarNullableArray = nil
   DirectFields.ScalarNullableArray = values
   DirectFields.ScalarNullableArray!![0] = nil
+
+  DirectFields.ScalarNullableGeneric = nil
+  DirectFields.ScalarNullableGeneric = items
+  DirectFields.ScalarNullableGeneric!![0] = nil
 
   ContextFields.Values = nil
   ContextFields.Values = values
   ContextFields.Values!![0] = nil
 
   ObliviousFields.Values = nil
-  ObliviousFields.Values = values
+  ObliviousFields.Values = platformValues
   ObliviousFields.Values!![0] = nil
 
-  return DirectFields.ScalarNullableArray!![0] == nil
+  ObliviousFields.Items = nil
+  ObliviousFields.Items = platformItems
+  ObliviousFields.Items!![0] = nil
+
+  return object.ReferenceEquals(DirectFields.ScalarNullableArray, values)
+    && object.ReferenceEquals(DirectFields.ScalarNullableGeneric, items)
+    && object.ReferenceEquals(ContextFields.Values, values)
+    && object.ReferenceEquals(ObliviousFields.Values, platformValues)
+    && object.ReferenceEquals(ObliviousFields.Items, platformItems)
+    && DirectFields.ScalarNullableArray!![0] == nil
+    && DirectFields.ScalarNullableGeneric!![0] == nil
     && ContextFields.Values!![0] == nil
-    && ObliviousFields.Values!![0] == nil ? 0 : 1
+    && ObliviousFields.Values!![0] == nil
+    && ObliviousFields.Items!![0] == nil ? 0 : 1
 }`
         let result = Compile(
             artifacts.Directory,
@@ -215,6 +234,45 @@ func Main() int32 {
         Assert.True(result.ExitCode == 0, result.Diagnostics)
         IlVerifier.Verify(result.OutputPath, []string{artifacts.MetadataPath})
         Assert.Equal(0, Run(result.OutputPath))
+    }
+
+    /// ADR-0186 rejects `C[T?] -> C[T!]`: a reader of the oblivious container can
+    /// take a nil element as non-null. Arrays obey the same rule as `List` (#5413).
+    @Fact
+    func ObliviousContainerFields_RejectNullableElementContainers() {
+        using let artifacts = Issue3522ImportedNullableFieldEmitTests.TestArtifacts()
+        const source = `package Issue3522.ObliviousNegative
+
+import System.Collections.Generic
+import Issue3522.Metadata
+
+func Break(values []string?, items List[string?]) {
+  ObliviousFields.Values = values
+  ObliviousFields.Items = items
+}`
+        let result = Compile(
+            artifacts.Directory,
+            "Issue3522.ObliviousNegative",
+            source,
+            target: "library",
+            artifacts.MetadataPath
+        )
+        Assert.NotEqual(0, result.ExitCode)
+        let errors = Regex.Matches(result.Diagnostics, "\\berror GS[0-9]+:")
+        Assert.True(errors.Count == 2, result.Diagnostics)
+        let sourcePath = Path.Combine(artifacts.Directory, "Issue3522.ObliviousNegative.gs")
+        Assert.Contains(
+            sourcePath + "(7,28,7,34): error GS0155: Cannot convert type '[]string?' to '[]!string!'.",
+            result.Diagnostics,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            sourcePath + "(8,27,8,32): error GS0155: Cannot convert type 'System.Collections.Generic.List[string?]' to "
+            + "'System.Collections.Generic.List[string!]!'.",
+            result.Diagnostics,
+            StringComparison.Ordinal
+        )
+        Assert.Equal([]string{sourcePath}, Directory.GetFiles(artifacts.Directory, "Issue3522.ObliviousNegative*"))
     }
 
     @Fact
@@ -762,7 +820,8 @@ namespace Issue3522.Metadata
 {
     public static class ObliviousFields
     {
-        public static string[] Values;
+        public static string[] Values = new string[] { "oblivious" };
+        public static List<string> Items = new List<string> { "oblivious" };
     }
 }`
 

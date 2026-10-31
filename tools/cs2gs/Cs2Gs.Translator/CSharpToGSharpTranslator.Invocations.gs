@@ -1847,7 +1847,7 @@ partial class CSharpToGSharpTranslator {
             var targetRequiresNonNull bool
             if targetParameter != nil && targetType != nil {
                 targetRequiresNonNull = (
-                    this.TargetWillRemainNonNullableReference(targetType, targetParameter) &&
+                    this.TargetWillRemainNonNullableReference(targetType, targetParameter, argument.Expression) &&
                         !targetIsPromotedMigratedSibling &&
                         !this.IsObliviousImportedInferredTypeParameterTarget(targetParameter, argument.Expression)
                 ) ||
@@ -2747,6 +2747,7 @@ partial class CSharpToGSharpTranslator {
                 cast[GTypeReference](NamedTypeReference(creation.Type.ToString()))
             }
             type = this.PromoteCreationTupleArguments(type, typeSymbol, creation)
+            type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
                 creation.ArgumentList?.Arguments ?? default(Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax])
@@ -3162,7 +3163,8 @@ partial class CSharpToGSharpTranslator {
                 IsNullOrSuppressedNull(valueExpression) ||
                 this.PlatformTypedImportNeedsNoBridge(valueExpression) || !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbolForPromotionCheck
+                targetSymbolForPromotionCheck,
+                valueExpression
             ) ||
                 // A member whose arms are already asserted (issue #5516) is non-null as a whole.
             this.GSharpExpressionIsStaticallyNonNull(valueExpression, translatedValue) {
