@@ -319,12 +319,20 @@ internal shared class ObliviousNullabilityAnalyzer {
     // declaration keys some call passes a `null` / `null!` literal into;
     // `Incoming` maps a declaration key to the keys of the PARAMETERS whose
     // value it receives unchanged (`Parent = parent`, `base(header, parent)`).
-    // `Forwarding` is filled on first request (see `EnsureForwardingEdges`).
+    // `Outgoing` is the reverse of `Incoming`. `Blocked` holds the keys of the
+    // declarations whose value reaches a slot that stays non-null in the emitted
+    // G# (issue #5574). `NonNullTargets` holds the keys of forwarding targets
+    // whose declared type is not oblivious; such a target outside the run keeps
+    // that contract. The forwarding part is filled on first request (see
+    // `EnsureNullArgumentForwarding`).
     private class NullArgumentGraph {
         init(owner Compilation, seeds HashSet[string]) {
             this.Owner = owner
             this.Seeds = seeds
             this.Incoming = Dictionary[string, List[string]](StringComparer.Ordinal)
+            this.Outgoing = Dictionary[string, List[string]](StringComparer.Ordinal)
+            this.Blocked = HashSet[string](StringComparer.Ordinal)
+            this.NonNullTargets = HashSet[string](StringComparer.Ordinal)
         }
 
         prop Owner Compilation {
@@ -336,6 +344,18 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
 
         prop Incoming Dictionary[string, List[string]] {
+            get;
+        }
+
+        prop Outgoing Dictionary[string, List[string]] {
+            get;
+        }
+
+        prop Blocked HashSet[string] {
+            get;
+        }
+
+        prop NonNullTargets HashSet[string] {
             get;
         }
 
@@ -571,6 +591,13 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// member does not own its nullability (repainting it is gsc's
     /// GS0185/GS0386), so it keeps its declared type.
     ///
+    /// <b>A forward into a slot that stays non-null stops the widening.</b>
+    /// Issue #5574: when the value reaches such a slot unchanged (a local
+    /// function, a virtual member, a substituted type parameter, or a member
+    /// that the run does not emit), the declaration keeps its declared type.
+    /// A widened declaration would need a `!!` on that forward, and the `!!`
+    /// throws on the null that C# passes on.
+    ///
     /// The answer is the existential union over every compilation in the run,
     /// so a declaration translates identically whichever project is emitted.
     /// @param compilation The compilation being translated.
@@ -585,11 +612,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         // Only a declaration this migration emits can be repainted. The seed
         // side needs no such test: a sibling project that binds the callee
         // through its emitted reference assembly still records the call.
+        // Issue #5574: a member of a native runtime view (`slice[T]`) binds the
+        // SDK's runtime assembly in the emitted G#, not the declaration this
+        // run emits.
         let original ISymbol? = OriginalNullArgumentDeclaration(symbol)
         if compilation == nil ||
             original == nil ||
             !IsNullArgumentCandidate(original) ||
-            !IsDeclaredInThisRun(compilation, original, siblingCompilations) {
+            !IsDeclaredInThisRun(compilation, original, siblingCompilations) ||
+            BindsThroughNativeRuntimeView(original, compilation) {
             return false
         }
         let keys = NullArgumentKeys(original)
@@ -616,6 +647,21 @@ internal shared class ObliviousNullabilityAnalyzer {
         for graph in graphs {
             EnsureNullArgumentForwarding(graph)
         }
+        // Issue #5574: a declaration whose value reaches a slot that stays
+        // non-null keeps its declared type. Widening it would put a `!!` on
+        // that forward, and the `!!` throws on the null that C# passes on.
+        return WalkNullArgumentKeys(keys, graphs, towardSinks: false) &&
+            !WalkNullArgumentKeys(keys, graphs, towardSinks: true)
+    }
+
+    // Issue #5508 / #5574: the one walk over the run's forwarding graph. With
+    // `towardSinks` false, the walk follows `Incoming` and stops at a seed. With
+    // `towardSinks` true, the walk follows `Outgoing` and stops at a blocked
+    // declaration or at a non-null target outside the run. Both directions use
+    // the same aliases, so the two answers agree for linked and metadata keys.
+    // The visited set makes the walk terminate. The answer is an existential
+    // OR, so the visit order cannot change it.
+    private func WalkNullArgumentKeys(keys List[string], graphs List[NullArgumentGraph], towardSinks bool) bool {
         let visited = HashSet[string](StringComparer.Ordinal)
         let pending = Stack[string]()
         for key in keys {
@@ -634,27 +680,49 @@ internal shared class ObliviousNullabilityAnalyzer {
             if !current.StartsWith("@", StringComparison.Ordinal) {
                 let split = current.IndexOf('|')
                 if split > 0 {
-                    for sourceKey in SourceDeclarationKeys(
-                        current.Substring(0, split),
-                        current.Substring(split + 1),
-                        graphs
-                    ) {
+                    let identity = current.Substring(0, split)
+                    if towardSinks && IsNonNullTargetOutsideRun(current, identity, graphs) {
+                        return true
+                    }
+                    for sourceKey in SourceDeclarationKeys(identity, current.Substring(split + 1), graphs) {
                         pending.Push(sourceKey)
                     }
                 }
             }
             for graph in graphs {
-                if graph.Seeds.Contains(current) {
+                let stop = if towardSinks {
+                    graph.Blocked.Contains(current)
+                } else {
+                    graph.Seeds.Contains(current)
+                }
+                if stop {
                     return true
                 }
-                if graph.Incoming.TryGetValue(current, out var sources) {
-                    for source in sources {
-                        pending.Push(source)
+                let edges = if towardSinks {
+                    graph.Outgoing
+                } else {
+                    graph.Incoming
+                }
+                if edges.TryGetValue(current, out var next) {
+                    for key in next {
+                        pending.Push(key)
                     }
                 }
             }
         }
         return false
+    }
+
+    // Issue #5574: whether `key` names a forwarding target with a non-null
+    // contract that no compilation of the run emits. The emitted G# keeps that
+    // contract, so a nullable value needs a `!!` there.
+    private func IsNonNullTargetOutsideRun(key string, identity string, graphs List[NullArgumentGraph]) bool {
+        for graph in graphs {
+            if graph.Owner.Assembly.Identity.GetDisplayName() == identity {
+                return false
+            }
+        }
+        return graphs.Any((g NullArgumentGraph) -> g.NonNullTargets.Contains(key))
     }
 
     /// Issue #3848 (family B): whether [`symbol`](paramref) is an
@@ -2195,6 +2263,64 @@ internal shared class ObliviousNullabilityAnalyzer {
         .Annotated &&
         !IsTaskLike(reference)
 
+    // Issue #5574: a slot whose C# type is a reference that the C# declares
+    // non-null. An oblivious slot is not one: gsc reads it as a platform type,
+    // and a nullable value needs no `!!` there (ADR-0186).
+    private func IsNonNullReferenceSlot(type ITypeSymbol?) bool -> type is {IsReferenceType: true} reference &&
+        reference.NullableAnnotation == Microsoft
+        .CodeAnalysis
+        .NullableAnnotation
+        .NotAnnotated
+
+    // Issue #5574: the type of the slot that a forward writes, as the call or
+    // store binds it: a parameter, field or property type, or the result of a
+    // member that returns the value. An async member returns its awaited result.
+    private func ForwardedSlotType(target ISymbol?) ITypeSymbol? {
+        switch target {
+            case parameter is IParameterSymbol {
+                return parameter.Type
+            }
+            case field is IFieldSymbol {
+                return field.Type
+            }
+            case property is IPropertySymbol {
+                return property.Type
+            }
+            case method is IMethodSymbol {
+                if !method.IsAsync {
+                    return method.ReturnType
+                }
+                return if method.ReturnType is INamedTypeSymbol{IsGenericType: true, TypeArguments: {Length: 1}} task {
+                    task.TypeArguments[0]
+                } else {
+                    default(ITypeSymbol?)
+                }
+            }
+            default {
+                return default(ITypeSymbol?)
+            }
+        }
+    }
+
+    // Issue #5574: whether `compilation` sees `symbol` through a native
+    // runtime view (ADR-0187 §6). The emitted G# spells the containing type
+    // `slice[T]` or `managed T`, and gsc binds that spelling to the SDK's
+    // runtime assembly. A widening of the declaration that this run emits
+    // therefore does not reach the call.
+    private func BindsThroughNativeRuntimeView(
+        symbol ISymbol?,
+        compilation Compilation
+    ) bool -> symbol?.ContainingType is {} containing &&
+        CSharpTypeMapper
+        .IsRecognizedRuntimeConsumerType(
+        containing,
+        compilation,
+        "Slice",
+        "ReadOnlySlice",
+        "ManagedRef",
+        "ReadOnlyManagedRef"
+    )
+
     // Issue #5508: the compilation-independent identities of a candidate, every
     // one of which stands for the same declaration. The documentation id alone
     // is not an identity across a run — two unrelated projects can declare the
@@ -2426,6 +2552,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         .Value
                         ?.Syntax is ExpressionSyntax value &&
                         ArgumentWritesNullValue(model, value) &&
+                        !BindsThroughNativeRuntimeView(parameter, compilation) &&
                         OriginalNullArgumentDeclaration(parameter) is {} original &&
                         IsNullArgumentCandidate(original) {
                         for key in NullArgumentKeys(original) {
@@ -2441,30 +2568,61 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Pass 2: the pure-forwarding edges, built once per compilation, and only
     // when some compilation of the run has a seed. An edge `target <- source`
     // records that `source`, a PARAMETER, hands its value on unchanged to
-    // `target` (a parameter, field or property).
+    // `target` (a parameter, field or property). Issue #5574: a forward into a
+    // slot that cannot widen and stays non-null blocks `source` instead.
     private func EnsureNullArgumentForwarding(graph NullArgumentGraph) {
         if graph.ForwardingBuilt {
             return
         }
         let owner = graph.Owner
         graph.ForwardingBuilt = true
+        let AddBlock = func (source ISymbol?, slotType ITypeSymbol?) {
+            let sourceOriginal = OriginalNullArgumentDeclaration(source)
+            if sourceOriginal != nil && IsNullArgumentCandidate(sourceOriginal) && IsNonNullReferenceSlot(slotType) {
+                for sourceKey in NullArgumentKeys(sourceOriginal) {
+                    graph.Blocked.Add(sourceKey)
+                }
+            }
+        }
         let AddEdge = func (target ISymbol?, source ISymbol?) {
             let targetOriginal = OriginalNullArgumentDeclaration(target)
             let sourceOriginal = OriginalNullArgumentDeclaration(source)
-            if targetOriginal != nil &&
-                sourceOriginal != nil &&
-                IsNullArgumentCandidate(targetOriginal) &&
-                IsNullArgumentCandidate(sourceOriginal) {
-                let sourceKeys = NullArgumentKeys(sourceOriginal)
-                for targetKey in NullArgumentKeys(targetOriginal) {
-                    if !graph.Incoming.TryGetValue(targetKey, out var sources) {
-                        sources = List[string]()
-                        graph.Incoming[targetKey] = sources
+            if target == nil || sourceOriginal == nil || !IsNullArgumentCandidate(sourceOriginal) {
+                return
+            }
+            // The slot the forward binds in the emitted G#: a declaration that
+            // cannot widen, or the SDK's runtime member behind a native view.
+            if targetOriginal == nil ||
+                !IsNullArgumentCandidate(targetOriginal) ||
+                BindsThroughNativeRuntimeView(targetOriginal, owner) {
+                AddBlock(source, ForwardedSlotType(target))
+                return
+            }
+            let sourceKeys = NullArgumentKeys(sourceOriginal)
+            let targetKeys = NullArgumentKeys(targetOriginal)
+            let nonNullTarget = IsNonNullReferenceSlot(ForwardedSlotType(targetOriginal))
+            for targetKey in targetKeys {
+                if nonNullTarget {
+                    graph.NonNullTargets.Add(targetKey)
+                }
+                if !graph.Incoming.TryGetValue(targetKey, out var sources) {
+                    sources = List[string]()
+                    graph.Incoming[targetKey] = sources
+                }
+                for sourceKey in sourceKeys {
+                    if !sources.Contains(sourceKey) {
+                        sources.Add(sourceKey)
                     }
-                    for sourceKey in sourceKeys {
-                        if !sources.Contains(sourceKey) {
-                            sources.Add(sourceKey)
-                        }
+                }
+            }
+            for sourceKey in sourceKeys {
+                if !graph.Outgoing.TryGetValue(sourceKey, out var targets) {
+                    targets = List[string]()
+                    graph.Outgoing[sourceKey] = targets
+                }
+                for targetKey in targetKeys {
+                    if !targets.Contains(targetKey) {
+                        targets.Add(targetKey)
                     }
                 }
             }
@@ -2509,6 +2667,20 @@ internal shared class ObliviousNullabilityAnalyzer {
                             ?.Syntax is ExpressionSyntax value &&
                             ReadsEnclosingParameterByName(value) {
                             AddEdge(parameter, model.GetSymbolInfo(Unwrap(value)).Symbol)
+                        }
+                        // An expanded `params` call passes each value into an
+                        // element of the carrier, which never widens.
+                        if argument.ArgumentKind == ArgumentKind.ParamArray &&
+                            argument
+                            .Parameter
+                            ?.Type is IArrayTypeSymbol carrier &&
+                            argument.Value is IArrayCreationOperation{Initializer: {} elements} {
+                            for element in elements.ElementValues {
+                                if element.Syntax is ExpressionSyntax elementValue &&
+                                    ReadsEnclosingParameterByName(elementValue) {
+                                    AddBlock(model.GetSymbolInfo(Unwrap(elementValue)).Symbol, carrier.ElementType)
+                                }
+                            }
                         }
                     }
                 }

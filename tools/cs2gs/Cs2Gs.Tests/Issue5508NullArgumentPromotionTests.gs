@@ -66,8 +66,8 @@ import Xunit
 /// | 37 | A and B link `State.cs`, only B stores null; C's `Node Read() => State.Stored` through A's emitted reference | `Stored!!` throws | the return widens (alias at every step) |
 /// | 38 | `get => stored` / `get { return stored; }` / `Node Value => stored` behind a widened store | getter asserts `stored!!` | getter and property widen |
 /// | 39 | `record Entry(Node Item)` + `new Entry(null!)` + `Read(Entry e) => e.Item` | `e.Item!!` throws | `Read` widens |
-/// | 40 | emitted-reference `record Key(string Value) : IKey`; a consumer forwards a widened parameter into `new Key(p)` | no bridge | bridged: the fixed property keeps the parameter non-null |
-/// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
+/// | 40 | emitted-reference `record Key(string Value) : IKey`; a consumer forwards `p` into `new Key(p)` and passes `null!` to `p` | no bridge | `p` keeps `string` and gets no `!!` (#5574: the fixed property stays non-null) |
+/// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type, and `parent` keeps `Node` without a `!!` (#5574) |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
 namespace Demo
@@ -198,7 +198,10 @@ namespace Demo
         Assert.DoesNotContain("parent Node?", printed[0])
     }
 
-    /// Row 9: a virtual property is not repainted by forwarding either.
+    /// Row 9: a virtual property is not repainted by forwarding either. Issue
+    /// #5574: the store keeps the property non-null, so `node` keeps its type.
+    /// A widened `node` would need `Stored = node!!`, which throws on the
+    /// null that C# stores.
     @Fact
     func PromotedParameter_StoredIntoVirtualProperty_DoesNotPromoteProperty() {
         let printed = TranslateEnabled(("Holder.cs", `
@@ -212,7 +215,8 @@ namespace Demo
         public static Holder Make() => new Holder(null!);
     }
 }`))
-        Assert.Contains("node Node?", printed[0])
+        Assert.Contains("init(node Node)", printed[0])
+        Assert.DoesNotContain("!!", printed[0])
         Assert.DoesNotContain("Stored Node?", printed[0].Replace("  ", " "))
     }
 
@@ -1022,7 +1026,8 @@ namespace Demo
         Assert.Contains("Take(item!!)", printed[0])
     }
 
-    /// Row 40.
+    /// Row 40. Issue #5574: `new Key(p)` binds a parameter that the fixed
+    /// property keeps non-null, so `p` keeps its type and gets no `!!`.
     @Fact
     func EmittedReferencePositionalRecordWithFixedProperty_IsNotTreatedAsWidened() {
         let library = Compile("Library", NullableContextOptions.Enable, nil, ("Key.cs", `
@@ -1061,7 +1066,8 @@ namespace Demo
                 context
             )
         )
-        Assert.Contains("p!!", printed)
+        Assert.Contains("func Build(p string) Key", printed)
+        Assert.DoesNotContain("!!", printed)
     }
 
     /// Row 8: the null argument lives in another project of the run.
