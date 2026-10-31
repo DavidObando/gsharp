@@ -362,6 +362,115 @@ public static class Use
 }`, []string{"private func Count(values ...string?) int32 {", "return Count(lines[1])\n"}, []string{"Expanded", "1"})
     }
 
+    /// Review of #5571: an argument for a parameter typed by a type argument that the
+    /// call binds to a nullable position passes a nil element through, for a stated
+    /// type argument, a construction and an inferred one. The call result then keeps
+    /// its `!!` at a dereference.
+    @Fact
+    func A_Generic_Argument_Bound_To_A_Nullable_Type_Argument_Passes_Nil() {
+        this.Check("Review6", `using ObLib;
+
+public class Box<T>
+{
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+
+public static class Use
+{
+    static T Id<T>(T x) { return x; }
+    public static int Explicit(string p) { string[] lines; lines = Node.Holes(p); return Id<string>(lines[1]) == null ? 1 : 0; }
+    public static int Constructed(string p) { string[] lines; lines = Node.Holes(p); return new Box<string>(lines[1]).Value == null ? 1 : 0; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Lines(p); return Id(lines[0]).Length; }
+    public static int InferredNil(string p) { string[] lines; lines = Node.Holes(p); return Id(lines[1]) == null ? 1 : 0; }
+    public static int InferredThrows(string p) { string[] lines; lines = Node.Holes(p); try { return Id(lines[1]).Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return if Id[string?](lines[1]) == nil { 1 } else { 0 }",
+                "return if Box[string?](lines[1]).Value == nil { 1 } else { 0 }",
+                "return Id(lines[0])!!.Length",
+                "return if Id(lines[1]) == nil { 1 } else { 0 }"
+            }, []string{
+                "Explicit",
+                "1",
+                "Constructed",
+                "1",
+                "Inferred",
+                "2",
+                "InferredNil",
+                "1",
+                "InferredThrows",
+                "-1"
+            })
+    }
+
+    /// Review of #5571: a block-bodied lambda returns a nullable element as it is when
+    /// the call binds the delegate result to a nullable position.
+    @Fact
+    func A_Block_Lambda_Returns_A_Nullable_Element_Unchanged() {
+        this.Check("Review7", `using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int Block(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => { return l; }).Count(x => x == null); }
+    public static int BlockFirst(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => { return l; }).First().Length; }
+}`, []string{"return l\n", ").First()!!.Length"}, []string{"Block", "1", "BlockFirst", "2"})
+    }
+
+    /// Review of #5571: a local that a G# nil test narrows passes a non-null value to a
+    /// generic call and to a local that takes its type from it, so neither result gets
+    /// a redundant `!!` (GS0536).
+    @Fact
+    func A_Narrowed_Local_Gives_A_Non_Null_Generic_Result() {
+        this.Check("Review8", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) { return x; }
+    public static int Guard(string p)
+    {
+        IEnumerable<string> xs;
+        xs = Node.Seq(p);
+        int n = 0;
+        foreach (var s in xs)
+        {
+            if (s != null)
+            {
+                var t = Id(s);
+                n += t.Length + Id(s).Length;
+            }
+        }
+        return n;
+    }
+}`, []string{"n += t.Length + Id(s).Length"}, []string{"Guard", "4"})
+    }
+
+    /// Review of #5571: enabled storage that an `async` method returns as its task's
+    /// result states the result's nullable element, so no conversion widens it.
+    @Fact
+    func Storage_Returned_By_An_Async_Method_States_The_Result_Element() {
+        this.Check("Review9", `using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static async Task<string[]> Load(string p, bool flag)
+    {
+        await Task.Yield();
+        string[] other = new string[1];
+        other[0] = "x";
+        if (flag) { return Node.Holes(p); }
+        return other;
+    }
+
+    public static int Async(string p) { return Load(p, false).Result[0].Length + (Load(p, true).Result[1] == null ? 10 : 0); }
+}`, []string{
+                "private async func Load(p string, flag bool) []string? {",
+                "let other []string? = [1]string?"
+            }, []string{"Async", "11"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
