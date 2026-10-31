@@ -564,7 +564,14 @@ class FinalizeTests(unittest.TestCase):
                 self.assertEqual(self.edits(), [])
 
     def test_prerelease_does_not_accept_a_failed_visual_studio_job(self) -> None:
-        self.assertEqual(self.finalize(prerelease="true", vs="failure").returncode, 1)
+        # The marketplace holds the pre-release, so only the failed Visual Studio job can block.
+        Marketplace.versions = [{"version": self.VERSION, "properties": [
+            {"key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true"}]}]
+        self.assertEqual(self.finalize(prerelease="true", vs="skipped").returncode, 0)
+        result = self.finalize(prerelease="true", vs="failure")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("job publish-visual-studio-marketplace | MISSING", result.stdout)
+        self.assertNotIn("VS Code Marketplace | MISSING", result.stdout)
 
     def test_a_skipped_vscode_or_release_job_fails(self) -> None:
         self.assertEqual(self.finalize(vscode="skipped").returncode, 1)
