@@ -322,7 +322,8 @@ open class Adr0208NarrowingCorpusTests {
                 "u18_5520_static_field_read_in_a_loop",
                 "u19_5520_type_without_initializers_keeps_member_path",
                 "u20_5520_plain_local_keeps_the_fact_across_a_static_read",
-                "u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact"
+                "u21_5520_static_read_in_a_function_literal_that_is_not_run_keeps_the_fact",
+                "u22_5520_literal_initializer_through_a_user_defined_conversion"
             },
             names
         )
@@ -3786,6 +3787,32 @@ func Run(ref a C?) int32 {
 }
 var xs = []C?{C{}}
 Console.WriteLine(Run(ref xs[0]))`, "", "run", "1", "R12"}
+            yield[]object{"u22_5520_literal_initializer_through_a_user_defined_conversion", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Token {
+    var Raw int32
+}
+func operator implicit(value int32) Token {
+    cleaner()
+    return Token{Raw: value}
+}
+class Trigger {
+    shared {
+        var Seed Token = 1
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
+    let n = Trigger.Seed
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@23:14", "reject", "", "R15"}
             yield[]object{"r1_5482_ref_alias_of_closure_replaced_callable", `import System
 
 class C {

@@ -169,6 +169,33 @@ public class Demo
         AssertCompilesWithGsc(printed)
     }
 
+    /// `+1` converts to `uint`, so the translation is `uint32(+1)`, which gsc counts as code. Mutation witness: the
+    /// conversion is read on the literal operand instead of the whole initializer.
+    @Fact
+    func OutParameter_ReadAfterAStaticFieldWithASignedConvertedLiteral_IsAsserted() {
+        let printed = Translate(`
+public sealed class Limits
+{
+    public static uint Max = +1;
+}
+public class Demo
+{
+    static string? Pick() => null;
+    public static int Run(out string? text)
+    {
+        text = Pick();
+        if (text is null)
+        {
+            return 0;
+        }
+        var n = Limits.Max;
+        return (int)n + text.Length;
+    }
+}`)
+        Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
     /// Mutation witness for this row and the constant and construction rows: `NodeRunsStaticTypeInitializer` counts
     /// every name and member access.
     @Fact

@@ -2465,14 +2465,16 @@ internal partial class DeclarationBinder {
         BindStructSharedEvents(syntax, $package, structSymbol, memberBinding)
     }
 
-    /// Issue #5520: whether a `shared` field initializer runs no code: a literal, possibly parenthesized or under a
-    /// unary operator (`-1`). Anything else (a call, a name, a construction) is user code or may be (ADR-0208 R11
-    /// and R15 read it through `DeclaresNonLiteralSharedFieldInitializer`).
-    private func IsLiteralInitializerSyntax(initializer ExpressionSyntax) bool {
+    /// Issue #5520: whether a `shared` field initializer runs no code: `nil`, or a literal of a built-in field type,
+    /// possibly parenthesized or under a unary operator (`-1`). A literal of another field type can call a
+    /// user-defined conversion (`var Seed Token = 1`), and anything else (a call, a name, a construction) is user
+    /// code or may be, so it counts (ADR-0208 R11 and R15 read it through
+    /// `DeclaresNonLiteralSharedFieldInitializer`). The answer reads only the syntax and the declared field type.
+    private func IsLiteralInitializerSyntax(initializer ExpressionSyntax, fieldType TypeSymbol) bool {
         var current = initializer
         for var depth = 0; depth < 64; depth++ {
-            if current is LiteralExpressionSyntax {
-                return true
+            if current is LiteralExpressionSyntax literal {
+                return literal.LiteralToken.Kind == SyntaxKind.NilKeyword || IsBuiltInLiteralTarget(fieldType)
             }
             if current is ParenthesizedExpressionSyntax parenthesized {
                 current = parenthesized.Expression
@@ -2483,6 +2485,32 @@ internal partial class DeclarationBinder {
             }
         }
         return false
+    }
+
+    /// Issue #5520: a built-in type, or `T?` of one, that a literal initializes without a user-defined conversion.
+    private func IsBuiltInLiteralTarget(fieldType TypeSymbol) bool {
+        let target = if fieldType is NullableTypeSymbol nullable {
+            nullable.UnderlyingType
+        } else {
+            fieldType
+        }
+        return target == TypeSymbol.Bool ||
+            target == TypeSymbol.Int8 ||
+            target == TypeSymbol.UInt8 ||
+            target == TypeSymbol.Int16 ||
+            target == TypeSymbol.UInt16 ||
+            target == TypeSymbol.Int32 ||
+            target == TypeSymbol.UInt32 ||
+            target == TypeSymbol.Int64 ||
+            target == TypeSymbol.UInt64 ||
+            target == TypeSymbol.NInt ||
+            target == TypeSymbol.NUInt ||
+            target == TypeSymbol.Float32 ||
+            target == TypeSymbol.Float64 ||
+            target == TypeSymbol.Decimal ||
+            target == TypeSymbol.Char ||
+            target == TypeSymbol.String ||
+            target == TypeSymbol.Object
     }
 
     private func BindStructSharedFields(
@@ -2598,7 +2626,7 @@ internal partial class DeclarationBinder {
                 // consolidated pass so it can see all sibling static/const members.
                 if fieldSyntax.Initializer is {} staticInitializer {
                     pendingStaticFieldInitializers.Add((fieldSymbol, staticInitializer, fieldType))
-                    if !IsLiteralInitializerSyntax(staticInitializer) {
+                    if !IsLiteralInitializerSyntax(staticInitializer, fieldType) {
                         structSymbol.DeclaresNonLiteralSharedFieldInitializer = true
                     }
                 } else if MagicCollectionZeroValue.MightNeedZeroValue(fieldType) {
