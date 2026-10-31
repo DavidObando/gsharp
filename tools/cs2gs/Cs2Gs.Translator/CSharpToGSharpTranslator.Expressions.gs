@@ -2392,7 +2392,8 @@ partial class CSharpToGSharpTranslator {
         // nullable-conversion errors at its other (non-null) uses, so the
         // assertion is applied only here at the receiver/foreach-source use site.
         private func LocalInitializedFromImportedObliviousNullable(symbol ISymbol?) bool {
-            if symbol is not ILocalSymbol local {
+            // Issue #5537: oblivious container storage states a non-null outer type.
+            if symbol is not ILocalSymbol local || this.StoresObliviousContainerElements(local) {
                 return false
             }
             for reference in local.DeclaringSyntaxReferences {
@@ -2667,7 +2668,8 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.BranchResultAcceptsNil(value, out var branch) || this.NullForgivingTargetAcceptsNil(
                     targetType,
-                    targetSymbol
+                    targetSymbol,
+                    value
                 ) ||
                     (
                     targetSymbol is IParameterSymbol parameterTarget &&
@@ -2887,7 +2889,8 @@ partial class CSharpToGSharpTranslator {
                 IsInitializerOfInferredLocal(value, targetSymbol) ||
                 this.LambdaResultFeedsNullableObservedInvocation(value) || !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbol
+                targetSymbol,
+                value
             ) {
                 return translated
             }
@@ -3268,6 +3271,10 @@ partial class CSharpToGSharpTranslator {
             checkNullableForEachBinding bool = true
         ) bool {
             if checkNullableForEachBinding && this.IsNullableForEachBindingUse(expression) {
+                return false
+            }
+            // Issue #5537: G# types an element of oblivious container storage `T?`.
+            if this.ReadsObliviousContainerStorageElement(expression) {
                 return false
             }
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
@@ -4710,6 +4717,9 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             valueSymbol ISymbol?
         ) bool {
+            if this.ReadsObliviousContainerStorageElement(value) {
+                return true
+            }
             if value is ElementAccessExpressionSyntax elementAccess && this.IsImportedObliviousNullableMember(
                 this.context.GetSymbolInfo(elementAccess.Expression).Symbol
             ) {
@@ -5234,7 +5244,9 @@ partial class CSharpToGSharpTranslator {
             .NullableAnnotation
             .Annotated &&
             !(targetSymbol is IParameterSymbol parameter && IsInferredGenericParameterTarget(parameter, callSite)) &&
-            (!targetType.IsReferenceType || this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
+            (
+            !targetType.IsReferenceType || this.TargetWillRemainNonNullableReference(targetType, targetSymbol, callSite)
+        )
 
         private func FindNullForgivingTarget(value PostfixUnaryExpressionSyntax)(Type ITypeSymbol?, Symbol ISymbol?) {
             let ExplicitLocalTypeIsNullable = func (local ILocalSymbol) bool {
@@ -5289,7 +5301,8 @@ partial class CSharpToGSharpTranslator {
 
         private func NullForgivingTargetAcceptsNil(
             targetType ITypeSymbol?,
-            targetSymbol ISymbol?
+            targetSymbol ISymbol?,
+            writtenValue Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
         ) bool -> targetType?.NullableAnnotation == Microsoft
             .CodeAnalysis
             .NullableAnnotation
@@ -5300,7 +5313,8 @@ partial class CSharpToGSharpTranslator {
             (
             targetType != nil && targetType.IsReferenceType == true && !this.TargetWillRemainNonNullableReference(
                 targetType,
-                targetSymbol
+                targetSymbol,
+                writtenValue
             )
         )
 
@@ -5561,11 +5575,14 @@ partial class CSharpToGSharpTranslator {
             if !(this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter}) {
                 return false
             }
-            return this.ParameterWillRemainNonNullableReference(parameter)
+            return this.ParameterWillRemainNonNullableReference(parameter, argument.Expression)
         }
 
-        private func ParameterWillRemainNonNullableReference(parameter IParameterSymbol) bool {
-            return this.TargetWillRemainNonNullableReference(parameter.Type, parameter)
+        private func ParameterWillRemainNonNullableReference(
+            parameter IParameterSymbol,
+            argumentValue Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+        ) bool {
+            return this.TargetWillRemainNonNullableReference(parameter.Type, parameter, argumentValue)
         }
 
         /// Issue #5516: whether [`node`](paramref) sits in a file with `#nullable enable annotations`
@@ -5647,6 +5664,12 @@ partial class CSharpToGSharpTranslator {
             // contract, not as `MethodGroup!!` on the delegate conversion seam.
             if this.IsCallableValueExpression(recv) {
                 return false
+            }
+            // Issue #5537: an element of storage that keeps an imported oblivious
+            // container is `T?` in G#. A C# dereference of it throws on nil. A value
+            // position keeps the target-aware bridge, so a nullable target gets no `!!`.
+            if isDereferenceReceiver && this.ReadsObliviousContainerStorageElement(recv) {
+                return NullForgivenessTelemetry.Record("5537-oblivious-container-element")
             }
             if isDereferenceReceiver &&
                 this

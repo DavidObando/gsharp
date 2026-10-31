@@ -283,6 +283,7 @@ partial class CSharpToGSharpTranslator {
                 default: default(ITypeSymbol?)
             }
             type = this.PromoteTupleDeclarationIfTainted(type, declaredType, symbol)
+            type = this.PromoteObliviousContainerStorage(type, symbol)
             if type!!.IsNullable {
                 return type
             }
@@ -334,6 +335,7 @@ partial class CSharpToGSharpTranslator {
         // must come from the shared decision table.
         private func PromoteReturnIfTainted(type GTypeReference?, symbol IMethodSymbol?) GTypeReference? {
             var type = type
+            type = this.PromoteObliviousContainerStorage(type, symbol)
             if type == nil || type.IsNullable || symbol == nil {
                 return type
             }
@@ -922,7 +924,11 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return elementType
             }
-            if literal != nil && this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) {
+            if literal != nil &&
+                (
+                this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) ||
+                    this.ObliviousContainerSinkPromotesArrayElement(literal)
+            ) {
                 return MakeNullable(elementType)
             }
             for element in elements {
@@ -1451,12 +1457,22 @@ partial class CSharpToGSharpTranslator {
         // symbol. Only declarations emitted by this compilation can have their
         // contract widened by this compilation's promotion result. Project
         // references and CLR metadata retain their already-emitted contract.
-        private func TargetWillRemainNonNullableReference(targetType ITypeSymbol?, targetSymbol ISymbol?) bool {
+        private func TargetWillRemainNonNullableReference(
+            targetType ITypeSymbol?,
+            targetSymbol ISymbol?,
+            writtenValue ExpressionSyntax? = nil
+        ) bool {
             if !(targetType != nil && targetType.IsReferenceType == true) ||
                 targetType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
+                return false
+            }
+            // Issue #5537: a parameter or element typed by a type argument of oblivious
+            // container storage, or of a construction stored there, takes that argument's
+            // nullable spelling (`List[string?].Add`, `[]string?` elements).
+            if this.WritesObliviousContainerStorageElement(writtenValue) {
                 return false
             }
             // ADR-0169 analyzer mode: an INamespaceSymbol target renders as
@@ -1537,6 +1553,16 @@ partial class CSharpToGSharpTranslator {
             // and produced GS0155. Trust the widening only where this run
             // actually emits the declaration.
             if IsVariadicCarrierParameter(targetSymbol) {
+                // Issue #5537: the shared storage rule spells the element of a
+                // `params` parameter that receives oblivious container storage
+                // `T?`, so an expanded nullable argument needs no bridge.
+                if targetSymbol is IParameterSymbol promotedParameter && SymbolEqualityComparer.Default.Equals(
+                    targetType,
+                    GetParamsElementType(promotedParameter)
+                ) &&
+                    this.ObliviousParamsElementIsPromoted(promotedParameter) {
+                    return false
+                }
                 return !(targetSymbol is IParameterSymbol{Type: IArrayTypeSymbol array} paramsParameter) ||
                     !SymbolEqualityComparer
                     .Default
