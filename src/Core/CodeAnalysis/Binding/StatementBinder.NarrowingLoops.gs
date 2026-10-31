@@ -340,7 +340,7 @@ internal partial class StatementBinder {
             case nil {
                 return false
             }
-            case FunctionTypeSymbol, DelegateTypeSymbol, TupleTypeSymbol {
+            case FunctionTypeSymbol, DelegateTypeSymbol {
                 return false
             }
             case declared is StructSymbol {
@@ -365,11 +365,6 @@ internal partial class StatementBinder {
                     MemberIsOnlyMethod(importedBase, member)
             }
             case contract is InterfaceSymbol {
-                for property in contract.Properties {
-                    if property.Name == member {
-                        return false
-                    }
-                }
                 for method in contract.Methods {
                     if method.Name == member {
                         return true

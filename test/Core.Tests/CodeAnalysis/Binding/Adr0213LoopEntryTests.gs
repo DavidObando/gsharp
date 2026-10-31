@@ -1113,6 +1113,24 @@ func Run(ref text string?, values []int32) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+interface IWork {
+    func Do();
+}
+class Work : IWork {
+    func Do() { }
+}
+func Run(ref text string?, work IWork) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        work.Do()
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }
