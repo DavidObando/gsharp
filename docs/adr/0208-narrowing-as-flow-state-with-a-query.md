@@ -1009,27 +1009,27 @@ Details per row:
   construction) is non-literal, on purpose, so the answer is syntactic. Constructing the type does not run
   the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and u01 to u21 (issue #5520).
 
-  Contract of #5520 (each row is a compiler corpus row; the mutation witness is the change that makes the row
-  fail):
+  Contract of #5520 (each row is a compiler corpus row; the mutation witness is a product change that makes the row
+  fail, recorded in the PR):
 
   | shape | before | after | row | mutation witness |
   | --- | --- | --- | --- | --- |
-  | static field read, non-literal `shared` initializer, closure-assigned local or mutable global | accepted, `NullReferenceException` | `GS0158` | s12 (R11, R15) | return `false` for `DeclaresNonLiteralSharedFieldInitializer` |
+  | static field read, non-literal `shared` initializer, closure-assigned local or mutable global | accepted, `NullReferenceException` | `GS0158` | s12 (R11, R15) | no `shared` field initializer counts (`IsLiteralInitializerSyntax` is always true) |
   | the same read, fact on a member path | accepted | `GS0158` | u01 | the same |
   | the same read, fact on a `ref` parameter | accepted | `GS0158` | u02 | the same |
-  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, u03, u04 | treat any initializer as non-literal |
-  | `const` read | accepted | accepted | u05, s07 | count a constant |
-  | construction (`Trigger{}`) | accepted | accepted | s27, u06 | count construction |
-  | instance member read | accepted | accepted | u07 | count an instance member |
-  | static property read, write; static field write; static event subscription | accepted | `GS0158` | u08, u09, u10 | ignore the node kind |
-  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | u11 | test the accessed field, not the type |
-  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | u12, u13, u14 | read the constructed type or the derived type |
-  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | u15 | read the access type, not the declaring type |
-  | access in a body of the type itself (static or instance) | accepted | `GS0158` | u16, u17 | exempt the type's own bodies |
-  | access in a loop between guard and use | accepted | `GS0158` | u18 | skip the loop collector |
-  | `shared` field without an initializer | accepted | accepted | u19 | count a field with no initializer |
-  | plain local (no closure assigns it) across a static read | accepted | accepted | u20 | kill every local at the access |
-  | static read only inside a function literal that is not called | accepted | accepted | u21 | count accesses inside nested function bodies |
+  | static property read, static field write, static event subscription | accepted | `GS0158` | u08, u09, u10 | the same |
+  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | u11 | the same |
+  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | u12, u13, u14 | the same |
+  | access in a body of the type itself (static or instance) | accepted | `GS0158` | u16, u17 | the same |
+  | access in a loop between guard and use | accepted | `GS0158` | u18 | the same |
+  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, u03, u04 | every initializer counts as non-literal; every static access counts |
+  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | u15 | the same |
+  | `shared` field without an initializer | accepted | accepted | u19 | every static access counts |
+  | `const` read | accepted | accepted | u05 | a constant counts as a static access |
+  | construction (`Trigger{}`) | accepted | accepted | s27, u06 | construction counts as a static access |
+  | instance member read | accepted | accepted | u07 | an instance field counts as a static access |
+  | plain local (no closure assigns it) across a static read | accepted | accepted | u20 | a node that runs user code drops every local |
+  | static read only inside a function literal that is not called | accepted | accepted | u21 | the collector walks a function literal body |
 
   The `src/Core` reads of `TypeSymbol.Error` and `TypeSymbol.Void` between a guard and a use now read the guarded
   value from a local (`UserTokenResolver`, `LambdaBinder`). The translator mirrors the rule (cs2gs, same PR).

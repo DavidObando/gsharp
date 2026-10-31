@@ -9,16 +9,23 @@ import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
+import System
+import System.Diagnostics
+import System.IO
 import System.Linq
+import System.Text
 import Xunit
 
 /// Issue #5520: ADR-0208 rows R11 and R15 count a static field, property or event access of a type with a
 /// non-literal `shared` field initializer (or a static constructor) as a call, because the type initializer runs
 /// at the first access. gsc removes member-path and by-reference facts there, as it does at a call. C# flow
 /// analysis keeps the fact, so the translated read needs its own `!!`. The translator answers with the one
-/// decision `NodeRunsStaticTypeInitializer`; each test names the change that would make it fail.
+/// decision `NodeRunsStaticTypeInitializer`; each test names the change that would make it fail. Each test also
+/// compiles the translated G# with the repository's `gsc.dll`, so a missing `!!` fails as `GS0158` and a bare read
+/// that gsc no longer narrows cannot pass.
 open class Issue5520StaticInitializerAccessNarrowingTests {
-    /// Mutation witness: `NodeRunsStaticTypeInitializer` returns false, or `IsByReferenceVariable` does.
+    /// Mutation witness for this row and the loop, `using`, property and event, and inherited-field rows:
+    /// `NodeRunsStaticTypeInitializer` returns false.
     @Fact
     func OutParameter_ReadAfterAStaticFieldWithACallInitializer_IsAsserted() {
         let printed = Translate(`
@@ -41,11 +48,13 @@ public class Demo
     }
 }`)
         Assert.Contains("substituted!!.ClrType", printed)
+        AssertCompilesWithGsc(printed)
     }
 
     /// The member-path shape of the LambdaBinder site (`node.Expression` guarded, then `kind == Kind.Void`, then the
-    /// read). The translator already asserts a member path guarded in an earlier statement
-    /// (`IsNullGuardNarrowedFieldUse`), so the static access needs no rule of its own; this row pins the result.
+    /// read). The translator never trusts gsc to narrow a member path that C# flow proves non-null, so the static
+    /// access needs no rule of its own; this row pins the result. Mutation witness:
+    /// `GSharpExpressionIsStaticallyNonNull` answers true for a member access whose C# flow state is non-null.
     @Fact
     func MemberPath_ReadAfterAStaticFieldInALaterStatement_IsAsserted() {
         let printed = Translate(`
@@ -73,6 +82,7 @@ public class Demo
     }
 }`)
         Assert.Contains("node.Expression!!.Length", printed)
+        AssertCompilesWithGsc(printed)
     }
 
     @Fact
@@ -101,6 +111,7 @@ public class Demo
     }
 }`)
         Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
     }
 
     @Fact
@@ -127,6 +138,7 @@ public class Demo
     }
 }`)
         Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
     }
 
     @Fact
@@ -154,9 +166,11 @@ public class Demo
     }
 }`)
         Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
     }
 
-    /// Mutation witness: the literal test counts a literal as code.
+    /// Mutation witness for this row and the constant and construction rows: `NodeRunsStaticTypeInitializer` counts
+    /// every name and member access.
     @Fact
     func OutParameter_ReadAfterAStaticFieldOfALiteralOnlyType_StaysBare() {
         let printed = Translate(`
@@ -181,9 +195,9 @@ public class Demo
     }
 }`)
         Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
     }
 
-    /// Mutation witness: a constant counts as an access.
     @Fact
     func OutParameter_ReadAfterAConstOfATypeWithACallInitializer_StaysBare() {
         let printed = Translate(`
@@ -206,15 +220,17 @@ public class Demo
     }
 }`)
         Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
     }
 
-    /// Mutation witness: a construction or an instance member counts as a static access.
+    /// `Mixed` is a struct with no field initializer, so its construction runs no user code. (gsc also kills the fact
+    /// of a by-reference parameter at a class construction through a constructor call, which is not this rule: #5562.)
     @Fact
     func OutParameter_ReadAfterAConstructionAndAnInstanceMember_StaysBare() {
         let printed = Translate(`
-public sealed class Mixed
+public struct Mixed
 {
-    public int Id = 1;
+    public int Id;
     public static readonly object Gate = new object();
 }
 public class Demo
@@ -232,9 +248,10 @@ public class Demo
     }
 }`)
         Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
     }
 
-    /// Mutation witness: a plain local that no closure assigns is treated like a by-reference variable.
+    /// Mutation witness: the early return for a variable that is neither closure-assigned nor by-reference is removed.
     @Fact
     func PlainLocal_ReadAfterAStaticFieldWithACallInitializer_StaysBare() {
         let printed = Translate(`
@@ -256,9 +273,10 @@ public class Demo
     }
 }`)
         Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
     }
 
-    /// Mutation witness: a static access inside a function literal that is not run counts as an access.
+    /// Mutation witness: the walk between the guard and the read enters function literals.
     @Fact
     func OutParameter_StaticFieldReadOnlyInsideAFunctionLiteral_StaysBare() {
         let printed = Translate(`
@@ -281,10 +299,10 @@ public class Demo
     }
 }`)
         Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
     }
 
-    /// Mutation witness: the owner test accepts a type of another compilation, or the declaring type is replaced by
-    /// the receiver type of the access.
+    /// `Derived` declares no initializer; the static field belongs to `Base`, which runs the initializer.
     @Fact
     func OutParameter_ReadAfterAnInheritedStaticField_UsesTheDeclaringType() {
         let printed = Translate(`
@@ -308,9 +326,68 @@ public class Demo
     }
 }`)
         Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
     }
 
     shared {
+        private func AssertCompilesWithGsc(printed string) {
+            let compiler string? = FindCompiler()
+            Assert.True(
+                compiler != nil,
+                "gsc.dll must be built (build the repository solution) before running this test."
+            )
+            let workDir = Path.Combine(
+                AppContext.BaseDirectory,
+                "Issue5520StaticInitializerAccessNarrowingTests",
+                Guid.NewGuid().ToString("N")
+            )
+            Directory.CreateDirectory(workDir)
+            try {
+                let gsPath = Path.Combine(workDir, "Probe.gs")
+                let dllPath = Path.Combine(workDir, "Probe.dll")
+                File.WriteAllText(gsPath, printed)
+                let (exitCode, output) = RunDotnet(
+                    "\"$compiler\" /target:library /targetframework:net10.0 /out:\"$dllPath\" \"$gsPath\""
+                )
+                Assert.True(exitCode == 0, "gsc must compile the translated snippet. Output:\n" + output + `
+
+Translated G#:
+` + printed)
+            } finally {
+                try {
+                    Directory.Delete(workDir, recursive: true)
+                } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+        }
+
+        private func RunDotnet(arguments string)(Exit int32, Output string) {
+            let startInfo = ProcessStartInfo("dotnet", arguments){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+            using let process = Process.Start(startInfo) ?? throw InvalidOperationException("failed to start dotnet")
+            let output = StringBuilder()
+            output.Append(process.StandardOutput.ReadToEnd())
+            output.Append(process.StandardError.ReadToEnd())
+            process.WaitForExit()
+            return (process.ExitCode, output.ToString())
+        }
+
+        private func FindCompiler() string? {
+            var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while directory != nil {
+                for config in[]string{"Release", "Debug"} {
+                    let candidate = Path.Combine(directory.FullName, "out", "bin", config, "Compiler", "gsc.dll")
+                    if File.Exists(candidate) {
+                        return candidate
+                    }
+                }
+                directory = directory.Parent
+            }
+            return nil
+        }
+
         private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {
             let tree = CSharpSyntaxTree.ParseText(
                 source,

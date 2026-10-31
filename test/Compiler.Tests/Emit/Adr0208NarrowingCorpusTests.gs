@@ -3500,23 +3500,24 @@ Console.WriteLine(Run(Box(Animal())))`, "GS0158@21:18", "reject", "", "R15"}
 class C {
     var Value int32 = 1
 }
-class Animal { var Name string = "a" }
-class Box {
-    let Pet Animal?
-    init(p Animal?) { Pet = p }
+func Touch() int32 {
+    cleaner()
+    return 5
 }
-func Touch() int32 { return 5 }
 class Trigger {
     shared {
         var Count int32 = Touch()
     }
 }
-func Run(b Box) string {
-    if b.Pet == nil { return "" }
+func Run() int32 {
+    var x C? = C{}
+    cleaner = func() { x = nil }
+    if x == nil { return 0 }
     Trigger.Count = 7
-    return b.Pet.Name
+    return x.Value
 }
-Console.WriteLine(Run(Box(Animal())))`, "GS0158@20:18", "reject", "", "R15"}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run())`, "GS0158@20:14", "reject", "", "R15"}
             yield[]object{"u10_5520_static_event_subscription", `import System
 
 class C {

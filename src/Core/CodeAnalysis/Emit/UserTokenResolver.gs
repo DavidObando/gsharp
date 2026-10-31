@@ -1867,10 +1867,7 @@ internal class UserTokenResolver {
         // the historical IL byte-identical.
         return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection) ||
             (
-            substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(
-                substitutedClr,
-                property.PropertyType
-            )
+            substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(substitutedClr, property.PropertyType)
         )
     }
 
@@ -1936,12 +1933,7 @@ internal class UserTokenResolver {
         // `Dictionary[int32, V]`); see the property variant above for the
         // rationale.
         return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection) ||
-            (
-            substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(
-                substitutedClr,
-                method.ReturnType
-            )
-        )
+            (substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(substitutedClr, method.ReturnType))
     }
 
     /// Issue #903: when a generic imported (extension) call — e.g. a LINQ

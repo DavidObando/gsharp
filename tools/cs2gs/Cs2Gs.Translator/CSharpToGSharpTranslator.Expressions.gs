@@ -4151,7 +4151,10 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let definition = owner.OriginalDefinition
-            if !SymbolEqualityComparer.Default.Equals(definition.ContainingAssembly, this.context.Compilation.Assembly) {
+            if !SymbolEqualityComparer.Default.Equals(
+                definition.ContainingAssembly,
+                this.context.Compilation.Assembly
+            ) {
                 return false
             }
             var declares = false
@@ -4169,7 +4172,12 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 for member in declaration.Members {
-                    if member is Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax constructor && this.HasModifier(
+                    if member is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConstructorDeclarationSyntax constructor &&
+                        this.HasModifier(
                         constructor.Modifiers,
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
                     ) {
@@ -4179,17 +4187,22 @@ partial class CSharpToGSharpTranslator {
                         field.Modifiers,
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
                     ) &&
-                        !this.HasModifier(field.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword) {
+                        !this
+                        .HasModifier(field.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword) {
                         for variable in field.Declaration.Variables {
-                            if variable.Initializer is {} initializer && !this.IsLiteralStaticInitializer(initializer.Value) {
+                            if variable.Initializer is {} initializer && !this.IsLiteralStaticInitializer(
+                                initializer.Value
+                            ) {
                                 return true
                             }
                         }
                     }
-                    if member is Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax property && this.HasModifier(
-                        property.Modifiers,
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
-                    ) &&
+                    if member is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PropertyDeclarationSyntax property &&
+                        this.HasModifier(property.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) &&
                         property.Initializer is {} propertyInitializer &&
                         !this.IsLiteralStaticInitializer(propertyInitializer.Value) {
                         return true
@@ -4212,15 +4225,21 @@ partial class CSharpToGSharpTranslator {
         /// gsc does not count the static field as running code. Anything else counts as code.
         private func IsLiteralStaticInitializer(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
             var current = value
-            if current is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax prefix &&
+            if current is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PrefixUnaryExpressionSyntax prefix &&
                 (
-                    prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnaryMinusExpression) ||
-                        prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnaryPlusExpression)
-                ) {
+                prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnaryMinusExpression) || prefix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnaryPlusExpression
+                )
+            ) {
                 current = prefix.Operand
             }
-            if current is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal ||
-                literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression) {
+            if current is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal || literal.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
+            ) {
                 return false
             }
             if literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression) {
@@ -4241,8 +4260,9 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // ADR-0208 R11 and R15 (#5520): a closure-assigned variable loses its fact at every node that may run
-            // source code. A by-reference variable that no closure assigns loses it only at a static access of a type
-            // whose initializer runs source code, which gsc treats as a call that can write the storage.
+            // source code. A by-reference variable that no closure assigns loses it at a static access of a type whose
+            // initializer runs source code, which gsc treats as a call that can write the storage. (gsc also drops it
+            // at a constructor call, which is not mirrored here: #5562.)
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 if closureAssigned && this.NodeMayRunEscapedClosure(node) {
                     return true
