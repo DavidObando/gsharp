@@ -338,6 +338,19 @@ internal partial class ExpressionBinder {
         return result
     }
 
+    /// Issue #5569: the parameter lists of a probe's candidates, for (cref:BindLambdaWithCandidateTarget).
+    /// @param methods The candidate methods.
+    /// @returns Their parameter lists, in candidate order.
+    private func CollectProbeParameterLists(methods IReadOnlyList[MethodInfo]) List[[]ParameterInfo] {
+        let result = List[[]ParameterInfo](methods.Count)
+        for method in methods {
+            if method != nil {
+                result.Add(method.GetParameters())
+            }
+        }
+        return result
+    }
+
     /// Issue #891: infers the target delegate type for each deferred un-typed
     /// arrow lambda argument of a member-style call by probing the applicable
     /// candidate methods — instance methods on the receiver, imported
@@ -641,16 +654,34 @@ internal partial class ExpressionBinder {
                         // void-discard / ordinary target-typed return-type
                         // inference applies instead of inferring the return
                         // type purely from the lambda body.
-                        let literal = lambdas.BindLambdaExpression(
+                        let slotIndex = idx
+                        let inferReturn = !exactReturnIndices.Contains(idx)
+                        boundArgs[idx] = BindLambdaWithCandidateTarget(
                             lambdaSyntax,
-                            target.FunctionType,
-                            inferReturnTypeFromBody: !exactReturnIndices.Contains(idx)
+                            CollectProbeParameterLists(probe.Methods),
+                            (parameters[]ParameterInfo) -> MapSourceArgumentToParameter(
+                                parameters,
+                                ce,
+                                slotIndex,
+                                probe.ReceiverParameterOffset
+                            ),
+                            () -> {
+                                let literal = lambdas.BindLambdaExpression(
+                                    lambdaSyntax,
+                                    target.FunctionType,
+                                    inferReturnTypeFromBody: inferReturn
+                                )
+                                return if ShouldConvertToNominalDelegate(target.DelegateType) {
+                                    conversions.BindConversion(
+                                        ce.Arguments[slotIndex].Location,
+                                        literal,
+                                        target.DelegateType
+                                    )
+                                } else {
+                                    literal
+                                }
+                            }
                         )
-                        boundArgs[idx] = if ShouldConvertToNominalDelegate(target.DelegateType) {
-                            conversions.BindConversion(ce.Arguments[idx].Location, literal, target.DelegateType)
-                        } else {
-                            literal
-                        }
                     }
                 }
                 return
@@ -759,11 +790,17 @@ internal partial class ExpressionBinder {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
                 if inner is LambdaExpressionSyntax lambdaSyntax {
                     let target = targets[idx]
-                    boundArgs[idx] = BindLambdaWithDelegateTarget(
-                        ce.Arguments[idx],
+                    let slotIndex = idx
+                    boundArgs[idx] = BindLambdaWithCandidateTarget(
                         lambdaSyntax,
-                        target.FunctionType,
-                        target.DelegateType
+                        CollectProbeParameterLists(probe.Methods),
+                        (parameters[]ParameterInfo) -> MapSourceArgumentToParameter(parameters, ce, slotIndex, offset),
+                        () -> BindLambdaWithDelegateTarget(
+                            ce.Arguments[slotIndex],
+                            lambdaSyntax,
+                            target.FunctionType,
+                            target.DelegateType
+                        )
                     )
                 }
             }
@@ -1441,7 +1478,7 @@ internal partial class ExpressionBinder {
         if receiver != nil && NativeSliceTypes.TryGetElement(receiver.Type, out _, out _) {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             let saved = DeclareRangeTemp("callReceiver", receiver.Type, receiver, statements)
-            let call = BindAccessorCallCore(
+            let call = BindAccessorCallKeepingLiteralTargetErrors(
                 BoundVariableExpression(receiver.Syntax, saved),
                 classSymbol,
                 ce,
@@ -1450,7 +1487,21 @@ internal partial class ExpressionBinder {
             )
             return BoundBlockExpression(ce, statements.ToImmutable(), call)
         }
-        return BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        return BindAccessorCallKeepingLiteralTargetErrors(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+    }
+
+    private func BindAccessorCallKeepingLiteralTargetErrors(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        ce CallExpressionSyntax,
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
+        let pending = literalTargetDiagnostics.Count
+        let mark = Diagnostics.Count
+        let call = BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        ReportDiscardedLiteralTargetDiagnostics(pending, HasErrorDiagnosticSince(mark))
+        return call
     }
 
     private func BindAccessorCallCore(
@@ -1723,8 +1774,20 @@ internal partial class ExpressionBinder {
                     if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
                         // target: non-null whenever hasClosedTarget is true
                         // ([NotNullWhen(true)] on TryResolveDelegateTargetFromCandidates).
+                        let functionTarget = target!!
+                        let slotIndex = argSlot
                         boundArguments.Add(
-                            BindLambdaWithDelegateTarget(argument, lambdaSyntax, target!!, nominalTarget)
+                            BindLambdaWithCandidateTarget(
+                                lambdaSyntax,
+                                delegateTargetCandidateParams!!,
+                                (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
+                                () -> BindLambdaWithDelegateTarget(
+                                    argument,
+                                    lambdaSyntax,
+                                    functionTarget,
+                                    nominalTarget
+                                )
+                            )
                         )
                         lambdaHandled = true
                     }
