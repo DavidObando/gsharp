@@ -272,6 +272,15 @@ internal partial class StatementBinder {
         return false
     }
 
+    // Whether the region runs code that it does not show: a call, a getter, a user operator or a conversion.
+    private func RegionRunsCode(effects RegionEffects, resolved ResolvedRegionWrites) bool -> effects.ContainsCall ||
+        effects.ContainsSuspension ||
+        effects.ContainsIteration ||
+        effects.ContainsMemberRead ||
+        resolved.RunsUserOperator ||
+        resolved.RunsUserCodeOnWrite ||
+        resolved.ReadsProperty
+
     private func CallIsIndirect(call RegionCall) bool {
         switch call.Kind {
             case RegionCallKind.NamedInvocation {
@@ -527,7 +536,9 @@ internal partial class StatementBinder {
             return RegionKillDecision(true, "W2(root-replaced)", "-")
         }
         // (iv) the shared predicate for every effect other than a plain write to this root.
-        if filterNames != nil && effects.ContainsHandler {
+        // A handler of the region, or one in code that the region calls, can catch an exception after an enclosing
+        // filter has written the root.
+        if filterNames != nil && (effects.ContainsHandler || callLike || readLike) {
             if filterNames.Contains(root.Name) || MayBeMutatedByUnknownCallable(path) {
                 return RegionKillDecision(true, "W8", "R10")
             }
@@ -685,7 +696,7 @@ internal partial class StatementBinder {
         }
         let resolved = ResolveRegionWrites(effects)
         var filterNames HashSet[string]? = nil
-        if effects.ContainsHandler {
+        if effects.ContainsHandler || RegionRunsCode(effects, resolved) {
             let filters = CollectCatchFiltersAbove(loop)
             if filters.Count > 0 {
                 filterNames = CollectEnclosingFilterNames(filters)

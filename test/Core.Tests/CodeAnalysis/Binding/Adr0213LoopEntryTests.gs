@@ -56,6 +56,31 @@ func Run(n int32) int32 {
         Assert.Equal(0L, measurements.GetCounter("narrowing.loop-rebinds"))
     }
 
+    @Fact
+    func StatementDeconstructionOfAnImportedType_IsACall() {
+        // Rule W4: `let (a, b) = pair` calls an imported `Deconstruct`, which can run user code.
+        using let fixture = CSharpFixture(`namespace Adr0213Deconstruct;
+public sealed class Pair {
+    public static System.Action? OnDeconstruct;
+    public void Deconstruct(out int a, out int b) { OnDeconstruct?.Invoke(); a = 1; b = 2; }
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import Adr0213Deconstruct
+var g string? = "safe"
+func Run(p Pair) string {
+    if g == nil { return "" }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        let (a, b) = p
+    }
+}
+func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
+        Assert.Equal("GS0155", string.Join(" ", errors))
+    }
+
     shared {
         func Rows() IEnumerable[[]object] {
             let rows = List[[]object]()
@@ -858,6 +883,87 @@ func Run() Meters {
     }
 }
 func Main() { }`, "GS0155")
+            Add("coalescing-projection-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Src {
+    prop Name string {
+        get {
+            g = nil
+            return "n"
+        }
+    }
+}
+class Dst { var Name string = "d" }
+func Run(a Dst?, b Src) string {
+    if g == nil { return "" }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        a ?? b
+    }
+}
+func Main() { }`, "GS0155")
+            Add("region-declared-callee-is-a-function-value (A3)", `package T
+import System
+func Invoke() { }
+func Run(ref text string?, cb () -> void) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    for var i = 0; i < 2; i++ {
+        n = n + text.Length
+        let Invoke = cb
+        Invoke()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("enclosing-filter-reached-through-a-call (W8)", `package T
+import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Helper() {
+    try {
+        try {
+            throw FormatException("f")
+        } finally {
+            throw InvalidOperationException("g")
+        }
+    } catch (InvalidOperationException) {
+    }
+}
+func Run() int32 {
+    var s string? = "abc"
+    var n = 0
+    if s == nil { return 0 }
+    try {
+        while s.Length > 0 && n < 2 {
+            n++
+            Helper()
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("nested-call-of-a-region-declared-callee-is-a-function-value (A3)", `package T
+import System
+func Invoke() { }
+func Run(ref text string?, cb () -> void) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    for var i = 0; i < 2; i++ {
+        n = n + text.Length
+        let Invoke = cb
+        for var j = 0; j < 1; j++ { Invoke() }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }

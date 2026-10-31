@@ -397,6 +397,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.TupleDeconstructionStatement {
                 let deconstruction = cast[TupleDeconstructionStatementSyntax](node)
                 Visit(deconstruction.Initializer)
+                RecordDeconstruction()
                 for identifier in deconstruction.Identifiers {
                     Declare(identifier)
                 }
@@ -404,6 +405,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.NamedDeconstructionStatement {
                 let deconstruction = cast[NamedDeconstructionStatementSyntax](node)
                 Visit(deconstruction.Initializer)
+                RecordDeconstruction()
                 for field in deconstruction.Fields {
                     Declare(field.LocalIdentifier)
                 }
@@ -541,6 +543,11 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.BinaryExpression {
                 let binary = cast[BinaryExpressionSyntax](node)
+                if Active() && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+                    // The two operands meet in one type, which a structural projection or a user conversion
+                    // may reach (rule W4).
+                    current.ContainsConversionCandidate = true
+                }
                 if Active() && IsOperatorCandidate(binary) {
                     current.ContainsOperatorCandidate = true
                     RecordOperatorOperand(binary.Left)
@@ -932,7 +939,22 @@ internal sealed class RegionEffectScanner {
             }
         }
         let bareBefore = current.BareReads.ToArray()
+        let callsBefore = current.Calls.Count
         current.AbsorbFlags(record, Active())
+        // A nested named call whose callee the enclosing region declares calls a function value.
+        for var i = callsBefore; i < current.Calls.Count; i++ {
+            let call = current.Calls[i]
+            if call.Kind == RegionCallKind.NamedInvocation && call.CalleeName != nil && IsDeclared(call.CalleeName) {
+                current.Calls[i] = RegionCall(
+                    RegionCallKind.ExpressionInvocation,
+                    nil,
+                    call.ByReferenceNames,
+                    call.ByValueNames,
+                    call.HasUnresolvedOperand,
+                    call.Position
+                )
+            }
+        }
         // A name that an enclosing declaration of the region hides is no property read.
         for name in record.BareReads {
             if DeclaringStorageFrame(name) >= 0 && !bareBefore.Contains(name) {
@@ -943,6 +965,13 @@ internal sealed class RegionEffectScanner {
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
     // `for` clause and the collection of a range loop are outside it (table T3, T5).
+    // A deconstruction calls `Deconstruct`, reads data members or converts the parts to declared types (rule W4).
+    private func RecordDeconstruction() {
+        if Active() {
+            current.ContainsConversionCandidate = true
+        }
+    }
+
     // A returned value is converted to the return type, which may select a user conversion (rule W4). The consumer
     // decides a plain name and a constant with their types. A member or element read is an unknown getter already
     // (W5), which removes what a conversion can.
@@ -1562,7 +1591,8 @@ internal sealed class RegionEffectScanner {
         var kind = RegionCallKind.NamedInvocation
         if receiver != nil {
             kind = RegionCallKind.MemberInvocation
-        } else if call.Callee != nil {
+        } else if call.Callee != nil || IsDeclared(call.Identifier.ValueText) {
+            // A callee that the region declares is a function value, which the entry scope cannot resolve.
             kind = RegionCallKind.ExpressionInvocation
         }
         let byReference = List[string]()

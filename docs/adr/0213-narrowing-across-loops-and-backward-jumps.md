@@ -1273,11 +1273,16 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   on the R16 list, or a field of a class whose hierarchy cannot hide it) is a later slice; it would accept q5c, q5d
   would stay rejected, and it needs its own rows and mutants.
 - *Conversion sites.* A user-defined conversion is a call (W4), and the walker cannot see types, so every place
-  where the binder converts a value is a candidate: a declared, assigned, multi-assigned or bound (`if let`) value,
-  a returned value, and a condition or guard (`if`, the loops, `if let`, `while let`, `guard let`, switch and select
+  where the binder converts a value is a candidate: a declared, assigned, multi-assigned, deconstructed or bound
+  (`if let`) value, both operands of `??`, a returned value, and a condition or guard (`if`, the loops, `if let`, `while let`, `guard let`, switch and select
   guards, `catch ... when`, `?:`) unless it is `bool` by its form (a `true` or `false` literal, `is`, a comparison,
   `!`, `&&` or `||`). The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of a
   tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
+- *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a
+  function value, which is an indirect call (A3), also when a nested loop's record is composed.
+- *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
+  or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
+  can catch the exception after the filter has written the root.
 - *Pattern variables (question 4).* The walker gives a type-pattern variable its type only where the binder
   scopes it (ADR-0166); see question 4 of section 23 for the rule and what stays out of L1.
 - *A loop the walker cannot name* (the synthetic loop of a collection spread) removes every fact.
