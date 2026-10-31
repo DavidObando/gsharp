@@ -60,7 +60,10 @@ func F(c bool, i int32) int32 {
     @InlineData("c ? (Ob.Field, 1) : (nil, 2)", "joined.Item1")
     @InlineData("if c { (\"a\", 1) } else {\n let n = 2\n (nil, n) }", "joined.Item1 ?? \"d\"")
     @InlineData("c ? (\"x\", 1) : (i == 0 ? (nil, 2) : (nil, 3))", "joined.Item1 ?? \"d\"")
-    @InlineData("if c { (\"a\", 1) } else {\n let n = 2\n switch i { case 0: (nil, n)\n default: (nil, 3) } }", "joined.Item1 ?? \"d\"")
+    @InlineData(
+        "if c { (\"a\", 1) } else {\n let n = 2\n switch i { case 0: (nil, n)\n default: (nil, 3) } }",
+        "joined.Item1 ?? \"d\""
+    )
     func ATupleJoinWithNilElements_KeepsPlatformElementsAndEmits(joinExpression string, use string) {
         let directory = Directory.CreateTempSubdirectory("gsc_4316_tuple_").FullName
         try {
