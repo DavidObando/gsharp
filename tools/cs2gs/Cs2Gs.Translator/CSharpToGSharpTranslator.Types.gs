@@ -604,11 +604,14 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
-            let type GTypeReference? = if typeSymbol != nil {
+            var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {
                 cast[GTypeReference](NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType))
             }
+            // Issue #5541: a target-typed construction states the same nullable
+            // positions as an explicit one.
+            type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
                 creation.ArgumentList?.Arguments ?? default(Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax])

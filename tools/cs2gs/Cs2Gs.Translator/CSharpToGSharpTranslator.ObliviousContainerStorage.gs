@@ -132,52 +132,11 @@ internal class ObliviousSignatureGroups {
             this.parents[rightRoot] = leftRoot
         }
     }
-
-    shared {
-        // Whether a member can override, be overridden by, or implement another.
-        func MayShareSignature(member ISymbol) bool -> member.IsVirtual ||
-            member.IsAbstract ||
-            member.IsOverride ||
-            member
-            .ContainingType
-            ?.TypeKind == TypeKind.Interface ||
-            ImplementsInterfaceMember(member)
-
-        // Whether a member implements an interface member.
-        private func ImplementsInterfaceMember(member ISymbol) bool {
-            let explicitImplementations = if member is IMethodSymbol method {
-                method.ExplicitInterfaceImplementations.Length
-            } else if member is IPropertySymbol property {
-                property.ExplicitInterfaceImplementations.Length
-            } else {
-                0
-            }
-            if explicitImplementations > 0 {
-                return true
-            }
-            let containingType INamedTypeSymbol? = member.ContainingType
-            if containingType == nil {
-                return false
-            }
-            for interfaceType in containingType.AllInterfaces {
-                for interfaceMember in interfaceType.GetMembers(member.Name) {
-                    if SymbolEqualityComparer.Default.Equals(
-                        containingType.FindImplementationForInterfaceMember(interfaceMember),
-                        member
-                    ) {
-                        return true
-                    }
-                }
-            }
-            return false
-        }
-    }
 }
 
 /// Issue #5541: the result of the nested-position flow analysis for one compilation.
 internal class ObliviousContainerFlow {
     private var hasNullable bool = false
-    private let sharesSignature Dictionary[ISymbol, bool] = Dictionary[ISymbol, bool](SymbolEqualityComparer.Default)
 
     init() {
         this.Destinations = Dictionary[ISymbol, HashSet[string]](SymbolEqualityComparer.Default)
@@ -219,18 +178,12 @@ internal class ObliviousContainerFlow {
     // Whether any storage holds a nullable position, so a read can need `!!`.
     prop HasNullable bool -> this.hasNullable
 
-    // Whether a member can share its signature with another, computed once.
-    func SharesSignature(member ISymbol) bool {
-        let definition = member.OriginalDefinition
-        if !this.sharesSignature.TryGetValue(definition, out var shares) {
-            shares = ObliviousSignatureGroups.MayShareSignature(definition)
-            this.sharesSignature.Add(definition, shares)
-        }
-        return shares
-    }
-
-    func Seal() {
-        this.hasNullable = this
+    // Whether the translation states a nullable position, so a read can need `!!`.
+    // A construction or an explicit type argument can state one without storage
+    // (#5541).
+    func Seal(spellsNullablePosition bool) {
+        this.hasNullable = spellsNullablePosition ||
+            this
             .Destinations
             .Count > 0 ||
             this
@@ -421,9 +374,7 @@ partial class CSharpToGSharpTranslator {
             }
             let nested = HashSet[string](System.StringComparer.Ordinal)
             for position in bound.Nullable {
-                if position != "" &&
-                    PositionType(typeArgument, position) is {} positionType &&
-                    IsNonNullReferencePosition(positionType) {
+                if position != "" && IsPromotablePosition(typeArgument, position) {
                     nested.Add(position)
                 }
             }
@@ -845,7 +796,7 @@ partial class CSharpToGSharpTranslator {
             Substitute(definition, bindings, "", substituted)
             let result = ObliviousPositionSet()
             for position in substituted.Nullable {
-                if PositionType(created, position) is {} positionType && IsNonNullReferencePosition(positionType) {
+                if IsPromotablePosition(created, position) {
                     result.Nullable.Add(position)
                 }
             }
@@ -933,6 +884,12 @@ partial class CSharpToGSharpTranslator {
             }
             for parameter in inferred {
                 if found.TryGetValue(parameter, out var positions) {
+                    // A constrained type parameter takes no `T?` argument in G#, so
+                    // the argument keeps its non-null bridge instead.
+                    if NullableTypeArgumentViolatesTranslatedConstraints(parameter) {
+                        positions.Nullable.Remove("")
+                        positions.Platform.Remove("")
+                    }
                     if spelled {
                         positions.Nullable.UnionWith(positions.Platform)
                         positions.Platform.Clear()
@@ -952,6 +909,9 @@ partial class CSharpToGSharpTranslator {
             let edges = List[
                 (Destination ISymbol?, Value ExpressionSyntax, Model SemanticModel, Prefix string, Kind int32)
             ]()
+            // Constructions and calls with stated type arguments, which can spell a
+            // nullable position that no storage records.
+            let spelledSites = List[(Site ExpressionSyntax, Model SemanticModel)]()
             for tree in compilation.SyntaxTrees {
                 let model = compilation.GetSemanticModel(tree)
                 for node in tree.GetRoot().DescendantNodes() {
@@ -987,6 +947,17 @@ partial class CSharpToGSharpTranslator {
                         edges.Add((ReturnDestination(enclosing), arrow.Expression, model, ReturnPrefix(enclosing), 0))
                     } else if node is ForEachStatementSyntax forEach {
                         edges.Add((model.GetDeclaredSymbol(forEach), forEach.Expression, model, "", 2))
+                    }
+                    if node is BaseObjectCreationExpressionSyntax{
+                        ArgumentList: {} constructionArguments
+                    } spelledCreation &&
+                        constructionArguments
+                        .Arguments
+                        .Count > 0 {
+                        spelledSites.Add((spelledCreation, model))
+                    } else if node is InvocationExpressionSyntax spelledCall &&
+                        HasExplicitTypeArguments(spelledCall.Expression) {
+                        spelledSites.Add((spelledCall, model))
                     }
                     if (node is InvocationExpressionSyntax || node is BaseObjectCreationExpressionSyntax) &&
                         HasLambdaArgument(node) {
@@ -1053,11 +1024,14 @@ partial class CSharpToGSharpTranslator {
                             continue
                         }
                         original = key
-                        // A value stored below the top level (an expanded `params`
-                        // element, an `async` result) keeps its own nullability there.
+                        // An expanded `params` argument is the element at position `0`,
+                        // nil included, so a nil element passes through. An `async`
+                        // result keeps its declared top level, as a return does.
                         if positions != nil {
                             let mapped = if prefix == "" {
                                 MapToStorageType(model.GetTypeInfo(value).Type, destinationType, positions)
+                            } else if destination is IParameterSymbol {
+                                Prefixed(positions, prefix)
                             } else {
                                 Prefixed(WithoutTopLevel(positions) ?? ObliviousPositionSet(), prefix)
                             }
@@ -1106,9 +1080,45 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
+            var spellsNullablePosition = false
+            for (site, siteModel) in spelledSites {
+                if this.SpellsNullablePosition(site, siteModel, flow) {
+                    spellsNullablePosition = true
+                    break
+                }
+            }
             flow.Memo = nil
-            flow.Seal()
+            flow.Seal(spellsNullablePosition)
             return flow
+        }
+
+        // Whether a construction or a call with stated type arguments spells a nullable
+        // position (PromoteObliviousContainerCreation, PromoteObliviousTypeArgument).
+        private func SpellsNullablePosition(
+            site ExpressionSyntax,
+            model SemanticModel,
+            flow ObliviousContainerFlow
+        ) bool {
+            if site is BaseObjectCreationExpressionSyntax creation {
+                return this.ObliviousCreationPositions(creation, model, flow) != nil
+            }
+            if model.GetOperation(site) is not IInvocationOperation operation ||
+                !operation
+                .TargetMethod
+                .IsGenericMethod {
+                return false
+            }
+            let bindings = TypeParameterMap()
+            this.InferObliviousTypeArguments(
+                site,
+                operation.TargetMethod.OriginalDefinition.TypeParameters,
+                operation.Arguments,
+                true,
+                model,
+                flow,
+                bindings
+            )
+            return bindings.Values.Any((positions ObliviousPositionSet) -> positions.Nullable.Count > 0)
         }
 
         // Gives source storage that a value reads as a whole the positions of the
@@ -1297,12 +1307,10 @@ partial class CSharpToGSharpTranslator {
                     let lambdaParameter = lambdaMethod.Parameters[i]
                     let positions = HashSet[string](System.StringComparer.Ordinal)
                     for position in substituted.Nullable {
-                        let positionType ITypeSymbol? = if position == "" {
-                            lambdaParameter.Type
-                        } else {
-                            PositionType(lambdaParameter.Type, position)
-                        }
-                        if positionType != nil && IsNonNullReferencePosition(positionType) {
+                        if position == "" &&
+                            IsNonNullReferencePosition(lambdaParameter.Type) ||
+                            position != "" &&
+                            IsPromotablePosition(lambdaParameter.Type, position) {
                             positions.Add(position)
                         }
                     }
@@ -1362,10 +1370,9 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     symbol
                 }
-                // Without groups no member that shares a signature holds positions.
-                if !(owner is IMethodSymbol || owner is IPropertySymbol) ||
-                    (flow.Groups == nil && compilation == nil) ||
-                    !flow.SharesSignature(owner!!) {
+                // The analysis builds the groups before any method, property or
+                // parameter receives positions, so without groups none holds any.
+                if !(owner is IMethodSymbol || owner is IPropertySymbol) || (flow.Groups == nil && compilation == nil) {
                     return symbol
                 }
                 if flow.Groups == nil {
@@ -1903,9 +1910,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let declared = HashSet[string](System.StringComparer.Ordinal)
                 for position in positions.Nullable.Concat(positions.Platform) {
-                    if position != "" &&
-                        PositionType(destinationType, position) is {} positionType &&
-                        IsNonNullReferencePosition(positionType) {
+                    if position != "" && IsPromotablePosition(destinationType, position) {
                         declared.Add(position)
                     }
                 }
@@ -1986,6 +1991,34 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 return HasNonNullNestedReferencePosition(StorageType(symbol))
+            }
+
+            // Whether the translation can spell the nested [`position`](paramref) of
+            // [`type`](paramref) nullable: a non-null reference whose slot is not a type
+            // argument of a type parameter that a `T?` argument violates.
+            private func IsPromotablePosition(type ITypeSymbol, position string) bool {
+                if PositionType(type, position) is not{} positionType || !IsNonNullReferencePosition(positionType) {
+                    return false
+                }
+                let separator = position.LastIndexOf('.')
+                let owner ITypeSymbol? = if separator < 0 {
+                    type
+                } else {
+                    PositionType(type, position.Substring(0, separator))
+                }
+                if owner is not INamedTypeSymbol named {
+                    return true
+                }
+                let index = int32.Parse(
+                    position.Substring(separator + 1),
+                    System.Globalization.CultureInfo.InvariantCulture
+                )
+                let parameters = FlatTypeArguments(named.OriginalDefinition)
+                return !(
+                    index < parameters.Count &&
+                        parameters[index] is ITypeParameterSymbol parameter &&
+                        NullableTypeArgumentViolatesTranslatedConstraints(parameter)
+                )
             }
 
             // The type at a dotted position below the top level of [`type`](paramref).
