@@ -457,7 +457,7 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed
+            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed || LoopPreludeRunsUserCode(prelude)
         )
         if !prelude.IsEmpty {
             body = BoundBlockStatement(originatingSyntax, prelude.Add(body))
@@ -611,6 +611,22 @@ internal partial class StatementBinder {
         }
         statements.Add(BoundLabelStatement(originatingSyntax, breakLabel))
         return BoundBlockStatement(originatingSyntax, statements.ToImmutable())
+    }
+
+    // ADR-0213 table T5: the prelude of a `for ... in` runs before every body run. A tuple element, a field and
+    // the element itself are read without user code; the conversion of a typed loop variable, a `Deconstruct`
+    // call and a property getter can run it.
+    private func LoopPreludeRunsUserCode(prelude ImmutableArray[BoundStatement]) bool {
+        for statement in prelude {
+            if statement is BoundVariableDeclaration declaration &&
+                declaration.Initializer is BoundTupleElementAccessExpression or
+                BoundFieldAccessExpression or
+                BoundVariableExpression {
+                continue
+            }
+            return true
+        }
+        return false
     }
 
     private func BindConditionedLoopBody(

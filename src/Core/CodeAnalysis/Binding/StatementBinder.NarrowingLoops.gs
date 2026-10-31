@@ -138,6 +138,30 @@ internal partial class StatementBinder {
         if effects.ContainsConversionCandidate {
             resolved.RunsUserCodeOnWrite = true
         }
+        // A returned name or constant runs no conversion operator when its type keeps its representation in the
+        // return type, or when the return type is built in (a user conversion needs a type of the package).
+        let enclosing = function
+        let returnType = if enclosing == nil || enclosing.IsReturnTypeInferred {
+            default(TypeSymbol?)
+        } else {
+            StripAllNullability(enclosing.Type)
+        }
+        if effects.ReturnsConstant && (returnType == nil || !MetadataTypeKeys.IsBuiltIn(returnType)) {
+            resolved.RunsUserCodeOnWrite = true
+        }
+        for name in effects.ReturnedNames {
+            let returned = if $scope.TryLookupSymbol(name) is VariableSymbol variable {
+                StripAllNullability(variable.Type)
+            } else {
+                default(TypeSymbol?)
+            }
+            if returned == nil || returnType == nil || !Conversion.IsRepresentationPreservingImplicit(
+                returned,
+                returnType
+            ) {
+                resolved.RunsUserCodeOnWrite = true
+            }
+        }
         if effects.ContainsOperatorCandidate {
             resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand
             for name in effects.OperatorOperandNames {

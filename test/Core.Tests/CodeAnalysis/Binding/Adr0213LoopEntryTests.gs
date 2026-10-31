@@ -746,6 +746,118 @@ func Run(start Op) string {
     }
     return last
 }`, "")
+            Add("return-value-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Box { var N int32 = 1 }
+func operator implicit (b Box) string {
+    g = nil
+    throw InvalidOperationException("c")
+}
+func Run(b Box) string {
+    if g == nil { return "" }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        try { return b } catch (InvalidOperationException) { }
+    }
+}
+func Main() { }`, "GS0155")
+            Add("switch-guard-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Flag { var N int32 = 1 }
+func operator implicit (f Flag) bool {
+    g = nil
+    return false
+}
+func Run(f Flag) string {
+    if g == nil { return "" }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        switch i {
+            case 1 when f { return "x" }
+            default { }
+        }
+    }
+}
+func Main() { }`, "GS0155")
+            Add("block-valued-condition-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Flag { var N int32 = 1 }
+func operator implicit (f Flag) bool {
+    g = nil
+    return true
+}
+func Run(f Flag) string {
+    if g == nil { return "" }
+    var i = 0
+    while { f } {
+        if i > 0 { return g }
+        i++
+    }
+    return "end"
+}
+func Main() { }`, "GS0155")
+            Add("if-let-guard-conversion-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Flag { var N int32 = 1 }
+func operator implicit (f Flag) bool {
+    g = nil
+    return false
+}
+func Run(f Flag, s string?) string {
+    if g == nil { return "" }
+    var i = 0
+    while i < 2 {
+        if i > 0 { return g }
+        i++
+        if let v = s && f { }
+    }
+    return "end"
+}
+func Main() { }`, "GS0155")
+            Add("typed-loop-variable-conversion-over-an-array-is-a-call (T5)", `package T
+import System
+var g string? = "safe"
+class Box { var N int32 = 1 }
+func operator implicit (b Box) string {
+    g = nil
+    return "box"
+}
+func Run(boxes []Box) string {
+    if g == nil { return "" }
+    var i = 0
+    for s string in boxes {
+        if i > 0 { return g }
+        i++
+    }
+    return "end"
+}
+func Main() { }`, "GS0155")
+            Add("return-constant-conversion-is-a-call (W4)", `package T
+import System
+class Meters { var V int32 = 0 }
+var g Meters? = Meters{}
+func operator implicit (n int32) Meters {
+    g = nil
+    throw InvalidOperationException("c")
+}
+func Run() Meters {
+    if g == nil { throw InvalidOperationException("n") }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        try { return 5 } catch (InvalidOperationException) { }
+    }
+}
+func Main() { }`, "GS0155")
             return rows
         }
     }

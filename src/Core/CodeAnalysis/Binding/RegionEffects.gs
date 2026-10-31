@@ -163,6 +163,7 @@ internal sealed class RegionEffects {
         BareReads = List[string]()
         OperatorOperandNames = List[string]()
         NilCompareOperandNames = List[string]()
+        ReturnedNames = List[string]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -270,6 +271,18 @@ internal sealed class RegionEffects {
         get;
     }
 
+    /// Gets the plain names that a `return` of the region converts to the return type, in order of first appearance.
+    /// The consumer asks whether a conversion operator can run there (rule W4).
+    prop ReturnedNames List[string] {
+        get;
+    }
+
+    /// Whether a `return` of the region converts a literal or a `nameof` to the return type (rule W4).
+    prop ReturnsConstant bool {
+        get;
+        set;
+    }
+
     /// Gets the names that are operands of an operator candidate (a binary or unary operator with no literal
     /// operand), in order of first appearance.
     prop OperatorOperandNames List[string] {
@@ -329,6 +342,12 @@ internal sealed class RegionEffects {
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
         ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
+        ReturnsConstant = ReturnsConstant || other.ReturnsConstant
+        for name in other.ReturnedNames {
+            if !ReturnedNames.Contains(name) {
+                ReturnedNames.Add(name)
+            }
+        }
         OperatorHasUnresolvedOperand = OperatorHasUnresolvedOperand || other.OperatorHasUnresolvedOperand
         for name in other.NilCompareOperandNames {
             if !NilCompareOperandNames.Contains(name) {

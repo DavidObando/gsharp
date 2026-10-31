@@ -292,6 +292,19 @@ internal sealed class RegionEffectScanner {
         }
         switch kind {
             case SyntaxKind.NameOfExpression { }
+            case SyntaxKind.ReturnStatement {
+                let returnStatement = cast[ReturnStatementSyntax](node)
+                if Active() && !returnStatement.IsRefReturn {
+                    RecordReturnedValue(returnStatement.Expression)
+                }
+                VisitChildren(node)
+            }
+            case SyntaxKind.ConditionalExpression {
+                let conditional = cast[ConditionalExpressionSyntax](node)
+                VisitCondition(conditional.Condition)
+                Visit(conditional.WhenTrue)
+                Visit(conditional.WhenFalse)
+            }
             case SyntaxKind.NameExpression {
                 let read = cast[NameExpressionSyntax](node).IdentifierToken.ValueText
                 if Active() && DeclaringStorageFrame(read) < 0 && !current.BareReads.Contains(read) {
@@ -334,7 +347,7 @@ internal sealed class RegionEffectScanner {
                 let ifLet = cast[IfLetStatementSyntax](node)
                 Push()
                 VisitBindings(ifLet.Bindings)
-                Visit(ifLet.Guard)
+                VisitCondition(ifLet.Guard)
                 Visit(ifLet.ThenStatement)
                 Pop()
                 Visit(ifLet.ElseClause)
@@ -343,7 +356,7 @@ internal sealed class RegionEffectScanner {
                 let ifLet = cast[IfLetExpressionSyntax](node)
                 Push()
                 VisitBindings(ifLet.Bindings)
-                Visit(ifLet.Guard)
+                VisitCondition(ifLet.Guard)
                 Visit(ifLet.ThenBlock)
                 Pop()
                 Visit(ifLet.ElseExpression)
@@ -352,7 +365,7 @@ internal sealed class RegionEffectScanner {
                 let guardLet = cast[GuardLetStatementSyntax](node)
                 // The names are visible to the statements that follow the guard.
                 VisitBindings(guardLet.Bindings)
-                Visit(guardLet.Guard)
+                VisitCondition(guardLet.Guard)
                 Visit(guardLet.ElseStatement)
             }
             case SyntaxKind.VariableDeclaration {
@@ -428,7 +441,7 @@ internal sealed class RegionEffectScanner {
                 for switchCase in switchStatement.Cases {
                     Push()
                     Visit(switchCase.Value)
-                    Visit(switchCase.Guard)
+                    VisitCondition(switchCase.Guard)
                     Visit(switchCase.Body)
                     Pop()
                 }
@@ -439,7 +452,7 @@ internal sealed class RegionEffectScanner {
                 for arm in switchExpression.Arms {
                     Push()
                     Visit(arm.Value)
-                    Visit(arm.Guard)
+                    VisitCondition(arm.Guard)
                     Visit(arm.Result)
                     Pop()
                 }
@@ -453,7 +466,7 @@ internal sealed class RegionEffectScanner {
                 Visit(selectCase.Value)
                 Push()
                 Declare(selectCase.Identifier)
-                Visit(selectCase.Guard)
+                VisitCondition(selectCase.Guard)
                 Visit(selectCase.Body)
                 Pop()
             }
@@ -467,7 +480,7 @@ internal sealed class RegionEffectScanner {
                     }
                     Push()
                     Declare(clause.Identifier)
-                    Visit(clause.Filter)
+                    VisitCondition(clause.Filter)
                     Visit(clause.Body)
                     Pop()
                 }
@@ -802,6 +815,9 @@ internal sealed class RegionEffectScanner {
         for binding in bindings {
             NodesVisited++
             Visit(binding.Initializer)
+            if Active() {
+                current.ContainsConversionCandidate = true
+            }
             Declare(binding.Identifier, "binding")
         }
     }
@@ -909,12 +925,17 @@ internal sealed class RegionEffectScanner {
                     current.OperatorHasUnresolvedOperand = true
                 }
             }
+            for name in record.ReturnedNames {
+                if IsDeclared(name) {
+                    current.ContainsConversionCandidate = true
+                }
+            }
         }
         let bareBefore = current.BareReads.ToArray()
         current.AbsorbFlags(record, Active())
         // A name that an enclosing declaration of the region hides is no property read.
         for name in record.BareReads {
-            if IsDeclared(name) && !bareBefore.Contains(name) {
+            if DeclaringStorageFrame(name) >= 0 && !bareBefore.Contains(name) {
                 current.BareReads.Remove(name)
             }
         }
@@ -922,14 +943,88 @@ internal sealed class RegionEffectScanner {
 
     // Visits the parts of a loop statement. At the top level of a region the initializer of a
     // `for` clause and the collection of a range loop are outside it (table T3, T5).
-    // The condition of a loop is converted to `bool`; a plain name or a member read may select a user conversion.
+    // A returned value is converted to the return type, which may select a user conversion (rule W4). The consumer
+    // decides a plain name and a constant with their types. A member or element read is an unknown getter already
+    // (W5), which removes what a conversion can.
+    private func RecordReturnedValue(value ExpressionSyntax?) {
+        var inner = value
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        switch inner {
+            case nil { }
+            case name is NameExpressionSyntax {
+                let text = name.IdentifierToken.ValueText
+                if IsDeclared(text) {
+                    // A name of the region may have any type.
+                    current.ContainsConversionCandidate = true
+                } else if !current.ReturnedNames.Contains(text) {
+                    current.ReturnedNames.Add(text)
+                }
+            }
+            case literal is LiteralExpressionSyntax {
+                if literal.LiteralToken.Kind != SyntaxKind.NilKeyword {
+                    current.ReturnsConstant = true
+                }
+            }
+            case NameOfExpressionSyntax {
+                current.ReturnsConstant = true
+            }
+            case AccessorExpressionSyntax, IndexExpressionSyntax { }
+            default {
+                current.ContainsConversionCandidate = true
+            }
+        }
+    }
+
+    // A condition or a guard is converted to `bool`. Unless it is `bool` by its form, it may select a user
+    // conversion (a name, a member read, an element, a block value, a conditional).
     private func VisitCondition(condition ExpressionSyntax?) {
-        if condition != nil &&
-            Active() &&
-            (condition.Kind == SyntaxKind.NameExpression || condition.Kind == SyntaxKind.AccessorExpression) {
+        if condition != nil && Active() && !IsBooleanByForm(condition) {
             current.ContainsConversionCandidate = true
         }
         Visit(condition)
+    }
+
+    // A literal `true` or `false`, an `is` test, a comparison, `!`, `&&` or `||`: the binder converts none of
+    // them, since `&&` and `||` take `bool` operands. A user operator in a comparison or in `!` is an operator
+    // candidate of its own.
+    private func IsBooleanByForm(expression ExpressionSyntax) bool {
+        switch expression {
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return IsBooleanByForm(parenthesized.Expression)
+            }
+            case literal is LiteralExpressionSyntax {
+                let token = literal.LiteralToken.Kind
+                return token == SyntaxKind.TrueKeyword || token == SyntaxKind.FalseKeyword
+            }
+            case IsExpressionSyntax {
+                return true
+            }
+            case unary is UnaryExpressionSyntax {
+                return unary.OperatorToken.Kind == SyntaxKind.BangToken
+            }
+            case binary is BinaryExpressionSyntax {
+                switch binary.OperatorToken.Kind {
+                    case SyntaxKind.AmpersandAmpersandToken,
+                    SyntaxKind.PipePipeToken,
+                    SyntaxKind.EqualsEqualsToken,
+                    SyntaxKind.BangEqualsToken,
+                    SyntaxKind.LessToken,
+                    SyntaxKind.LessOrEqualsToken,
+                    SyntaxKind.GreaterToken,
+                    SyntaxKind.GreaterOrEqualsToken {
+                        return true
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+            default {
+                return false
+            }
+        }
     }
 
     private func VisitLoop(node SyntaxNode, topLevel bool, iterationRunsUserCode bool = true) {
@@ -1018,7 +1113,7 @@ internal sealed class RegionEffectScanner {
                 let loop = cast[WhileLetStatementSyntax](node)
                 Push()
                 VisitBindings(loop.Bindings)
-                Visit(loop.Guard)
+                VisitCondition(loop.Guard)
                 Visit(loop.Body)
                 Pop()
             }
