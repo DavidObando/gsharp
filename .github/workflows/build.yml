@@ -760,7 +760,12 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Package VSIX
-        run: npx vsce package --no-dependencies -o vscode-gsharp.vsix
+        # ADR-0218: a prerelease tag packages a pre-release extension; the marker is inside the VSIX.
+        # The kind comes from the one tag-kind definition. Pull requests and main are kind none.
+        run: |
+          flags=()
+          if [ "$(python3 ../../build/release-publish.py tag-kind "$GITHUB_REF_NAME")" = prerelease ]; then flags+=(--pre-release); fi
+          npx vsce package --no-dependencies "${flags[@]}" -o vscode-gsharp.vsix
 
       - name: Upload VSIX
         uses: actions/upload-artifact@v5
@@ -1121,16 +1126,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 build/ci-selection.py --check build
 
-  publish:
+  # ADR-0218: one job per destination. "Re-run failed jobs" on the tag run is the only retry tool.
+  # Every job states its condition in full: the implicit success() also looks at failed ancestors
+  # (a failed advisory r2r-compiler-smoke leg sits behind ci), so a default `needs` job would be skipped.
+  # !cancelled() and not always(), because always() also runs in a cancelled run.
+  publish-verify:
+    needs: [ci]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.ci.result == 'success' }}
     runs-on: ubuntu-latest
-    needs: [build, tests, test-partition, harness, e2e, ilverify, cs2gs-corpus, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke]
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.verify.outputs.version }}
+      prerelease: ${{ steps.verify.outputs.prerelease }}
+      vscode_version: ${{ steps.verify.outputs.vscode_version }}
+      visual_studio_version: ${{ steps.verify.outputs.visual_studio_version }}
+      unverified_rids: ${{ needs.ci.outputs.unverified_rids }}
 
     steps:
-      # The feed checks run build/check-rid-packages.py (ADR-0207).
       - uses: actions/checkout@v5
 
       - name: Download NuGet packages
@@ -1151,67 +1162,29 @@ jobs:
           name: visual-studio-gsharp-vsix
           path: ./vsix
 
-      - name: Create GitHub Release with all assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --title "$GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" ./nupkgs/*.nupkg ./nupkgs/*.snupkg ./vsix/*.vsix --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Verify the artifacts against the tag
+        id: verify
+        run: python3 build/release-publish.py verify --nupkgs ./nupkgs --vsix ./vsix --tag "$GITHUB_REF_NAME"
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-
-      # ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version with
-      # PackageDownload. A restore fails if that package is missing, so the six RID packages go first.
-      # A failed push fails the job before the SDK package is pushed.
-      - name: Push the RID compiler packages to NuGet
-        run: |
-          set -euo pipefail
-          count=0
-          for pkg in ./nupkgs/Gsharp.NET.Sdk.Compiler.*.nupkg; do
-            for attempt in 1 2 3; do
-              if dotnet nuget push "$pkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate; then break; fi
-              if [ "$attempt" = 3 ]; then echo "push of $pkg failed three times"; exit 1; fi
-              sleep 30
-            done
-            count=$((count + 1))
-          done
-          test "$count" -eq 6 || { echo "expected six RID compiler packages, found $count"; exit 1; }
-
-      - name: Wait until the six RID compiler packages are on NuGet
-        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 30
-
-      - name: Push the remaining packages to NuGet
-        run: |
-          set -euo pipefail
-          for pkg in ./nupkgs/*.nupkg; do
-            case "$(basename "$pkg")" in Gsharp.NET.Sdk.Compiler.*) continue ;; esac
-            dotnet nuget push "$pkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
-          done
-
-      - name: Check that the SDK and all six RID compiler packages exist on NuGet
-        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 15 --require-sdk
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '24'
-
-      - name: Publish to VS Code Marketplace
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx --yes @vscode/vsce publish --packagePath ./vsix/vscode-gsharp.vsix
-
-  publish-visual-studio-extension:
-    runs-on: windows-latest
-    needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+  publish-github-release:
+    needs: [publish-verify]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v5
+        with:
+          name: nuget-packages
+          path: ./nupkgs
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v5
+        with:
+          name: vscode-gsharp-vsix
+          path: ./vsix
 
       - name: Download Visual Studio VSIX
         uses: actions/download-artifact@v5
@@ -1219,11 +1192,147 @@ jobs:
           name: visual-studio-gsharp-vsix
           path: ./vsix
 
-      - name: Publish to Visual Studio Marketplace
+      # The release stays a draft until publish-finalize. view || create and upload --clobber make a re-run safe.
+      - name: Create the draft GitHub release and upload the assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.publish-verify.outputs.prerelease }}
+        run: |
+          flags=(--draft --generate-notes --title "$GITHUB_REF_NAME")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${flags[@]}"
+          gh release upload "$GITHUB_REF_NAME" ./nupkgs/*.nupkg ./nupkgs/*.snupkg ./vsix/*.vsix --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish-nuget-compiler:
+    needs: [publish-verify]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v5
+        with:
+          name: nuget-packages
+          path: ./nupkgs
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version with
+      # PackageDownload, so the six RID packages go first. --skip-duplicate makes a re-run push only what is missing.
+      - name: Push the six RID compiler packages to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: python3 build/release-publish.py nuget-push --group compiler --nupkgs ./nupkgs
+
+      - name: Wait until the six RID compiler packages are on NuGet
+        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 30
+
+  publish-nuget-sdk:
+    needs: [publish-verify, publish-nuget-compiler]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' && needs.publish-nuget-compiler.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v5
+        with:
+          name: nuget-packages
+          path: ./nupkgs
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # The needs edge orders the jobs; this check orders them again on the feed itself (ADR-0207 result 6).
+      - name: Check that the six RID compiler packages are on NuGet
+        run: python3 build/check-rid-packages.py --packages ./nupkgs
+
+      - name: Push Gsharp.NET.Sdk and the remaining packages to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: python3 build/release-publish.py nuget-push --group sdk --nupkgs ./nupkgs
+
+      - name: Check that the SDK and all six RID compiler packages exist on NuGet
+        run: python3 build/check-rid-packages.py --packages ./nupkgs --wait-minutes 15 --require-sdk
+
+  publish-vscode-marketplace:
+    needs: [publish-verify, publish-nuget-sdk]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' && needs.publish-nuget-sdk.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v5
+        with:
+          name: vscode-gsharp-vsix
+          path: ./vsix
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      # A present version is success: a timeout after the upload was accepted must not fail a re-run.
+      # The marketplace answer, not the vsce exit code, decides. The pre-release marker is inside the VSIX
+      # (the vsix job packages with --pre-release for a prerelease tag), so publish passes no flag.
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VERSION: ${{ needs.publish-verify.outputs.vscode_version }}
+          PRERELEASE: ${{ needs.publish-verify.outputs.prerelease }}
+        run: |
+          kind=release
+          if [ "$PRERELEASE" = true ]; then kind=prerelease; fi
+          query() { python3 build/release-publish.py marketplace-version gsharplang.vscode-gsharp --version "$VERSION" --kind "$kind" "$@"; }
+          if query; then exit 0; else rc=$?; fi
+          if [ "$rc" != 1 ]; then exit "$rc"; fi
+          npx --yes @vscode/vsce@3.9.2 publish --packagePath ./vsix/vscode-gsharp.vsix --skip-duplicate \
+            || echo "vsce failed; the marketplace query below decides"
+          query --wait-minutes 5
+
+  publish-visual-studio-marketplace:
+    needs: [publish-verify, publish-nuget-sdk]
+    # Skipped on any prerelease tag: the Visual Studio Marketplace has no pre-release channel.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' && needs.publish-nuget-sdk.result == 'success' && needs.publish-verify.outputs.prerelease != 'true' }}
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download Visual Studio VSIX
+        uses: actions/download-artifact@v5
+        with:
+          name: visual-studio-gsharp-vsix
+          path: ./vsix
+
+      # VsixPublisher overwrites a version that exists, and the version has a per-build fourth part.
+      # A present version is still success, so a re-run does not publish twice.
+      - name: Publish to the Visual Studio Marketplace
         shell: pwsh
         env:
           VS_MARKETPLACE_PAT: ${{ secrets.VSCE_PAT }}
+          VERSION: ${{ needs.publish-verify.outputs.visual_studio_version }}
         run: |
+          python build/release-publish.py marketplace-version gsharplang.GSharp-VisualStudio --version $env:VERSION
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if ($LASTEXITCODE -ne 1) { throw "Marketplace query failed with exit code $LASTEXITCODE." }
+
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $installPath = & $vswhere -latest -products * `
             -requires Microsoft.VisualStudio.Component.VSSDK `
@@ -1245,3 +1354,37 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Visual Studio Marketplace publishing failed with exit code $LASTEXITCODE."
           }
+
+          python build/release-publish.py marketplace-version gsharplang.GSharp-VisualStudio --version $env:VERSION --wait-minutes 5
+          if ($LASTEXITCODE -ne 0) { throw "The Visual Studio Marketplace does not list $env:VERSION." }
+
+  # Runs after a failure too, to report what is missing, but not in a cancelled run. The release becomes
+  # public only when every destination has the version.
+  publish-finalize:
+    needs: [publish-verify, publish-github-release, publish-vscode-marketplace, publish-visual-studio-marketplace]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check every destination and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish-verify.outputs.version }}
+          PRERELEASE: ${{ needs.publish-verify.outputs.prerelease }}
+          VSCODE_VERSION: ${{ needs.publish-verify.outputs.vscode_version }}
+          VISUAL_STUDIO_VERSION: ${{ needs.publish-verify.outputs.visual_studio_version }}
+          UNVERIFIED_RIDS: ${{ needs.publish-verify.outputs.unverified_rids }}
+          GITHUB_RELEASE_RESULT: ${{ needs.publish-github-release.result }}
+          VSCODE_RESULT: ${{ needs.publish-vscode-marketplace.result }}
+          VISUAL_STUDIO_RESULT: ${{ needs.publish-visual-studio-marketplace.result }}
+        run: |
+          python3 build/release-publish.py finalize --tag "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --version "$VERSION" --prerelease "$PRERELEASE" \
+            --vscode-version "$VSCODE_VERSION" --visual-studio-version "$VISUAL_STUDIO_VERSION" \
+            --unverified "$UNVERIFIED_RIDS" \
+            --github-release "$GITHUB_RELEASE_RESULT" --vscode "$VSCODE_RESULT" --visual-studio "$VISUAL_STUDIO_RESULT" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

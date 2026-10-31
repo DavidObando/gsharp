@@ -382,6 +382,101 @@ class AdvisorySmokeTests(unittest.TestCase):
         self.assertIn("id: check", block)
 
 
+class PublishJobTests(unittest.TestCase):
+    """ADR-0218: seven publish jobs, each with its condition in full (the implicit success() looks past the
+    direct prerequisite, as the step-2 probe showed). Nothing here can run a publish; only a tag run does."""
+    JOBS = {
+        "publish-verify": {"ci"},
+        "publish-github-release": {"publish-verify"},
+        "publish-nuget-compiler": {"publish-verify"},
+        "publish-nuget-sdk": {"publish-verify", "publish-nuget-compiler"},
+        "publish-vscode-marketplace": {"publish-verify", "publish-nuget-sdk"},
+        "publish-visual-studio-marketplace": {"publish-verify", "publish-nuget-sdk"},
+        "publish-finalize": {"publish-verify", "publish-github-release", "publish-vscode-marketplace",
+                             "publish-visual-studio-marketplace"},
+    }
+
+    def setUp(self):
+        self.text = (ROOT / ".github/workflows/build.yml").read_text()
+
+    def needs(self, name):
+        return set(re.search(r"^    needs: \[(.*?)\]", job(self.text, name), re.M).group(1).split(", "))
+
+    def condition(self, name):
+        return re.search(r"^    if: \$\{\{ (.*) \}\}$", job(self.text, name), re.M).group(1)
+
+    def test_the_old_jobs_are_gone_and_the_seven_exist(self):
+        self.assertNotRegex(self.text, r"(?m)^  publish:")
+        self.assertNotIn("publish-visual-studio-extension", self.text)
+        found = set(re.findall(r"(?m)^  (publish-[\w-]+):", self.text))
+        self.assertEqual(found, set(self.JOBS))
+
+    def test_the_graph_is_the_adr_graph(self):
+        for name, needs in self.JOBS.items():
+            with self.subTest(job=name):
+                self.assertEqual(self.needs(name), needs)
+
+    def test_every_job_states_its_condition_in_full(self):
+        for name, needs in self.JOBS.items():
+            with self.subTest(job=name):
+                condition = self.condition(name)
+                self.assertIn("!cancelled()", condition)
+                self.assertNotIn("always()", condition)
+                self.assertIn("startsWith(github.ref, 'refs/tags/v')", condition)
+                for need in needs:
+                    if name == "publish-finalize" and need != "publish-verify":
+                        continue  # finalize reports the other destinations itself
+                    self.assertIn(f"needs.{need}.result == 'success'", condition)
+
+    def test_only_the_visual_studio_job_skips_on_a_prerelease(self):
+        for name in self.JOBS:
+            has = "prerelease != 'true'" in self.condition(name)
+            self.assertEqual(has, name == "publish-visual-studio-marketplace", name)
+
+    def test_permissions_secrets_and_runners(self):
+        for name in self.JOBS:
+            block = job(self.text, name)
+            writes = "contents: write" in block
+            self.assertEqual(writes, name in {"publish-github-release", "publish-finalize"}, name)
+            self.assertNotIn("environment:", block)
+        for secret, owner in (("NUGET_API_KEY", {"publish-nuget-compiler", "publish-nuget-sdk"}),
+                              ("VSCE_PAT", {"publish-vscode-marketplace", "publish-visual-studio-marketplace"})):
+            self.assertEqual({n for n in self.JOBS if f"secrets.{secret}" in job(self.text, n)}, owner)
+        self.assertIn("runs-on: windows-latest", job(self.text, "publish-visual-studio-marketplace"))
+
+    def test_scripts_vsce_pin_draft_and_artifacts(self):
+        self.assertIn("nuget-push --group compiler", job(self.text, "publish-nuget-compiler"))
+        self.assertIn("--wait-minutes 30", job(self.text, "publish-nuget-compiler"))
+        sdk = job(self.text, "publish-nuget-sdk")
+        self.assertLess(sdk.index("check-rid-packages.py --packages ./nupkgs\n"), sdk.index("nuget-push --group sdk"))
+        self.assertIn("--wait-minutes 15 --require-sdk", sdk)
+        vscode = job(self.text, "publish-vscode-marketplace")
+        self.assertIn("@vscode/vsce@3.9.2 publish", vscode)
+        self.assertIn("--skip-duplicate", vscode)
+        self.assertNotRegex(vscode, r"vsce@[\d.]+ publish[^\n]*--pre-release")
+        self.assertRegex(self.text, r"@vscode/vsce@\d+\.\d+\.\d+")
+        self.assertNotRegex(self.text, r"vsce publish --packagePath \./vsix/vscode-gsharp\.vsix\n")
+        release = job(self.text, "publish-github-release")
+        self.assertIn("--draft", release)
+        self.assertIn("--prerelease", release)
+        self.assertIn("--clobber", release)
+        self.assertIn("finalize", job(self.text, "publish-finalize"))
+        for name in ("publish-github-release", "publish-nuget-compiler", "publish-nuget-sdk"):
+            self.assertIn("name: nuget-packages", job(self.text, name))
+
+    def test_the_vsix_job_asks_tag_kind_for_the_pre_release_flag(self):
+        block = job(self.text, "vsix")
+        self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
+        self.assertIn("--pre-release", block)
+        self.assertLess(block.index("tag-kind"), block.index("vsce package"))
+
+    def test_publish_verify_forwards_the_ci_output_and_the_script_outputs(self):
+        block = job(self.text, "publish-verify")
+        for name in ("version", "prerelease", "vscode_version", "visual_studio_version"):
+            self.assertIn(f"{name}: ${{{{ steps.verify.outputs.{name} }}}}", block)
+        self.assertIn("unverified_rids: ${{ needs.ci.outputs.unverified_rids }}", block)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_partition_pipeline_propagates_failed_verification(self):
         text = (ROOT / ".github/workflows/build.yml").read_text()
@@ -426,14 +521,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("dotnet restore GSharp.slnx --locked-mode", block)
             self.assertIn("dotnet build GSharp.slnx --configuration Release --no-restore -graph", block)
             self.assertIn("if: github.event_name != 'pull_request'", block)
-        publish = job(text, "publish")
-        self.assertIn("if: startsWith(github.ref, 'refs/tags/v')", publish)
-        needs = set(re.search(r"needs: \[(.*?)\]", publish).group(1).split(", "))
-        self.assertEqual(needs, {"build", "tests", "test-partition", "harness", "e2e", "ilverify",
-                                 "cs2gs-corpus", "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke",
-                                 "r2r-compiler-smoke"})
+        # The publish jobs are covered by PublishJobTests (ADR-0218).
         for artifact in ("nuget-packages", "vscode-gsharp-vsix", "visual-studio-gsharp-vsix"):
-            self.assertIn(f"name: {artifact}", publish)
+            self.assertIn(f"name: {artifact}", job(text, "publish-verify"))
         pages = (ROOT / ".github/workflows/pages.yml").read_text()
         push = pages.split("  push:\n")[1].split("  pull_request:")[0]
         self.assertEqual(re.findall(r"      - '(.*?)'", push),
