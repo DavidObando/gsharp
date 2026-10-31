@@ -1086,7 +1086,18 @@ internal class ConversionClassifier {
                 )
             )
         ) {
-            return BoundDefaultExpression(nil, type!!)
+            // A `nil` that an expression with effects produces (`if c { Log()\n nil } else { nil }`)
+            // still runs that expression; only a bare `nil` is replaced outright.
+            let zero = BoundDefaultExpression(nil, type!!)
+            return if StatementBinder.IsNilLiteral(expression) {
+                cast[BoundExpression](zero)
+            } else {
+                BoundBlockExpression(
+                    expression.Syntax,
+                    ImmutableArray.Create[BoundStatement](BoundExpressionStatement(expression.Syntax, expression)),
+                    zero
+                )
+            }
         }
         // Issue #1256: element-wise tuple conversion lowering. When the source
         // and target are tuple types of the same arity and the classifier above
