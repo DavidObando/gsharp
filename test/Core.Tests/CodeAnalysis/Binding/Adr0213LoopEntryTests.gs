@@ -1131,6 +1131,94 @@ func Run(ref text string?, work IWork) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("inherited-interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+interface IWork {
+    func Do();
+}
+interface IChild : IWork { }
+func Run(ref text string?, work IChild) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        work.Do()
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("imported-interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+func Run(ref text string?, values IList[int32]) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        values.Clear()
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("object-method-on-an-interface-keeps-a-by-reference-fact (A3)", `package T
+import System
+interface IWork {
+    func Do();
+}
+func Run(ref text string?, work IWork) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + work.GetHashCode() * 0
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("constraint-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+interface IWork {
+    func Do();
+}
+func Run[W IWork](ref text string?, work W) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        work.Do()
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("extension-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+import System.Linq
+func Run(ref text string?, values IEnumerable[int32]) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + values.Count() * 0
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("member-call-on-a-region-narrowed-receiver-is-indirect (A3)", `package T
+import System
+class Holder {
+    var Cb Action = Action(func() { })
+}
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is Holder { o.Cb() }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }

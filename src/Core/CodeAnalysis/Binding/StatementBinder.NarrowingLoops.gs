@@ -302,11 +302,13 @@ internal partial class StatementBinder {
     }
 
     // A member call is a plain call (ADR-0208 amendment A3 keeps by-reference storage across a call to a method)
-    // when the member is surely a method. A receiver that is a plain name of the entry scope, a variable or a type,
-    // is resolved: every member of that name on its declared type, and on the type its entry fact narrows it to,
-    // must be a method, so a member of a delegate (`Invoke`), a field or a property of function type, an extension
-    // method and an element of a tuple count as a function value. The member of any other receiver (an element,
-    // a member chain, a call result) is taken for a method, as in slice L0, unless it invokes a delegate.
+    // when the member is a method. A receiver that is a plain name of the entry scope, a variable or a type, is
+    // resolved on its declared type and on the type its entry fact narrows it to. The call is indirect when either
+    // type is a function or delegate type or has a field, a property or an event of the member's name (a function
+    // value of a class, an interface or a tuple element). It is a method call when the types have only methods of
+    // that name, or none and an extension method of that name is visible. Otherwise the region narrows the receiver
+    // to a type that the entry scope does not show, and the call is indirect. The member of any other receiver (an
+    // element, a member chain, a call result) is taken for a method, as in slice L0, unless it invokes a delegate.
     private func MemberCallIsIndirect(call RegionCall) bool {
         let member = call.CalleeName
         let receiverName = call.ReceiverName
@@ -317,81 +319,156 @@ internal partial class StatementBinder {
             return member == "Invoke" || member == "BeginInvoke" || member == "DynamicInvoke"
         }
         let symbol = $scope.TryLookupSymbol(receiverName)
+        var shape = 0
+        var declaredType TypeSymbol? = nil
+        var narrowedType TypeSymbol? = nil
         if symbol is VariableSymbol receiver {
-            if !MemberIsOnlyMethod(StripAllNullability(receiver.Type), member) {
-                return true
-            }
-            let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(receiver))
-            return narrowed != nil && !MemberIsOnlyMethod(StripAllNullability(narrowed), member)
-        }
-        let type = if symbol is TypeSymbol named {
-            named
+            declaredType = StripAllNullability(receiver.Type)
+            narrowedType = StripAllNullability(binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(receiver)))
+            shape = MemberShape(declaredType, member) | MemberShape(narrowedType, member)
+        } else if symbol is TypeSymbol named {
+            shape = MemberShape(named, member)
         } else if symbol == nil {
-            ResolveConstructedType(receiverName)
-        } else {
-            default(TypeSymbol?)
+            shape = MemberShape(ResolveConstructedType(receiverName), member)
         }
-        return !MemberIsOnlyMethod(type, member)
+        if (shape & MemberIsValue) != 0 {
+            return true
+        }
+        if (shape & MemberIsMethod) != 0 {
+            return false
+        }
+        if declaredType == nil {
+            return true
+        }
+        if HasExtensionFunction(declaredType, member) || HasExtensionFunction(narrowedType, member) {
+            return false
+        }
+        return MemberLookup(binderCtx).CollectImportedExtensionMethods(member).Count == 0
     }
 
-    // Whether the type has a member of the name and every such member is a method.
-    private func MemberIsOnlyMethod(type TypeSymbol?, member string) bool {
+    private func HasExtensionFunction(receiverType TypeSymbol?, member string) bool {
+        if receiverType == nil {
+            return false
+        }
+        return !$scope.TryLookupExtensionFunctions(receiverType, member).IsDefaultOrEmpty
+    }
+
+    private const MemberIsMethod int32 = 1
+    private const MemberIsValue int32 = 2
+
+    // The kinds of the members of the name on the type, its base types, its base interfaces and its constraints:
+    // `MemberIsMethod` for a method, `MemberIsValue` for a field, a property or an event. Every member of a
+    // function or delegate type is a value.
+    private func MemberShape(type TypeSymbol?, member string) int32 {
         switch type {
             case nil {
-                return false
+                return 0
             }
             case FunctionTypeSymbol, DelegateTypeSymbol {
-                return false
+                return MemberIsValue
             }
             case declared is StructSymbol {
-                var found = false
-                for level in declared.GetHierarchy() {
+                var shape = 0
+                let hierarchy = declared.GetHierarchy()
+                for level in hierarchy {
                     for symbol in level.GetMembers() {
                         if symbol.Name == member {
-                            if symbol is not FunctionSymbol {
-                                return false
-                            }
-                            found = true
+                            shape = shape | ShapeOf(symbol is FunctionSymbol)
                         }
                     }
                 }
-                if found {
-                    return true
+                let importedBase = hierarchy.Last().ImportedBaseType
+                if importedBase != nil {
+                    return shape | MemberShape(importedBase, member)
                 }
-                return declared
-                    .GetHierarchy()
-                    .Last()
-                    .ImportedBaseType is {} importedBase &&
-                    MemberIsOnlyMethod(importedBase, member)
+                return shape | ClrMemberShape(typeof(object), member)
             }
             case contract is InterfaceSymbol {
-                for method in contract.Methods {
-                    if method.Name == member {
-                        return true
+                var shape = ClrMemberShape(typeof(object), member)
+                for level in contract.SelfAndAllBaseInterfaces() {
+                    level.EnsureMembersResolved()
+                    if !level.GetMethods(member).IsDefaultOrEmpty || !level.GetStaticMethods(member).IsDefaultOrEmpty {
+                        shape = shape | MemberIsMethod
+                    }
+                    for symbol in level.Properties {
+                        if symbol.Name == member {
+                            shape = shape | MemberIsValue
+                        }
+                    }
+                    for symbol in level.Events {
+                        if symbol.Name == member {
+                            shape = shape | MemberIsValue
+                        }
+                    }
+                    for symbol in level.StaticFields {
+                        if symbol.Name == member {
+                            shape = shape | MemberIsValue
+                        }
+                    }
+                    for symbol in level.ConstFields {
+                        if symbol.Name == member {
+                            shape = shape | MemberIsValue
+                        }
+                    }
+                    for clrBase in level.BaseClrInterfaces {
+                        shape = shape | MemberShape(clrBase, member)
                     }
                 }
-                return false
+                return shape
+            }
+            case parameter is TypeParameterSymbol {
+                var shape = ClrMemberShape(typeof(object), member)
+                let visited = HashSet[TypeParameterSymbol]()
+                var current TypeParameterSymbol? = parameter
+                while current != nil && visited.Add(current) {
+                    shape = shape | MemberShape(current.InterfaceConstraint, member)
+                    shape = shape | MemberShape(current.ClrInterfaceConstraint, member)
+                    shape = shape | MemberShape(current.ClassConstraint, member)
+                    current = current.TypeParameterBound
+                }
+                return shape
+            }
+            case EnumSymbol {
+                return ClrMemberShape(typeof(Enum), member)
             }
             default {
-                if type?.ClrType is not{} clrType || ClrTypeUtilities.IsDelegateType(clrType) {
-                    return false
+                if type is TupleTypeSymbol tuple && tuple.TryGetElementIndexByName(member, out var element) {
+                    return MemberIsValue
                 }
-                let members = clrType.GetMember(
-                    member,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
-                    BindingFlags.FlattenHierarchy
-                )
-                if members.Length == 0 {
-                    return false
+                if type?.ClrType is not{} clrType {
+                    return 0
                 }
-                for clrMember in members {
-                    if clrMember is not MethodInfo {
-                        return false
+                if ClrTypeUtilities.IsDelegateType(clrType) {
+                    return MemberIsValue
+                }
+                var shape = ClrMemberShape(clrType, member)
+                if clrType.IsInterface {
+                    shape = shape | ClrMemberShape(typeof(object), member)
+                    for contract in clrType.GetInterfaces() {
+                        shape = shape | ClrMemberShape(contract, member)
                     }
                 }
-                return true
+                return shape
             }
         }
+    }
+
+    private func ClrMemberShape(type Type, member string) int32 {
+        var shape = 0
+        for clrMember in type.GetMember(
+            member,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
+            BindingFlags.FlattenHierarchy
+        ) {
+            shape = shape | ShapeOf(clrMember is MethodInfo)
+        }
+        return shape
+    }
+
+    private func ShapeOf(isMethod bool) int32 -> if isMethod {
+        MemberIsMethod
+    } else {
+        MemberIsValue
     }
 
     private func StripAllNullability(type TypeSymbol?) TypeSymbol? -> StripNullability(type)
