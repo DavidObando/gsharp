@@ -366,10 +366,10 @@ internal partial class MethodBodyEmitter {
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType))
         }
         this.EmitStoreVariable(tp.Variable)
-        if tp.PropertyPattern != nil {
+        if tp.PropertyPattern is {} propertyPattern {
             let variableSlot = this.locals[tp.Variable]
             this.EmitPropertyPattern(
-                tp.PropertyPattern,
+                propertyPattern,
                 loadValue: () -> this.il.LoadLocal(variableSlot),
                 valueType: tp.TargetType,
                 failLabel
@@ -954,12 +954,12 @@ internal partial class MethodBodyEmitter {
     ) {
         if bp.IsConjunction {
             this.EmitPattern(bp.Left, loadValue, valueType, failLabel)
-            if bp.RightInputVariable != nil {
-                let rightInputSlot = this.locals[bp.RightInputVariable]
+            if bp.RightInputVariable is {} rightInput {
+                let rightInputSlot = this.locals[rightInput]
                 this.EmitPattern(
                     bp.Right,
                     loadValue: () -> this.il.LoadLocal(rightInputSlot),
-                    valueType: bp.RightInputVariable.Type,
+                    valueType: rightInput.Type,
                     failLabel
                 )
             } else {

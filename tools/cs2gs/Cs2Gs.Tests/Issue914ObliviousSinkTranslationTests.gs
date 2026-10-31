@@ -115,10 +115,12 @@ namespace Demo
     }
 
     @Fact
-    func Enabled_DesignatedConstructorReachedWithNull_StaysUnpromoted() {
-        // The SAME shape under a nullable-ENABLED compilation: the analyzer
-        // short-circuits, the annotations are non-null, so the designated ctor
-        // parameters stay `string` (byte-identical, unpromoted).
+    func Enabled_DesignatedConstructorReachedWithNull_PromotesParameters() {
+        // Issue #5508: the SAME shape under a nullable-ENABLED compilation. The
+        // C# author passes the literal `null` at a parameter the annotations
+        // declare non-null, which C# only warns about but gsc rejects at a
+        // non-nullable reference slot (#4316). The parameters follow the
+        // author's null, exactly as the oblivious twin above does.
         let printed = TranslateEnabled(`
 namespace Demo
 {
@@ -128,9 +130,8 @@ namespace Demo
 
         public C() : this(null, null) { }
     }
-}`, "Nullable-enabled C# permits null-forgiven calls that G# rejects at non-null parameters.")
-        Assert.Contains("init(context string, message string)", printed)
-        Assert.DoesNotContain("string?", printed)
+}`, "Round-trip only: this snippet pins the declaration, not a bound program.")
+        Assert.Contains("init(context string?, message string?)", printed)
     }
 
     @Fact
