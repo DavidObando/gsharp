@@ -2023,15 +2023,21 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     // Issue #5574: whether the declaration `key` stands for is PINNED non-null:
-    // it hands its value on unchanged (`Walk(type, match)`, `Stored = p`,
-    // `return p`) to a slot that keeps a non-null contract, so widening it
-    // would only move the null to that slot, where G# needs a `!!` that throws
-    // on the very null the C# passes on (`ContainsTypeParameter(null)` returns
-    // false in C#; a widened `type` forwarded to the non-widenable local
-    // function `AnyTypeParameter(type!!, match)` threw). A slot keeps its
+    // its value reaches, through unchanged forwards (`Walk(type, match)`,
+    // `Stored = p`, `return p`), a slot that keeps a non-null contract. Widening
+    // it would only move the null to that slot, where G# needs a `!!` that
+    // throws on the very null the C# passes on (`ContainsTypeParameter(null)`
+    // returns false in C#; a widened `type` forwarded to the non-widenable
+    // local function `AnyTypeParameter(type!!, match)` threw). A slot keeps its
     // contract when it is non-null and this rule does not widen it: it is not a
-    // candidate, this run does not emit it, or it is pinned itself. The answer
-    // is memoized per query in `pins`; a cycle reads as not pinned.
+    // candidate, or this run does not emit it. A candidate the run emits passes
+    // the question on to its own forwards.
+    //
+    // The answer is reachability over the forward edges, so it does not depend
+    // on the order of the queries or of the declarations: each search visits
+    // every node once, an alias (a linked source file, an emitted reference
+    // assembly) is the same node, and only the searched root's answer is
+    // memoized in `pins`.
     private func IsPinnedNonNull(
         key string,
         compilation CSharpCompilation,
@@ -2042,27 +2048,50 @@ internal shared class ObliviousNullabilityAnalyzer {
         if pins.TryGetValue(key, out var known) {
             return known
         }
-        pins[key] = false
+        let visited = HashSet[string](StringComparer.Ordinal)
+        let pending = Stack[string]()
+        pending.Push(key)
         var pinned = false
-        for graph in graphs {
-            if pinned || !graph.Outgoing.TryGetValue(key, out var slots) {
+        while !pinned && pending.Count != 0 {
+            let current = pending.Pop()
+            if !visited.Add(current) {
                 continue
             }
-            for slot in slots {
-                if !KeepsNonNullContract(slot, compilation, siblingCompilations) {
+            for alias in NullArgumentAliasKeys(current, graphs) {
+                pending.Push(alias)
+            }
+            if !current.StartsWith("@", StringComparison.Ordinal) {
+                let split = current.IndexOf('|')
+                if split > 0 {
+                    for sourceKey in SourceDeclarationKeys(
+                        current.Substring(0, split),
+                        current.Substring(split + 1),
+                        graphs
+                    ) {
+                        pending.Push(sourceKey)
+                    }
+                }
+            }
+            for graph in graphs {
+                if pinned || !graph.Outgoing.TryGetValue(current, out var slots) {
                     continue
                 }
-                let slotOriginal = OriginalNullArgumentDeclaration(slot)
-                if slotOriginal != nil &&
-                    IsNullArgumentCandidate(slotOriginal) &&
-                    IsDeclaredInThisRun(compilation, slotOriginal, siblingCompilations) &&
-                    !NullArgumentKeys(slotOriginal).Any(
-                    (slotKey string) -> IsPinnedNonNull(slotKey, compilation, siblingCompilations, graphs, pins)
-                ) {
-                    continue
+                for slot in slots {
+                    if !KeepsNonNullContract(slot, compilation, siblingCompilations) {
+                        continue
+                    }
+                    let slotOriginal = OriginalNullArgumentDeclaration(slot)
+                    if slotOriginal != nil &&
+                        IsNullArgumentCandidate(slotOriginal) &&
+                        IsDeclaredInThisRun(compilation, slotOriginal, siblingCompilations) {
+                        for slotKey in NullArgumentKeys(slotOriginal) {
+                            pending.Push(slotKey)
+                        }
+                        continue
+                    }
+                    pinned = true
+                    break
                 }
-                pinned = true
-                break
             }
         }
         pins[key] = pinned
@@ -2071,14 +2100,21 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     // Issue #5574: whether `slot` (as the call or store binds it) is a non-null
     // reference in the emitted G#: not `T?`, not a value or open type, not a
-    // method type parameter that G# infers from the value, and not an
-    // oblivious contract this run does not emit (G# reads that as `T!`, which
-    // takes `nil`).
+    // declaration whose attribute contract widens it (`[AllowNull]`, a
+    // `null` data row), and not an oblivious contract this run does not emit
+    // (G# reads that as `T!`, which takes `nil`). A generic slot is read as the
+    // call binds it (`Sink<Node>(p)` and an inferred `Sink(p)` are both `Node`):
+    // the translator asserts a value C# proved non-null even where G# infers
+    // the type argument (#5254), so neither takes the null.
     private func KeepsNonNullContract(
         slot ISymbol,
         compilation CSharpCompilation,
         siblingCompilations IReadOnlyList[CSharpCompilation]?
     ) bool {
+        let declaration ISymbol? = OriginalNullArgumentDeclaration(slot) ?? slot.OriginalDefinition
+        if HasAllowNullWriteContract(declaration) || HasNullDataRowArgument(declaration) {
+            return false
+        }
         let type ITypeSymbol? = switch slot {
             case parameter is IParameterSymbol: parameter.Type
             case field is IFieldSymbol: field.Type
@@ -2091,11 +2127,6 @@ internal shared class ObliviousNullabilityAnalyzer {
             .CodeAnalysis
             .NullableAnnotation
             .Annotated {
-            return false
-        }
-        if slot is IParameterSymbol{
-            OriginalDefinition: {Type: ITypeParameterSymbol{TypeParameterKind: TypeParameterKind.Method}}
-        } {
             return false
         }
         return reference.NullableAnnotation != Microsoft

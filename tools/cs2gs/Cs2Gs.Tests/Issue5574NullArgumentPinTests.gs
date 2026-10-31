@@ -134,7 +134,190 @@ namespace Demo
         Assert.Contains("FromArray(default([]string))", printed)
     }
 
+    /// Pinning is reachability, so the order of the declarations cannot change it: `A` forwards to
+    /// a virtual (fixed) sink and to `B`, `B` forwards back to `A`, both store into `Stored`, and
+    /// only `B` receives the null. Both parameters are pinned and `Stored` is not widened.
+    /// @param aFirst Whether `A` is declared before `B`.
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func ACycleThroughAFixedSink_PinsEveryMemberWhateverTheOrder(aFirst bool) {
+        let a = "public void A(Node a, Sink s, int depth) { if (depth > 0) { B(a, s, depth - 1); } Stored = a; s.Take(a); }"
+        let b = "public void B(Node b, Sink s, int depth) { Stored = b; if (depth > 0) { A(b, s, depth - 1); } }"
+        let printed = TranslateBound(("Holder.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual void Take(Node n) { } }
+    public class Holder
+    {
+        public Node Stored = new Node();
+        ` + (
+                    if aFirst {
+                        a + "\n        " + b
+                    } else {
+                        b + "\n        " + a
+                    }
+                ) + `
+        public static void Go(Holder h, Sink s) => h.B(null!, s, 1);
+    }
+}`))
+        Assert.DoesNotContain("Stored Node?", printed)
+        Assert.DoesNotContain("a Node?", printed)
+        Assert.DoesNotContain("b Node?", printed)
+        Assert.DoesNotContain("a!!", printed)
+        Assert.DoesNotContain("b!!", printed)
+    }
+
+    /// A slot that an attribute contract widens (`[AllowNull]`) takes the null, so it does not pin
+    /// the parameter that forwards into it.
+    @Fact
+    func AForwardIntoAnAllowNullSlot_DoesNotPin() {
+        let printed = TranslateBound(("Sink.cs", `
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { }
+    public class Sink
+    {
+        public virtual void Take([AllowNull] Node n) { }
+        public void Forward(Node p) => Take(p);
+        public void Go() => Forward(null!);
+    }
+}`))
+        Assert.Contains("Forward(p Node?)", printed)
+        Assert.DoesNotContain("p!!", printed)
+    }
+
+    /// A generic slot is read as the call binds it. `Sink<Node>(p)` names `Node`, and an inferred
+    /// `Sink(q)` binds `Node` too: the translator asserts a value C# proved non-null even where G#
+    /// infers the type argument (#5254), so both forwards pin.
+    @Fact
+    func AGenericSlot_PinsWhetherItsTypeArgumentIsNamedOrInferred() {
+        let printed = TranslateBound(("Sinks.cs", `
+namespace Demo
+{
+    public class Node { }
+    public static class Sinks
+    {
+        public static void Sink<T>(T value) { }
+        public static void Named(Node p) => Sink<Node>(p);
+        public static void Inferred(Node q) => Sink(q);
+        public static void Go() { Named(null!); Inferred(null!); }
+    }
+}`))
+        Assert.Contains("Named(p Node)", printed)
+        Assert.DoesNotContain("p!!", printed)
+        Assert.Contains("Inferred(q Node)", printed)
+        Assert.DoesNotContain("q!!", printed)
+    }
+
+    /// A linked source file is one declaration in every project that compiles it. `Forward.cs` is
+    /// linked into A, whose sink can be widened, and into B, whose sink is virtual. The parameter is
+    /// pinned in both translations and for a consumer that sees it through A's emitted reference,
+    /// which therefore bridges its own maybe-null argument instead of passing a `Node?` to `Node`.
+    @Fact
+    func ALinkedForwarder_IsPinnedThroughEveryAlias() {
+        let forward = `
+namespace Demo
+{
+    public class Node { }
+    public static class Forwarder
+    {
+        public static void Forward(Node p, Sinks s) => s.Sink(p);
+    }
+}`
+        let a = CompileFiles("A", nil, ("Forward.cs", forward), ("SinkA.cs", `
+namespace Demo
+{
+    public class Sinks { public void Sink(Node value) { } }
+}`))
+        let b = CompileFiles("B", nil, ("Forward.cs", forward), ("SinkB.cs", `
+namespace Demo
+{
+    public class Sinks { public virtual void Sink(Node value) { } }
+}`))
+        let image = MemoryStream()
+        Assert.True(a.Emit(image).Success)
+        image.Position = 0
+        let c = CompileFiles("C", MetadataReference.CreateFromStream(image), ("Go.cs", `
+namespace Demo
+{
+    public static class Go
+    {
+        public static void Run(Node? maybe)
+        {
+            Forwarder.Forward(null!, new Sinks());
+            Forwarder.Forward(maybe, new Sinks());
+        }
+    }
+}`))
+        let siblings = []CSharpCompilation{a, b, c}
+        let forwardA = TranslateFile(a, "Forward.cs", siblings)
+        Assert.Contains("Forward(p Node, s Sinks)", forwardA)
+        Assert.Equal(forwardA, TranslateFile(b, "Forward.cs", siblings))
+        Assert.Contains("Forward(maybe!!", TranslateFile(c, "Go.cs", siblings))
+    }
+
     shared {
+        private func TranslateBound(source(Path string, Source string)) string {
+            let compilation = CompileFiles("Snippet", nil, source)
+            let printed = TranslateFile(compilation, source.Path, []CSharpCompilation{compilation})
+            TranslationTestValidation.AssertBinds(printed)
+            return printed
+        }
+
+        private func TranslateFile(
+            compilation CSharpCompilation,
+            path string,
+            repository IReadOnlyList[CSharpCompilation]
+        ) string {
+            let tree = compilation.SyntaxTrees.First((t SyntaxTree) -> t.FilePath == path)
+            let model = compilation.GetSemanticModel(tree)
+            let context = TranslationContext(
+                compilation,
+                model,
+                tree.FilePath,
+                siblingCompilations: repository,
+                repositoryCompilations: repository
+            )
+            return GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+            )
+        }
+
+        private func CompileFiles(
+            name string,
+            reference MetadataReference?,
+            sources ...(Path string, Source string)
+        ) CSharpCompilation {
+            let trees = sources.Select(
+                (source(Path string, Source string)) -> CSharpSyntaxTree.ParseText(
+                    source.Source,
+                    CSharpParseOptions(LanguageVersion.Latest),
+                    path: source.Path
+                )
+            )
+                .ToArray()
+            var references = CSharpProjectLoader.RuntimeReferences().ToList()
+            if reference != nil {
+                references.Add(reference)
+            }
+            let compilation = CSharpCompilation.Create(
+                name,
+                trees,
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                    NullableContextOptions.Enable
+                )
+            )
+            Assert.DoesNotContain(
+                compilation.GetDiagnostics(),
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
+            )
+            return compilation
+        }
+
         private func Translate(compilation CSharpCompilation, repository IReadOnlyList[CSharpCompilation]) string {
             let tree = Assert.Single(compilation.SyntaxTrees)
             let model = compilation.GetSemanticModel(tree)
