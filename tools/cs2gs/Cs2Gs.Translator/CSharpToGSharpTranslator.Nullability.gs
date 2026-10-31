@@ -1160,8 +1160,9 @@ partial class CSharpToGSharpTranslator {
         // gets the same `T?`/forgiveness treatment everywhere.
         /// Decides whether [`symbol`](paramref) is a declaration that the translator emits as `T?`
         /// although C# declares it non-null: a parameter or `out` parameter that cs2gs widened, or a local
-        /// that an `out var` / `out T x` argument declares for such a parameter (G# infers the local's
-        /// type from the widened parameter).
+        /// that an `out var x` / `out T x` argument declares for such a parameter, or a local that a
+        /// deconstruction declares for such a `Deconstruct` element (G# infers the local's type from the
+        /// widened declaration).
         /// @remarks This is the one place that names the declarations whose reads need a forgiving
         /// `!!` when the C# flow state at the read is non-null (issue #5254). The flow-state rule
         /// itself stays in `ReceiverNeedsNullForgiveness`.
@@ -1203,7 +1204,85 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
             }
-            return false
+            // A deconstructed local (`var (a, b) = e`, `(T a, U b) = e`, `foreach
+            // (var (a, b) in items)`) is emitted without a type, so G# infers it
+            // from the `Deconstruct` element it receives.
+            let element = this.DeconstructedElementDeclaration(local)
+            return element != nil && this.IsTranslatorWidenedDeclaration(element)
+        }
+
+        // Issue #5508: the declaration whose value a deconstructed local receives:
+        // the `Deconstruct` out parameter at the local's position or, for a
+        // record's synthesized `Deconstruct`, the positional property that the
+        // emitted G# record deconstructs. A tuple deconstruction has no such
+        // declaration and gives null.
+        private func DeconstructedElementDeclaration(local ILocalSymbol) ISymbol? {
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not SingleVariableDesignationSyntax designation {
+                return nil
+            }
+            // Climb to the deconstruction root and record the element index at each level.
+            let indexes = List[int32]()
+            var current SyntaxNode = designation
+            var climbing = true
+            while climbing {
+                switch current.Parent {
+                    case nested is ParenthesizedVariableDesignationSyntax when current is VariableDesignationSyntax variable {
+                        indexes.Insert(0, nested.Variables.IndexOf(variable))
+                        current = nested
+                    }
+                    case declaration is DeclarationExpressionSyntax {
+                        current = declaration
+                    }
+                    case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
+                        indexes.Insert(0, tuple.Arguments.IndexOf(argument))
+                        current = tuple
+                    }
+                    default {
+                        climbing = false
+                    }
+                }
+            }
+            let model = this.context.SemanticModel
+            var info DeconstructionInfo
+            if current.Parent is AssignmentExpressionSyntax assignment && assignment.Left == current {
+                info = model.GetDeconstructionInfo(assignment)
+            } else if current.Parent is ForEachVariableStatementSyntax forEach && forEach.Variable == current {
+                info = model.GetDeconstructionInfo(forEach)
+            } else {
+                return nil
+            }
+            for var level = 0; level < indexes.Count; level++ {
+                let index = indexes[level]
+                let nested = info.Nested
+                if index < 0 || index >= nested.Length {
+                    return nil
+                }
+                if level < indexes.Count - 1 {
+                    info = nested[index]
+                    continue
+                }
+                if info.Method is not IMethodSymbol deconstruct {
+                    return nil
+                }
+                // An unreduced extension `Deconstruct(this T value, out …)` starts its outputs at ordinal 1.
+                let ordinal = if deconstruct.IsExtensionMethod && deconstruct.ReducedFrom == nil {
+                    index + 1
+                } else {
+                    index
+                }
+                if ordinal >= deconstruct.Parameters.Length {
+                    return nil
+                }
+                let parameter = deconstruct.Parameters[ordinal]
+                if deconstruct.IsImplicitlyDeclared && deconstruct.ContainingType is {IsRecord: true} record {
+                    return record.GetMembers(parameter.Name).OfType[IPropertySymbol]().FirstOrDefault() ?? parameter
+                }
+                return parameter.OriginalDefinition
+            }
+            return nil
         }
 
         /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds
@@ -1281,6 +1360,19 @@ partial class CSharpToGSharpTranslator {
             // attribute (gsc GS0274). Attribute-driven and therefore decided by
             // the DECLARATION alone, exactly like `[AllowNull]` above.
             if ObliviousNullabilityAnalyzer.HasNullDataRowArgument(symbol) {
+                return true
+            }
+            // Issue #5508: a call that passes the author's own `null` / `null!`
+            // into a parameter the C# declares non-nullable — and the slots that
+            // parameter's value reaches unchanged — is decided by that evidence,
+            // not by the annotation `!` was written to silence. Direct evidence
+            // and pure forwarding only, decided by the DECLARATION across every
+            // compilation of the run (see `IsNullArgumentTarget`).
+            if ObliviousNullabilityAnalyzer.IsNullArgumentTarget(
+                this.context.Compilation,
+                NormalizePositionalRecordProperty(symbol),
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
                 return true
             }
             // EF Core treats reference properties from nullable-oblivious C#
@@ -1577,6 +1669,16 @@ partial class CSharpToGSharpTranslator {
             let targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
             ) == true
+            // Issue #5508: a member another project of THIS run emits, seen here
+            // through that project's reference assembly, carries the widening the
+            // producer decided from the same run-wide evidence.
+            if !targetDeclaredInThisCompilation && ObliviousNullabilityAnalyzer.IsNullArgumentTarget(
+                this.context.Compilation,
+                targetSymbol,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
+                return false
+            }
             return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
         }
 
