@@ -4322,13 +4322,17 @@ partial class CSharpToGSharpTranslator {
                 // rewrote `IsType<EventHandler>` into `IsType<Action<object,
                 // EventArgs>>`, a different runtime type, defeating exactly the
                 // identity check the call was making.
-                result.Add(
-                    if symbol != nil {
-                        this.typeMapper.MapExplicitType(symbol, this.context, argument.GetLocation())
-                    } else {
-                        cast[GTypeReference](NamedTypeReference(argument.ToString()))
-                    }
-                )
+                var mapped GTypeReference? = if symbol != nil {
+                    this.typeMapper.MapExplicitType(symbol, this.context, argument.GetLocation())
+                } else {
+                    cast[GTypeReference](NamedTypeReference(argument.ToString()))
+                }
+                // Issue #5541: a stated type argument spells the nullable positions
+                // that an oblivious container argument gives it.
+                if GetContainingInvocation(generic) is {} call {
+                    mapped = this.PromoteObliviousTypeArgument(mapped, symbol, call, i)
+                }
+                result.Add(mapped!!)
             }
             return result
         }
