@@ -505,6 +505,30 @@ namespace Demo
         Assert.DoesNotContain("Item Node?", printed)
     }
 
+    /// A read that a null test guards never sees the null, so a fixed slot behind the guard does not
+    /// pin: `Outer` and `OuterEarly` widen through the guarded `Inner` and `Early`, and `Outer(nil)`
+    /// binds and runs as C# does.
+    @Fact
+    func AGuardedReadIntoAFixedSlot_DoesNotPin() {
+        let compilation = CompileFiles("App", nil, ("Guards.cs", `
+namespace Demo
+{
+    public static class P
+    {
+        public static int Inner(string s) { if (s != null) return int.Parse(s); return -1; }
+        public static int Early(string s) { if (s == null) { return -2; } return int.Parse(s); }
+        public static int Outer(string s) => Inner(s);
+        public static int OuterEarly(string s) => Early(s);
+        public static string Run() => Outer(null!) + " " + Outer("1") + " " + OuterEarly(null!) + " " + OuterEarly("2");
+    }
+}`))
+        let printed = TranslateFile(compilation, "Guards.cs", []CSharpCompilation{compilation})
+        Assert.Equal("-1 1 -2 2", CompileAndRun([]string{printed}, "Demo.P.Run()").Trim())
+        Assert.Contains("Outer(s string?)", printed)
+        Assert.Contains("OuterEarly(s string?)", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

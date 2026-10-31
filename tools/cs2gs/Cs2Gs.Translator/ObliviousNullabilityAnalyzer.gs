@@ -2374,7 +2374,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     // dereference (`x.M`, `x[i]`, `foreach`), a comparison or null test
     // (`x == y`, `x is …`, `x ?? y`, `x?.M`, `switch (x)`) and the author's own
     // `x!` take the null as C# does or are asserted either way: G#'s `!!`
-    // before a dereference throws where C# throws. A read handed to a slot (an argument, a store, a
+    // before a dereference throws where C# throws. A read that a null test
+    // guards (`if (x != null) …`) takes it too. A read handed to a slot (an argument, a store, a
     // `return`, an arrow body, a reduced extension's receiver) takes the null
     // when the slot is nullable — `(true, nil)` — or when the slot is a
     // declaration this rule widens too — `(false, slot)`, decided by the fixed
@@ -2389,6 +2390,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             value = parenthesized
         }
         let unsafe = (false, default(string?))
+        // A read that a null test guards never sees the null, in C# or in G#.
+        if IsNullGuardDominatedRead(expression, model) {
+            return (true, default(string?))
+        }
         // A user-defined conversion receives the value first: its input is the slot.
         if value is ExpressionSyntax converted && model.GetConversion(converted) is {
             IsUserDefined: true,
