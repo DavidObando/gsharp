@@ -160,12 +160,11 @@ stood in for `@ThreadStatic` fields under the older pin have been reverted
 `Issue4909ThreadStaticStateTests` (Runtime.Channels.Tests) fail if a pin moves
 to an SDK whose emitter drops `@ThreadStatic` on these fields again.
 
-The packed `tools/task/Gsharp.NET.Sdk.dll` does not follow the bootstrap pin:
-`src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj` redirects `GsharpCompilerFullPath`
-to the `gsc` built from the same commit, so a release carries a task assembly
-compiled by its own compiler (issue #4921: a bootstrap `gsc` that predates a
-codegen fix would otherwise ship that defect for one more release). The `build`
-job's `build/check-netstandard-host-refs.py` step fails if the packed task assembly
+The pinned `gsc` compiles the packed `tools/task/Gsharp.NET.Sdk.dll`, as it
+compiles every other repository project (the N-1 rule in `CONTRIBUTING.md`). A
+codegen correction for the task assembly therefore ships one release after the
+release that contains it (issues #4921 and #5413). The `build` job's
+`build/check-netstandard-host-refs.py` step fails if the packed task assembly
 names a `System.Private.*` host assembly, and `build/check-netstandard-member-refs.py`
 fails if any of its TypeRefs or MemberRefs is missing from the netstandard2.0
 reference surface (issue #4924). The `desktop-msbuild-sdk-smoke` job builds a

@@ -24,6 +24,1608 @@ import GSharp.Compiler.Tests
 import GSharp.Core.CodeAnalysis
 
 class Issue4776CopyProvenanceEmitTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedPlatformValueContainer_WidensOnlyToNullableContracts(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Platform.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable disable
+using System.Collections.Generic;
+namespace CopyPlatform5413;
+public record struct S<T>(T Value) {
+    public readonly object Anchor = Api.Construct();
+}
+public struct Plain<T> { public T Value; }
+public static class Api {
+    public static readonly object Marker = new();
+    public static int Calls, Constructions;
+    public static object Construct() { Constructions++; return Marker; }
+    public static S<string> Create() { Calls++; return new(null); }
+    public static Plain<string> Plain() { Calls++; return new() { Value = null }; }
+    public static S<S<string>> Nested() { Calls++; return new(new(null)); }
+    public static S<List<string>> NestedReference() { Calls++; return new(new() { null }); }
+    public static S<int> Value() => new(42);
+    public static S<int?> Optional() => new(null);
+    public static S<string>? Absent() => null;
+    public static S<string>? Present() => Create();
+#nullable enable
+    public static S<string> Required() => new("required");
+}`, "Platform", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        const source = `package PlatformApi5413
+import System.Collections.Generic
+import CopyPlatform5413
+public class Exports {
+    shared {
+        public func Direct() S[string?] -> Api.Create()
+        public func Local() S[string?] {
+            let value S[string?] = Api.Create()
+            return value
+        }
+        private func Receive(value S[string?]) S[string?] -> value
+        public func Argument() S[string?] -> Receive(Api.Create())
+        public func Lift() S[string?]? -> Api.Create()
+        public func Present() S[string?]? -> Api.Present()
+        public func Absent() S[string?]? -> Api.Absent()
+        public func Plain() Plain[string?] -> Api.Plain()
+        public func Nested() S[S[string?]] -> Api.Nested()
+        public func NestedReference() S[List[string?]?] -> Api.NestedReference()
+        public func Required() S[string] -> Api.Required()
+        public func Value() S[int32] -> Api.Value()
+        public func Optional() S[int32?] -> Api.Optional()
+    }
+}`
+        let apiReference = Path.Combine(fixture.Directory, "Widening.ref.dll")
+        let arguments = []string{"/assemblyname:Widening", "/r:" + selected, "/refout:" + apiReference}.Concat(
+            runtimeReferences.Select((path string) -> "/r:" + path)
+        )
+            .ToArray()
+        let api = fixture.Compile(source, "Widening", executable: false, arguments)
+        let firstImage = File.ReadAllBytes(api)
+        let firstReference = File.ReadAllBytes(apiReference)
+        let _ = fixture.Compile(source, "Widening", executable: false, arguments)
+        Assert.Equal(firstImage, File.ReadAllBytes(api))
+        Assert.Equal(firstReference, File.ReadAllBytes(apiReference))
+        let caller = fixture.CompileCSharp(`#nullable enable
+using System;
+using System.Reflection;
+using CopyPlatform5413;
+using PlatformApi5413;
+public static class Probe {
+    public static string Run() {
+        foreach (var value in new[] { Exports.Direct(), Exports.Local(), Exports.Argument() })
+            if (value.Value != null || !ReferenceEquals(value.Anchor, Api.Marker))
+                throw new Exception("Widening lost null or storage.");
+        var lifted = Exports.Lift();
+        var present = Exports.Present();
+        var nested = Exports.Nested();
+        var nestedReference = Exports.NestedReference();
+        if (!lifted.HasValue || lifted.Value.Value != null || !present.HasValue || present.Value.Value != null
+            || !ReferenceEquals(lifted.Value.Anchor, Api.Marker) || !ReferenceEquals(present.Value.Anchor, Api.Marker)
+            || Exports.Absent().HasValue || Exports.Plain().Value != null
+            || nested.Value.Value != null || !ReferenceEquals(nested.Value.Anchor, Api.Marker)
+            || !ReferenceEquals(nested.Anchor, Api.Marker)
+            || nestedReference.Value == null || nestedReference.Value.Count != 1 || nestedReference.Value[0] != null
+            || Api.Calls != 8 || Api.Constructions != 8)
+            throw new Exception("Widening changed optionality, nested storage or evaluation count.");
+        if (Exports.Required().Value != "required" || Exports.Value().Value != 42 || Exports.Optional().Value != null)
+            throw new Exception("Non-null or value-type contract changed.");
+        var context = new NullabilityInfoContext();
+        foreach (var name in new[] { "Direct", "Local", "Argument", "Plain" }) {
+            var method = typeof(Exports).GetMethod(name)!;
+            if (context.Create(method.ReturnParameter).GenericTypeArguments[0].ReadState != NullabilityState.Nullable)
+                throw new Exception("Nullable argument metadata lost: " + name);
+        }
+        var required = context.Create(typeof(Exports).GetMethod("Required")!.ReturnParameter);
+        var nestedInfo = context.Create(typeof(Exports).GetMethod("Nested")!.ReturnParameter);
+        var nestedReferenceInfo = context.Create(typeof(Exports).GetMethod("NestedReference")!.ReturnParameter);
+        if (required.GenericTypeArguments[0].ReadState != NullabilityState.NotNull
+            || nestedInfo.GenericTypeArguments[0].GenericTypeArguments[0].ReadState != NullabilityState.Nullable
+            || nestedReferenceInfo.GenericTypeArguments[0].ReadState != NullabilityState.Nullable
+            || nestedReferenceInfo.GenericTypeArguments[0].GenericTypeArguments[0].ReadState != NullabilityState.Nullable)
+            throw new Exception("Nested metadata was erased.");
+        return "null|storage|once|optional|nested|metadata";
+    }
+}`, "PlatformCaller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(
+            "null|storage|once|optional|nested|metadata",
+            assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+        )
+        for (target, expression) in[](string, string){
+            ("S[string]", "Api.Create()"),
+            ("S[object?]", "Api.Create()"),
+            ("S[S[string]]", "Api.Nested()"),
+            ("S[List[string]]", "Api.NestedReference()"),
+            ("S[List[string]?]", "Api.NestedReference()"),
+            ("S[string?]", "Api.Required()"),
+            ("S[int32]", "Api.Optional()"),
+            ("S[int32?]", "Api.Value()"),
+            ("S[string?]", "Api.Present()")
+        } {
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import System.Collections.Generic\nimport CopyPlatform5413\npublic func Rejected() " +
+                    target +
+                    " -> " +
+                    expression +
+                    "\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            let start = 28 + target.Length
+            let end = start + expression.Length
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+        for modifier in[]string{"ref", "out"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "ByRef.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "ByRef.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import CopyPlatform5413\nfunc Receive(" +
+                    modifier +
+                    " value S[int32]) { value = default }\n" +
+                    "public func Rejected() {\nvar value = Api.Optional()\nReceive(" +
+                    modifier +
+                    " value)\n}",
+                "ByRef",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.True(output.Contains("ByRef.gs(5,9,5,18): error GS0154:", StringComparison.Ordinal), output)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "ByRef.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
+    /// Each argument pair of a nested platform view is related once per conversion query. Before, the
+    /// variant slot classified each child twice, the same-shape projection repeated the direct
+    /// comparison, and a proven supertype projection was classified again by the ordinary upcast
+    /// rules, so a depth-24 view did not finish compiling. The CLR guard of a variant position also
+    /// admits a variant view of an implemented interface (`IReadOnlyList` to `IEnumerable`).
+    @Fact
+    func DeepPlatformCovariantViews_RelateEachArgumentPairOnce() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        const depth = 24
+        let csharpView = Nest("System.Collections.Generic.IReadOnlyList<", depth, "string", ">")
+        let csharpInner = Nest("System.Collections.Generic.IReadOnlyList<", depth - 1, "string", ">")
+        let values = string.Concat(Enumerable.Repeat("One(", depth)) + "(string)null" + string.Concat(
+            Enumerable.Repeat(")", depth)
+        )
+        let inner = string.Concat(Enumerable.Repeat("One(", depth - 1)) + "(string)null" + string.Concat(
+            Enumerable.Repeat(")", depth - 1)
+        )
+        let contract = fixture.CompileCSharp(
+            "#nullable disable\nusing System.Collections.Generic;\nnamespace DeepView5413;\n" +
+                "public static class Api {\n" +
+                "    private static IReadOnlyList<T> One<T>(T value) => new List<T> { value };\n" +
+                "    public static readonly $csharpView Value = $values;\n" +
+                "    public static readonly List<$csharpInner> Items = new() { $inner };\n" +
+                "    public static $csharpView View() => Value;\n" +
+                "    public static List<$csharpInner> List() => Items;\n" +
+                "}",
+            "DeepView"
+        )
+        let view = NullableView(depth, "IReadOnlyList", "string?")
+        let enumerable = NullableView(depth, "IEnumerable", "string?")
+        let source = "package DeepViewApi5413\nimport System.Collections.Generic\nimport DeepView5413\n" +
+            "public class Exports {\n    shared {\n" +
+            "        public func View() $view -> Api.View()\n" +
+            "        public func List() $view -> Api.List()\n" +
+            "        public func Sequence() $enumerable -> Api.View()\n" +
+            "        public func ListSequence() $enumerable -> Api.List()\n" +
+            "    }\n}"
+        let api = fixture.Compile(
+            source,
+            "DeepViewApi",
+            executable: false,
+            []string{"/assemblyname:DeepViewApi", "/r:" + contract}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let caller = fixture.CompileCSharp(
+            "#nullable disable\nusing System.Collections;\nusing DeepView5413;\nusing DeepViewApi5413;\n" +
+                "public static class Probe {\n" +
+                "    private static object Leaf(object value, int depth) {\n" +
+                "        for (var i = 0; i < depth; i++) value = ((IList)value)[0];\n" +
+                "        return value;\n" +
+                "    }\n" +
+                "    public static string Run() {\n" +
+                "        if (!ReferenceEquals(Exports.View(), Api.Value) || !ReferenceEquals(Exports.List(), Api.Items)\n" +
+                "            || !ReferenceEquals(Exports.Sequence(), Api.Value) || !ReferenceEquals(Exports.ListSequence(), Api.Items))\n" +
+                "            throw new System.Exception(\"The view changed storage.\");\n" +
+                "        if (Leaf(Exports.View(), $depth) != null || Leaf(Exports.List(), $depth) != null\n" +
+                "            || Leaf(Exports.Sequence(), $depth) != null || Leaf(Exports.ListSequence(), $depth) != null)\n" +
+                "            throw new System.Exception(\"The view lost the null leaf.\");\n" +
+                "        return \"same|null\";\n" +
+                "    }\n" +
+                "}",
+            "DeepViewCaller",
+            contract,
+            api
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal("same|null", assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        // The non-null leaf is still rejected at the same depth, in either view.
+        for container in[]string{"IReadOnlyList", "IEnumerable"} {
+            let rejected = NullableView(depth, container, "string")
+            let rejectedReference = Path.Combine(fixture.Directory, "DeepRejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "DeepRejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "import System.Collections.Generic\nimport DeepView5413\npublic func Rejected() $rejected -> Api.View()\n",
+                "DeepRejected",
+                executable: false,
+                []string{"/r:" + contract, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            let start = 28 + rejected.Length
+            let end = start + "Api.View()".Length
+            Assert.NotEqual(0, code)
+            Assert.Contains("DeepRejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "DeepRejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
+    // `prefix` applied `depth` times around `leaf`, closed by `suffix`.
+    private func Nest(prefix string, depth int32, leaf string, suffix string) string -> string.Concat(
+        Enumerable.Repeat(prefix, depth)
+    ) +
+        leaf +
+        string.Concat(Enumerable.Repeat(suffix, depth))
+
+    // A G# view of `depth` levels of `container`; every nested level is nullable, the outermost is not.
+    private func NullableView(depth int32, container string, leaf string) string {
+        var view = leaf
+        for var level = 1; level <= depth; level++ {
+            view = container +
+                "[" +
+                view +
+                "]" +
+                (
+                if level < depth {
+                    "?"
+                } else {
+                    ""
+                }
+            )
+        }
+        return view
+    }
+
+    private const ReviewContract5413 string = `#nullable enable
+using System;
+using System.Collections.Generic;
+using RequiredList = System.Collections.Generic.List<string>;
+namespace Review5413;
+public record struct S<T>(T Value);
+public record struct Pair<T, U>(T First, U Second);
+public static class Api {
+#nullable disable
+    public static Pair<string,
+#nullable enable
+        string?> Mixed() => new(null, null);
+#nullable disable
+    public static S<RequiredList> Nested() => new(new() { "required" });
+    public static List<Tuple<int, int>> ReferenceTuples() => new() { Tuple.Create(1, 2) };
+    public static List<ValueTuple<int, int>> ValueTuples() => new() { (3, 4) };
+}`
+
+    @Theory
+    @InlineData(false, "Pair[string?, string]", "Api.Mixed()")
+    @InlineData(true, "Pair[string?, string]", "Api.Mixed()")
+    @InlineData(false, "S[List[string?]?]", "Api.Nested()")
+    @InlineData(true, "S[List[string?]?]", "Api.Nested()")
+    func ImportedPlatformValueContainer_RejectsContractChanges(useReference bool, target string, expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(ReviewContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport Review5413\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func ImportedGenericStorage_PreservesClrTupleFamilies(useReference bool, isOut bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(ReviewContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let modifier = if isOut {
+            "out"
+        } else {
+            "ref"
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport Review5413\nfunc Receive(" +
+                modifier +
+                " value List[(int32, int32)]) { value = default }\npublic func Rejected() {\n" +
+                "var value = Api.ReferenceTuples()\nReceive(" +
+                modifier +
+                " value)\n}\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(6,9,6,18): error GS0154:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+        let apiReference = Path.Combine(fixture.Directory, "Storage.ref.dll")
+        let api = fixture.Compile(`package Storage5413
+import System.Collections.Generic
+import Review5413
+public class Exports {
+    shared {
+        private func Keep(ref value List[(int32, int32)]) List[(int32, int32)] -> value
+        private func Reset(out value List[(int32, int32)]) { value = Api.ValueTuples() }
+        public func Mixed() Pair[string?, string?] -> Api.Mixed()
+        public func Nested() S[List[string]?] -> Api.Nested()
+        public func Run() int32 {
+            var value = Api.ValueTuples()
+            let kept = Keep(ref value)
+            Reset(out value)
+            return kept[0].Item1 + value[0].Item2
+        }
+    }
+}`, "Storage", executable: false, []string{"/assemblyname:Storage", "/r:" + selected, "/refout:" + apiReference}
+                .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray())
+        let caller = fixture.CompileCSharp(`using System;
+using Storage5413;
+public static class Probe {
+    public static int Run() {
+        var mixed = Exports.Mixed();
+        var nested = Exports.Nested();
+        if (mixed.First != null || mixed.Second != null || nested.Value == null || nested.Value[0] != "required")
+            throw new Exception("Matching argument contracts or storage changed.");
+        return Exports.Run();
+    }
+}`, "Caller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal(7, assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+    }
+
+    @Fact
+    func NullableValueTupleSpelling_LiftsGenericAndClosedValues() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Lifts.ref.dll")
+        let api = fixture.Compile(`package TupleLifts5413
+public class Exports {
+    shared {
+        public func Lift[T](value (int32, T)) System.ValueTuple[int32, T]? -> value
+        public func Closed(value (int32, int32)) System.ValueTuple[int32, int32]? -> value
+    }
+}`, "Lifts", executable: false, []string{"/assemblyname:Lifts", "/refout:" + reference}
+                .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray())
+        let caller = fixture.CompileCSharp(`using System;
+using TupleLifts5413;
+public static class Probe {
+    public static string Run() {
+        var reference = Exports.Lift<string>((17, "open"));
+        var value = Exports.Lift<int>((19, 23));
+        var closed = Exports.Closed((29, 31));
+        if (!reference.HasValue || !value.HasValue || !closed.HasValue)
+            throw new Exception("Nullable construction lost the value.");
+        return $"{reference.Value.Item1}|{reference.Value.Item2}|{value.Value.Item1}|{value.Value.Item2}|{closed.Value.Item1}|{closed.Value.Item2}";
+    }
+}`, "Caller", reference)
+        for image in[]string{api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(api, caller)
+        Assert.Equal("17|open|19|23|29|31", assemblies[1].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+    }
+
+    private const MixedReferenceContract5413 string = `#nullable enable
+using System;
+using System.Collections.Generic;
+namespace ReviewMixed5413;
+public class C<T, U> {
+    public T First;
+    public U Second;
+    public C(T first, U second) { First = first; Second = second; }
+}
+public static class Api {
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        string?> Mixed() => new(null, null);
+    public static C<string?,
+#nullable disable
+        string
+#nullable enable
+        > Reversed() => new(null, null);
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        List<string?>> Nested() => new(null, new() { null });
+    public static C<C<
+#nullable disable
+        string,
+#nullable enable
+        string?>, int> Recursive() => new(Mixed(), 42);
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        int?> Optional() => new(null, null);
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        C<int?, string?>> Deep() => new(null, new(null, null));
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        C<int?, int>> DeepOptional() => new(null, new(null, 42));
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        C<List<Tuple<int, int>>, int>> DeepStorage() => new(null, new(new() { Tuple.Create(1, 2) }, 42));
+    public static C<
+#nullable disable
+        string,
+#nullable enable
+        List<Tuple<int, int>>> Storage() => new(null, new() { Tuple.Create(1, 2) });
+    public static int Consume(C<string, string> value) => value.First.Length + value.Second.Length;
+}`
+
+    @Theory
+    @InlineData(false, "C[string, string]", "Api.Mixed()")
+    @InlineData(true, "C[string, string]", "Api.Mixed()")
+    @InlineData(false, "C[string?, string]", "Api.Mixed()")
+    @InlineData(true, "C[string?, string]", "Api.Mixed()")
+    @InlineData(false, "C[string, string]", "Api.Reversed()")
+    @InlineData(true, "C[string, string]", "Api.Reversed()")
+    @InlineData(false, "C[string, List[string]]", "Api.Nested()")
+    @InlineData(true, "C[string, List[string]]", "Api.Nested()")
+    @InlineData(false, "C[string?, List[string]]", "Api.Nested()")
+    @InlineData(true, "C[string?, List[string]]", "Api.Nested()")
+    @InlineData(false, "C[C[string, string], int32]", "Api.Recursive()")
+    @InlineData(true, "C[C[string, string], int32]", "Api.Recursive()")
+    @InlineData(false, "C[string, int32]", "Api.Optional()")
+    @InlineData(true, "C[string, int32]", "Api.Optional()")
+    @InlineData(false, "C[string?, int32]", "Api.Optional()")
+    @InlineData(true, "C[string?, int32]", "Api.Optional()")
+    @InlineData(false, "C[string?, C[int32, string]]", "Api.Deep()")
+    @InlineData(true, "C[string?, C[int32, string]]", "Api.Deep()")
+    @InlineData(false, "C[string?, C[int32, int32]]", "Api.DeepOptional()")
+    @InlineData(true, "C[string?, C[int32, int32]]", "Api.DeepOptional()")
+    @InlineData(false, "C[string?, C[List[(int32, int32)], int32]]", "Api.DeepStorage()")
+    @InlineData(true, "C[string?, C[List[(int32, int32)], int32]]", "Api.DeepStorage()")
+    @InlineData(false, "C[string, List[(int32, int32)]]", "Api.Storage()")
+    @InlineData(true, "C[string, List[(int32, int32)]]", "Api.Storage()")
+    @InlineData(false, "C[string?, List[(int32, int32)]]", "Api.Storage()")
+    @InlineData(true, "C[string?, List[(int32, int32)]]", "Api.Storage()")
+    func ImportedPlatformReferenceContainer_RejectsMixedContracts(useReference bool, target string, expression string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(MixedReferenceContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport ReviewMixed5413\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedPlatformReferenceContainer_RejectsMixedClrArguments(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contracts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(MixedReferenceContract5413, "Contracts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import ReviewMixed5413\npublic func Rejected() int32 -> Api.Consume(Api.Mixed())\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(2,45,2,56): error GS0154:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    private const PlatformContextContract5413 string = `#nullable enable
+using System;
+using System.Collections.Generic;
+namespace Context5413;
+public record struct S<T>(T Value);
+public class Box<T, U>(T first, U second) { public T First = first; public U Second = second; }
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public interface IWrite<in T, in U> { void Put(T first, U second); }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public class WriteImpl<T, U> : IWrite<T, U> {
+    public void Put(T first, U second) { Api.Writes++; }
+}
+public static class Api {
+    public static int Calls, Writes;
+#nullable disable
+    public static string Get() { Calls++; return null; }
+#nullable enable
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        string> View() => new ViewImpl<string, string>(Get(), "view");
+    public static IWrite<string?,
+#nullable disable
+        string
+#nullable enable
+        > Sink() => new WriteImpl<string?, string>();
+    public static Box<
+#nullable disable
+        string,
+#nullable enable
+        string> Invariant() => new(Get(), "box");
+    public static S<List<
+#nullable disable
+        string
+#nullable enable
+        >?> NullList() => new(null);
+    public static S<S<List<
+#nullable disable
+        string
+#nullable enable
+        >?>> NestedNullList() => new(NullList());
+    public static S<(
+#nullable disable
+        string,
+#nullable enable
+        string)> AliasedTuple() => new((Get(), "tuple"));
+    public static Box<IView<
+#nullable disable
+        string,
+#nullable enable
+        string>, int> NestedInvariant() => new(View(), 42);
+    public static IView<List<
+#nullable disable
+        string
+#nullable enable
+        >?, string> NullableView() => new ViewImpl<List<string>?, string>(null, "view");
+    public static IView<int?,
+#nullable disable
+        string> OptionalView() => new ViewImpl<int?, string>(null, null);
+    public static IView<string,
+#nullable enable
+        List<Tuple<int, int>>> TupleView() =>
+        new ViewImpl<string, List<Tuple<int, int>>>(null!, new() { Tuple.Create(17, 19) });
+}`
+
+    @Theory
+    @InlineData(false, "stored")
+    @InlineData(true, "stored")
+    @InlineData(false, "view")
+    @InlineData(true, "view")
+    @InlineData(false, "sink")
+    @InlineData(true, "sink")
+    func ImportedPlatformValueConversion_UsesStructuralAndVariantContexts(useReference bool, context string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contexts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(PlatformContextContract5413, "Contexts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let body = if context == "stored" {
+            "public func Lift() (string?, string?) {\nlet pair = (Api.Get(), \"x\")\nreturn pair\n}"
+        } else if context == "view" {
+            "public func Lift() IView[string?, string?] -> Api.View()"
+        } else {
+            "public func Lift() IWrite[string, string] -> Api.Sink()"
+        }
+        let apiReference = Path.Combine(fixture.Directory, "Values.ref.dll")
+        let api = fixture.Compile(
+            "package ValueContexts5413\nimport System.Collections.Generic\nimport Context5413\n" +
+                "public class Exports { shared {\n" +
+                body +
+                "\npublic func NullableList() S[List[string?]?] -> Api.NullList()\n" +
+                "public func NestedNullableList() S[S[List[string?]?]] -> Api.NestedNullList()\n} }\n",
+            "Values",
+            executable: false,
+            []string{"/assemblyname:Values", "/r:" + selected, "/refout:" + apiReference}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let assertion = if context == "stored" {
+            `if (value.Item1 != null || value.Item2 != "x" || Api.Calls != 1) throw new Exception("Stored tuple changed.");
+return $"{value.Item1 == null}|{value.Item2}|{Api.Calls}";`
+        } else if context == "view" {
+            `if (value.First != null || value.Second != "view" || Api.Calls != 1) throw new Exception("Covariant view changed.");
+return $"{value.First == null}|{value.Second}|{Api.Calls}";`
+        } else {
+            `value.Put("first", "second");
+if (Api.Writes != 1 || Api.Calls != 0) throw new Exception("Contravariant view changed.");
+return $"{Api.Writes}|{Api.Calls}";`
+        }
+        let caller = fixture.CompileCSharp(
+            "using System;\nusing Context5413;\nusing ValueContexts5413;\npublic static class Probe {\n" +
+                "public static string Run() {\n" +
+                "if (Exports.NullableList().Value != null || Exports.NestedNullableList().Value.Value != null) " +
+                "throw new Exception(\"Nullable list changed.\");\nvar value = Exports.Lift();\n" +
+                assertion +
+                "\n} }",
+            "Caller",
+            contract,
+            apiReference
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        let expected = if context == "stored" {
+            "True|x|1"
+        } else if context == "view" {
+            "True|view|1"
+        } else {
+            "1|0"
+        }
+        Assert.Equal(expected, assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        if context == "view" {
+            let targets = []string{
+                "Box[string?, string?]",
+                "S[(string?, string?)]",
+                "Box[IView[string?, string?], int32]",
+                "IView[string, string?]",
+                "IView[List[string?], string?]",
+                "IView[int32, string?]",
+                "IView[string?, List[(int32, int32)]]"
+            }
+            let expressions = []string{
+                "Api.Invariant()",
+                "Api.AliasedTuple()",
+                "Api.NestedInvariant()",
+                "Api.View()",
+                "Api.NullableView()",
+                "Api.OptionalView()",
+                "Api.TupleView()"
+            }
+            for var i = 0; i < targets.Length; i++ {
+                let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+                let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+                let (code, output) = fixture.TryCompile(
+                    "import System.Collections.Generic\nimport Context5413\npublic func Rejected() " +
+                        targets[i] +
+                        " -> " +
+                        expressions[i] +
+                        "\n",
+                    "Rejected",
+                    executable: false,
+                    []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                        runtimeReferences.Select((path string) -> "/r:" + path)
+                    )
+                        .ToArray()
+                )
+                let start = 28 + targets[i].Length
+                let end = start + expressions[i].Length
+                Assert.NotEqual(0, code)
+                Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+                Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+                Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+                Assert.False(File.Exists(rejectedReference))
+                Assert.False(File.Exists(pdb))
+            }
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ImportedPlatformValueContainer_RejectsNullableNodesWithPlatformDescendants(useReference bool, nested bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Contexts.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(PlatformContextContract5413, "Contexts", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let target = if nested {
+            "S[S[List[string?]]]"
+        } else {
+            "S[List[string?]]"
+        }
+        let expression = if nested {
+            "Api.NestedNullList()"
+        } else {
+            "Api.NullList()"
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import System.Collections.Generic\nimport Context5413\npublic func Rejected() " +
+                target +
+                " -> " +
+                expression +
+                "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = 28 + target.Length
+        let end = start + expression.Length
+        Assert.NotEqual(0, code)
+        Assert.Contains("Rejected.gs(3,$start,3,$end): error GS0155:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    private const PlatformOuterContract5413 string = `#nullable enable
+namespace ContextOuter5413;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public class Box<T, U>(T first, U second) { public T First = first; public U Second = second; }
+public static class Maker<T> where T : class {
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        T> Create(T value) {
+        Api.Calls++;
+        return new ViewImpl<string, T>(null!, value);
+    }
+    public static Box<
+#nullable disable
+        string,
+#nullable enable
+        T> Invariant(T value) => new(null!, value);
+}
+public static class Api {
+    public static int Calls;
+#nullable disable
+    public static string Get() { Calls++; return null; }
+    public static IView<string,
+#nullable enable
+        string
+#nullable disable
+        > Outer(bool absent) {
+        Calls++;
+        return absent ? null : new ViewImpl<string, string>(null, "outer");
+    }
+}`
+
+    @Theory
+    @InlineData(false, "outer")
+    @InlineData(true, "outer")
+    @InlineData(false, "nullable-outer")
+    @InlineData(true, "nullable-outer")
+    @InlineData(false, "local-view")
+    @InlineData(true, "local-view")
+    @InlineData(false, "nullable-tuple")
+    @InlineData(true, "nullable-tuple")
+    func ImportedPlatformViewContext_PreservesOuterChecksAndSymbolicReferences(useReference bool, context string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Outer.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(PlatformOuterContract5413, "Outer", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let body = if context == "outer" {
+            "public func Lift(absent bool) IView[string?, string?] -> Api.Outer(absent)"
+        } else if context == "nullable-outer" {
+            "public func Lift(absent bool) IView[string?, string?]? -> Api.Outer(absent)"
+        } else if context == "local-view" {
+            "public func Lift(value C) IView[string?, C?] {\nlet view = Maker[C].Create(value)\nreturn view\n}"
+        } else {
+            `public func Lift(value C) (string?, C?)? {
+let pair = (Api.Get(), value)
+return pair
+}
+public func Stored(value C) (string?, C?) {
+let pair = (Api.Get(), value)
+return pair
+}
+public func Imported(value C) System.ValueTuple[string?, C?]? {
+let pair = (Api.Get(), value)
+return pair
+}`
+        }
+        let apiReference = Path.Combine(fixture.Directory, "Views.ref.dll")
+        let api = fixture.Compile(
+            "package OuterViews5413\nimport ContextOuter5413\npublic class C {}\npublic class Exports { shared {\n" +
+                body +
+                "\n} }\n",
+            "Views",
+            executable: false,
+            []string{"/assemblyname:Views", "/r:" + selected, "/refout:" + apiReference}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let assertion = if context == "outer" {
+            `var value = Exports.Lift(false);
+if (value.First != null || value.Second != "outer") throw new Exception("View changed.");
+bool checkedNull = false;
+try {
+    Exports.Lift(true);
+    throw new Exception("The outer null crossed a non-null boundary.");
+} catch (NullReferenceException error) {
+    if (!error.Message.Contains("'Outer(absent)' was nil") || !error.Message.Contains("Views.gs:5"))
+        throw new Exception("The outer check lost its origin.", error);
+    checkedNull = true;
+}
+if (Api.Calls != 2) throw new Exception("The producer was evaluated twice.");
+return $"{value.First == null}|{value.Second}|{checkedNull}|{Api.Calls}";`
+        } else if context == "nullable-outer" {
+            `var value = Exports.Lift(false);
+var absent = Exports.Lift(true);
+if (value == null || value.First != null || value.Second != "outer" || absent != null || Api.Calls != 2)
+    throw new Exception("The nullable outer view changed.");
+return $"{value.First == null}|{value.Second}|{absent == null}|{Api.Calls}";`
+        } else if context == "local-view" {
+            `var item = new C();
+var value = Exports.Lift(item);
+if (value.First != null || !ReferenceEquals(value.Second, item) || Api.Calls != 1)
+    throw new Exception("The symbolic class reference changed.");
+return $"{value.First == null}|{ReferenceEquals(value.Second, item)}|{Api.Calls}";`
+        } else {
+            `var item = new C();
+var lifted = Exports.Lift(item);
+var stored = Exports.Stored(item);
+var imported = Exports.Imported(item);
+if (!lifted.HasValue || !imported.HasValue || lifted.Value.Item1 != null || stored.Item1 != null ||
+    imported.Value.Item1 != null || !ReferenceEquals(lifted.Value.Item2, item) ||
+    !ReferenceEquals(stored.Item2, item) || !ReferenceEquals(imported.Value.Item2, item) || Api.Calls != 3)
+    throw new Exception("The tuple reference or Nullable storage changed.");
+return $"{lifted.HasValue}|{lifted.Value.Item1 == null}|{ReferenceEquals(lifted.Value.Item2, item)}|{Api.Calls}";`
+        }
+        let caller = fixture.CompileCSharp(
+            "using System;\nusing ContextOuter5413;\nusing OuterViews5413;\npublic static class Probe {\n" +
+                "public static string Run() {\n" +
+                assertion +
+                "\n} }",
+            "Caller",
+            contract,
+            apiReference
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        let expected = if context == "outer" || context == "nullable-outer" {
+            "True|outer|True|2"
+        } else if context == "local-view" {
+            "True|True|1"
+        } else {
+            "True|True|True|3"
+        }
+        Assert.Equal(expected, assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        let rejectedLine = if context == "outer" || context == "nullable-outer" {
+            "public func Rejected() IView[string, string?] -> Api.Outer(false)"
+        } else if context == "local-view" {
+            "public func Rejected() Box[string?, C?] -> Maker[C].Invariant(C())"
+        } else {
+            "public func Rejected(value (string?, C?)?) (string?, C?) -> value"
+        }
+        let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "package OuterReject5413\nimport ContextOuter5413\npublic class C {}\n" + rejectedLine + "\n",
+            "Rejected",
+            executable: false,
+            []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                runtimeReferences.Select((path string) -> "/r:" + path)
+            )
+                .ToArray()
+        )
+        let start = rejectedLine.IndexOf("->", StringComparison.Ordinal) + 4
+        let end = rejectedLine.Length + 1
+        Assert.NotEqual(0, code)
+        let diagnostic = if context == "local-view" {
+            "GS0490"
+        } else {
+            "GS0155"
+        }
+        Assert.Contains("Rejected.gs(4,$start,4,$end): error $diagnostic:", output, StringComparison.Ordinal)
+        Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(rejectedReference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    private const PlatformArrayContract5413 string = `#nullable enable
+namespace ContextArrays5413;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public interface ISink<out T, in U> { T First { get; } void Put(U value); }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public class SinkImpl<T, U>(T first) : ISink<T, U> {
+    public T First => first;
+    public void Put(U value) { Api.Puts++; Api.Last = value; }
+}
+public static class Producer<U> where U : class {
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        U> View(U value) { Api.Calls++; return new ViewImpl<string, U>(null!, value); }
+    public static ISink<
+#nullable disable
+        string,
+#nullable enable
+        U> Sink() { Api.Calls++; return new SinkImpl<string, U>(null!); }
+    public static IView<string, U> OrdinaryView(U value) {
+        Api.Calls++; return new ViewImpl<string, U>("ordinary", value);
+    }
+    public static ISink<string, U> OrdinarySink() {
+        Api.Calls++; return new SinkImpl<string, U>("ordinary");
+    }
+}
+public static class Api {
+    public static int Calls, Puts;
+    public static object? Last;
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        int[]> MetadataView() {
+        Api.Calls++; return new ViewImpl<string, int[]>(null!, new[] { 10, 20, 30 });
+    }
+    public static ISink<
+#nullable disable
+        string,
+#nullable enable
+        int[]> MetadataSink() {
+        Api.Calls++; return new SinkImpl<string, int[]>(null!);
+    }
+}`
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ImportedPlatformVariance_PreservesKnownArrayShapes(useReference bool, contravariant bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "Arrays.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(PlatformArrayContract5413, "Arrays", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let shape = if contravariant {
+            "ISink"
+        } else {
+            "IView"
+        }
+        for element in[]string{"int32", "C"} {
+            let sourceArgument = if contravariant {
+                "[]$element"
+            } else {
+                "[3]$element"
+            }
+            let targetArgument = if contravariant {
+                "[3]$element"
+            } else {
+                "[]$element"
+            }
+            let values = if element == "C" {
+                "C(), C(), C()"
+            } else {
+                "10, 20, 30"
+            }
+            let make = if contravariant {
+                "Sink()"
+            } else {
+                "View($sourceArgument{$values})"
+            }
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "package ArrayReject5413\nimport ContextArrays5413\npublic class C {}\n" +
+                    "public func Rejected() $shape[string?, $targetArgument] {\n" +
+                    "let value = Producer[$sourceArgument].$make\nreturn value\n}\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(6,8,6,13): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Contains("$shape[string!, $sourceArgument]", output, StringComparison.Ordinal)
+            Assert.Contains("$shape[string?, $targetArgument]", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+        let body = if contravariant {
+            `public func Match(value [3]int32) ISink[string?, [3]int32] -> Producer[[3]int32].Sink()
+public func Slice(value []int32) ISink[string?, []int32] -> Producer[[]int32].Sink()
+public func Metadata() ISink[string?, [3]int32] -> Api.MetadataSink()
+public func Ordinary(value [3]int32) ISink[string?, [3]int32] -> Producer[[3]int32].OrdinarySink()
+public func Symbolic(value C) ISink[string?, [3]C] -> Producer[[3]C].Sink()`
+        } else {
+            `public func Match(value [3]int32) IView[string?, [3]int32] -> Producer[[3]int32].View(value)
+public func Slice(value []int32) IView[string?, []int32] -> Producer[[]int32].View(value)
+public func Metadata() IView[string?, [3]int32] -> Api.MetadataView()
+public func Ordinary(value [3]int32) IView[string?, [3]int32] -> Producer[[3]int32].OrdinaryView(value)
+public func Symbolic(value C) IView[string?, [3]C] -> Producer[[3]C].View([3]C{value, value, value})`
+        }
+        let source = "package ArrayViews5413\nimport ContextArrays5413\npublic class C {}\n" +
+            "public class Exports { shared {\n" +
+            body +
+            "\npublic func Bare(value [3]int32) []int32 -> value\n} }\n"
+        let apiReference = Path.Combine(fixture.Directory, "ArrayViews.ref.dll")
+        let apiPdb = Path.Combine(fixture.Directory, "ArrayViews.pdb")
+        let arguments = []string{
+            "/assemblyname:ArrayViews",
+            "/r:" + selected,
+            "/refout:" + apiReference,
+            "/pdb:" + apiPdb
+        }
+            .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray()
+        let api = fixture.Compile(source, "ArrayViews", executable: false, arguments)
+        let first = []string{api, apiReference, apiPdb}.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        fixture.Compile(source, "ArrayViews", executable: false, arguments)
+        for var i = 0; i < first.Length; i++ {
+            Assert.Equal(first[i], File.ReadAllBytes(([]string{api, apiReference, apiPdb})[i]))
+        }
+        let assertion = if contravariant {
+            `foreach (var sink in new[] { matched, sliced, metadata, ordinary }) {
+    sink.Put(values);
+    if (!ReferenceEquals(Api.Last, values)) throw new Exception("Array storage changed.");
+}
+var objects = new[] { item, item, item };
+symbolic.Put(objects);
+if (!ReferenceEquals(Api.Last, objects) || Api.Puts != 5)
+    throw new Exception("Symbolic storage or write count changed.");`
+        } else {
+            `if (!ReferenceEquals(matched.Second, values) || !ReferenceEquals(sliced.Second, values) ||
+    !ReferenceEquals(ordinary.Second, values) || metadata.Second.Length != 3 || metadata.Second[1] != 20 ||
+    symbolic.Second.Length != 3 || !ReferenceEquals(symbolic.Second[2], item) || Api.Puts != 0)
+    throw new Exception("Array storage, metadata leniency, or symbolic identity changed.");`
+        }
+        let caller = fixture.CompileCSharp(
+            "using System;\nusing ContextArrays5413;\nusing ArrayViews5413;\npublic static class Probe {\n" +
+                "public static string Run() {\n" +
+                `var values = new[] { 10, 20, 30 };
+var item = new C();
+var matched = Exports.Match(values);
+var sliced = Exports.Slice(values);
+var metadata = Exports.Metadata();
+var ordinary = Exports.Ordinary(values);
+var symbolic = Exports.Symbolic(item);
+if (matched.First != null || sliced.First != null || metadata.First != null || symbolic.First != null ||
+    ordinary.First != "ordinary" || Api.Calls != 5 || !ReferenceEquals(Exports.Bare(values), values))
+    throw new Exception("Null payload, producer evaluation, ordinary variance, or bare widening changed.");
+` +
+                assertion +
+                "\nreturn $\"True|{Api.Calls}|{Api.Puts}\";\n} }",
+            "ArrayCaller",
+            contract,
+            apiReference
+        )
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        let actual = cast[string](assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)!!)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                if contravariant {
+                    "True|5|5"
+                } else {
+                    "True|5|0"
+                }
+            ),
+            Encoding.UTF8.GetBytes(actual)
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedPlatformVariance_PreservesUnchangedSymbolicValueArguments(useReference bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "TupleContract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+namespace TupleContract5413;
+public interface IView<out T, out U> { T First { get; } U Second { get; } }
+public class ViewImpl<T, U>(T first, U second) : IView<T, U> {
+    public T First => first;
+    public U Second => second;
+}
+public static class Api { public static int Calls; }
+public static class Maker<U> {
+    public static IView<
+#nullable disable
+        string,
+#nullable enable
+        U> Create(U value) {
+        Api.Calls++; return new ViewImpl<string, U>(null!, value);
+    }
+    public static IView<string, U> Ordinary(U value) {
+        Api.Calls++; return new ViewImpl<string, U>("ordinary", value);
+    }
+}`, "TupleContract", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        const source = `package TupleViews5413
+import TupleContract5413
+public class C {}
+public class Exports { shared {
+public func Lift(value C) IView[string?, (C, int32)] {
+    let pair = (value, 42)
+    let view = Maker[(C, int32)].Create(pair)
+    return view
+}
+public func Ordinary(value C) IView[string?, (C, int32)] -> Maker[(C, int32)].Ordinary((value, 42))
+public func Present(value C) IView[string?, (C, int32)?] -> Maker[(C, int32)?].Create((value, 42))
+public func Absent() IView[string?, (C, int32)?] -> Maker[(C, int32)?].Create(nil)
+public func Closed() IView[string?, (string, int32)] -> Maker[(string, int32)].Create(("closed", 42))
+} }`
+        let apiReference = Path.Combine(fixture.Directory, "TupleViews.ref.dll")
+        let apiPdb = Path.Combine(fixture.Directory, "TupleViews.pdb")
+        let arguments = []string{
+            "/assemblyname:TupleViews",
+            "/r:" + selected,
+            "/refout:" + apiReference,
+            "/pdb:" + apiPdb
+        }
+            .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray()
+        let api = fixture.Compile(source, "TupleViews", executable: false, arguments)
+        let first = []string{api, apiReference, apiPdb}.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        fixture.Compile(source, "TupleViews", executable: false, arguments)
+        for var i = 0; i < first.Length; i++ {
+            Assert.Equal(first[i], File.ReadAllBytes(([]string{api, apiReference, apiPdb})[i]))
+        }
+        let caller = fixture.CompileCSharp(`using System;
+using System.Reflection;
+using TupleContract5413;
+using TupleViews5413;
+public static class Probe {
+    public static string Run() {
+        var item = new C();
+        var lifted = Exports.Lift(item);
+        var ordinary = Exports.Ordinary(item);
+        var present = Exports.Present(item);
+        var absent = Exports.Absent();
+        var closed = Exports.Closed();
+        if (lifted.First != null || ordinary.First != "ordinary" || present.First != null ||
+            absent.First != null || closed.First != null || Api.Calls != 5 ||
+            !ReferenceEquals(lifted.Second.Item1, item) || lifted.Second.Item2 != 42 ||
+            !ReferenceEquals(ordinary.Second.Item1, item) || ordinary.Second.Item2 != 42 ||
+            !present.Second.HasValue || !ReferenceEquals(present.Second.Value.Item1, item) ||
+            present.Second.Value.Item2 != 42 || absent.Second.HasValue ||
+            closed.Second.Item1 != "closed" || closed.Second.Item2 != 42)
+            throw new Exception("Unchanged tuple storage, nulls, optionality, or evaluation changed.");
+        var copy = lifted.Second;
+        copy.Item1 = new C();
+        if (!ReferenceEquals(lifted.Second.Item1, item))
+            throw new Exception("A tuple read did not return a value copy.");
+        var result = typeof(Exports).GetMethod("Lift")!.ReturnParameter;
+        var info = new NullabilityInfoContext().Create(result);
+        if (result.ParameterType.GenericTypeArguments[1] != typeof(ValueTuple<C, int>) ||
+            typeof(Exports).GetMethod("Present")!.ReturnType.GenericTypeArguments[1] != typeof(ValueTuple<C, int>?) ||
+            info.GenericTypeArguments[0].ReadState != NullabilityState.Nullable ||
+            info.GenericTypeArguments[1].GenericTypeArguments[0].ReadState != NullabilityState.NotNull)
+            throw new Exception("Tuple family or exported contracts changed.");
+        return $"True|{Api.Calls}|{lifted.Second.Item2}";
+    }
+}`, "TupleCaller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal("True|5|42", assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        for target in[]string{"(D, int32)", "(C, int64)", "(C, int32)?"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                "package TupleReject5413\nimport TupleContract5413\npublic class C {}\npublic class D {}\n" +
+                    "public func Rejected(value C) IView[string?, $target] {\n" +
+                    "let view = Maker[(C, int32)].Create((value, 42))\nreturn view\n}\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(7,8,7,12): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func ImportedPlatformMap_PreservesStatedArgumentContracts(useReference bool, platformKey bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let runtimeReferences = Directory
+            .GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location)!!, "*.dll")
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        let reference = Path.Combine(fixture.Directory, "MapContract.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable disable
+namespace MapContract5413;
+public record Box<T>(T Value);
+public static class Api {
+    public static int Calls, Captures;
+    public static object Last;
+    public static Box<string> Key() { Calls++; return new("key"); }
+    public static Box<string> Value() { Calls++; return new(null); }
+    public static void Remember(object value) { Captures++; Last = value; }
+}`, "MapContract", reference)
+        let selected = if useReference {
+            reference
+        } else {
+            contract
+        }
+        let helper = if platformKey {
+            "public func Build[K](box Box[K]) map[K, string?] -> map[K, string?]{box.Value:nil}\n" +
+                "public func Objects[K](box Box[K], item C?) map[K, C?] -> map[K, C?]{box.Value:item}\n"
+        } else {
+            "public func Build[V](box Box[V]) map[string?, V] -> map[string?, V]{\"key\":box.Value}\n" +
+                "public func Objects[V](box Box[V], item C?) map[C?, V] -> map[C?, V]{item:box.Value}\n"
+        }
+        let producer = if platformKey {
+            "Api.Key()"
+        } else {
+            "Api.Value()"
+        }
+        let symbolicArguments = if platformKey {
+            "string?, C?"
+        } else {
+            "C?, string?"
+        }
+        let prefix = "package MapViews5413\nimport MapContract5413\nimport System.Collections.Generic\npublic class C {}\n" +
+            helper
+        let source = prefix +
+            "public class Exports { shared {\n" +
+            "public func Direct() Dictionary[string?, string?] {\nlet value = Build($producer)\nApi.Remember(value)\nreturn value\n}\n" +
+            "public func Projected() IDictionary[string?, string?] {\nlet value = Build($producer)\nApi.Remember(value)\nreturn value\n}\n" +
+            "public func Symbolic(item C?) Dictionary[$symbolicArguments] {\nlet value = Objects($producer, item)\nApi.Remember(value)\nreturn value\n}\n" +
+            "public func Ordinary(item C) Dictionary[string, C?] -> map[string, C?]{\"key\":item}\n" +
+            "public func Optional() Dictionary[string, int32?] -> map[string, int32?]{\"key\":nil}\n} }\n"
+        let apiReference = Path.Combine(fixture.Directory, "MapViews.ref.dll")
+        let apiPdb = Path.Combine(fixture.Directory, "MapViews.pdb")
+        let arguments = []string{
+            "/assemblyname:MapViews",
+            "/r:" + selected,
+            "/refout:" + apiReference,
+            "/pdb:" + apiPdb
+        }
+            .Concat(runtimeReferences.Select((path string) -> "/r:" + path)).ToArray()
+        let api = fixture.Compile(source, "MapViews", executable: false, arguments)
+        let first = []string{api, apiReference, apiPdb}.Select((path string) -> File.ReadAllBytes(path)).ToArray()
+        fixture.Compile(source, "MapViews", executable: false, arguments)
+        for var i = 0; i < first.Length; i++ {
+            Assert.Equal(first[i], File.ReadAllBytes(([]string{api, apiReference, apiPdb})[i]))
+        }
+        let symbolicCheck = if platformKey {
+            "symbolic[\"key\"] != item"
+        } else {
+            "symbolic[item] != null"
+        }
+        let caller = fixture.CompileCSharp(`using System;
+using System.Reflection;
+using MapContract5413;
+using MapViews5413;
+public static class Probe {
+    public static string Run() {
+        var direct = Exports.Direct();
+        if (!ReferenceEquals(direct, Api.Last) || direct.Count != 1 || direct["key"] != null)
+            throw new Exception("Direct map conversion changed storage or null.");
+        var projected = Exports.Projected();
+        if (!ReferenceEquals(projected, Api.Last) || projected.Count != 1 || projected["key"] != null)
+            throw new Exception("Projected map conversion changed storage or null.");
+        var item = new C();
+        var symbolic = Exports.Symbolic(item);
+        if (!ReferenceEquals(symbolic, Api.Last) || symbolic.Count != 1 || ` + symbolicCheck + `)
+            throw new Exception("Symbolic map conversion changed storage or identity.");
+        if (!ReferenceEquals(Exports.Ordinary(item)["key"], item) || Exports.Optional()["key"].HasValue ||
+            Api.Calls != 3 || Api.Captures != 3)
+            throw new Exception("Ordinary contracts, value optionality or evaluation changed.");
+        var info = new NullabilityInfoContext().Create(typeof(Exports).GetMethod("Direct")!.ReturnParameter);
+        if (info.GenericTypeArguments[0].ReadState != NullabilityState.Nullable ||
+            info.GenericTypeArguments[1].ReadState != NullabilityState.Nullable)
+            throw new Exception("Exported map argument contracts changed.");
+        return $"True|{Api.Calls}|{Api.Captures}";
+    }
+}`, "MapCaller", contract, apiReference)
+        for image in[]string{contract, api, caller} {
+            var report = string.Empty
+            IlVerifier.Verify(
+                image,
+                runtimeReferences.Concat([]string{contract, api}),
+                report: (text string) -> {
+                    report = text
+                }
+            )
+            Assert.Contains("raw exit: 0", report, StringComparison.Ordinal)
+            Assert.DoesNotContain("[approved", report, StringComparison.Ordinal)
+        }
+        let assemblies = EmittedFixture.LoadTogether(contract, api, caller)
+        Assert.Equal("True|3|3", assemblies[2].GetType("Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        for target in[]string{"string?, string", "string, string?"} {
+            let rejectedReference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+            let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+            let (code, output) = fixture.TryCompile(
+                prefix +
+                    "public func Rejected() Dictionary[$target] {\nlet value = Build($producer)\nreturn value\n}\n",
+                "Rejected",
+                executable: false,
+                []string{"/r:" + selected, "/refout:" + rejectedReference, "/pdb:" + pdb}.Concat(
+                    runtimeReferences.Select((path string) -> "/r:" + path)
+                )
+                    .ToArray()
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("Rejected.gs(9,8,9,13): error GS0155:", output, StringComparison.Ordinal)
+            Assert.Equal(1, output.Split(": error GS", StringSplitOptions.None).Length - 1)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+            Assert.False(File.Exists(rejectedReference))
+            Assert.False(File.Exists(pdb))
+        }
+    }
+
     private const ImportedNullableContract5408 string = `#nullable enable
 using System.Collections.Generic;
 namespace CopyAnnotated5408;
