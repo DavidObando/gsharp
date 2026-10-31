@@ -527,6 +527,95 @@ func Run(n int32, other Node) int32 {
     }
     return total
 }`, "GS0158")
+            Add("bare-property-getter-in-a-return-is-a-call (W5)", `package T
+import System
+var g string? = "safe"
+class H {
+    prop P string {
+        get {
+            g = nil
+            return "p"
+        }
+    }
+    func Run(flag bool) string {
+        if g == nil { return "" }
+        for {
+            if flag == true { return P }
+            if flag == true { return g }
+        }
+    }
+}
+func Main() { Console.WriteLine(H{}.Run(true)) }`, "GS0155")
+            Add("user-operator-in-a-return-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class V { var N int32 = 1 }
+func (a V) operator +(b V) string {
+    g = nil
+    return "v"
+}
+func Run(flag bool) string {
+    if g == nil { return "" }
+    let a = V{}
+    for {
+        if flag == true { return a + a }
+        if flag == true { return g }
+    }
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
+            Add("property-increment-runs-a-setter (W4)", `package T
+import System
+var g string? = "safe"
+class H {
+    prop P int32 {
+        get { return 1 }
+        set { g = nil }
+    }
+    func Run(flag bool) string {
+        if g == nil { return "" }
+        for {
+            if flag == true { P++ }
+            if flag == true { return g }
+        }
+    }
+}
+func Main() { Console.WriteLine(H{}.Run(true)) }`, "GS0155")
+            Add("value-type-nil-comparison-runs-a-user-equality (W4)", `package T
+import System
+var g string? = "safe"
+struct Token {
+    var N int32
+}
+func (a Token) operator ==(b object?) bool {
+    g = nil
+    return false
+}
+func (a Token) operator !=(b object?) bool -> true
+func Run(flag bool) string {
+    if g == nil { return "" }
+    let token = Token{N: 1}
+    for {
+        if token == nil { return "t" }
+        if flag == true { return g }
+    }
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
+            Add("boolean-condition-conversion-in-an-if-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+class Flag { var N int32 = 1 }
+func operator implicit (f Flag) bool {
+    g = nil
+    return true
+}
+func Run(done Flag) string {
+    if g == nil { return "" }
+    for {
+        if done { return "d" }
+        return g
+    }
+}
+func Main() { Console.WriteLine(Run(Flag{})) }`, "GS0155")
             return rows
         }
     }
