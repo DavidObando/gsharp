@@ -2756,22 +2756,35 @@ internal shared class ObliviousNullabilityAnalyzer {
             if id == nil {
                 return sources
             }
-            var source ISymbol? = nil
-            if id.StartsWith("P:M:", StringComparison.Ordinal) {
-                let separator = id.LastIndexOf('#')
-                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
-                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
-                IMethodSymbol method && ordinal < method.Parameters.Length {
-                    source = method.Parameters[ordinal]
-                }
-            } else {
-                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
-            }
-            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
+            if DeclarationOfNullArgumentId(id, csharp) is {} source && source.DeclaringSyntaxReferences.Length != 0 {
                 sources.Add(source)
             }
         }
         return sources
+    }
+
+    // Issue #5577: the declaration that `id` (a `NullArgumentId`) names in
+    // `compilation`. A parameter id is `P:` and its owner's id (a method or an
+    // indexer) and `#` and its ordinal.
+    private func DeclarationOfNullArgumentId(id string, compilation Compilation) ISymbol? {
+        if !(id.Length > 4 && id.StartsWith("P:", StringComparison.Ordinal) && id[3] == ':') {
+            return DocumentationCommentId.GetFirstSymbolForDeclarationId(id, compilation)
+        }
+        let separator = id.LastIndexOf('#')
+        let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
+        let parameters ImmutableArray[IParameterSymbol] = switch DocumentationCommentId.GetFirstSymbolForDeclarationId(
+            id.Substring(2, separator - 2),
+            compilation
+        ) {
+            case method is IMethodSymbol: method.Parameters
+            case indexer is IPropertySymbol: indexer.Parameters
+            default: ImmutableArray[IParameterSymbol].Empty
+        }
+        return if ordinal >= 0 && ordinal < parameters.Length {
+            parameters[ordinal]
+        } else {
+            default(ISymbol?)
+        }
     }
 
     /// Issue #5577: (cref:HasAllowNullWriteContract) for a slot as a
@@ -2781,22 +2794,37 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// `T?` from its source `[AllowNull]` (#3694), so the answer comes from
     /// that source declaration. The store bridge and the null-argument pin rule
     /// (#5574) both use this query, so they read the same contract.
+    ///
+    /// The query answers as the producer emits the slot. The slot's declared
+    /// type must be a reference type, so a `T` that is not constrained to a
+    /// class stays `T`. A `params` carrier stays `...T`, because its attribute
+    /// admits a null array, not a null element. A reduced extension parameter
+    /// is read at its unreduced ordinal.
     /// @param symbol The slot as the call or store binds it.
     /// @param runCompilations Every compilation of the run, or `nil`.
     /// @returns `true` when the run emits the slot with null as an accepted input.
     func HasRunAllowNullWriteContract(symbol ISymbol?, runCompilations IEnumerable[Compilation]?) bool {
-        if HasAllowNullWriteContract(symbol) {
-            return true
+        let slot ISymbol? = if symbol is IParameterSymbol parameter {
+            ReducedExtensionParameter(parameter)
+        } else {
+            symbol
         }
-        if runCompilations == nil ||
-            !((symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IParameterSymbol)) ||
-            symbol!!
-            .OriginalDefinition
-            .DeclaringSyntaxReferences
-            .Length != 0 {
+        let declared ITypeSymbol? = switch slot?.OriginalDefinition {
+            case parameter is IParameterSymbol when !parameter.IsParams: parameter.Type
+            case field is IFieldSymbol: field.Type
+            case property is IPropertySymbol: property.Type
+            default: default(ITypeSymbol?)
+        }
+        if declared?.IsReferenceType != true {
             return false
         }
-        for source in RunSourceDeclarations(symbol!!, runCompilations) {
+        if HasAllowNullWriteContract(slot) {
+            return true
+        }
+        if runCompilations == nil || slot!!.OriginalDefinition.DeclaringSyntaxReferences.Length != 0 {
+            return false
+        }
+        for source in RunSourceDeclarations(slot!!, runCompilations) {
             if HasAllowNullWriteContract(source) {
                 return true
             }
@@ -3119,18 +3147,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .GetDisplayName() != identity {
                 continue
             }
-            var source ISymbol? = nil
-            if id.StartsWith("P:M:", StringComparison.Ordinal) {
-                let separator = id.LastIndexOf('#')
-                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
-                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
-                IMethodSymbol method && ordinal < method.Parameters.Length {
-                    source = method.Parameters[ordinal]
-                }
-            } else {
-                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
-            }
-            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
+            if DeclarationOfNullArgumentId(id, csharp) is {} source && source.DeclaringSyntaxReferences.Length != 0 {
                 keys.AddRange(NullArgumentKeys(OriginalNullArgumentDeclaration(source)))
             }
         }

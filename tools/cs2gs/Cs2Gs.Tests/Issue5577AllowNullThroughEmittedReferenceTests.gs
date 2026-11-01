@@ -22,9 +22,11 @@ import Xunit
 /// but the metadata symbol has no source attributes, so the consumer bridged a maybe-null store
 /// with a `!!` that throws where C# stores the null. The store bridge and the null-argument pin
 /// rule (#5574) now read the contract of the source declaration in the run.
+/// The query answers as the producer emits the slot: a `params` carrier and a slot typed by an
+/// unconstrained type parameter stay non-null, so they keep their bridge.
 /// @remarks Mutation witnesses (ADR-0154): on fe8eaa302, before this fix, the run rows emit
-/// `m!!` and the translated program throws `NullReferenceException`. The control row keeps its
-/// bridge with and without the fix.
+/// `m!!` and the translated program throws `NullReferenceException`, and the one-compilation
+/// `params` row has no bridge. The PR records a mutant for each other row.
 open class Issue5577AllowNullThroughEmittedReferenceTests {
     /// A maybe-null value stored into a sibling's `[AllowNull]` property or field, or passed to its
     /// `[AllowNull]` parameter, takes no bridge. The translation stores and passes the null as C#
@@ -90,6 +92,110 @@ namespace Demo.App
         Assert.Equal("null null null", CompileAndRun([]string{holderB, appPrinted}, "Demo.App.Use.Run()").Trim())
     }
 
+    /// A sibling's `[AllowNull]` indexer key and reduced extension parameter take the null too. The
+    /// extension's parameter is read at its unreduced ordinal: the call binds the reduced parameter
+    /// `n` at ordinal 0, whose documentation id names no declaration in the producer.
+    @Fact
+    func ASiblingAllowNullIndexerOrExtensionParameter_TakesTheNull() {
+        let library = CompileFiles("Lib", nil, ("Holder.cs", ExtensionSource))
+        let app = CompileFiles("App", Emit(library), ("Use.cs", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static string Index(Holder h, Node? m) => h[m];
+        public static string Extension(Holder h, Node? m) => h.Take(m);
+        public static string Run() => Index(new Holder(), null) + " " + Extension(new Holder(), null);
+    }
+}`))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = TranslateFile(library, "Holder.cs", repository)
+        let appPrinted = TranslateFile(app, "Use.cs", repository)
+        Assert.DoesNotContain("!!", appPrinted)
+        Assert.Equal("null null", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
+    }
+
+    /// An `[AllowNull]` `params` carrier stays `...Node` in the producer's translation: its attribute
+    /// admits a null array, not a null element. So an expanded maybe-null argument keeps its bridge,
+    /// through an emitted reference and in one compilation, and the translation compiles and runs.
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func AnAllowNullParamsCarrier_KeepsItsBridge(throughReference bool) {
+        let producer = ("Lib.cs", `
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { }
+    public static class Counter
+    {
+        public static int Count([AllowNull] params Node[] nodes) => nodes == null ? -1 : nodes.Length;
+    }
+}`)
+        let consumer = ("Use.cs", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static int CountOne(Node? m) => Counter.Count(m);
+        public static string Run() => CountOne(new Node()).ToString();
+    }
+}`)
+        let library = if throughReference {
+            CompileFiles("Lib", nil, producer)
+        } else {
+            CompileFiles("Lib", nil, producer, consumer)
+        }
+        let app = if throughReference {
+            CompileFiles("App", Emit(library), consumer)
+        } else {
+            library
+        }
+        let repository = []CSharpCompilation{library, app}.Distinct().ToArray()
+        let libraryPrinted = TranslateFile(library, "Lib.cs", repository)
+        let appPrinted = TranslateFile(app, "Use.cs", repository)
+        Assert.Contains("Count(m!!)", appPrinted)
+        Assert.Equal("1", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
+    }
+
+    /// A sibling's `[AllowNull]` field typed by a type parameter that is not constrained to a class
+    /// stays `Value T` in the producer's translation, so a maybe-null value stored into
+    /// `Box<Node>.Value` keeps its bridge, and the translation compiles and runs.
+    @Fact
+    func ASiblingAllowNullSlotOfAnUnconstrainedTypeParameter_KeepsItsBridge() {
+        let library = CompileFiles("Lib", nil, ("Lib.cs", `
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { }
+    public class Box<T>
+    {
+        public Box(T value) { Value = value; }
+        [AllowNull] public T Value;
+    }
+}`))
+        let app = CompileFiles("App", Emit(library), ("Use.cs", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static void Put(Box<Node> b, Node? m) { b.Value = m; }
+        public static string Run()
+        {
+            var b = new Box<Node>(new Node());
+            Put(b, new Node());
+            return b.Value == null ? "null" : "node";
+        }
+    }
+}`))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = TranslateFile(library, "Lib.cs", repository)
+        let appPrinted = TranslateFile(app, "Use.cs", repository)
+        Assert.Contains("Value T", libraryPrinted)
+        Assert.Contains("b.Value = m!!", appPrinted)
+        Assert.Equal("node", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
+    }
+
     shared {
         private const HolderSource string = `
 using System.Diagnostics.CodeAnalysis;
@@ -101,6 +207,21 @@ namespace Demo
         [AllowNull] public virtual Node Stored { get; set; } = new Node();
         [AllowNull] public Node Field = new Node();
         public string Take([AllowNull] Node n) => n == null ? "null" : "node";
+    }
+}`
+
+        private const ExtensionSource string = `
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { }
+    public class Holder
+    {
+        public string this[[AllowNull] Node key] => key == null ? "null" : "node";
+    }
+    public static class Ext
+    {
+        public static string Take(this Holder h, [AllowNull] Node n) => n == null ? "null" : "node";
     }
 }`
 
