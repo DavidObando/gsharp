@@ -598,9 +598,16 @@ internal partial class StatementBinder {
                     why = "literal-into-value-type"
                     return false
                 }
+                // A conversion operator from the literal's type can return nil, so the literal proves the fact
+                // only when its value reaches the root by a reference or boxing conversion.
+                if !LiteralKeepsItsValue(write.ConstructedTypeName, declared) {
+                    why = "literal-converted-by-an-operator"
+                    return false
+                }
                 // The literal proves a type-test fact only when its own type converts to the fact's type.
-                if factKind == "type-test" &&
-                    (write.ConstructedTypeName != "string" || !ConvertsImplicitly(TypeSymbol.String, narrowedType)) {
+                let provesTypeTest = write.ConstructedTypeName == "System.String" &&
+                    ConvertsImplicitly(TypeSymbol.String, narrowedType)
+                if factKind == "type-test" && !provesTypeTest {
                     why = "literal-type-differs"
                     return false
                 }
@@ -702,6 +709,31 @@ internal partial class StatementBinder {
                 return false
             }
         }
+    }
+
+    // Whether a literal of the CLR type is an instance of the target: the target is the literal's type, a base
+    // class or a non-generic interface of it.
+    private func LiteralKeepsItsValue(literalTypeName string?, target TypeSymbol) bool {
+        if literalTypeName == nil || target.ClrType is not{} targetClr || targetClr.IsGenericType {
+            return false
+        }
+        let literalType = Type.GetType(literalTypeName)
+        if literalType == nil {
+            return false
+        }
+        var current Type? = literalType
+        while current != nil {
+            if current.FullName == targetClr.FullName {
+                return true
+            }
+            current = current.BaseType
+        }
+        for contract in literalType.GetInterfaces() {
+            if !contract.IsGenericType && contract.FullName == targetClr.FullName {
+                return true
+            }
+        }
+        return false
     }
 
     private func ConvertsImplicitly(from TypeSymbol, to TypeSymbol) bool {

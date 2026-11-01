@@ -1404,6 +1404,37 @@ func Run(ref text string?, o object, other object) int32 {
     return n
 }
 func Main() { }`, "GS0158")
+            Add("literal-converted-by-an-operator-is-no-proof (P7)", `package T
+import System
+class Box { var N int32 = 1 }
+func operator implicit (i int32) Box {
+    let o object? = nil
+    return cast[Box](o)
+}
+func Run() int32 {
+    var b Box? = Box()
+    if b == nil { return 0 }
+    var n = 0
+    while b.N > 0 && n < 3 {
+        n++
+        b = 5
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("boxed-literal-keeps-the-fact (P7)", `package T
+import System
+func Run() int32 {
+    var o object? = "a"
+    if o == nil { return 0 }
+    var n = 0
+    while o.GetHashCode() != 0 && n < 3 {
+        n++
+        o = 5
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

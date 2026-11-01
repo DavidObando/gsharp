@@ -1246,7 +1246,10 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   call (the `indexed-for-in` row of #5170 keeps its result). A nested loop is still a call.
 - *Literal types.* A non-nil literal proves a type-test fact only when it is a string literal whose type
   converts to the fact's type. Slice L0 took every literal for a string, so `value = 42` kept a
-  `value is string` fact.
+  `value is string` fact. A literal proves a nullability fact only when the target's declared type is the
+  literal's type, a base class of it or a non-generic interface of it (`o = 5` into `object?`). Otherwise a
+  conversion operator converts it (`b = 5` into `Box?` through `operator implicit (i int32) Box`), which can
+  return nil, as the binder also assumes after the assignment.
 - *Member reads and by-reference parameters.* A member read keeps member-bearing paths, mutable
   globals, closure-assigned locals and the facts of an alias of an element or a member out
   (W5, no exemption). It does not remove the fact of a by-reference parameter, as a plain call does not

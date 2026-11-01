@@ -1399,11 +1399,11 @@ internal sealed class RegionEffectScanner {
             case literal is LiteralExpressionSyntax {
                 if literal.LiteralToken.Kind != SyntaxKind.NilKeyword {
                     proof = RegionWriteProof.NonNilLiteral
-                    // The type of a type-test fact must accept the literal: only a string literal proves one.
+                    // The consumer checks that the literal's type converts to the root without an operator.
                     typeName = if literal.LiteralToken.Kind == SyntaxKind.StringToken {
-                        "string"
+                        "System.String"
                     } else {
-                        nil
+                        literal.Value?.GetType().FullName
                     }
                 }
             }
