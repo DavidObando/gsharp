@@ -342,7 +342,10 @@ open class Adr0208NarrowingCorpusTests {
                 "w26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18",
                 "w27_5534_type_test_whose_getter_removes_a_guarded_fact_narrows_nothing_R18",
                 "w28_5534_type_test_whose_getter_removes_the_value_narrows_nothing_R18",
-                "w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18"
+                "w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18",
+                "w30_5534_constant_pattern_whose_call_removes_the_value_narrows_nothing_R18",
+                "w31_5534_condition_in_the_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
+                "w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18"
             },
             names
         )
@@ -5643,6 +5646,144 @@ func Run() int32 {
     let d = Dog{}
     let x Pet? = d
     if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w30_5534_constant_pattern_whose_call_removes_the_value_narrows_nothing_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Read(h Holder) string {
+    h.Callback()
+    return "abc"
+}
+func Run() int32 {
+    var x string? = "abc"
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if x is Read(h) {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@44:18", "reject", "", "R18"}
+            yield[]object{"w31_5534_condition_in_the_then_branch_of_if_let_does_not_reach_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let maybe C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe if Check(h) { } else { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let maybe C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe {
+        if Check(h) { } else { }
+    } else {
         return x.Value
     }
     return 2

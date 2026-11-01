@@ -970,16 +970,18 @@ Details per row:
   then-branch runs only on that path, so the facts it removed from the enclosing frames are put back while the
   sibling else-branch is bound and removed again after it, as section 9 binds the else-branch from the state after
   the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows w20
-  to w22). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
+  to w22). The then-branch of `if let` and its else-branch are siblings in the same way (rows w31 and w32). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
   test does (rows w23 and w24). (6) A pattern runs after its operand is read, so a test whose own pattern can
   remove the tested path (a getter with user code in a property sub-pattern, `x is Dog { P: 1 }` where `P` sets
-  `x = nil`) narrows neither branch, by the statement rule applied to the test's effects, whether or not a fact
-  was removed before it (rows w25 to w28); a getter that cannot reach the path keeps the narrowing (row w29). A
+  `x = nil`, or a call in a constant pattern, `x is Read(h)`) narrows neither branch, by the statement rule
+  applied to the test's effects, whether or not a fact was removed before it (rows w25 to w28 and w30); a getter
+  that cannot reach the path keeps the narrowing (row w29). The `Equals` call of a constant pattern and the
+  accessors of a list pattern are not in the effect collector yet (#5593). A
   later operand that removes it (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
   tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
   `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
-  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows w01 to w29.
+  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows w01 to w32.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only

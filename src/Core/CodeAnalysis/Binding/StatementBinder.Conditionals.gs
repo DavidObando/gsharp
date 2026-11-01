@@ -244,6 +244,9 @@ internal partial class StatementBinder {
         // BindIfStatement does.
         var callableEntry = CaptureExternalCallableAliases()
         var callableThenExit = callableEntry
+        var thenEntry = binderCtx.Narrowing
+        var outerConditionKills = conditionKillJournal
+        var thenKillsStarted = false
         let (clauses, guard_, thenStatement) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -269,18 +272,33 @@ internal partial class StatementBinder {
             (boundGuard BoundExpression) -> ClassifyIfConditionNarrowing(boundGuard).Then,
             () -> {
                 callableEntry = CaptureExternalCallableAliases()
+                if syntax.ElseClause != nil {
+                    thenEntry = binderCtx.Narrowing
+                    outerConditionKills = BeginThenBranchConditionKills()
+                    thenKillsStarted = true
+                }
                 let then = BindStatementWithNarrowing(syntax.ThenStatement, nil)
                 callableThenExit = CaptureExternalCallableAliases()
                 RestoreExternalCallableAliases(callableEntry)
                 return then
             }
         )
+        // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
+        // the then-branch removed.
+        let restoredConditionKills = if thenKillsStarted {
+            RestoreThenBranchConditionKills(outerConditionKills, thenEntry)
+        } else {
+            default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
+        }
         // Bound AFTER the header scope is popped: the else branch never sees
         // the bindings.
         let elseStatement = if syntax.ElseClause == nil {
             default(BoundStatement?)
         } else {
             BindStatement(syntax.ElseClause.ElseStatement)
+        }
+        if restoredConditionKills != nil {
+            EndThenBranchConditionKills(restoredConditionKills)
         }
         let callableElseExit = if syntax.ElseClause == nil {
             callableEntry
@@ -765,18 +783,15 @@ internal partial class StatementBinder {
     /// ADR-0208 R18 (#5534): a pattern runs after its operand is read, and a getter with user code in a property
     /// sub-pattern can change the tested path (`x is Dog { P: 1 }` where `P` sets `x = nil`). Such a test proves
     /// nothing about the value a branch reads, so it narrows neither branch. The one statement rule
-    /// (cref:StatementKillsPath) decides, applied to the effects of the test. A constant or discard pattern, or a
-    /// type pattern without a property pattern, runs no code.
+    /// (cref:StatementKillsPath) decides, applied to the effects of the test, which include a call in a constant
+    /// pattern (`x is Read(h)`).
     private func TestMayRemoveItsOperandFact(isExpr BoundIsExpression) bool {
         let pattern = if isExpr.Pattern is BoundNotPattern notPattern {
             notPattern.Pattern
         } else {
             isExpr.Pattern
         }
-        if pattern is BoundConstantPattern or
-            BoundDiscardPattern ||
-            pattern is BoundTypePattern typePattern &&
-            typePattern.PropertyPattern == nil {
+        if RunsNoCode(pattern) {
             return false
         }
         var path AccessPath? = nil
@@ -785,6 +800,7 @@ internal partial class StatementBinder {
         } else if !SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out path, out _) {
             return false
         }
+        CompilationMeasurements.Count("narrowing.pattern-effect-walks")
         let collector = NewCollector(nil, externalCallableAliases)
         collector.Visit(isExpr)
         return StatementKillsPath(
@@ -793,6 +809,16 @@ internal partial class StatementBinder {
             collector.MayMutateMemberPaths,
             collector.MayMutateReferenceStorage
         )
+    }
+
+    // A pattern that reads no member and evaluates no expression: a discard, a literal, a type test, or `{}`.
+    private func RunsNoCode(pattern BoundPattern) bool -> switch pattern {
+        case BoundDiscardPattern: true
+        case constantPattern is BoundConstantPattern: constantPattern.Value is BoundLiteralExpression
+        case typePattern is BoundTypePattern: typePattern.PropertyPattern == nil ||
+            RunsNoCode(typePattern.PropertyPattern)
+        case propertyPattern is BoundPropertyPattern: propertyPattern.Fields.Length == 0
+        default: false
     }
 
     private func IsNullabilityOnlyFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {
