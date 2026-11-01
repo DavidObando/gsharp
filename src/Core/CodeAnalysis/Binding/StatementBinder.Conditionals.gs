@@ -657,6 +657,9 @@ internal partial class StatementBinder {
         switch condition {
             case isExpr is BoundIsExpression {
                 {
+                    if TestMayRemoveItsOperandFact(isExpr) {
+                        return (nil, nil)
+                    }
                     let operandType = TypeTestOperandTypeAfterEffects(isExpr, removedFacts)
                     if isExpr.Pattern is BoundNotPattern notPattern {
                         return (
@@ -729,9 +732,7 @@ internal partial class StatementBinder {
     /// has the removed type), the test is classified against the declared type of the path, the type the path has
     /// after the effects. Otherwise the bound type is the current one and `nil` keeps it. Only a fact that strips
     /// `?` or `!` from a reference type qualifies: its read emits no conversion, so the test sees the current
-    /// value. A subtype fact (`castclass`) or a nullable value (an unwrap) would test the stale read. A pattern
-    /// that can itself remove the fact after the read (a getter with user code in a property sub-pattern) proves
-    /// nothing about the value the branch reads, so it keeps the bound type too.
+    /// value. A subtype fact (`castclass`) or a nullable value (an unwrap) would test the stale read.
     private func TypeTestOperandTypeAfterEffects(
         isExpr BoundIsExpression,
         removedFacts Dictionary[AccessPath, TypeSymbol]?
@@ -741,11 +742,9 @@ internal partial class StatementBinder {
         }
         let operand = isExpr.Expression
         if operand is BoundVariableExpression variable {
-            let path AccessPath = variable.Variable
-            return if removedFacts.TryGetValue(path, out var removedType) &&
+            return if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) &&
                 operand.Type == removedType &&
-                IsNullabilityOnlyFact(variable.Variable.Type, removedType) &&
-                !PatternMayRemoveFact(isExpr, path) {
+                IsNullabilityOnlyFact(variable.Variable.Type, removedType) {
                 variable.Variable.Type
             } else {
                 default(TypeSymbol?)
@@ -754,7 +753,7 @@ internal partial class StatementBinder {
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
             removedFacts.TryGetValue(path!!, out var removedMemberType) && currentType == removedMemberType {
             let declared = MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
-            return if IsNullabilityOnlyFact(declared, currentType!!) && !PatternMayRemoveFact(isExpr, path!!) {
+            return if IsNullabilityOnlyFact(declared, currentType!!) {
                 declared
             } else {
                 default(TypeSymbol?)
@@ -763,11 +762,37 @@ internal partial class StatementBinder {
         return nil
     }
 
-    // The one statement rule (cref:StatementKillsPath), applied to the effects of the test itself.
-    private func PatternMayRemoveFact(isExpr BoundIsExpression, path AccessPath) bool {
+    /// ADR-0208 R18 (#5534): a pattern runs after its operand is read, and a getter with user code in a property
+    /// sub-pattern can change the tested path (`x is Dog { P: 1 }` where `P` sets `x = nil`). Such a test proves
+    /// nothing about the value a branch reads, so it narrows neither branch. The one statement rule
+    /// (cref:StatementKillsPath) decides, applied to the effects of the test. A constant or discard pattern, or a
+    /// type pattern without a property pattern, runs no code.
+    private func TestMayRemoveItsOperandFact(isExpr BoundIsExpression) bool {
+        let pattern = if isExpr.Pattern is BoundNotPattern notPattern {
+            notPattern.Pattern
+        } else {
+            isExpr.Pattern
+        }
+        if pattern is BoundConstantPattern or
+            BoundDiscardPattern ||
+            pattern is BoundTypePattern typePattern &&
+            typePattern.PropertyPattern == nil {
+            return false
+        }
+        var path AccessPath? = nil
+        if isExpr.Expression is BoundVariableExpression variable {
+            path = variable.Variable
+        } else if !SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out path, out _) {
+            return false
+        }
         let collector = NewCollector(nil, externalCallableAliases)
         collector.Visit(isExpr)
-        return StatementKillsPath(collector, path, collector.MayMutateMemberPaths, collector.MayMutateReferenceStorage)
+        return StatementKillsPath(
+            collector,
+            path!!,
+            collector.MayMutateMemberPaths,
+            collector.MayMutateReferenceStorage
+        )
     }
 
     private func IsNullabilityOnlyFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {

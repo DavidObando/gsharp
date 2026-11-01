@@ -314,32 +314,35 @@ open class Adr0208NarrowingCorpusTests {
                 "u11_5532_generic_span_read_keeps_the_fact_R17",
                 "u12_5532_generic_list_write_keeps_the_fact_R17",
                 "u13_5532_list_indexer_get_keeps_a_closure_assigned_local_R17",
-                "v01_5534_call_in_a_condition_kills_in_the_then_branch_R18",
-                "v02_5534_imported_getter_in_a_condition_kills_in_the_then_branch_R18",
-                "v03_5534_source_getter_in_a_condition_kills_in_the_then_branch_R18",
-                "v04_5534_getter_in_a_condition_kills_in_the_else_branch_R18",
-                "v05_5534_plain_condition_keeps_the_fact_R18",
-                "v06_5534_call_in_a_condition_with_an_initializer_R18",
-                "v07_5534_stable_getter_in_a_condition_keeps_the_fact_R18",
-                "v08_5534_member_path_stays_rejected_R18",
-                "v09_5534_test_after_the_call_still_narrows_the_branch_R18",
-                "v10_5534_assignment_in_a_condition_kills_in_the_branch_R18",
-                "v11_5534_type_test_after_the_call_narrows_the_branch_R18",
-                "v12_5534_type_test_after_the_call_with_an_initializer_R18",
-                "v13_5534_callable_alias_assigned_after_its_call_R18",
-                "v14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18",
-                "v15_5534_closure_created_in_a_condition_keeps_a_member_path_R18",
-                "v16_5534_closure_created_in_a_statement_keeps_a_member_path_R18",
-                "v17_5534_type_test_after_the_call_narrows_a_member_path_R18",
-                "v18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18",
-                "v19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18",
-                "v20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18",
-                "v21_5534_condition_in_the_then_branch_with_an_initializer_R18",
-                "v22_5534_condition_in_a_braced_then_branch_does_not_reach_the_else_branch_R18",
-                "v23_5534_property_pattern_after_the_call_narrows_the_branch_R18",
-                "v24_5534_property_pattern_after_the_call_with_an_initializer_R18",
-                "v25_5534_type_test_whose_getter_removes_the_fact_is_not_restored_R18",
-                "v26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18"
+                "w01_5534_call_in_a_condition_kills_in_the_then_branch_R18",
+                "w02_5534_imported_getter_in_a_condition_kills_in_the_then_branch_R18",
+                "w03_5534_source_getter_in_a_condition_kills_in_the_then_branch_R18",
+                "w04_5534_getter_in_a_condition_kills_in_the_else_branch_R18",
+                "w05_5534_plain_condition_keeps_the_fact_R18",
+                "w06_5534_call_in_a_condition_with_an_initializer_R18",
+                "w07_5534_stable_getter_in_a_condition_keeps_the_fact_R18",
+                "w08_5534_member_path_stays_rejected_R18",
+                "w09_5534_test_after_the_call_still_narrows_the_branch_R18",
+                "w10_5534_assignment_in_a_condition_kills_in_the_branch_R18",
+                "w11_5534_type_test_after_the_call_narrows_the_branch_R18",
+                "w12_5534_type_test_after_the_call_with_an_initializer_R18",
+                "w13_5534_callable_alias_assigned_after_its_call_R18",
+                "w14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18",
+                "w15_5534_closure_created_in_a_condition_keeps_a_member_path_R18",
+                "w16_5534_closure_created_in_a_statement_keeps_a_member_path_R18",
+                "w17_5534_type_test_after_the_call_narrows_a_member_path_R18",
+                "w18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18",
+                "w19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18",
+                "w20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18",
+                "w21_5534_condition_in_the_then_branch_with_an_initializer_R18",
+                "w22_5534_condition_in_a_braced_then_branch_does_not_reach_the_else_branch_R18",
+                "w23_5534_property_pattern_after_the_call_narrows_the_branch_R18",
+                "w24_5534_property_pattern_after_the_call_with_an_initializer_R18",
+                "w25_5534_type_test_whose_getter_removes_the_fact_is_not_restored_R18",
+                "w26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18",
+                "w27_5534_type_test_whose_getter_removes_a_guarded_fact_narrows_nothing_R18",
+                "w28_5534_type_test_whose_getter_removes_the_value_narrows_nothing_R18",
+                "w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18"
             },
             names
         )
@@ -4322,7 +4325,7 @@ func Run() int32 {
     return x.Value + first
 }
 Console.WriteLine(Run())`, "", "run", "2", "R17"}
-            yield[]object{"v01_5534_call_in_a_condition_kills_in_the_then_branch_R18", `import System
+            yield[]object{"w01_5534_call_in_a_condition_kills_in_the_then_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4366,7 +4369,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@40:18", "reject", "", "R18"}
-            yield[]object{"v02_5534_imported_getter_in_a_condition_kills_in_the_then_branch_R18", `import System
+            yield[]object{"w02_5534_imported_getter_in_a_condition_kills_in_the_then_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4412,7 +4415,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@42:18", "reject", "", "R18"}
-            yield[]object{"v03_5534_source_getter_in_a_condition_kills_in_the_then_branch_R18", `import System
+            yield[]object{"w03_5534_source_getter_in_a_condition_kills_in_the_then_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4456,7 +4459,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@40:18", "reject", "", "R18"}
-            yield[]object{"v04_5534_getter_in_a_condition_kills_in_the_else_branch_R18", `import System
+            yield[]object{"w04_5534_getter_in_a_condition_kills_in_the_else_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4503,7 +4506,7 @@ func Run() int32 {
     }
 }
 Console.WriteLine(Run())`, "GS0158@44:18", "reject", "", "R18"}
-            yield[]object{"v05_5534_plain_condition_keeps_the_fact_R18", `import System
+            yield[]object{"w05_5534_plain_condition_keeps_the_fact_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4546,7 +4549,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(true))`, "", "run", "1", "R18"}
-            yield[]object{"v06_5534_call_in_a_condition_with_an_initializer_R18", `import System
+            yield[]object{"w06_5534_call_in_a_condition_with_an_initializer_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4590,7 +4593,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@40:18", "reject", "", "R18"}
-            yield[]object{"v07_5534_stable_getter_in_a_condition_keeps_the_fact_R18", `import System
+            yield[]object{"w07_5534_stable_getter_in_a_condition_keeps_the_fact_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4633,7 +4636,7 @@ func Run(s string) int32 {
     return 2
 }
 Console.WriteLine(Run("ab"))`, "", "run", "1", "R18"}
-            yield[]object{"v08_5534_member_path_stays_rejected_R18", `import System
+            yield[]object{"w08_5534_member_path_stays_rejected_R18", `import System
 import System.Collections.ObjectModel
 
 class C {
@@ -4672,7 +4675,7 @@ func Run(b Box) string {
     return "z"
 }
 Console.WriteLine(Run(Box(Animal())))`, "GS0158@35:22", "reject", "", "R18"}
-            yield[]object{"v09_5534_test_after_the_call_still_narrows_the_branch_R18", `import System
+            yield[]object{"w09_5534_test_after_the_call_still_narrows_the_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4715,7 +4718,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "2", "R18"}
-            yield[]object{"v10_5534_assignment_in_a_condition_kills_in_the_branch_R18", `import System
+            yield[]object{"w10_5534_assignment_in_a_condition_kills_in_the_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4757,7 +4760,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@38:18", "reject", "", "R18"}
-            yield[]object{"v11_5534_type_test_after_the_call_narrows_the_branch_R18", `import System
+            yield[]object{"w11_5534_type_test_after_the_call_narrows_the_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4801,7 +4804,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "2", "R18"}
-            yield[]object{"v12_5534_type_test_after_the_call_with_an_initializer_R18", `import System
+            yield[]object{"w12_5534_type_test_after_the_call_with_an_initializer_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4845,7 +4848,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "2", "R18"}
-            yield[]object{"v13_5534_callable_alias_assigned_after_its_call_R18", `import System
+            yield[]object{"w13_5534_callable_alias_assigned_after_its_call_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4889,7 +4892,7 @@ func Run(callback () -> bool) int32 {
     return 2
 }
 Console.WriteLine(Run(() -> true))`, "", "run", "1", "R18"}
-            yield[]object{"v14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18", `import System
+            yield[]object{"w14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4933,7 +4936,7 @@ func Run(callback () -> bool) int32 {
     return 2
 }
 Console.WriteLine(Run(() -> true))`, "", "run", "2", "R18"}
-            yield[]object{"v15_5534_closure_created_in_a_condition_keeps_a_member_path_R18", `import System
+            yield[]object{"w15_5534_closure_created_in_a_condition_keeps_a_member_path_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -4979,7 +4982,7 @@ func Run(b Crate) string {
     return "z"
 }
 Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
-            yield[]object{"v16_5534_closure_created_in_a_statement_keeps_a_member_path_R18", `import System
+            yield[]object{"w16_5534_closure_created_in_a_statement_keeps_a_member_path_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5023,7 +5026,7 @@ func Run(b Crate) string {
     return b.Pet.Name
 }
 Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
-            yield[]object{"v17_5534_type_test_after_the_call_narrows_a_member_path_R18", `import System
+            yield[]object{"w17_5534_type_test_after_the_call_narrows_a_member_path_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5068,7 +5071,7 @@ func Run(b Crate) string {
     return "z"
 }
 Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
-            yield[]object{"v18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18", `import System
+            yield[]object{"w18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5115,7 +5118,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0159@43:18", "reject", "", "R18"}
-            yield[]object{"v19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18", `import System
+            yield[]object{"w19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5159,7 +5162,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0156@40:16", "reject", "", "R18"}
-            yield[]object{"v20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18", `import System
+            yield[]object{"w20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5201,7 +5204,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(false))`, "", "run", "1", "R18"}
-            yield[]object{"v21_5534_condition_in_the_then_branch_with_an_initializer_R18", `import System
+            yield[]object{"w21_5534_condition_in_the_then_branch_with_an_initializer_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5243,7 +5246,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(false))`, "", "run", "1", "R18"}
-            yield[]object{"v22_5534_condition_in_a_braced_then_branch_does_not_reach_the_else_branch_R18", `import System
+            yield[]object{"w22_5534_condition_in_a_braced_then_branch_does_not_reach_the_else_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5289,7 +5292,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(false))`, "", "run", "1", "R18"}
-            yield[]object{"v23_5534_property_pattern_after_the_call_narrows_the_branch_R18", `import System
+            yield[]object{"w23_5534_property_pattern_after_the_call_narrows_the_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5333,7 +5336,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(true))`, "", "run", "2", "R18"}
-            yield[]object{"v24_5534_property_pattern_after_the_call_with_an_initializer_R18", `import System
+            yield[]object{"w24_5534_property_pattern_after_the_call_with_an_initializer_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5377,7 +5380,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(true))`, "", "run", "2", "R18"}
-            yield[]object{"v25_5534_type_test_whose_getter_removes_the_fact_is_not_restored_R18", `import System
+            yield[]object{"w25_5534_type_test_whose_getter_removes_the_fact_is_not_restored_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5431,7 +5434,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@50:18", "reject", "", "R18"}
-            yield[]object{"v26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18", `import System
+            yield[]object{"w26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18", `import System
 import System.Collections.Generic
 import System.Text
 import System.Collections.ObjectModel
@@ -5486,6 +5489,165 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@51:18", "reject", "", "R18"}
+            yield[]object{"w27_5534_type_test_whose_getter_removes_a_guarded_fact_narrows_nothing_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    var x Pet? = d
+    d.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@50:18", "reject", "", "R18"}
+            yield[]object{"w28_5534_type_test_whose_getter_removes_the_value_narrows_nothing_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    var x Pet? = d
+    d.Clear = func() { x = nil }
+    if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@49:18", "reject", "", "R18"}
+            yield[]object{"w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    let x Pet? = d
+    if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

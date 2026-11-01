@@ -961,7 +961,7 @@ Details per row:
   `!` from a reference type, whose read emits no conversion. The operand of a subtype fact is read with a
   `castclass` and a nullable value with an unwrap, so that test runs on the stale read (an `InvalidCastException`
   or `InvalidOperationException` when the call changed the value; #5545); those branches stay rejected
-  (rows v18 and v19). (2) The effects are read with the callable aliases
+  (rows w18 and w19). (2) The effects are read with the callable aliases
   from before the condition, as for a statement, and the aliases are updated after them, so a call of an alias
   that the condition reassigns later (`action() && (action = callback) is {} a`) keeps its classification.
   (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or
@@ -969,15 +969,17 @@ Details per row:
   (`action = func() { ... }` no longer removes member-path facts). (4) The condition of an `if` statement in a
   then-branch runs only on that path, so the facts it removed from the enclosing frames are put back while the
   sibling else-branch is bound and removed again after it, as section 9 binds the else-branch from the state after
-  the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows v20
-  to v22). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
-  test does (rows v23 and v24). A test whose own pattern can remove the fact after the read (a getter with user
-  code in a sub-pattern, `x is D { P: 1 }`) restores nothing (rows v25 and v26); a later operand that removes it
-  (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
+  the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows w20
+  to w22). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
+  test does (rows w23 and w24). (6) A pattern runs after its operand is read, so a test whose own pattern can
+  remove the tested path (a getter with user code in a property sub-pattern, `x is Dog { P: 1 }` where `P` sets
+  `x = nil`) narrows neither branch, by the statement rule applied to the test's effects, whether or not a fact
+  was removed before it (rows w25 to w28); a getter that cannot reach the path keeps the narrowing (row w29). A
+  later operand that removes it (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
   tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
   `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
-  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows v01 to v26.
+  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows w01 to w29.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only
