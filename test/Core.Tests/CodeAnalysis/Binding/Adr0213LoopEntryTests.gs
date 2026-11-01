@@ -1296,6 +1296,94 @@ func Run(ref text string?, callback () -> void) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("hiding-field-of-a-region-tested-type-is-indirect (A3)", `package T
+import System
+class Holder {
+    var GetHashCode () -> int32 = func() int32 { return 0 }
+}
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is Holder { n = n + o.GetHashCode() * 0 }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("field-of-a-region-tested-type-named-like-an-extension-is-indirect (A3)", `package T
+import System
+import System.Linq
+class Holder {
+    var Count Action = Action(func() { })
+}
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is Holder { o.Count() }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("switch-case-type-test-is-a-region-type-test (A3)", `package T
+import System
+import System.Linq
+class Holder {
+    var Count Action = Action(func() { })
+}
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        switch o {
+        case Holder { o.Count() }
+        default { }
+        }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("method-of-a-region-tested-generic-type-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is List[int32] { o.Clear() }
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("method-of-a-region-tested-qualified-type-keeps-a-by-reference-fact (A3)", `package T
+import System
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is System.Text.StringBuilder { o.Clear() }
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("enum-constant-test-keeps-a-by-reference-fact (A3)", `package T
+import System
+enum Kind { A, B }
+func Run(ref text string?, k Kind) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if k is Kind.A { n = n + k.GetHashCode() * 0 }
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

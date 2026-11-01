@@ -1278,20 +1278,23 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   guards, `catch ... when`, `?:`) unless it is `bool` by its form (a `true` or `false` literal, `is`, a comparison,
   `!`, `&&` or `||`). The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of a
   tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
-- *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a
-  function value, which is an indirect call (A3), also when a nested loop's record is composed. A member call
-  whose receiver is a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared
-  type and on the type its entry fact narrows it to, with their base types, base interfaces (source and imported),
-  constraints and `object` members. It invokes a function value, which is indirect, when it calls `Invoke`,
-  `BeginInvoke` or `DynamicInvoke` on a receiver of function or delegate type (`callback.Invoke()`), or when either
-  type has a field, a property or an event of that name (a function-typed member of a class, an interface or a
-  tuple element). Another method of a delegate (`callback.GetHashCode()`) is a method. It is a plain call (A3) when the types have only methods of
-  that name, or none and an extension method of that name is visible (`values.Count()`). When they have no member
-  of that name and no extension method is visible, the region narrows the receiver to a type that the entry scope
-  does not show (`if o is Holder { o.Cb() }`), and the call is indirect. The member of any other receiver (an
-  element, a member chain, a call result) is taken for a method, as in slice L0 and the A3 rows
-  (`frames[i].TryGetValue(path, out found)`), unless it is `Invoke`, `BeginInvoke` or `DynamicInvoke`
-  (`holder.Cb.Invoke()`). A function-typed field called through a chain (`a.b.Cb()`) stays a plain call.
+- *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
+  value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is
+  a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared type, on the type its
+  entry fact narrows it to, and on each type that a type test of the region (`is`, a `switch` case or arm) applies to
+  that name, because the binder looks up the member on the tested type where the test holds (`if o is Holder {
+  o.Count() }`). Each type counts with its base types, base interfaces (source and imported), constraints and `object`
+  members. A tested type is resolved by its name and arity; a name-shaped pattern whose name is a constant (`case
+  Kind.A`) tests no type, and a tested type without a name (an array, tuple or function type) or that the entry scope
+  does not resolve can have any member. The call invokes a function value, which is indirect, when it calls `Invoke`,
+  `BeginInvoke` or `DynamicInvoke` on a receiver of function or delegate type (`callback.Invoke()`), or when one of
+  the types has a field, a property or an event of that name (a function-typed member of a class, an interface or a
+  tuple element). Another method of a delegate (`callback.GetHashCode()`) is a method. The call is a plain call (A3)
+  when the types have only methods of that name, or none and an extension method of that name is visible
+  (`values.Count()`); otherwise it is indirect. The member of any other receiver (an element, a member chain, a call
+  result) is taken for a method, as in slice L0 and the A3 rows (`frames[i].TryGetValue(path, out found)`), unless it
+  is `Invoke`, `BeginInvoke` or `DynamicInvoke` (`holder.Cb.Invoke()`). A function-typed field called through a chain
+  (`a.b.Cb()`) stays a plain call.
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.

@@ -437,10 +437,16 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.MultiAssignmentDeclarationExpression {
                 Declare(cast[MultiAssignmentDeclarationExpressionSyntax](node).Identifier)
             }
+            case SyntaxKind.IsExpression {
+                let isExpression = cast[IsExpressionSyntax](node)
+                RecordTypeTests(isExpression.Expression, isExpression.Pattern)
+                VisitChildren(node)
+            }
             case SyntaxKind.SwitchStatement {
                 let switchStatement = cast[SwitchStatementSyntax](node)
                 Visit(switchStatement.Expression)
                 for switchCase in switchStatement.Cases {
+                    RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     Push()
                     Visit(switchCase.Value)
                     VisitCondition(switchCase.Guard)
@@ -452,6 +458,7 @@ internal sealed class RegionEffectScanner {
                 let switchExpression = cast[SwitchExpressionSyntax](node)
                 Visit(switchExpression.Expression)
                 for arm in switchExpression.Arms {
+                    RecordTypeTests(switchExpression.Expression, arm.Value)
                     Push()
                     Visit(arm.Value)
                     VisitCondition(arm.Guard)
@@ -941,6 +948,7 @@ internal sealed class RegionEffectScanner {
         let bareBefore = current.BareReads.ToArray()
         let callsBefore = current.Calls.Count
         current.AbsorbFlags(record, Active())
+        current.TypeTests.RemoveAll((test RegionTypeTest) -> IsDeclared(test.Name))
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
         // call whose receiver the enclosing region declares has a receiver that the entry scope cannot resolve.
         for var i = callsBefore; i < current.Calls.Count; i++ {
@@ -1697,6 +1705,35 @@ internal sealed class RegionEffectScanner {
     }
 
     // The name of a plain variable operand: a name, through parentheses and `!!`. Otherwise `nil`.
+    // A type test of a plain name narrows the name where the test holds, so a member call on it can bind a
+    // member of the tested type (ADR-0213, function values). Every type of the pattern counts.
+    private func RecordTypeTests(subject ExpressionSyntax?, pattern PatternSyntax?) {
+        if pattern == nil || !Active() || NameOf(subject) is not{} name || IsDeclared(name) {
+            return
+        }
+        for node in pattern.DescendantNodesAndSelf() {
+            if node is TypePatternSyntax typePattern {
+                current.TypeTests.Add(TypeTest(name, typePattern.Type, false))
+            } else if node is TypeOrConstantPatternSyntax candidate {
+                current.TypeTests.Add(TypeTest(name, candidate.CandidateType, true))
+            }
+        }
+    }
+
+    // The members of a name do not depend on the type arguments or on `?`, so a test of a named type keeps its
+    // name and arity. An array, tuple or function type has no name.
+    private func TypeTest(name string, type TypeClauseSyntax, mayBeConstant bool) RegionTypeTest {
+        if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
+            return RegionTypeTest(name, nil, 0, mayBeConstant)
+        }
+        let arity = if type.TypeArguments is {} arguments {
+            arguments.Count
+        } else {
+            0
+        }
+        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant)
+    }
+
     private func NameOf(expression ExpressionSyntax?) string? {
         var node = expression
         while node != nil {

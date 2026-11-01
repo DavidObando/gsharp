@@ -102,6 +102,37 @@ internal sealed class RegionWrite {
     }
 }
 
+/// A type test of a name that the region does not declare: the binder looks up the members of the name on the
+/// tested type where the test holds (ADR-0213, function values).
+internal sealed class RegionTypeTest {
+    init(name string, typeName string?, arity int32, mayBeConstant bool) {
+        Name = name
+        TypeName = typeName
+        Arity = arity
+        MayBeConstant = mayBeConstant
+    }
+
+    /// Gets the tested name.
+    prop Name string {
+        get;
+    }
+
+    /// Gets the name of the tested type, or `nil` when the type is not a plain or dotted name.
+    prop TypeName string? {
+        get;
+    }
+
+    /// Gets the number of type arguments of the tested type.
+    prop Arity int32 {
+        get;
+    }
+
+    /// Whether the pattern is name-shaped, so it tests a constant when the name is not a type.
+    prop MayBeConstant bool {
+        get;
+    }
+}
+
 /// One call site found by the scanner.
 internal sealed class RegionCall {
     init(
@@ -171,6 +202,7 @@ internal sealed class RegionEffects {
         OperatorOperandNames = List[string]()
         NilCompareOperandNames = List[string]()
         ReturnedNames = List[string]()
+        TypeTests = List[RegionTypeTest]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -181,6 +213,11 @@ internal sealed class RegionEffects {
 
     /// Gets the call sites with an operand analysis, in source order of the walk.
     prop Calls List[RegionCall] {
+        get;
+    }
+
+    /// Gets the type tests of names that the region does not declare, in source order of the walk.
+    prop TypeTests List[RegionTypeTest] {
         get;
     }
 
@@ -337,6 +374,7 @@ internal sealed class RegionEffects {
             return
         }
         Calls.AddRange(other.Calls)
+        TypeTests.AddRange(other.TypeTests)
         ContainsCall = ContainsCall || other.ContainsCall
         ContainsMemberWrite = ContainsMemberWrite || other.ContainsMemberWrite
         ContainsMemberRead = ContainsMemberRead || other.ContainsMemberRead

@@ -282,7 +282,7 @@ internal partial class StatementBinder {
         resolved.RunsUserCodeOnWrite ||
         resolved.ReadsProperty
 
-    private func CallIsIndirect(call RegionCall) bool {
+    private func CallIsIndirect(call RegionCall, effects RegionEffects) bool {
         switch call.Kind {
             case RegionCallKind.NamedInvocation {
                 let symbol = $scope.TryLookupSymbol(call.CalleeName)
@@ -293,7 +293,7 @@ internal partial class StatementBinder {
                 return true
             }
             case RegionCallKind.MemberInvocation {
-                return MemberCallIsIndirect(call)
+                return MemberCallIsIndirect(call, effects)
             }
             default {
                 return false
@@ -310,7 +310,7 @@ internal partial class StatementBinder {
     // the region narrows the receiver to a type that the entry scope does not show, and the call is indirect. The
     // member of any other receiver (an element, a member chain, a call result) is taken for a method, as in slice
     // L0, unless it invokes a delegate.
-    private func MemberCallIsIndirect(call RegionCall) bool {
+    private func MemberCallIsIndirect(call RegionCall, effects RegionEffects) bool {
         let member = call.CalleeName
         let receiverName = call.ReceiverName
         if member == nil {
@@ -327,10 +327,13 @@ internal partial class StatementBinder {
             declaredType = StripAllNullability(receiver.Type)
             narrowedType = StripAllNullability(binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(receiver)))
             shape = MemberShape(declaredType, member) | MemberShape(narrowedType, member)
-        } else if symbol is TypeSymbol named {
-            shape = MemberShape(named, member)
-        } else if symbol == nil {
-            shape = MemberShape(ResolveConstructedType(receiverName), member)
+            for test in effects.TypeTests {
+                if test.Name == receiverName {
+                    shape = shape | TestedMemberShape(test, member)
+                }
+            }
+        } else {
+            shape = MemberShape(ResolveTypeName(receiverName), member)
         }
         if (shape & MemberIsValue) != 0 {
             return true
@@ -345,6 +348,61 @@ internal partial class StatementBinder {
             return false
         }
         return MemberLookup(binderCtx).CollectImportedExtensionMethods(member).Count == 0
+    }
+
+    // The kinds of the member on the type of a type test. A type that the entry scope does not resolve can have
+    // any member. A name-shaped pattern whose name is not a type tests a constant (`case Kind.Name`), which
+    // narrows nothing.
+    private func TestedMemberShape(test RegionTypeTest, member string) int32 {
+        let typeName = test.TypeName
+        if typeName == nil {
+            return MemberIsValue
+        }
+        if ResolveTestedType(typeName, test.Arity) is {} type {
+            return MemberShape(type, member)
+        }
+        if test.MayBeConstant && $scope.TryLookupSymbol(typeName) != nil {
+            return 0
+        }
+        let dot = typeName.LastIndexOf('.')
+        if test.MayBeConstant && dot > 0 && ResolveTypeName(typeName.Substring(0, dot)) != nil {
+            return 0
+        }
+        return MemberIsValue
+    }
+
+    // The type that a type test names: a type of the scope, an imported class of that arity or a full CLR name.
+    private func ResolveTestedType(name string, arity int32) TypeSymbol? {
+        if $scope.TryLookupSymbol(name) is TypeSymbol type {
+            return type
+        }
+        if arity == 0 {
+            if ResolveTypeName(name) is {} named {
+                return named
+            }
+        } else if $scope.TryLookupImportedClassByArity(name, arity, nil, out var imported) && imported != nil {
+            return TypeSymbol.FromClrTypeWithoutNullability(imported.ClassType, NullabilityFreeReason.ResolvedTypeName)
+        }
+        let fullName = if arity == 0 {
+            name
+        } else {
+            name + "`" + arity.ToString()
+        }
+        if binderCtx.References.TryResolveType(fullName, out var clrType) {
+            return TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.ResolvedTypeName)
+        }
+        return nil
+    }
+
+    private func ResolveTypeName(name string) TypeSymbol? {
+        let symbol = $scope.TryLookupSymbol(name)
+        if symbol is TypeSymbol type {
+            return type
+        }
+        if symbol == nil {
+            return ResolveConstructedType(name)
+        }
+        return nil
     }
 
     private func HasExtensionFunction(receiverType TypeSymbol?, member string) bool {
@@ -677,7 +735,7 @@ internal partial class StatementBinder {
         let mayMutateMemberPaths = callLike || readLike || memberWrite
         var indirectCall = effects.ContainsIteration || effects.ContainsSuspension
         for call in effects.Calls {
-            if CallIsIndirect(call) {
+            if CallIsIndirect(call, effects) {
                 indirectCall = true
             }
         }
