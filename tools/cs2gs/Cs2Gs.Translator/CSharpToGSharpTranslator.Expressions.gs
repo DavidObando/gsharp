@@ -2440,6 +2440,17 @@ partial class CSharpToGSharpTranslator {
             if this.state.EmittedLocalGSharpNullability.TryGetValue(local, out var recorded) {
                 return recorded
             }
+            // Issue #5582: a `var` capture has the G# type of its input.
+            if this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
+                return !narrowedByTypeTest &&
+                    (
+                    if input != nil {
+                        this.IsGSharpNullableAnalyzerExpression(input)
+                    } else {
+                        this.IsGSharpNullableAnalyzerApiMember(member)
+                    }
+                )
+            }
             return RoslynAnalyzerApiMap.IsGSharpNullableCapableType(
                 RoslynTypeMetadataName(local.Type as INamedTypeSymbol)
             )
@@ -3769,14 +3780,46 @@ partial class CSharpToGSharpTranslator {
         /// Issue #5582: decides a `var` pattern capture as an inferred local. C# types the capture `T?`, but
         /// G# gives it the G# type of the value that the pattern matches. Thus the capture is non-null when
         /// that input is non-null.
-        /// @remarks This is the one decision for `x is var c`, a switch arm `var c =>`, a `case var c:` label
-        /// and a property subpattern `{ P: var c }` at any depth. The input of a top-level capture is the
-        /// scrutinee. The input of a subpattern capture is the member that it reads. A capture in a conjunction
-        /// has the input of the conjunction, except after a type test, which makes it non-null.
-        /// @returns `false` when cs2gs cannot name the input, for example in a positional subpattern
-        /// (issue #4576) or a list pattern. The caller then uses its other rules.
+        /// @remarks This is the one decision for `x is var c`, a switch arm `var c =>`, a `case var c:` label,
+        /// a property subpattern `{ P: var c }` at any depth and a conjunction. See
+        /// (cref:TryGetVarCaptureInput) for the input.
+        /// @returns `false` when cs2gs cannot name the input. The caller then uses its other rules.
         private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
             isNonNull = false
+            if !this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
+                return false
+            }
+            if narrowedByTypeTest {
+                isNonNull = true
+            } else if input != nil {
+                isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
+            } else {
+                // The analyzer map can retarget a non-null Roslyn member onto a `T?` G# member (issue #4356).
+                isNonNull = !this.IsGSharpNullableAnalyzerApiMember(member) && this.DeclaredValueIsStaticallyNonNull(
+                    member,
+                    (member as IFieldSymbol)?.Type ?? (member as IPropertySymbol)?.Type
+                )
+            }
+            return true
+        }
+
+        /// Issue #5582: finds the value that a `var` pattern capture holds in the emitted G#.
+        /// @param local The capture.
+        /// @param input The scrutinee of `x is var c`, of a switch arm or of a `case` label.
+        /// @param member The field or property that a property subpattern `{ P: var c }` reads.
+        /// @param narrowedByTypeTest Whether a type test before the capture in a conjunction narrows it, as in
+        /// `Node and var c`. gsc does not narrow it after `not nil` or a property pattern.
+        /// @returns `false` when the capture has no input that cs2gs can name, for example in a positional
+        /// subpattern (issue #4576) or a list pattern.
+        private func TryGetVarCaptureInput(
+            local ILocalSymbol,
+            out input Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            out member ISymbol?,
+            out narrowedByTypeTest bool
+        ) bool {
+            input = nil
+            member = nil
+            narrowedByTypeTest = false
             let designation = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             if !(
                 designation is SingleVariableDesignationSyntax{
@@ -3798,10 +3841,8 @@ partial class CSharpToGSharpTranslator {
                     .BinaryPatternSyntax conjunction &&
                     conjunction
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AndPattern) {
-                    // In `A and var c`, G# narrows `c` to a type that `A` tests. A `not nil` or a property
-                    // pattern does not narrow it.
                     if conjunction.Right == pattern && this.PatternTestsType(conjunction.Left) {
-                        isNonNull = true
+                        narrowedByTypeTest = true
                         return true
                     }
                     pattern = conjunction
@@ -3809,7 +3850,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 break
             }
-            let input Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch pattern.Parent {
+            input = switch pattern.Parent {
                 case isPattern is IsPatternExpressionSyntax: isPattern.Expression
                 case Microsoft
                     .CodeAnalysis
@@ -3824,7 +3865,6 @@ partial class CSharpToGSharpTranslator {
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
             if input != nil {
-                isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
                 return true
             }
             let memberPath Microsoft
@@ -3841,17 +3881,8 @@ partial class CSharpToGSharpTranslator {
             if memberPath == nil {
                 return false
             }
-            let member ISymbol? = this.context.GetSymbolInfo(memberPath).Symbol
-            let memberType ITypeSymbol? = switch member {
-                case field is IFieldSymbol: field.Type
-                case property is IPropertySymbol: property.Type
-                default: default(ITypeSymbol?)
-            }
-            if memberType == nil {
-                return false
-            }
-            isNonNull = this.DeclaredValueIsStaticallyNonNull(member, memberType)
-            return true
+            member = this.context.GetSymbolInfo(memberPath).Symbol
+            return member is IFieldSymbol || member is IPropertySymbol
         }
 
         // Whether `pattern` matches only a value of a tested type, which G# then gives to a later `var` capture.

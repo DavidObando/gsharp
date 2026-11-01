@@ -409,6 +409,50 @@ public sealed class BlockSurfaceAnalyzer : DiagnosticAnalyzer
         AssertBindsAgainstGsCore(printed)
     }
 
+    /// Issue #5582: a `var` capture in a property subpattern has the G# type of the member that it reads.
+    /// `IIsTypeOperation.TypeOperand` is non-null in Roslyn, but its G# member `BoundIsExpression.TypeOperand`
+    /// is `TypeSymbol?`, so a dereference of the capture keeps its `!!` in the switch-arm and `is` forms.
+    @Fact
+    func TypeOperandVarCapture_KeepsTheMappedMembersNullability() {
+        let (printed, diagnostics) = TranslateAnalyzer(`
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class TypeOperandAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        "TEST5582", "Title", "Message", "Testing", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterOperationAction(AnalyzeIsType, OperationKind.IsType);
+    }
+
+    private static void AnalyzeIsType(OperationAnalysisContext context)
+    {
+        var operation = (IIsTypeOperation)context.Operation;
+        string armName = operation switch { { TypeOperand: var t } => t.Name };
+        string isName = operation is { TypeOperand: var u } ? u.Name : "";
+        if (armName.Length + isName.Length == 0)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+        }
+    }
+}
+`)
+        Assert.Contains("case { TypeOperand: var t }: t!!.Name", printed, StringComparison.Ordinal)
+        Assert.Contains("if operation is { TypeOperand: var u } { u!!.Name }", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported)
+        AssertBindsAgainstGsCore(printed)
+    }
+
     @Fact
     func OperationRegistrationWrapper_ReservesCtxAgainstLiftedHandler() {
         let (printed, diagnostics) = TranslateAnalyzer(`
