@@ -631,11 +631,21 @@ internal partial class StatementBinder {
                 }
             }
             case tuple is TupleTypeSymbol {
-                if step.Kind == RegionReceiverStepKind.Member && step.Name != nil && tuple.TryGetElementIndexByName(
-                    step.Name,
-                    out var element
-                ) {
-                    return Outcome(AddSymbolType(tuple.ElementTypes[element], next))
+                if step.Kind == RegionReceiverStepKind.Member && step.Name is {} elementName {
+                    if tuple.TryGetElementIndexByName(elementName, out var element) {
+                        return Outcome(AddSymbolType(tuple.ElementTypes[element], next))
+                    }
+                    // `Item1` to `ItemN` name the elements of any tuple.
+                    if elementName.StartsWith("Item", StringComparison.Ordinal) && int32.TryParse(
+                        elementName.Substring(4),
+                        out var position
+                    ) &&
+                        position >= 1 &&
+                        position <= tuple
+                        .ElementTypes
+                        .Length {
+                        return Outcome(AddSymbolType(tuple.ElementTypes[position - 1], next))
+                    }
                 }
             }
             case declared is StructSymbol {
@@ -701,7 +711,12 @@ internal partial class StatementBinder {
         if symbol?.ClrType is not{} clrType {
             return StepUnresolved
         }
-        return AddClrStepTypes(clrType, step, ImmutableArray[TypeSymbol].Empty, nil, next)
+        let arguments = if symbol is ImportedTypeSymbol importedType {
+            importedType.TypeArguments
+        } else {
+            ImmutableArray[TypeSymbol].Empty
+        }
+        return AddClrStepTypes(clrType, step, arguments, nil, next)
     }
 
     private func Outcome(resolved bool) int32 -> if resolved {
@@ -766,6 +781,28 @@ internal partial class StatementBinder {
     // The CLR form of a step. [`definition`](paramref) is the open definition of an imported generic type whose
     // type arguments are [`arguments`](paramref); a member type that is one of its type parameters is the argument.
     private func AddClrStepTypes(
+        type Type,
+        step RegionReceiverStep,
+        arguments ImmutableArray[TypeSymbol],
+        definition Type?,
+        next List[ReceiverType]
+    ) int32 {
+        if ReflectionType(type) is not{} reflected {
+            return StepUnresolved
+        }
+        let reflectedDefinition = if object.ReferenceEquals(reflected, type) {
+            definition
+        } else {
+            reflected
+        }
+        try {
+            return AddClrStepTypesCore(reflected, step, arguments, reflectedDefinition, next)
+        } catch (ex NotSupportedException) {
+            return StepUnresolved
+        }
+    }
+
+    private func AddClrStepTypesCore(
         type Type,
         step RegionReceiverStep,
         arguments ImmutableArray[TypeSymbol],
@@ -898,7 +935,7 @@ internal partial class StatementBinder {
                 if InvokesDelegate(member) {
                     return MemberIsValue
                 }
-                return ClrMemberShape(type?.ClrType ?? typeof(MulticastDelegate), member)
+                return ClrTypeShape(type?.ClrType ?? typeof(MulticastDelegate), member)
             }
             case declared is StructSymbol {
                 var shape = 0
@@ -976,7 +1013,30 @@ internal partial class StatementBinder {
         }
     }
 
-    private func ClrTypeShape(clrType Type, member string) int32 {
+    // A generic instantiation over a type that emit still defines answers member queries by throwing; its
+    // definition has the same members. A type that emit still defines is not reflected.
+    private func ReflectionType(type Type) Type? {
+        if ClrTypeUtilities.IsTypeBuilderInstantiation(type) {
+            return type.GetGenericTypeDefinition()
+        }
+        if ClrTypeUtilities.IsUnfinishedEmitType(type) {
+            return nil
+        }
+        return type
+    }
+
+    private func ClrTypeShape(type Type, member string) int32 {
+        if ReflectionType(type) is not{} reflected {
+            return MemberIsValue
+        }
+        try {
+            return ClrTypeShapeCore(reflected, member)
+        } catch (ex NotSupportedException) {
+            return MemberIsValue
+        }
+    }
+
+    private func ClrTypeShapeCore(clrType Type, member string) int32 {
         if ClrTypeUtilities.IsDelegateType(clrType) && InvokesDelegate(member) {
             return MemberIsValue
         }
