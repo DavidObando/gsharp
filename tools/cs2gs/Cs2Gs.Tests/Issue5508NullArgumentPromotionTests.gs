@@ -198,7 +198,8 @@ namespace Demo
         Assert.DoesNotContain("parent Node?", printed[0])
     }
 
-    /// Row 9: a virtual property is not repainted by forwarding either.
+    /// Row 9: a virtual property is not repainted by forwarding either. Issue #5574: the parameter
+    /// that stores into it is pinned non-null too, so no `node!!` throws on the null C# stores.
     @Fact
     func PromotedParameter_StoredIntoVirtualProperty_DoesNotPromoteProperty() {
         let printed = TranslateEnabled(("Holder.cs", `
@@ -212,7 +213,8 @@ namespace Demo
         public static Holder Make() => new Holder(null!);
     }
 }`))
-        Assert.Contains("node Node?", printed[0])
+        Assert.DoesNotContain("node Node?", printed[0])
+        Assert.DoesNotContain("node!!", printed[0])
         Assert.DoesNotContain("Stored Node?", printed[0].Replace("  ", " "))
     }
 
@@ -985,7 +987,9 @@ namespace Demo
         Assert.DoesNotContain("e.Item!!", printed[0])
     }
 
-    /// Row 41: a local deconstructed from a promoted positional member.
+    /// Row 41: a local deconstructed from a positional member that a call passes `null`. Since #5574
+    /// a deconstruction is a read of the positional property that keeps it non-null (G# infers the
+    /// locals from it and asserts their later reads), so the member stays `Node` and nothing asserts.
     @Fact
     func DeconstructedLocalOfPromotedPositionalMember_IsAssertedOnDereference() {
         let printed = TranslateEnabled(("Entry.cs", `
@@ -1018,11 +1022,12 @@ namespace Demo
         private static int Take(Node node) => node.GetHashCode();
     }
 }`))
-        Assert.DoesNotContain("item.GetHashCode()", printed[0])
-        Assert.Contains("Take(item!!)", printed[0])
+        Assert.DoesNotContain("Item Node?", printed[0])
+        Assert.DoesNotContain("Take(item!!)", printed[0])
     }
 
-    /// Row 40.
+    /// Row 40. Issue #5574: `p` forwards into a parameter that its interface property fixes, so `p`
+    /// is pinned non-null and the call is not bridged with a `p!!` that would throw.
     @Fact
     func EmittedReferencePositionalRecordWithFixedProperty_IsNotTreatedAsWidened() {
         let library = Compile("Library", NullableContextOptions.Enable, nil, ("Key.cs", `
@@ -1061,7 +1066,8 @@ namespace Demo
                 context
             )
         )
-        Assert.Contains("p!!", printed)
+        Assert.DoesNotContain("p!!", printed)
+        Assert.DoesNotContain("p string?", printed)
     }
 
     /// Row 8: the null argument lives in another project of the run.
