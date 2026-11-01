@@ -354,6 +354,17 @@ partial class CSharpToGSharpTranslator {
                         declaration!!.Type.GetLocation()
                     )
                 }
+                // Issue #5561: record whether the emitted storage accepts nil.
+                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
+                    (type != nil || initializer != nil) {
+                    this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
+                        type.IsNullable
+                    } else {
+                        !(initializer is NonNullAssertionExpression) && this.IsNullablePromotedValue(
+                            declarator.Initializer?.Value
+                        )
+                    }
+                }
                 // Issue #4356: record the emitted G# nullability of this local
                 // (analyzer mode), for every later read of it.
                 this.RecordEmittedLocalNullability(

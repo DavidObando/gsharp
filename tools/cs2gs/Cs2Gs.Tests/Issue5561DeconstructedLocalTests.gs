@@ -30,6 +30,7 @@ import Xunit
 /// | `Node n; (n, i) = entry;`, also nested | `n = nValue`, GS0155 | `n = nValue!!`, as `n = entry.Item!!` (store bridge) |
 /// | the same, when `entry.Item != null` taints the property itself | `n = nValue`, GS0155 | `var n Node?`, `n = nValue`; the null is stored (taint edge) |
 /// | `var n = entry.Item; (n, i) = entry;` (nullable storage) | `n = nValue` | unchanged: the target reads as nullable, so no bridge |
+/// | `Node n = entry.Item; (n, i) = entry;` (G# infers `n` from the initializer) | `n = nValue` | unchanged: the storage that the declaration emitted accepts nil |
 /// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets the conversion's result flow, not the element's |
 /// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
 /// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
@@ -46,6 +47,8 @@ import Xunit
 /// `AddDeconstructedElementEdge` (on 38b501c29); `SynthesizedDeconstructRecord` ignoring the run's
 /// compilations; the conversion's result flow discarded; no compiler-generated match without the
 /// run's compilations. The field row fails on baacf938e (GS0155), whose exception covered fields too.
+/// The `Node n` row is decided by `EmittedLocalStorageAcceptsNil`; it throws at `n = nValue!!` when
+/// only a `var` local's storage follows its initializer.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -169,6 +172,33 @@ namespace Demo
             return (o == null) + ":" + i;
         }
         public static string Run() => Inferred(new Entry(new Node(), 1));
+    }
+}`)
+        Assert.Equal("True:0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.Contains("n = nValue\n", printed)
+    }
+
+    /// An explicitly typed local's storage is what its declaration emitted. G# infers `Node n = entry.Item`
+    /// from its initializer, so a deconstruction into it stores the null, as for `var`.
+    @Fact
+    func StoreIntoAnExplicitlyTypedLocal_FollowsItsEmittedStorage() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Same(Entry entry)
+        {
+            Node n = entry.Item;
+            int i;
+            (n, i) = Empty();
+            object o = n;
+            return (o == null) + ":" + i;
+        }
+        public static string Run() => Same(new Entry(new Node(), 1));
     }
 }`)
         Assert.Equal("True:0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())

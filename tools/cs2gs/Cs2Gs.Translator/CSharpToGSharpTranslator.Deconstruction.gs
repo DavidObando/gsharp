@@ -906,9 +906,9 @@ partial class CSharpToGSharpTranslator {
         // widened element stored into a slot that stays non-null is asserted
         // exactly as `n = entry.Item!!` is. The slot is the input of a
         // user-defined conversion, as in `ForgiveNullableReferenceValueCore`, or
-        // else the target's storage. A local that reads as nullable (a `var`
-        // local whose initializer is nullable) has nullable storage; a field or
-        // property is decided by its declaration, as for a plain assignment.
+        // else the target's storage. A local's storage is what its declaration
+        // emitted (`EmittedLocalStorageAcceptsNil`); any other target is decided
+        // by its declaration, as for a plain assignment.
         // An element-access target is #5595.
         private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
             if !(target is IdentifierNameSyntax || target is MemberAccessExpressionSyntax) {
@@ -928,8 +928,16 @@ partial class CSharpToGSharpTranslator {
             if ObliviousNullabilityAnalyzer.DeconstructedElementConversionOperator(target, model) is {} conversion {
                 slot = conversion.Parameters[0]
                 slotType = conversion.Parameters[0].Type
-            } else if slot is ILocalSymbol && this.IsNullablePromotedValue(target) {
-                return value
+            } else if slot is ILocalSymbol local &&
+                this
+                .state
+                .EmittedLocalStorageAcceptsNil
+                .TryGetValue(local, out var acceptsNil) {
+                return if acceptsNil {
+                    value
+                } else {
+                    EnsureNonNullAssertion(value)
+                }
             }
             return if this.TargetWillRemainNonNullableReference(slotType, slot) {
                 EnsureNonNullAssertion(value)
