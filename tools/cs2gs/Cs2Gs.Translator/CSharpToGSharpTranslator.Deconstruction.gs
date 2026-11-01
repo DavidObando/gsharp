@@ -907,8 +907,9 @@ partial class CSharpToGSharpTranslator {
         // exactly as `n = entry.Item!!` is. The slot is the input of a
         // user-defined conversion, as in `ForgiveNullableReferenceValueCore`, or
         // else the target's storage. A local's storage is what its declaration
-        // emitted (`EmittedLocalStorageAcceptsNil`); any other target is decided
-        // by its declaration, as for a plain assignment.
+        // emitted (`EmittedLocalStorageAcceptsNil`), and a local with no record
+        // is not bridged; any other target is decided by its declaration, as
+        // for a plain assignment.
         // An element-access target is #5595.
         private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
             if !(target is IdentifierNameSyntax || target is MemberAccessExpressionSyntax) {
@@ -928,15 +929,19 @@ partial class CSharpToGSharpTranslator {
             if ObliviousNullabilityAnalyzer.DeconstructedElementConversionOperator(target, model) is {} conversion {
                 slot = conversion.Parameters[0]
                 slotType = conversion.Parameters[0].Type
-            } else if slot is ILocalSymbol local &&
-                this
-                .state
-                .EmittedLocalStorageAcceptsNil
-                .TryGetValue(local, out var acceptsNil) {
-                return if acceptsNil {
-                    value
-                } else {
+            } else if slot is ILocalSymbol local {
+                // A local whose emitted storage is not recorded (a pattern
+                // variable, for example) keeps the unbridged store: a wrong
+                // `!!` would throw where C# stores the null, and a wrong
+                // omission is a compile error that gsc reports.
+                return if this
+                    .state
+                    .EmittedLocalStorageAcceptsNil
+                    .TryGetValue(local, out var acceptsNil) &&
+                    !acceptsNil {
                     EnsureNonNullAssertion(value)
+                } else {
+                    value
                 }
             }
             return if this.TargetWillRemainNonNullableReference(slotType, slot) {

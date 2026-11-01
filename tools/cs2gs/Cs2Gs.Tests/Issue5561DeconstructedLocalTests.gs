@@ -33,6 +33,7 @@ import Xunit
 /// | `Node n = entry.Item; (n, i) = entry;` (G# infers `n` from the initializer) | `n = nValue` | unchanged: the storage that the declaration emitted accepts nil |
 /// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets the conversion's result flow, not the element's |
 /// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
+/// | `entry.Item is var p` / `is Node p`, then `(p, i) = Empty()` (no recorded storage) | `p = pValue` | unchanged (#5605): an unknown local is not bridged |
 /// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
 /// | `(holder.Value, i) = entry` into another project's `Holder<T>.Value`, which the consumer null-tests | GS0155 | `holder.Value = holderValue!!`: a field is decided by its declaration |
 /// @remarks Mutation witnesses (ADR-0154), each also failing on d12a50f86: with the
@@ -48,7 +49,8 @@ import Xunit
 /// compilations; the conversion's result flow discarded; no compiler-generated match without the
 /// run's compilations. The field row fails on baacf938e (GS0155), whose exception covered fields too.
 /// The `Node n` row is decided by `EmittedLocalStorageAcceptsNil`; it throws at `n = nValue!!` when
-/// only a `var` local's storage follows its initializer.
+/// only a `var` local's storage follows its initializer. The pattern-variable row throws at
+/// `p = pValue!!` on 7c4638e68, which bridged a local with no record by its declared type.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -203,6 +205,47 @@ namespace Demo
 }`)
         Assert.Equal("True:0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
         Assert.Contains("n = nValue\n", printed)
+    }
+
+    /// A pattern variable has no recorded declared storage (#5605), so the bridge leaves its store as it
+    /// is on `main`: the lowerings emit `var p Node?`, and the null that C# stores is stored, not asserted.
+    @Fact
+    func StoreIntoALocalOfUnknownStorage_IsNotBridged() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Pattern(Entry entry)
+        {
+            if (entry.Item is var p)
+            {
+                int i;
+                (p, i) = Empty();
+                object o = p;
+                return (o == null) + ":" + i;
+            }
+            return "none";
+        }
+        public static string Typed(Entry entry)
+        {
+            if (entry.Item is Node p)
+            {
+                int i;
+                (p, i) = Empty();
+                object o = p;
+                return (o == null) + ":" + i;
+            }
+            return "none";
+        }
+        public static string Run() => Pattern(new Entry(new Node(), 1)) + " " + Typed(new Entry(new Node(), 1));
+    }
+}`)
+        Assert.Equal("True:0 True:0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.DoesNotContain("p = pValue!!", printed)
     }
 
     /// A user-defined conversion takes the element as its input, so the bridge asks the operator's
