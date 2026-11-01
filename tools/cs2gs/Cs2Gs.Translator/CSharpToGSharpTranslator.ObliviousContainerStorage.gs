@@ -310,27 +310,53 @@ partial class CSharpToGSharpTranslator {
             if type == nil {
                 return type
             }
-            let positions = HashSet[string](System.StringComparer.Ordinal)
-            let sink ISymbol? = this.ResolveValueSink(creation)
-            let sinkPositions = this.ObliviousContainerPositions(sink)
-            if sinkPositions != nil && SameContainerShape(createdType, StorageType(sink!!.OriginalDefinition)) {
-                positions.UnionWith(sinkPositions)
-            }
-            if creation is BaseObjectCreationExpressionSyntax objectCreation {
-                let inferred = this.ObliviousCreationPositions(
-                    objectCreation,
-                    this.context.SemanticModel,
-                    this.ObliviousContainerFlowState()
-                )
-                if inferred != nil {
-                    positions.UnionWith(inferred.Nullable)
-                }
-            }
+            let positions = this.EffectiveCreationPositions(creation, createdType).Nullable
             return if positions.Count == 0 {
                 type
             } else {
                 PromoteNestedPositions(type, createdType, positions, "")
             }
+        }
+
+        // The positions that a construction states: those of the storage that receives
+        // it (an `async` method's task result included) and those that its arguments
+        // and initializer give its type arguments. The spelling, the constructor
+        // arguments and the initializer writes all read these.
+        private func EffectiveCreationPositions(
+            creation ExpressionSyntax,
+            createdType ITypeSymbol?
+        ) ObliviousPositionSet {
+            let positions = ObliviousPositionSet()
+            let (sinkPositions, sinkType) = this.SinkStorage(this.ResolveValueSink(creation))
+            if sinkPositions != nil && SameContainerShape(createdType, sinkType) {
+                positions.Nullable.UnionWith(sinkPositions)
+            }
+            if creation is BaseObjectCreationExpressionSyntax objectCreation {
+                positions.UnionWith(
+                    this.ObliviousCreationPositions(
+                        objectCreation,
+                        this.context.SemanticModel,
+                        this.ObliviousContainerFlowState()
+                    )
+                )
+            }
+            return positions
+        }
+
+        // The declared positions and type of the storage that receives a value. An
+        // `async` method receives its task's result.
+        private func SinkStorage(sink ISymbol?)(Positions HashSet[string]?, Type ITypeSymbol?) {
+            let positions = this.ObliviousContainerPositions(sink)
+            let type ITypeSymbol? = StorageType(sink?.OriginalDefinition)
+            if sink is IMethodSymbol method && method.IsAsync && IsGenericTaskLike(type) {
+                let result = HashSet[string](System.StringComparer.Ordinal)
+                if positions != nil {
+                    SubtreeInto(positions, "0", result)
+                    result.Remove("")
+                }
+                return (result, (type as INamedTypeSymbol)!!.TypeArguments[0])
+            }
+            return (positions, type)
         }
 
         /// Issue #5541: an explicit type argument of a generic call spells the positions
@@ -418,9 +444,17 @@ partial class CSharpToGSharpTranslator {
         /// @param creation The array construction.
         /// @returns True when the element type is nullable.
         private func ObliviousContainerSinkPromotesArrayElement(creation ExpressionSyntax?) bool {
-            let sink ISymbol? = this.ResolveValueSink(creation)
-            return StorageType(sink?.OriginalDefinition) is IArrayTypeSymbol && this.ObliviousContainerPositions(sink)
-                ?.Contains("0") == true
+            let (positions, type) = this.SinkStorage(this.ResolveValueSink(creation))
+            if type is IArrayTypeSymbol && positions?.Contains("0") == true {
+                return true
+            }
+            // Issue #5541: an array literal holds the nullable element that it is given
+            // (`new[] { l }` is `[]string?` for a `string?` element).
+            return (creation is ArrayCreationExpressionSyntax || creation is ImplicitArrayCreationExpressionSyntax) &&
+                this
+                .ObliviousValuePositions(creation)
+                ?.Nullable
+                .Contains("0") == true
         }
 
         /// Issue #5537: whether [`value`](paramref) reads an element that oblivious
@@ -454,7 +488,187 @@ partial class CSharpToGSharpTranslator {
         /// the value is an array element.
         /// @param value The written C# value.
         /// @returns True when the destination position of the value is `T?` in G#.
+        ///
+        /// Issue #5541: a value that the analysis gives a nullable top level gets no
+        /// `!!` unless its slot is proven non-null (see `SlotProvesNonNull`). A slot
+        /// that the analysis cannot resolve fails closed: the translation keeps the
+        /// value as it is, so it either binds or reports a compile error, and never
+        /// throws where C# stores nil.
         private func WritesObliviousContainerStorageElement(value ExpressionSyntax?) bool {
+            if value == nil || !this.ObliviousContainerFlowState().HasNullable {
+                return false
+            }
+            if this.WritesNullableSlot(value) {
+                return true
+            }
+            return this.ReadsObliviousContainerStorageElement(value) && !this.SlotProvesNonNull(
+                this.WrittenWholeValue(value)
+            )
+        }
+
+        // Whether the slot that [`written`](paramref) is written into is proven
+        // non-null: a declared parameter, local, field, property, return, iterator
+        // element or delegate result (the caller asks whether the run widens it), a
+        // type parameter whose constraint rejects `T?`, or a type parameter of a
+        // receiver whose storage the analysis knows. Any other slot, such as a type
+        // parameter that a construction, a call or a lambda binds, or an array
+        // element, is not proven.
+        private func SlotProvesNonNull(written ExpressionSyntax) bool {
+            let parent SyntaxNode? = written.Parent
+            let model = this.context.SemanticModel
+            if parent is ArgumentSyntax argument {
+                let (parameter, prefix) = ArgumentDestination(argument, model)
+                if parameter == nil {
+                    return false
+                }
+                var slotType ITypeSymbol? = parameter.OriginalDefinition.Type
+                if prefix == "0" {
+                    slotType = (slotType as IArrayTypeSymbol)?.ElementType
+                }
+                return slotType != nil && this.SlotTypeProvesNonNull(
+                    argument.Parent?.Parent as ExpressionSyntax,
+                    slotType
+                )
+            }
+            if parent is EqualsValueClauseSyntax {
+                return true
+            }
+            if parent is AssignmentExpressionSyntax assignment && assignment.Right == written {
+                let member ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
+                // An object initializer member of a construction.
+                if assignment.Parent is InitializerExpressionSyntax memberInitializer &&
+                    memberInitializer.Parent is BaseObjectCreationExpressionSyntax memberCreation {
+                    let memberType ITypeSymbol? = StorageType(member?.OriginalDefinition)
+                    return memberType != nil && this.SlotTypeProvesNonNull(memberCreation, memberType)
+                }
+                // An element or member of a receiver: its type parameter is bound by the
+                // receiver's storage.
+                let receiver ExpressionSyntax? = switch assignment.Left {
+                    case access is ElementAccessExpressionSyntax: access.Expression
+                    case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                    default: default(ExpressionSyntax?)
+                }
+                if receiver != nil &&
+                    StorageType(member?.OriginalDefinition) is ITypeParameterSymbol receiverParameter {
+                    return NullableTypeArgumentViolatesTranslatedConstraints(receiverParameter) ||
+                        !this.ElementPositionIsPromoted(receiver, member)
+                }
+                return true
+            }
+            if parent is ReturnStatementSyntax ||
+                parent is YieldStatementSyntax ||
+                parent is ArrowExpressionClauseSyntax ||
+                parent is AnonymousFunctionExpressionSyntax {
+                return this.ResultSlotProvesNonNull(written)
+            }
+            if parent is InitializerExpressionSyntax initializer {
+                // A collection initializer element (`new List<T> { value }`, also inside a
+                // complex element). An array element is not proven.
+                let element ExpressionSyntax = if initializer.IsKind(SyntaxKind.ComplexElementInitializerExpression) {
+                    initializer
+                } else {
+                    written
+                }
+                let collection SyntaxNode? = element.Parent
+                if collection is not InitializerExpressionSyntax collectionInitializer || !collectionInitializer.IsKind(
+                    SyntaxKind.CollectionInitializerExpression
+                ) ||
+                    collectionInitializer.Parent is not BaseObjectCreationExpressionSyntax collectionCreation ||
+                    model
+                    .GetCollectionInitializerSymbolInfo(element).Symbol is not IMethodSymbol add {
+                    return false
+                }
+                let index = if object.ReferenceEquals(element, written) {
+                    0
+                } else {
+                    initializer.Expressions.IndexOf(written)
+                }
+                return index >= 0 && index < add.OriginalDefinition.Parameters.Length && this.SlotTypeProvesNonNull(
+                    collectionCreation,
+                    add.OriginalDefinition.Parameters[index].Type
+                )
+            }
+            return false
+        }
+
+        // Whether the result slot of the function that returns [`result`](paramref) is
+        // proven non-null: a method, property, local function or a lambda with a fixed
+        // delegate is declared; a lambda whose delegate result a call binds is not.
+        private func ResultSlotProvesNonNull(result ExpressionSyntax) bool {
+            var node SyntaxNode? = result.Parent
+            while node != nil && !(node is AnonymousFunctionExpressionSyntax) {
+                if node is LocalFunctionStatementSyntax ||
+                    node is BaseMethodDeclarationSyntax ||
+                    node is AccessorDeclarationSyntax ||
+                    node is BasePropertyDeclarationSyntax {
+                    return true
+                }
+                node = node.Parent
+            }
+            if node is not AnonymousFunctionExpressionSyntax lambda {
+                return false
+            }
+            var argumentNode SyntaxNode? = lambda.Parent
+            while argumentNode is ParenthesizedExpressionSyntax {
+                argumentNode = argumentNode.Parent
+            }
+            if argumentNode is not ArgumentSyntax argument {
+                // A lambda stored in declared delegate storage has a fixed result.
+                return true
+            }
+            if this
+                .context
+                .SemanticModel
+                .GetOperation(argument) is not IArgumentOperation operation ||
+                operation.Parameter == nil {
+                return false
+            }
+            let invoke IMethodSymbol? = (
+                operation.Parameter!!.OriginalDefinition.Type as INamedTypeSymbol
+            )?.DelegateInvokeMethod
+            if invoke == nil {
+                return false
+            }
+            var slotType ITypeSymbol? = invoke.ReturnType
+            if lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword) {
+                // The result of an `async` lambda is its task's result.
+                slotType = if slotType is INamedTypeSymbol task && IsGenericTaskLike(task) {
+                    task.TypeArguments[0]
+                } else {
+                    nil
+                }
+            }
+            return slotType != nil && this.SlotTypeProvesNonNull(argument.Parent?.Parent as ExpressionSyntax, slotType)
+        }
+
+        // Whether a slot of declared type [`slotType`](paramref) (in the declaring
+        // definition's terms) is proven non-null at the top level.
+        private func SlotTypeProvesNonNull(call ExpressionSyntax?, slotType ITypeSymbol) bool {
+            if slotType is not ITypeParameterSymbol parameter {
+                return true
+            }
+            if NullableTypeArgumentViolatesTranslatedConstraints(parameter) {
+                return true
+            }
+            // A type parameter of the receiver's type, which the receiver's storage
+            // binds: `list.Add(value)` on `List[string]` storage.
+            if parameter.TypeParameterKind == TypeParameterKind.Type &&
+                call is InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax target} invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol method &&
+                method.ReducedFrom == nil &&
+                !method.IsStatic &&
+                !(target.Expression is ThisExpressionSyntax || target.Expression is BaseExpressionSyntax) {
+                return !this.CallSlotIsNullable(invocation, slotType)
+            }
+            return false
+        }
+
+        // Whether [`value`](paramref) is written into a slot that the analysis makes
+        // nullable.
+        private func WritesNullableSlot(value ExpressionSyntax?) bool {
             if value == nil || !this.ObliviousContainerFlowState().HasNullable {
                 return false
             }
@@ -566,26 +780,13 @@ partial class CSharpToGSharpTranslator {
                 member = add.Parameters[index]
             }
             let createdType ITypeSymbol? = this.context.GetTypeInfo(creation).Type
-            let positions = ObliviousPositionSet()
-            let sink ISymbol? = this.ResolveValueSink(creation)
-            let sinkPositions = this.ObliviousContainerPositions(sink)
-            if sinkPositions != nil && SameContainerShape(createdType, StorageType(sink?.OriginalDefinition)) {
-                positions.Nullable.UnionWith(sinkPositions)
-            }
-            positions.UnionWith(
-                this.ObliviousCreationPositions(
-                    creation,
-                    this.context.SemanticModel,
-                    this.ObliviousContainerFlowState()
-                )
-            )
-            return MemberPositionIsNullable(positions, createdType, member)
+            return MemberPositionIsNullable(this.EffectiveCreationPositions(creation, createdType), createdType, member)
         }
 
         // Whether the type [`slotType`](paramref) of a parameter or delegate result of
         // the call [`call`](paramref), with the call's type arguments bound as the
         // analysis binds them, is nullable at the top level.
-        private func CallSlotIsNullable(call ExpressionSyntax, slotType ITypeSymbol) bool {
+        private func CallSlotIsNullable(call ExpressionSyntax, slotType ITypeSymbol, position string = "") bool {
             if !MentionsTypeParameter(slotType) {
                 return false
             }
@@ -604,7 +805,7 @@ partial class CSharpToGSharpTranslator {
                 .GetTypeInfo(creation)
                 .Type is INamedTypeSymbol created {
                 // A construction binds its type parameters to the positions it states.
-                let stated = this.ObliviousCreationPositions(creation, model, flow)
+                let stated = this.EffectiveCreationPositions(creation, created)
                 bindings = TypeParameterMap()
                 let parameters = FlatTypeArguments(created.OriginalDefinition)
                 for var i = 0; i < parameters.Count; i++ {
@@ -618,7 +819,7 @@ partial class CSharpToGSharpTranslator {
             }
             let slot = ObliviousPositionSet()
             Substitute(slotType, bindings, "", slot)
-            return slot.Nullable.Contains("")
+            return slot.Nullable.Contains(position)
         }
 
         // Whether a value that a lambda returns has a nullable delegate result, because
@@ -632,11 +833,10 @@ partial class CSharpToGSharpTranslator {
                 }
                 node = node.Parent
             }
-            if node is not AnonymousFunctionExpressionSyntax lambda || lambda.AsyncKeyword.IsKind(
-                SyntaxKind.AsyncKeyword
-            ) {
+            if node is not AnonymousFunctionExpressionSyntax lambda {
                 return false
             }
+            let isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
             var argumentNode SyntaxNode? = lambda.Parent
             while argumentNode is ParenthesizedExpressionSyntax {
                 argumentNode = argumentNode.Parent
@@ -655,7 +855,16 @@ partial class CSharpToGSharpTranslator {
             let invoke IMethodSymbol? = (
                 operation.Parameter!!.OriginalDefinition.Type as INamedTypeSymbol
             )?.DelegateInvokeMethod
-            return invoke != nil && !invoke.ReturnsVoid && this.CallSlotIsNullable(call, invoke.ReturnType)
+            // An `async` lambda returns its task's result, position `0` of the result.
+            return invoke != nil && !invoke.ReturnsVoid && this.CallSlotIsNullable(
+                call,
+                invoke.ReturnType,
+                if isAsync {
+                    "0"
+                } else {
+                    ""
+                }
+            )
         }
 
         // The whole value that a write stores: an arm of a conditional or switch
@@ -761,6 +970,22 @@ partial class CSharpToGSharpTranslator {
             }
             if value is AwaitExpressionSyntax awaitExpression {
                 return this.ObliviousAwaitedPositions(awaitExpression, model, flow)
+            }
+            // An array literal holds the positions of its elements below position `0`.
+            let arrayInitializer InitializerExpressionSyntax? = switch value {
+                case explicitArray is ArrayCreationExpressionSyntax: explicitArray.Initializer
+                case implicitArray is ImplicitArrayCreationExpressionSyntax: implicitArray.Initializer
+                default: default(InitializerExpressionSyntax?)
+            }
+            if arrayInitializer != nil {
+                let elements = ObliviousPositionSet()
+                for element in arrayInitializer.Expressions {
+                    let elementPositions = this.ObliviousPositionsOf(element, model, flow)
+                    if elementPositions != nil {
+                        elements.UnionWith(Prefixed(elementPositions, "0"))
+                    }
+                }
+                return Filtered(model.GetTypeInfo(value!!).Type, elements)
             }
             if !(
                 value is IdentifierNameSyntax ||
@@ -925,9 +1150,7 @@ partial class CSharpToGSharpTranslator {
             if model.GetOperation(creation) is not IObjectCreationOperation operation ||
                 operation.Constructor == nil ||
                 operation.Type is not INamedTypeSymbol created ||
-                operation
-                .Arguments
-                .Length == 0 {
+                (operation.Arguments.Length == 0 && creation.Initializer == nil) {
                 return nil
             }
             let definition = created.OriginalDefinition
@@ -943,7 +1166,8 @@ partial class CSharpToGSharpTranslator {
                 true,
                 model,
                 flow,
-                bindings
+                bindings,
+                creation.Initializer
             )
             if bindings.Count == 0 {
                 return nil
@@ -974,9 +1198,24 @@ partial class CSharpToGSharpTranslator {
             spelled bool,
             model SemanticModel,
             flow ObliviousContainerFlow,
-            bindings Dictionary[ITypeParameterSymbol, ObliviousPositionSet]
+            bindings Dictionary[ITypeParameterSymbol, ObliviousPositionSet],
+            initializer InitializerExpressionSyntax? = nil
         ) {
             let found = TypeParameterMap()
+            // A construction's initializer writes give its type arguments positions as
+            // its arguments do: `new List<string> { value }`, `new Box<T> { Value = value }`.
+            if initializer != nil {
+                for written in InitializerWrites(initializer, model) {
+                    let writtenPositions = if MentionsTypeParameter(written.Pattern) {
+                        this.ObliviousPositionsOf(written.Value, model, flow)
+                    } else {
+                        nil
+                    }
+                    if writtenPositions != nil {
+                        Unify(written.Pattern, model.GetTypeInfo(written.Value).Type, writtenPositions, found)
+                    }
+                }
+            }
             let lambdas = List[(Parameter IParameterSymbol, Lambda AnonymousFunctionExpressionSyntax)]()
             for argument in arguments {
                 let argumentParameter IParameterSymbol? = argument.Parameter
@@ -1028,12 +1267,24 @@ partial class CSharpToGSharpTranslator {
                 let invoke IMethodSymbol? = (
                     parameter.OriginalDefinition.Type as INamedTypeSymbol
                 )?.DelegateInvokeMethod
-                if invoke == nil || invoke.ReturnsVoid || lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword) {
+                if invoke == nil || invoke.ReturnsVoid {
+                    continue
+                }
+                // An `async` lambda's results are its task's result, position `0` of the
+                // task that the lambda returns.
+                let isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
+                let lambdaTask ITypeSymbol? = (model.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType
+                if isAsync && !IsGenericTaskLike(lambdaTask) {
                     continue
                 }
                 for result in LambdaResults(lambda) {
                     let resultPositions = this.ObliviousPositionsOf(result, model, flow)
-                    if resultPositions != nil {
+                    if resultPositions == nil {
+                        continue
+                    }
+                    if isAsync {
+                        Unify(invoke.ReturnType, lambdaTask, Prefixed(resultPositions, "0"), found)
+                    } else {
                         Unify(invoke.ReturnType, model.GetTypeInfo(result).Type, resultPositions, found)
                     }
                 }
@@ -1104,12 +1355,10 @@ partial class CSharpToGSharpTranslator {
                     } else if node is ForEachStatementSyntax forEach {
                         edges.Add((model.GetDeclaredSymbol(forEach), forEach.Expression, model, "", 2))
                     }
-                    if node is BaseObjectCreationExpressionSyntax{
-                        ArgumentList: {} constructionArguments
-                    } spelledCreation &&
-                        constructionArguments
-                        .Arguments
-                        .Count > 0 {
+                    if node is BaseObjectCreationExpressionSyntax spelledCreation &&
+                        (
+                        (spelledCreation.ArgumentList?.Arguments.Count ?? 0) > 0 || spelledCreation.Initializer != nil
+                    ) {
                         spelledSites.Add((spelledCreation, model))
                     } else if node is InvocationExpressionSyntax spelledCall &&
                         HasExplicitTypeArguments(spelledCall.Expression) {
@@ -1681,6 +1930,42 @@ partial class CSharpToGSharpTranslator {
                 return (nil, "")
             }
 
+            // The values that an object or collection initializer writes, with the type
+            // of the slot each one fills in the declaring definition's terms.
+            private func InitializerWrites(initializer InitializerExpressionSyntax, model SemanticModel) List[
+                (Pattern ITypeSymbol, Value ExpressionSyntax)
+            ] {
+                let writes = List[(Pattern ITypeSymbol, Value ExpressionSyntax)]()
+                for expression in initializer.Expressions {
+                    if expression is AssignmentExpressionSyntax memberWrite {
+                        let memberType ITypeSymbol? = StorageType(
+                            model.GetSymbolInfo(memberWrite.Left).Symbol?.OriginalDefinition
+                        )
+                        if memberType != nil {
+                            writes.Add((memberType, memberWrite.Right))
+                        }
+                        continue
+                    }
+                    if !initializer.IsKind(SyntaxKind.CollectionInitializerExpression) ||
+                        model
+                        .GetCollectionInitializerSymbolInfo(expression)
+                        .Symbol is not IMethodSymbol add ||
+                        add.IsExtensionMethod {
+                        continue
+                    }
+                    let values = if expression is InitializerExpressionSyntax complex {
+                        complex.Expressions.ToList()
+                    } else {
+                        List[ExpressionSyntax]{expression}
+                    }
+                    let parameters = add.OriginalDefinition.Parameters
+                    for var i = 0; i < values.Count && i < parameters.Length; i++ {
+                        writes.Add((parameters[i].Type, values[i]))
+                    }
+                }
+                return writes
+            }
+
             // Whether [`value`](paramref) is written inside the call, not the call.
             private func IsWrittenIn(call SyntaxNode, value ExpressionSyntax?) bool -> value != nil &&
                 value.SyntaxTree == call.SyntaxTree &&
@@ -1731,6 +2016,8 @@ partial class CSharpToGSharpTranslator {
 
             // Only these values can carry positions (see ObliviousPositionsOf).
             private func CanCarryPositions(value ExpressionSyntax) bool -> value is IdentifierNameSyntax ||
+                value is ArrayCreationExpressionSyntax ||
+                value is ImplicitArrayCreationExpressionSyntax ||
                 value is MemberAccessExpressionSyntax ||
                 value is ElementAccessExpressionSyntax ||
                 value is InvocationExpressionSyntax ||

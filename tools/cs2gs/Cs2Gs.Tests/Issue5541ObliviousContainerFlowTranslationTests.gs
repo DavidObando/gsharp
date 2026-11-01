@@ -530,6 +530,114 @@ public static class Use
             }, []string{"Stated", "1", "Inferred", "1"})
     }
 
+    /// Review of #5571: a construction that an `async` method returns states the task
+    /// result's positions, so its collection initializer takes a nil element as it is.
+    @Fact
+    func An_Async_Return_Construction_Takes_A_Nil_Element() {
+        this.Check("Review13", `using System.Collections.Generic;
+using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static async Task<List<string>> LoadAsync(string p, int k)
+    {
+        await Task.Yield();
+        string[] lines; lines = Node.Holes(p);
+        if (k == 0) { return new List<string>(Node.Holes(p)); }
+        if (k == 1) { return new List<string>(); }
+        return new List<string> { lines[1] };
+    }
+    static async Task<string[]> LoadArrayAsync(string p, int k)
+    {
+        await Task.Yield();
+        string[] lines; lines = Node.Holes(p);
+        if (k == 0) { return Node.Holes(p); }
+        return new string[] { lines[1] };
+    }
+    public static int AsyncList(string p) { return LoadAsync(p, 2).Result[0] == null ? 1 : 0; }
+    public static int AsyncEmpty(string p) { return LoadAsync(p, 1).Result.Count; }
+    public static int AsyncArray(string p) { return LoadArrayAsync(p, 1).Result[0] == null ? 1 : 0; }
+    public static int AsyncThrows(string p) { try { return LoadAsync(p, 2).Result[0].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return List[string?](Node.Holes(p)!!)",
+                "return List[string?]()",
+                "return List[string?]{ lines[1] }",
+                "return []string?{lines[1]}"
+            }, []string{"AsyncList", "1", "AsyncEmpty", "0", "AsyncArray", "1", "AsyncThrows", "-1"})
+    }
+
+    /// Review of #5571: a construction assigned to a local that an earlier construction
+    /// promoted states that local's positions, so a nil argument is passed through.
+    @Fact
+    func A_Reassigned_Construction_Takes_The_Local_Positions() {
+        this.Check("Review14", `using ObLib;
+
+public class Box<T> { public T Value; public Box(T value) { Value = value; } }
+
+public static class Use
+{
+    public static int Reassigned(string p)
+    {
+        string[] lines; lines = Node.Holes(p);
+        Box<string> b;
+        b = new Box<string>(lines[0]);
+        string? s = null;
+        b = new Box<string>(s);
+        return b.Value == null ? 1 : 0;
+    }
+}`, []string{"b = Box[string?](lines[0])", "b = Box[string?](s)"}, []string{"Reassigned", "1"})
+    }
+
+    /// Review of #5571: an array literal of a nullable element is a `[]T?`, so a lambda
+    /// that wraps an element passes nil through.
+    @Fact
+    func An_Array_Literal_Holds_A_Nil_Element() {
+        this.Check("Review15", `using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int Arrays(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => new[] { l }).ToArray().Length + (lines.Select(l => new string[] { l }).ToArray()[1][0] == null ? 10 : 0); }
+    public static int ArrayThrows(string p) { string[] lines; lines = Node.Holes(p); try { return lines.Select(l => new[] { l }).ToArray()[1][0].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{"lines.Select((l string?) -> []string?{l})"}, []string{"Arrays", "12", "ArrayThrows", "-1"})
+    }
+
+    /// Review of #5571: an `async` lambda's results give the task result of the delegate
+    /// its positions, so returning a nil element does not assert it.
+    @Fact
+    func An_Async_Lambda_Returns_A_Nil_Element() {
+        this.Check("Review16", `using System.Linq;
+using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    public static int AsyncLambda(string p) { string[] lines; lines = Node.Holes(p); var all = Task.WhenAll(lines.Select(async l => { await Task.Yield(); return l; })).GetAwaiter().GetResult(); return all.Length + (all[1] == null ? 10 : 0); }
+    public static int AsyncLambdaThrows(string p) { string[] lines; lines = Node.Holes(p); try { return Task.WhenAll(lines.Select(async l => { await Task.Yield(); return l; })).GetAwaiter().GetResult()[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{"async (l string?) -> {", "return l\n"}, []string{"AsyncLambda", "12", "AsyncLambdaThrows", "-1"})
+    }
+
+    /// Review of #5571: a value that the analysis makes nullable keeps its `!!` only
+    /// where its slot is proven non-null. An iterator's declared element is such a
+    /// slot; a lambda result that a call binds is not, so it passes nil through.
+    @Fact
+    func Only_A_Proven_Slot_Asserts_A_Nullable_Value() {
+        this.Check("Review17", `using System.Collections.Generic;
+using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    static IEnumerable<string> Iterate(string p) { string[] lines; lines = Node.Holes(p); yield return lines[0]; }
+    public static int Iterator(string p) { return Iterate(p).First().Length; }
+    public static int Bound(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => new List<string> { l }).ToList()[1][0] == null ? 1 : 0; }
+}`, []string{
+                "yield lines[0]!!",
+                "lines.Select((l string?) -> List[string?]{ l })"
+            }, []string{"Iterator", "2", "Bound", "1"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
