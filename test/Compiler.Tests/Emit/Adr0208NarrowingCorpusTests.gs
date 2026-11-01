@@ -346,6 +346,9 @@ open class Adr0208NarrowingCorpusTests {
                 "w30_5534_constant_pattern_whose_call_removes_the_value_narrows_nothing_R18",
                 "w31_5534_condition_in_the_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
                 "w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
+                "w33_5534_alias_assigned_after_a_test_keeps_the_test_R18",
+                "w34_5534_if_let_guard_fact_does_not_hide_the_outer_fact_for_the_else_branch_R18",
+                "w35_5534_alias_assigned_before_a_test_reaches_the_test_R18",
                 "x01_5215_getter_in_condition_kills_the_member_path_R14",
                 "x02_5215_stable_read_in_condition_keeps_the_member_path_R14"
             },
@@ -5791,6 +5794,144 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w33_5534_alias_assigned_after_a_test_keeps_the_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && (x is action()) && (action = func() string { return "" }) is {} a {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> "abc"))`, "", "run", "2", "R18"}
+            yield[]object{"w34_5534_if_let_guard_fact_does_not_hide_the_outer_fact_for_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet { }
+func Run() int32 {
+    var x Pet? = Dog{}
+    let maybe C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe && (x is Dog) if Check(h) { } else { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w35_5534_alias_assigned_before_a_test_reaches_the_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if (action = func() string {
+        x = nil
+        return "abc"
+    }) is {} a && (x is action()) {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> "abc"))`, "GS0158@44:18", "reject", "", "R18"}
             yield[]object{"x01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
     var Name string = "a"
     prop Tag string {

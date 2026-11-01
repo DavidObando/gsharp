@@ -37,6 +37,9 @@ internal partial class StatementBinder {
     // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
     // so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
+    // ADR-0208 R18: the callable aliases at the operand being classified, while an `if` condition whose header
+    // effects removed aliases is classified; otherwise `nil`, and the current aliases apply.
+    private var testAliases HashSet[VariableSymbol]?
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -1799,17 +1802,23 @@ internal partial class StatementBinder {
             return nil
         }
         let before = HashSet[VariableSymbol](externalCallableAliases)
-        let collector = NewCollector(nil, externalCallableAliases)
-        collector.VisitExpression(header)
-        if collector.MayMutateAnyRootViaPointer {
-            externalCallableAliases.Clear()
-        }
-        RemoveAssignedAliases(externalCallableAliases, collector)
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
-        }
+        RemoveHeaderAffectedAliases(externalCallableAliases, header)
         before.ExceptWith(externalCallableAliases)
         return before
+    }
+
+    // The one header rule: an alias that [`header`](paramref) assigns, or that an unknown callable in it can assign,
+    // is no longer known to be external.
+    private func RemoveHeaderAffectedAliases(aliases HashSet[VariableSymbol], header BoundExpression) {
+        let collector = NewCollector(nil, aliases)
+        collector.VisitExpression(header)
+        if collector.MayMutateAnyRootViaPointer {
+            aliases.Clear()
+        }
+        RemoveAssignedAliases(aliases, collector)
+        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
+            aliases.RemoveWhere(NamesClosureAssignedStorage)
+        }
     }
 
     /// ADR-0208 section 9 and row R18 (#5534): the else-branch of an `if` statement is bound under the state after
