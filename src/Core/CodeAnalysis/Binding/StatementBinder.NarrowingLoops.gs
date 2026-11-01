@@ -108,6 +108,18 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        /// The answers that do not depend on the fact, computed once for all the facts of the region: whether a
+        /// call is indirect (`nil` until asked) and whether a member or index read can run user code.
+        prop CallsAreIndirect bool? {
+            get;
+            set;
+        }
+
+        prop ReadsRunUserCode bool? {
+            get;
+            set;
+        }
     }
 
     private var packageDeclaresConversions bool? = nil
@@ -1491,19 +1503,28 @@ internal partial class StatementBinder {
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite
         let mayMutateMemberPaths = callLike || readLike || memberWrite
         var indirectCall = effects.ContainsIteration || effects.ContainsSuspension
-        for call in effects.Calls {
-            if CallIsIndirect(call, effects) {
-                indirectCall = true
+        if !indirectCall {
+            if resolved.CallsAreIndirect == nil {
+                var anyIndirect = false
+                for call in effects.Calls {
+                    if CallIsIndirect(call, effects) {
+                        anyIndirect = true
+                        break
+                    }
+                }
+                resolved.CallsAreIndirect = anyIndirect
             }
+            indirectCall = resolved.CallsAreIndirect == true
         }
         // Coordinator decision 2026-11-01 (pending maintainer review; amendment A3 is the more permissive
         // alternative): a getter or an indexer that can run user code (ADR-0208 R14, R16 and R17) removes the fact
         // of storage that a reference names, as on main, because the code can write the storage that the
         // reference aliases. Only such a fact needs the answer, so the reads are resolved only for it.
-        if !indirectCall &&
-            NamesReferenceStorage(path) &&
-            (resolved.ReadsUserCodeProperty || ReadsRunUserCode(effects)) {
-            indirectCall = true
+        if !indirectCall && NamesReferenceStorage(path) {
+            if resolved.ReadsRunUserCode == nil {
+                resolved.ReadsRunUserCode = resolved.ReadsUserCodeProperty || ReadsRunUserCode(effects)
+            }
+            indirectCall = resolved.ReadsRunUserCode == true
         }
         // A member read is an unknown getter, which the table classes as a call (ADR-0208 R14). Amendment A3
         // (#5292) keeps the fact of a by-reference parameter across a call, so a read does not write the
