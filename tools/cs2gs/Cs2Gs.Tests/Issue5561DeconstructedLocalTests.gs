@@ -30,18 +30,21 @@ import Xunit
 /// | `Node n; (n, i) = entry;`, also nested | `n = nValue`, GS0155 | `n = nValue!!`, as `n = entry.Item!!` (store bridge) |
 /// | the same, when `entry.Item != null` taints the property itself | `n = nValue`, GS0155 | `var n Node?`, `n = nValue`; the null is stored (taint edge) |
 /// | `var n = entry.Item; (n, i) = entry;` (nullable storage) | `n = nValue` | unchanged: the target reads as nullable, so no bridge |
-/// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets no edge |
+/// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets the conversion's result flow, not the element's |
 /// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
+/// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
 /// @remarks Mutation witnesses (ADR-0154), each also failing on d12a50f86: with the
 /// `IsTranslatorWidenedDeclaration` local arms of `IsNullablePromotedValue` and
 /// `ReceiverValueIsPromotedNullable` reverted to `ShouldPromoteToNullableReference`, the first test
 /// fails binding (GS0159, GS0154); with `BridgeDeconstructedElementStore` returning its value, the second
 /// fails binding (GS0155); without the `CollectDeconstructedElementEdges` calls in `CollectEdges`,
 /// the third throws `NullReferenceException` at the bridged store, where C# stores the null. The
-/// other four rows answer the review of c05ce523f. The mutants, in order: no
-/// `IsNullablePromotedValue(target)` check in `BridgeDeconstructedElementStore`, no conversion-operator
-/// slot there, no `DeconstructedElementConversionOperator` check in `AddDeconstructedElementEdge`, and
-/// `SynthesizedDeconstructRecord` ignoring the run's compilations.
+/// other rows answer reviews of c05ce523f and 38b501c29 and fail on the head they answer. Their
+/// mutants: no `IsNullablePromotedValue(target)` check in `BridgeDeconstructedElementStore`; no
+/// conversion-operator slot there; an element edge in place of the conversion's result flow in
+/// `AddDeconstructedElementEdge` (on 38b501c29); `SynthesizedDeconstructRecord` ignoring the run's
+/// compilations; the conversion's result flow discarded; no compiler-generated match without the
+/// run's compilations.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -180,13 +183,73 @@ namespace Demo
         Assert.Contains("b = bValue\n", printed)
     }
 
-    /// The conversion's result, not the element, is stored, so a target of a converted element gets no
-    /// taint edge from it, also when the taint widens the property itself.
+    /// The conversion's result, not the element, is stored, so the element's taint does not widen the
+    /// target of a converted element, also when the taint widens the property itself.
     @Fact
     func ConvertedElement_DoesNotWidenTheTarget() {
         let printed = Translate(BoxSource("public static bool HasItem(Entry entry) => entry.Item != null;"))
         Assert.Equal("null0 null", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
         Assert.Contains("func Convert(entry Entry) string {\n        var b Box\n", printed)
+    }
+
+    /// A conversion declared to return `Box?` stores that null: the target gets the conversion's result
+    /// flow and is widened, as for `b = entry.Item`.
+    /// @remarks Translation only: G# has no conversion operator to `Box?` (GS0394), so neither form
+    /// compiles, on d12a50f86 either. The row pins that both targets get the same declaration.
+    @Fact
+    func ConversionWithANullableResult_WidensTheTarget() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+#nullable enable
+    public class Box
+    {
+        public static implicit operator Box?(Node? node) => node == null ? null : new Box();
+    }
+#nullable restore
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Convert(Entry entry) { Box b; int i; (b, i) = entry; object o = b; return (o == null) + ":" + i; }
+        public static string Plain(Entry entry) { Box b; b = entry.Item; object o = b; return (o == null).ToString(); }
+        public static string Run() => Convert(Empty()) + " " + Plain(Empty());
+    }
+}`)
+        Assert.Contains("func Convert(entry Entry) string {\n        var b Box?\n", printed)
+        Assert.Contains("func Plain(entry Entry) string {\n        var b Box?\n", printed)
+    }
+
+    /// The consumer's own null test of a record property from another project taints that property
+    /// in the consumer, and a deconstruction there widens its target from it, as `n = entry.Item` does.
+    @Fact
+    func ConsumerTaintOfAPropertyFromAnotherProject_WidensTheTarget() {
+        let library = Compile("Lib", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public static class Make { public static Entry Empty() => new Entry(null, 0); }
+}`, nil)
+        let app = Compile("App", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static bool HasItem(Demo.Entry entry) => entry.Item != null;
+        public static string Store(Demo.Entry entry) { Demo.Node n; int i; (n, i) = entry; object o = n; return (o == null) + ":" + i; }
+        public static string Plain(Demo.Entry entry) { Demo.Node n; n = entry.Item; object o = n; return (o == null).ToString(); }
+        public static string Run() => Store(Demo.Make.Empty()) + " " + Plain(Demo.Make.Empty()) + " " + HasItem(Demo.Make.Empty());
+    }
+}`, Emit(library))
+        let repository = []CSharpCompilation{library, app}
+        let appPrinted = Translate(app, repository)
+        Assert.Equal(
+            "True:0 True False",
+            CompileAndRun([]string{Translate(library, repository), appPrinted}, "Demo.App.Use.Run()").Trim()
+        )
+        Assert.Contains("n = nValue\n", appPrinted)
     }
 
     private func BoxSource(extra string) string -> `

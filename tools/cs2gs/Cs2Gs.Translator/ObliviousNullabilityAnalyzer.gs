@@ -2497,9 +2497,12 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     // Issue #5574/#5561: the record whose synthesized `Deconstruct` `method`
     // is, or null. Seen through a run project's emitted reference the method is
-    // not marked implicitly declared, so it is matched through the record's
-    // source declaration in that project, which is the record returned: its
-    // positional properties carry the producer's widening.
+    // not marked implicitly declared. With the run's `compilations` (the
+    // translator's widening queries), it is matched through the record's source
+    // declaration in that project, which is the record returned: its positional
+    // properties carry the producer's widening. Without them (the taint of one
+    // compilation, whose edges are keyed on what its own reads bind), it is the
+    // compiler-generated method, and the metadata record is returned.
     private func SynthesizedDeconstructRecord(
         method IMethodSymbol,
         compilations IReadOnlyList[CSharpCompilation]?
@@ -2510,8 +2513,18 @@ internal shared class ObliviousNullabilityAnalyzer {
         if method.IsImplicitlyDeclared {
             return record
         }
-        if method.DeclaringSyntaxReferences.Length != 0 || compilations == nil {
+        if method.DeclaringSyntaxReferences.Length != 0 {
             return nil
+        }
+        if compilations == nil {
+            return if method.GetAttributes().Any(
+                (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
+                "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
+            ) {
+                record
+            } else {
+                default(INamedTypeSymbol?)
+            }
         }
         let identity = record.ContainingAssembly?.Identity
         let id = DocumentationCommentId.CreateDeclarationId(record.OriginalDefinition)
@@ -2541,32 +2554,34 @@ internal shared class ObliviousNullabilityAnalyzer {
     // Issue #5561: a deconstruction through a `Deconstruct` method stores each
     // element into its target, as `target = element` does. The local, field,
     // property or parameter that it declares or assigns therefore gets the same
-    // edge from the element's declaration. Tuple elements flow through
-    // `CollectDeconstructionFlow` instead, so they have no element declaration here.
+    // flow from the element's declaration, or from a user-defined conversion's
+    // result. Tuple elements flow through `CollectDeconstructionFlow` instead,
+    // so they have no element declaration here.
     private func CollectDeconstructedElementEdges(
         target SyntaxNode,
         model SemanticModel,
+        tainted HashSet[ISymbol],
         edges List[(Target ISymbol, Source ISymbol)]
     ) {
         switch target {
             case tuple is TupleExpressionSyntax {
                 for argument in tuple.Arguments {
-                    CollectDeconstructedElementEdges(argument.Expression, model, edges)
+                    CollectDeconstructedElementEdges(argument.Expression, model, tainted, edges)
                 }
             }
             case declaration is DeclarationExpressionSyntax {
-                CollectDeconstructedElementEdges(declaration.Designation, model, edges)
+                CollectDeconstructedElementEdges(declaration.Designation, model, tainted, edges)
             }
             case parenthesized is ParenthesizedVariableDesignationSyntax {
                 for variable in parenthesized.Variables {
-                    CollectDeconstructedElementEdges(variable, model, edges)
+                    CollectDeconstructedElementEdges(variable, model, tainted, edges)
                 }
             }
             case single is SingleVariableDesignationSyntax {
-                AddDeconstructedElementEdge(model.GetDeclaredSymbol(single), single, model, edges)
+                AddDeconstructedElementEdge(model.GetDeclaredSymbol(single), single, model, tainted, edges)
             }
             case expression is ExpressionSyntax {
-                AddDeconstructedElementEdge(ResolveAssignable(expression, model), expression, model, edges)
+                AddDeconstructedElementEdge(ResolveAssignable(expression, model), expression, model, tainted, edges)
             }
         }
     }
@@ -2575,15 +2590,31 @@ internal shared class ObliviousNullabilityAnalyzer {
         receiver ISymbol?,
         target SyntaxNode,
         model SemanticModel,
+        tainted HashSet[ISymbol],
         edges List[(Target ISymbol, Source ISymbol)]
     ) {
-        // A user-defined conversion stores its result, not the element.
-        if IsValueDeclarationSymbol(receiver) &&
-            IsEligibleScalarTarget(receiver) &&
-            DeconstructedElementConversionOperator(target, model) == nil &&
-            DeconstructedElementDeclaration(target, model) is {} element {
+        if !IsValueDeclarationSymbol(receiver) || !IsEligibleScalarTarget(receiver) {
+            return
+        }
+        if DeconstructedElementConversionOperator(target, model) is {} conversion {
+            CollectConversionResultFlow(Canonical(receiver), conversion, tainted, edges)
+        } else if DeconstructedElementDeclaration(target, model) is {} element {
             edges.Add((Canonical(receiver)!!, Canonical(element)!!))
         }
+    }
+
+    // A user-defined conversion stores its result: a declared-nullable result
+    // taints the target, and the operator's return taint flows into it.
+    private func CollectConversionResultFlow(
+        target ISymbol?,
+        conversion IMethodSymbol,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol?, Source ISymbol?)]
+    ) {
+        if IsDeclaredNullablePosition(conversion.ReturnType) {
+            tainted.Add(target!!)
+        }
+        edges.Add((target, Canonical(conversion)))
     }
 
     // Issue #5574: the source record whose synthesized `Deconstruct` `method`
@@ -4364,11 +4395,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                     CollectScalarValueFlow(assignTarget, assign.Right, model, tainted, edges, scalarTupleEdges)
                 }
                 if assign.Left is TupleExpressionSyntax or DeclarationExpressionSyntax {
-                    CollectDeconstructedElementEdges(assign.Left, model, edges)
+                    CollectDeconstructedElementEdges(assign.Left, model, tainted, edges)
                 }
             }
             case loop is ForEachVariableStatementSyntax {
-                CollectDeconstructedElementEdges(loop.Variable, model, edges)
+                CollectDeconstructedElementEdges(loop.Variable, model, tainted, edges)
             }
             case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil {
                 if model.GetDeclaredSymbol(declarator) is ISymbol declared && IsValueDeclarationSymbol(declared) {
@@ -7014,10 +7045,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, $scope)
             }
             if conversion.OperatorMethod != nil && !IsNonNullableValueType(conversion.Type) {
-                if IsDeclaredNullablePosition(conversion.OperatorMethod!!.ReturnType) {
-                    tainted.Add(target!!)
-                }
-                edges.Add((target, Canonical(conversion.OperatorMethod)))
+                CollectConversionResultFlow(target, conversion.OperatorMethod!!, tainted, edges)
             }
         } else if value?.Syntax is ExpressionSyntax expression {
             CollectScalarValueFlow(
