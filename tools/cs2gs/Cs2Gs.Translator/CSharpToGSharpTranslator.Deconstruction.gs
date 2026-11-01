@@ -904,10 +904,11 @@ partial class CSharpToGSharpTranslator {
         // field or property that a deconstruction assigns. The temp holds the
         // `Deconstruct` element, which G# types from its declaration, so a
         // widened element stored into a slot that stays non-null is asserted
-        // exactly as `n = entry.Item!!` is. The slot is the target's storage,
-        // which a target that reads as nullable (a widened declaration, or a
-        // `var` local whose initializer is nullable) does not need, or the input
-        // of a user-defined conversion, as in `ForgiveNullableReferenceValueCore`.
+        // exactly as `n = entry.Item!!` is. The slot is the input of a
+        // user-defined conversion, as in `ForgiveNullableReferenceValueCore`, or
+        // else the target's storage. A local that reads as nullable (a `var`
+        // local whose initializer is nullable) has nullable storage; a field or
+        // property is decided by its declaration, as for a plain assignment.
         // An element-access target is #5595.
         private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
             if !(target is IdentifierNameSyntax || target is MemberAccessExpressionSyntax) {
@@ -927,7 +928,7 @@ partial class CSharpToGSharpTranslator {
             if ObliviousNullabilityAnalyzer.DeconstructedElementConversionOperator(target, model) is {} conversion {
                 slot = conversion.Parameters[0]
                 slotType = conversion.Parameters[0].Type
-            } else if this.IsNullablePromotedValue(target) {
+            } else if slot is ILocalSymbol && this.IsNullablePromotedValue(target) {
                 return value
             }
             return if this.TargetWillRemainNonNullableReference(slotType, slot) {

@@ -33,6 +33,7 @@ import Xunit
 /// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets the conversion's result flow, not the element's |
 /// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
 /// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
+/// | `(holder.Value, i) = entry` into another project's `Holder<T>.Value`, which the consumer null-tests | GS0155 | `holder.Value = holderValue!!`: a field is decided by its declaration |
 /// @remarks Mutation witnesses (ADR-0154), each also failing on d12a50f86: with the
 /// `IsTranslatorWidenedDeclaration` local arms of `IsNullablePromotedValue` and
 /// `ReceiverValueIsPromotedNullable` reverted to `ShouldPromoteToNullableReference`, the first test
@@ -44,7 +45,7 @@ import Xunit
 /// conversion-operator slot there; an element edge in place of the conversion's result flow in
 /// `AddDeconstructedElementEdge` (on 38b501c29); `SynthesizedDeconstructRecord` ignoring the run's
 /// compilations; the conversion's result flow discarded; no compiler-generated match without the
-/// run's compilations.
+/// run's compilations. The field row fails on baacf938e (GS0155), whose exception covered fields too.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -250,6 +251,42 @@ namespace Demo.App
             CompileAndRun([]string{Translate(library, repository), appPrinted}, "Demo.App.Use.Run()").Trim()
         )
         Assert.Contains("n = nValue\n", appPrinted)
+    }
+
+    /// A consumer's null test of a field that another project declares does not widen the field that
+    /// project emits, so a widened element stored into it is bridged, as for a plain assignment.
+    @Fact
+    func StoreIntoAFieldFromAnotherProject_IsDecidedByItsDeclaration() {
+        let library = Compile("Lib", `
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public class Holder<T> { public T Value; }
+    public static class Make { public static Entry Empty() => new Entry(null, 0); }
+}`, nil)
+        let app = Compile("App", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static bool Has(Demo.Holder<Demo.Node> holder) => holder.Value != null;
+        public static string Store(Demo.Entry entry)
+        {
+            var holder = new Demo.Holder<Demo.Node>();
+            int i;
+            (holder.Value, i) = entry;
+            return Has(holder) + ":" + i;
+        }
+        public static string Run() => Store(new Demo.Entry(new Demo.Node(), 1));
+    }
+}`, Emit(library))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = Translate(library, repository)
+        let appPrinted = Translate(app, repository)
+        Assert.Equal("True:1", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
+        Assert.Contains("var Value T\n", libraryPrinted)
+        Assert.Contains("holder.Value = holderValue!!", appPrinted)
     }
 
     private func BoxSource(extra string) string -> `
