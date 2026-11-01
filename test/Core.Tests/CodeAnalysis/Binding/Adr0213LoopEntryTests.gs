@@ -1260,6 +1260,18 @@ func Run(ref text string?, holder IHolder) int32 {
     return n
 }
 func Main() { }`, "GS0158")
+            Add("delegate-method-keeps-a-by-reference-fact (A3)", `package T
+import System
+func Run(ref text string?, callback Action) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + callback.GetHashCode() * 0
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

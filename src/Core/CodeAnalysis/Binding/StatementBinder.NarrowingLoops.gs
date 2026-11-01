@@ -303,12 +303,13 @@ internal partial class StatementBinder {
 
     // A member call is a plain call (ADR-0208 amendment A3 keeps by-reference storage across a call to a method)
     // when the member is a method. A receiver that is a plain name of the entry scope, a variable or a type, is
-    // resolved on its declared type and on the type its entry fact narrows it to. The call is indirect when either
-    // type is a function or delegate type or has a field, a property or an event of the member's name (a function
-    // value of a class, an interface or a tuple element). It is a method call when the types have only methods of
-    // that name, or none and an extension method of that name is visible. Otherwise the region narrows the receiver
-    // to a type that the entry scope does not show, and the call is indirect. The member of any other receiver (an
-    // element, a member chain, a call result) is taken for a method, as in slice L0, unless it invokes a delegate.
+    // resolved on its declared type and on the type its entry fact narrows it to. The call is indirect when it
+    // invokes a receiver of function or delegate type, or when either type has a field, a property or an event of
+    // the member's name (a function value of a class, an interface or a tuple element). It is a method call when
+    // the types have only methods of that name, or none and an extension method of that name is visible. Otherwise
+    // the region narrows the receiver to a type that the entry scope does not show, and the call is indirect. The
+    // member of any other receiver (an element, a member chain, a call result) is taken for a method, as in slice
+    // L0, unless it invokes a delegate.
     private func MemberCallIsIndirect(call RegionCall) bool {
         let member = call.CalleeName
         let receiverName = call.ReceiverName
@@ -316,7 +317,7 @@ internal partial class StatementBinder {
             return true
         }
         if receiverName == nil {
-            return member == "Invoke" || member == "BeginInvoke" || member == "DynamicInvoke"
+            return InvokesDelegate(member)
         }
         let symbol = $scope.TryLookupSymbol(receiverName)
         var shape = 0
@@ -357,15 +358,18 @@ internal partial class StatementBinder {
     private const MemberIsValue int32 = 2
 
     // The kinds of the members of the name on the type, its base types, its base interfaces and its constraints:
-    // `MemberIsMethod` for a method, `MemberIsValue` for a field, a property or an event. Every member of a
-    // function or delegate type is a value.
+    // `MemberIsMethod` for a method, `MemberIsValue` for a field, a property or an event. The members of a
+    // function or delegate type that invoke it (`Invoke`, `BeginInvoke`, `DynamicInvoke`) are values.
     private func MemberShape(type TypeSymbol?, member string) int32 {
         switch type {
             case nil {
                 return 0
             }
             case FunctionTypeSymbol, DelegateTypeSymbol {
-                return MemberIsValue
+                if InvokesDelegate(member) {
+                    return MemberIsValue
+                }
+                return ClrMemberShape(type?.ClrType ?? typeof(MulticastDelegate), member)
             }
             case declared is StructSymbol {
                 var shape = 0
@@ -438,7 +442,7 @@ internal partial class StatementBinder {
                 if type?.ClrType is not{} clrType {
                     return 0
                 }
-                if ClrTypeUtilities.IsDelegateType(clrType) {
+                if ClrTypeUtilities.IsDelegateType(clrType) && InvokesDelegate(member) {
                     return MemberIsValue
                 }
                 var shape = ClrMemberShape(clrType, member)
@@ -464,6 +468,10 @@ internal partial class StatementBinder {
         }
         return shape
     }
+
+    private func InvokesDelegate(member string) bool -> member == "Invoke" ||
+        member == "BeginInvoke" ||
+        member == "DynamicInvoke"
 
     private func ShapeOf(isMethod bool) int32 -> if isMethod {
         MemberIsMethod
