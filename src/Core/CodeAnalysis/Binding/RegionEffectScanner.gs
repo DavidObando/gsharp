@@ -703,10 +703,12 @@ internal sealed class RegionEffectScanner {
                     }
                     if creation.Elements is {} elements {
                         for element in elements {
-                            // A nested array literal converts by its own elements.
-                            if UnwrapParentheses(element) is not ArrayCreationExpressionSyntax {
-                                RecordElementConversion(element, elementType)
+                            // A nested array literal of the element type converts by its own elements.
+                            if UnwrapParentheses(element) is ArrayCreationExpressionSyntax nested &&
+                                NestedArrayHasElementType(creation, nested) {
+                                continue
                             }
+                            RecordElementConversion(element, elementType)
                         }
                     }
                     RecordLengthConversion(creation.LengthExpression)
@@ -1897,10 +1899,30 @@ internal sealed class RegionEffectScanner {
         if inner is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax {
             return RegionArgumentForm.FunctionLiteral
         }
+        if IsStringForm(inner) {
+            return RegionArgumentForm.Path
+        }
         if IsOperatorForm(inner) || inner is InterpolatedStringExpressionSyntax {
             return RegionArgumentForm.BuiltInByForm
         }
         return RegionArgumentForm.Path
+    }
+
+    // An interpolated string, or a `+` with a string literal or interpolated operand, is a `string` (its path is
+    // a `string` literal type), so a call's overloads are matched against `string`.
+    private func IsStringForm(expression ExpressionSyntax?) bool {
+        let inner = UnwrapParentheses(expression)
+        if inner is InterpolatedStringExpressionSyntax {
+            return true
+        }
+        if inner is LiteralExpressionSyntax literal {
+            return literal.LiteralToken.Kind == SyntaxKind.StringToken
+        }
+        return inner is BinaryExpressionSyntax binary &&
+            binary
+            .OperatorToken
+            .Kind == SyntaxKind.PlusToken &&
+            (IsStringForm(binary.Left) || IsStringForm(binary.Right))
     }
 
     private func IsOperatorForm(expression ExpressionSyntax?) bool {
@@ -1960,16 +1982,37 @@ internal sealed class RegionEffectScanner {
     }
 
     // The bounds of a range. A `^n` bound is an offset from the end of the sliced sequence; the range that
-    // contains it is classified as a whole.
+    // contains it is classified as a whole. The binder converts a bound that is not a `System.Index`, and the
+    // operand of `^`, to `int32` (`BindRangeBound`), so each is a conversion site.
     private func VisitRangeBounds(bounds RangeExpressionSyntax) {
-        for bound in[]ExpressionSyntax? {bounds.LowerBound, bounds.UpperBound} {
-            if UnwrapParentheses(bound) is FromEndIndexExpressionSyntax fromEnd {
-                Visit(fromEnd.Operand)
-            } else {
-                Visit(bound)
-            }
-        }
+        RecordRangeBound(bounds.LowerBound)
+        RecordRangeBound(bounds.UpperBound)
     }
+
+    private func RecordRangeBound(bound ExpressionSyntax?) {
+        let value = if UnwrapParentheses(bound) is FromEndIndexExpressionSyntax fromEnd {
+            fromEnd.Operand
+        } else {
+            bound
+        }
+        if value == nil {
+            return
+        }
+        if Active() {
+            RecordConversion(value, RootPath("int32"))
+        }
+        Visit(value)
+    }
+
+    // Whether a nested array literal is stored into an array element (`[][]int32{[]int32{1}}`). No conversion
+    // operator converts between array types: a source one must name a type of the package (GS0394), and an imported
+    // one is declared on a class.
+    private func NestedArrayHasElementType(
+        creation ArrayCreationExpressionSyntax,
+        nested ArrayCreationExpressionSyntax
+    ) bool -> creation
+        .ElementTypeClause
+        ?.IsArray == true
 
     // An index access `t[i]`, recorded as a call of the member `[]` on the target for the consumer's check of the
     // conversions of its arguments. A range argument has the form `Range`.
@@ -2268,6 +2311,16 @@ internal sealed class RegionEffectScanner {
                 return AppendPath(BuildPath(accessor.LeftPart), accessor.RightPart)
             }
             default {
+                // A string concatenation or an interpolated string is a `string`.
+                if IsStringForm(expression) {
+                    return RegionReceiverPath(
+                        nil,
+                        false,
+                        nil,
+                        "System.String",
+                        ImmutableArray[RegionReceiverStep].Empty
+                    )
+                }
                 return nil
             }
         }

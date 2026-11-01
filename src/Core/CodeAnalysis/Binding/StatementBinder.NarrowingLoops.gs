@@ -1302,60 +1302,120 @@ internal partial class StatementBinder {
                 kinds.Add(ArgumentTyped)
             }
         }
+        var exact = false
+        var free = false
+        var user = false
         for parameters in ParameterLists(call, name, effects) {
-            if parameters.Count == argumentTypes.Count &&
-                CandidateTakesArguments(parameters, argumentTypes, kinds, call.HasTypeArguments) {
-                return false
+            if parameters.Count != argumentTypes.Count {
+                continue
             }
+            let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, call.HasTypeArguments)
+            exact = exact || candidate == CandidateExact
+            free = free || candidate == CandidateFree
+            user = user || candidate == CandidateUser
         }
-        return true
+        // A candidate that takes every argument by identity is better than one that needs a conversion operator.
+        // Otherwise a candidate that needs one can be the better one (a conversion to `Payload` beats one to
+        // `object`), and a call that no candidate takes is not checked.
+        return !exact && (user || !free)
     }
 
-    private func CandidateTakesArguments(
+    // How a candidate takes the arguments: not at all, through a conversion operator, without one, or by identity.
+    private const CandidateNotApplicable int32 = 0
+    private const CandidateUser int32 = 1
+    private const CandidateFree int32 = 2
+    private const CandidateExact int32 = 3
+
+    private func ClassifyCandidate(
         parameters List[TypeSymbol],
         argumentTypes List[List[TypeSymbol]?],
         kinds List[int32],
         explicitTypeArguments bool
-    ) bool {
+    ) int32 {
+        var result = CandidateExact
         for var index = 0; index < parameters.Count; index++ {
             let kind = kinds[index]
-            let parameter = parameters[index]
             if kind == ArgumentSkipped {
                 continue
             }
+            let parameter = parameters[index]
+            let stripped = StripAllNullability(parameter) ?? parameter
+            var argument = CandidateExact
             if kind == ArgumentNil {
-                if !AcceptsNilWithoutOperator(parameter) {
-                    return false
+                argument = if AcceptsNilWithoutOperator(parameter) {
+                    CandidateFree
+                } else {
+                    CandidateUser
                 }
+            } else if argumentTypes[index] is {} types {
+                argument = ClassifyArgument(types, parameter, stripped, explicitTypeArguments)
+            } else if MetadataTypeKeys.IsBuiltIn(stripped) || object.Equals(stripped, TypeSymbol.Object) ||
+                TypeParameterTakesArgument(stripped, explicitTypeArguments) {
+                // A value of some built-in type.
+                argument = CandidateFree
+            } else if BuiltInReachesThroughOperator(stripped) {
+                // A value of some built-in type reaches another type only through a conversion operator.
+                argument = CandidateUser
+            } else {
+                argument = CandidateNotApplicable
+            }
+            result = Math.Min(result, argument)
+        }
+        return result
+    }
+
+    // The worst way that one argument, of any of its possible types, reaches the parameter. A conversion operator
+    // counts before a type that the parameter does not take.
+    private func ClassifyArgument(
+        types List[TypeSymbol],
+        parameter TypeSymbol,
+        stripped TypeSymbol,
+        explicitTypeArguments bool
+    ) int32 {
+        var result = CandidateExact
+        var notApplicable = false
+        for argumentType in types {
+            if object.Equals(argumentType, stripped) || SameClrType(argumentType, stripped) {
                 continue
             }
-            if argumentTypes[index] is not{} types {
-                // A value of some built-in type takes a built-in, `object` or inferred type-parameter parameter.
-                let stripped = StripAllNullability(parameter) ?? parameter
-                if !MetadataTypeKeys.IsBuiltIn(stripped) && !object.Equals(stripped, TypeSymbol.Object) &&
-                    !TypeParameterTakesArgument(stripped, explicitTypeArguments) {
-                    return false
-                }
-                continue
-            }
-            for argumentType in types {
-                if !ArgumentFits(argumentType, parameter, explicitTypeArguments) {
-                    return false
-                }
+            if ArgumentFits(argumentType, parameter, explicitTypeArguments) {
+                result = Math.Min(result, CandidateFree)
+            } else if conversions.HasUserDefinedImplicitConversion(argumentType, stripped) {
+                return CandidateUser
+            } else {
+                notApplicable = true
             }
         }
-        return true
+        return if notApplicable {
+            CandidateNotApplicable
+        } else {
+            result
+        }
     }
+
+    // Whether a conversion operator converts some built-in type other than `string` to the type. An operator
+    // argument that is not a string form has such a type (`n + 1`); a string form has the path `string`.
+    private func BuiltInReachesThroughOperator(type TypeSymbol) bool {
+        for builtin in BuiltInTypes() {
+            if !object.Equals(builtin, TypeSymbol.String) && !object.Equals(builtin, TypeSymbol.Object) &&
+                conversions.HasUserDefinedImplicitConversion(builtin, type) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func SameClrType(argument TypeSymbol, parameter TypeSymbol) bool -> argument.ClrType is {} argumentClr &&
+        parameter.ClrType is {} parameterClr &&
+        !parameterClr.ContainsGenericParameters &&
+        ClrTypeUtilities.AreSame(argumentClr, parameterClr)
 
     private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol, explicitTypeArguments bool) bool {
         let stripped = StripAllNullability(parameter) ?? parameter
         if object.Equals(argument, stripped) || object.Equals(stripped, TypeSymbol.Object) {
             return true
         }
-        if argument.ClrType is {} argumentClr &&
-            stripped.ClrType is {} parameterClr &&
-            !parameterClr.ContainsGenericParameters &&
-            ClrTypeUtilities.AreSame(argumentClr, parameterClr) {
+        if SameClrType(argument, stripped) {
             return true
         }
         if TypeParameterTakesArgument(stripped, explicitTypeArguments) {
@@ -1464,7 +1524,7 @@ internal partial class StatementBinder {
         }
         for receiver in receivers {
             if name == RegionEffectScanner.IndexMemberName {
-                AddIndexParameterLists(receiver, call, lists)
+                AddIndexParameterLists(receiver, call, effects, lists)
             } else {
                 AddMethodParameterLists(receiver, name, lists)
             }
@@ -1559,7 +1619,26 @@ internal partial class StatementBinder {
     // is not matched: the binder slices the target, and the read classification decides whether that runs user code
     // (R16, R17), as on main. A source indexer is a getter that runs user code (R14), which the read classification
     // counts, so it is not listed.
-    private func AddIndexParameterLists(receiver ReceiverType, call RegionCall, lists List[List[TypeSymbol]]) {
+    // Whether the one argument of an index access is a `System.Index`, which the binder takes as it is; any other
+    // value is converted to `int32`.
+    private func ArgumentIsSystemIndex(call RegionCall, effects RegionEffects) bool {
+        if call.Arguments[0] is not{} path || ConversionTypes(path, effects) is not{} types || types.Count == 0 {
+            return false
+        }
+        for type in types {
+            if type.ClrType is not{} clr || !ClrTypeUtilities.AreSame(clr, typeof(Index)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func AddIndexParameterLists(
+        receiver ReceiverType,
+        call RegionCall,
+        effects RegionEffects,
+        lists List[List[TypeSymbol]]
+    ) {
         let count = call.Arguments.Count
         var rank = 0
         switch receiver.Symbol {
@@ -1587,7 +1666,7 @@ internal partial class StatementBinder {
                 }
                 lists.Add(dimensions)
             }
-            if count == 1 {
+            if count == 1 && ArgumentIsSystemIndex(call, effects) {
                 let fromEnd = List[TypeSymbol]()
                 fromEnd.Add(TypeSymbol.FromClrTypeWithoutNullability(typeof(Index), NullabilityFreeReason.TypeLiteral))
                 lists.Add(fromEnd)

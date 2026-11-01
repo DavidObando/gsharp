@@ -25,7 +25,12 @@ open class Adr0213LoopEntryTests {
             []string{source},
             EmittedOracleOptions{IsLibrary: !source.Contains("func Main")}
         )
-        let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
+        // A rejection names each diagnostic and its source location (line:column), as CONTRIBUTING.md requires.
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
         Assert.True(
             expectedErrors == string.Join(" ", errors),
             "${name}: expected [${expectedErrors}] but found [${string.Join(" ", errors)}]"
@@ -77,8 +82,12 @@ func Run(p Pair) string {
     }
 }
 func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
-        let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Id).ToArray()
-        Assert.Equal("GS0155", string.Join(" ", errors))
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0155@8:27", string.Join(" ", errors))
     }
 
     shared {
@@ -105,7 +114,7 @@ func Run(c bool, d bool) int32 {
         s = "ok"
     }
     return s.Length
-}`, "GS0158")
+}`, "GS0158@9:14")
             Add("exit-gain-dropped-when-the-header-writes-the-root", `package T
 func Get(c bool) string? { return if c { nil } else { "ab" } }
 func Reset(ref s string?) bool {
@@ -118,7 +127,7 @@ func Run(c bool) int32 {
         s = "ok"
     }
     return s.Length
-}`, "GS0158")
+}`, "GS0158@12:14")
             Add("literal-of-another-type-removes-a-type-test-fact (P7)", `package T
 func Run(n int32) int32 {
     var value object = "first"
@@ -130,7 +139,7 @@ func Run(n int32) int32 {
         }
     }
     return total
-}`, "GS0158")
+}`, "GS0158@7:35")
             Add("string-literal-keeps-a-type-test-fact (P7)", `package T
 func Run(n int32) int32 {
     var value object = "first"
@@ -167,7 +176,7 @@ func Run(items List[int32], flag bool) string {
     }
     return ""
 }
-func Main() { Console.WriteLine(Run(List[int32](), false)) }`, "GS0155")
+func Main() { Console.WriteLine(Run(List[int32](), false)) }`, "GS0155@9:34")
             Add("literal-false-header-has-no-back-edge", `package T
 class C { func M() { } }
 func Run() {
@@ -197,7 +206,7 @@ func Run(cb func()) int32 {
         g = h
     }
     return total + other.Length
-}`, "GS0158")
+}`, "GS0158@14:31")
             Add("by-reference-parameter-survives-a-member-read (A3, #5292)", `package T
 func Run(out path string?, n int32) int32 {
     path = "p"
@@ -219,7 +228,7 @@ func Run() int32 {
         n++
     }
     return n
-}`, "GS0158")
+}`, "GS0158@7:13")
             Add("value-type-construction-is-no-proof (P7)", `package T
 import System
 struct S { var V int32 }
@@ -232,7 +241,7 @@ func Run(n int32) int32 {
         x = S{}
     }
     return total
-}`, "GS0159")
+}`, "GS0159@9:27")
             Add("unresolved-construction-is-no-proof (P7)", `package T
 import System
 func Run(n int32) int32 {
@@ -244,7 +253,7 @@ func Run(n int32) int32 {
         s = Missing()
     }
     return total
-}`, "GS0158 GS0130")
+}`, "GS0158@8:27 GS0130@9:13")
             Add("bare-property-read-runs-a-getter (W5)", `package T
 import System
 var g string? = "safe"
@@ -266,7 +275,7 @@ class H {
         return t
     }
 }
-func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155")
+func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155@15:32")
             Add("user-defined-operator-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -288,7 +297,7 @@ func Run() int32 {
     }
     return t
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0155")
+func Main() { Console.WriteLine(Run()) }`, "GS0155@14:28")
             Add("break-in-the-post-statement-leaves-the-loop (R7 f)", `package T
 import System
 func Run() int32 {
@@ -297,7 +306,7 @@ func Run() int32 {
     for ; s == nil; i = 1 + { break 0 } {
     }
     return s.Length
-}`, "GS0158")
+}`, "GS0158@8:14")
             Add("value-type-construction-keeps-no-struct-fact (P7)", `package T
 import System
 struct S { var N int32 }
@@ -311,7 +320,7 @@ func Run(n int32) int32 {
         s = S{N: 1}
     }
     return t
-}`, "GS0158")
+}`, "GS0158@10:15")
             Add("enclosing-filter-removes-an-exit-fact (W8)", `package T
 import System
 func Clear(ref s string?) bool {
@@ -339,7 +348,7 @@ func Replace() bool {
     } catch (InvalidOperationException) {
     }
     return false
-}`, "GS0158")
+}`, "GS0158@13:18")
             Add("bare-property-setter-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -363,7 +372,7 @@ class H {
         return t
     }
 }
-func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155")
+func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155@16:32")
             Add("member-property-setter-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -387,7 +396,7 @@ class H {
         return t
     }
 }
-func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155")
+func Main() { Console.WriteLine(H{}.Run()) }`, "GS0155@16:32")
             Add("user-conversion-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -408,7 +417,7 @@ func Run() int32 {
     }
     return t
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0155")
+func Main() { Console.WriteLine(Run()) }`, "GS0155@14:28")
             Add("header-handler-with-an-enclosing-filter-removes-the-exit-fact (W8)", `package T
 import System
 func Clear(ref s string?) bool {
@@ -435,7 +444,7 @@ func Run() int32 {
     } catch (FormatException) when Clear(ref s) {
         return -1
     }
-}`, "GS0158")
+}`, "GS0158@23:18")
             Add("nameof-reads-no-getter", `package T
 import System
 var g string? = "safe"
@@ -466,7 +475,7 @@ func Run(flag bool) string {
         if flag == true { return g }
     }
 }
-func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
+func Main() { Console.WriteLine(Run(true)) }`, "GS0155@14:34")
             Add("null-assertion-converting-to-the-root-is-no-proof (P7)", `package T
 import System
 class V { var N int32 = 1 }
@@ -480,7 +489,7 @@ func Run(v V) int32 {
         s = v!!
     }
     return t
-}`, "GS0158")
+}`, "GS0158@10:15")
             Add("pattern-variable-write-keeps-the-fact (Q4)", `package T
 import System
 class Node { var Next object? = nil
@@ -538,7 +547,7 @@ func Run(n int32, other Node) int32 {
         access = copy
     }
     return total
-}`, "GS0158")
+}`, "GS0158@9:24")
             Add("mutable-var-copy-write-still-removes-the-fact (Q4)", `package T
 class Node { var V int32 = 1 }
 func Run(n int32, other Node) int32 {
@@ -551,7 +560,7 @@ func Run(n int32, other Node) int32 {
         access = copy
     }
     return total
-}`, "GS0158")
+}`, "GS0158@9:24")
             Add("bare-property-getter-in-a-return-is-a-call (W5)", `package T
 import System
 var g string? = "safe"
@@ -570,7 +579,7 @@ class H {
         }
     }
 }
-func Main() { Console.WriteLine(H{}.Run(true)) }`, "GS0155")
+func Main() { Console.WriteLine(H{}.Run(true)) }`, "GS0155@14:38")
             Add("user-operator-in-a-return-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -587,7 +596,7 @@ func Run(flag bool) string {
         if flag == true { return a + a }
     }
 }
-func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
+func Main() { Console.WriteLine(Run(true)) }`, "GS0155@13:34")
             Add("property-increment-runs-a-setter (W4)", `package T
 import System
 var g string? = "safe"
@@ -604,7 +613,7 @@ class H {
         }
     }
 }
-func Main() { Console.WriteLine(H{}.Run(true)) }`, "GS0155")
+func Main() { Console.WriteLine(H{}.Run(true)) }`, "GS0155@12:38")
             Add("value-type-nil-comparison-runs-a-user-equality (W4)", `package T
 import System
 var g string? = "safe"
@@ -624,7 +633,7 @@ func Run(flag bool) string {
         if token == nil { return "t" }
     }
 }
-func Main() { Console.WriteLine(Run(true)) }`, "GS0155")
+func Main() { Console.WriteLine(Run(true)) }`, "GS0155@16:34")
             Add("boolean-condition-conversion-in-an-if-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -640,7 +649,7 @@ func Run(done Flag, flag bool) string {
         if done { return "d" }
     }
 }
-func Main() { Console.WriteLine(Run(Flag{}, true)) }`, "GS0155")
+func Main() { Console.WriteLine(Run(Flag{}, true)) }`, "GS0155@12:34")
             Add("closed-scope-pattern-name-denotes-the-entry-variable (Q4)", `package T
 class Node { var V int32 = 1 }
 func Run(o object, n int32) int32 {
@@ -656,7 +665,7 @@ func Run(o object, n int32) int32 {
         access = inner
     }
     return total
-}`, "GS0158")
+}`, "GS0158@9:32")
             Add("when-false-pattern-name-in-the-then-branch-denotes-the-entry-variable (Q4)", `package T
 class Node { var V int32 = 1 }
 func Run(o object, n int32) int32 {
@@ -669,7 +678,7 @@ func Run(o object, n int32) int32 {
         if o is not Node inner { access = inner }
     }
     return total
-}`, "GS0158")
+}`, "GS0158@9:32")
             Add("write-to-a-when-false-pattern-name-writes-the-entry-variable (W1)", `package T
 class Node { var V int32 = 1 }
 func Run(o object, n int32) int32 {
@@ -681,7 +690,7 @@ func Run(o object, n int32) int32 {
         if o is not Node inner { inner = nil }
     }
     return total
-}`, "GS0158")
+}`, "GS0158@8:31")
             Add("guard-without-an-exit-leaks-no-pattern-variable (Q4)", `package T
 class Node { var V int32 = 1 }
 func Run(o object, n int32) int32 {
@@ -695,7 +704,7 @@ func Run(o object, n int32) int32 {
         access = inner
     }
     return total
-}`, "GS0158")
+}`, "GS0158@9:32")
             Add("guard-leak-is-dropped-in-a-function-with-a-label (Q4)", `package T
 class Node { var V int32 = 1 }
 func Run(o object, n int32) int32 {
@@ -712,7 +721,7 @@ func Run(o object, n int32) int32 {
     if total < 0 { goto done }
 done:
     return total
-}`, "GS0158")
+}`, "GS0158@9:36")
             Add("when-false-pattern-name-in-the-then-branch-is-a-bare-property-read (W5)", `package T
 var g string? = "safe"
 class H {
@@ -730,7 +739,7 @@ class H {
         }
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:38")
             Add("negated-guard-pattern-variable-write-keeps-the-fact (Q4)", `package T
 class Node { var V int32 = 1
     var Next object? = nil }
@@ -788,7 +797,7 @@ func Run(b Box) string {
         try { return b } catch (InvalidOperationException) { }
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("switch-guard-conversion-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -809,7 +818,7 @@ func Run(f Flag) string {
         }
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("block-valued-condition-conversion-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -827,7 +836,7 @@ func Run(f Flag) string {
     }
     return "end"
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("if-let-guard-conversion-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -846,7 +855,7 @@ func Run(f Flag, s string?) string {
     }
     return "end"
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("typed-loop-variable-conversion-over-an-array-is-a-call (T5)", `package T
 import System
 var g string? = "safe"
@@ -864,7 +873,7 @@ func Run(boxes []Box) string {
     }
     return "end"
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("return-constant-conversion-is-a-call (W4)", `package T
 import System
 class Meters { var V int32 = 0 }
@@ -882,7 +891,7 @@ func Run() Meters {
         try { return 5 } catch (InvalidOperationException) { }
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("coalescing-projection-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -904,7 +913,7 @@ func Run(a Dst?, b Src) string {
         a ?? b
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@17:27")
             Add("region-declared-callee-is-a-function-value (A3)", `package T
 import System
 func Invoke() { }
@@ -918,7 +927,7 @@ func Run(ref text string?, cb () -> void) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@8:22")
             Add("enclosing-filter-reached-through-a-call (W8)", `package T
 import System
 func Clear(ref s string?) bool {
@@ -949,7 +958,7 @@ func Run() int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@22:17")
             Add("nested-call-of-a-region-declared-callee-is-a-function-value (A3)", `package T
 import System
 func Invoke() { }
@@ -963,7 +972,7 @@ func Run(ref text string?, cb () -> void) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@8:22")
             Add("return-asserted-value-conversion-is-a-call (W4)", `package T
 import System
 var g string? = "safe"
@@ -981,7 +990,7 @@ func Run(b Box?) string {
         try { return b!! } catch (InvalidOperationException) { }
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:27")
             Add("when-false-pattern-name-in-a-test-is-a-bare-property-read (W5)", `package T
 var g string? = "safe"
 class H {
@@ -1001,7 +1010,7 @@ class H {
         }
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@13:38")
             Add("delegate-invoke-member-call-is-indirect (A3)", `package T
 import System
 func Run(ref text string?, callback Action) int32 {
@@ -1013,7 +1022,7 @@ func Run(ref text string?, callback Action) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:16")
             Add("function-parameter-call-is-indirect (A3)", `package T
 import System
 func Run(ref text string?, callback Action) int32 {
@@ -1025,7 +1034,7 @@ func Run(ref text string?, callback Action) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:16")
             Add("function-typed-field-member-call-is-indirect (A3)", `package T
 import System
 class Holder {
@@ -1040,7 +1049,7 @@ func Run(ref text string?, holder Holder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("method-member-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 class Holder {
@@ -1070,7 +1079,7 @@ func Run(ref text string?, holder Holder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("interface-property-member-call-is-indirect (A3)", `package T
 import System
 interface IHolder {
@@ -1089,7 +1098,7 @@ func Run(ref text string?, holder IHolder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@13:16")
             Add("tuple-element-member-call-is-indirect (A3)", `package T
 import System
 func Run(ref text string?, pair (Cb Action, N int32)) int32 {
@@ -1101,7 +1110,7 @@ func Run(ref text string?, pair (Cb Action, N int32)) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:16")
             Add("static-method-member-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 func Run(ref text string?, values []int32) int32 {
@@ -1218,7 +1227,7 @@ func Run(ref text string?, o object) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("delegate-base-member-call-is-indirect (A3)", `package T
 import System
 func Run(ref text string?, callback Delegate) int32 {
@@ -1230,7 +1239,7 @@ func Run(ref text string?, callback Delegate) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:16")
             Add("tuple-element-named-like-an-extension-is-indirect (A3)", `package T
 import System
 import System.Linq
@@ -1243,7 +1252,7 @@ func Run(ref text string?, pair (Count Action, N int32)) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@7:16")
             Add("interface-property-named-like-an-extension-is-indirect (A3)", `package T
 import System
 import System.Linq
@@ -1259,7 +1268,7 @@ func Run(ref text string?, holder IHolder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@10:16")
             Add("delegate-method-keeps-a-by-reference-fact (A3)", `package T
 import System
 func Run(ref text string?, callback Action) int32 {
@@ -1283,7 +1292,7 @@ func Run(ref text string?, callback () -> void) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:16")
             Add("function-type-method-keeps-a-by-reference-fact (A3)", `package T
 import System
 func Run(ref text string?, callback () -> void) int32 {
@@ -1310,7 +1319,7 @@ func Run(ref text string?, o object) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("field-of-a-region-tested-type-named-like-an-extension-is-indirect (A3)", `package T
 import System
 import System.Linq
@@ -1326,7 +1335,7 @@ func Run(ref text string?, o object) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@10:16")
             Add("switch-case-type-test-is-a-region-type-test (A3)", `package T
 import System
 import System.Linq
@@ -1345,7 +1354,7 @@ func Run(ref text string?, o object) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@10:16")
             Add("method-of-a-region-tested-generic-type-keeps-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -1403,7 +1412,7 @@ func Run(ref text string?, o object, other object) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@10:16")
             Add("literal-converted-by-an-operator-is-no-proof (P7)", `package T
 import System
 class Box { var N int32 = 1 }
@@ -1421,7 +1430,7 @@ func Run() int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@12:13")
             Add("boxed-literal-keeps-the-fact (P7)", `package T
 import System
 func Run() int32 {
@@ -1465,7 +1474,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@24:16")
             Add("member-chain-function-field-call-is-indirect (A3)", `package T
 import System
 import System.Collections.Generic
@@ -1495,7 +1504,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@24:16")
             Add("call-result-function-field-call-is-indirect (A3)", `package T
 import System
 import System.Collections.Generic
@@ -1525,7 +1534,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@24:16")
             Add("list-element-function-field-call-is-indirect (A3)", `package T
 import System
 import System.Collections.Generic
@@ -1555,7 +1564,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@24:16")
             Add("type-tested-local-call-is-indirect (A3)", `package T
 import System
 import System.Linq
@@ -1573,7 +1582,7 @@ func Run(ref text string?, holder Holder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@11:16")
             Add("member-chain-method-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -1771,7 +1780,7 @@ func Run(ref text string?, holder Holder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@10:16")
             Add("nested-call-operands-name-the-storage-of-a-ref-local (A3)", `package T
 import System
 func Clear2(ref x string?, ref y string?) { y = nil }
@@ -1789,7 +1798,7 @@ func Run(ref a string?, ref b string?) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@7:13")
             Add("member-of-a-source-interface-with-an-imported-base-resolves (A3)", `package T
 import System
 class Holder {
@@ -1837,7 +1846,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@24:16")
             Add("dictionary-indexer-removes-a-by-reference-fact (R17)", `package T
 import System
 import System.Collections.Generic
@@ -1867,7 +1876,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@24:16")
             Add("stable-list-indexer-keeps-a-by-reference-fact (R17)", `package T
 import System
 import System.Collections.Generic
@@ -1915,7 +1924,7 @@ func Run(ref text string?, holder Holder) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@12:16")
             Add("source-auto-property-keeps-a-by-reference-fact (R14)", `package T
 import System
 class Holder {
@@ -1966,7 +1975,7 @@ func Run(flag bool) string {
         -"x"
     }
 }
-func Main() { }`, "GS0155")
+func Main() { }`, "GS0155@12:27")
             Add("extension-operator-keeps-a-by-reference-fact (A3)", `package T
 import System
 func (s string) operator -() int32 {
@@ -1999,7 +2008,7 @@ class Trigger {
         return n
     }
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@11:20")
             Add("imported-conversion-removes-a-by-reference-fact (A3)", `package T
 import System
 
@@ -2012,7 +2021,7 @@ func Run(ref text string?, k int32) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@7:16")
             Add("constant-of-an-initializing-type-keeps-a-by-reference-fact (R11)", `package T
 import System
 class Lim {
@@ -2057,7 +2066,7 @@ func Run(ref text string?) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@7:16")
             Add("argument-without-conversion-keeps-a-by-reference-fact (A3)", `package T
 import System
 func Run(ref text string?) int32 {
@@ -2084,7 +2093,7 @@ func Run(ref text string?) ReadOnlySpan[char] {
     }
     return ""
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:16")
             Add("argument-without-a-path-counts-as-a-conversion (A3)", `package T
 import System
 func Use(s ReadOnlySpan[char]) { }
@@ -2097,7 +2106,7 @@ func Run(ref text string?, a string, flag bool) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@7:16")
             Add("operator-with-an-unresolved-operand-counts-as-a-conversion (A3)", `package T
 import System
 func Pick[T](x T) T -> x
@@ -2109,7 +2118,7 @@ func Run(ref text string?, m int32) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@7:16")
             Add("if-expression-initializer-is-scoped-to-the-expression (W1)", `package T
 func Run(flag bool, s0 string?) int32 {
     var s = s0
@@ -2122,7 +2131,7 @@ func Run(flag bool, s0 string?) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@6:13")
             Add("index-argument-conversion-counts-for-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -2141,7 +2150,7 @@ func Run(ref text string?, flag bool, k Key, arr []int32, items List[Token]) int
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@13:16")
             Add("index-arguments-and-elements-of-built-in-types-keep-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -2177,7 +2186,7 @@ func Run(ref text string?, dt DateTime, items List[DateTimeOffset], n0 int32) in
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("nil-to-a-value-type-counts-as-a-conversion (A3)", `package T
 import System
 import System.Collections.Generic
@@ -2196,7 +2205,7 @@ func Run(ref text string?, flag bool, k Key, arr []int32, items List[Token]) int
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@13:16")
             Add("nil-argument-to-a-value-type-counts-as-a-conversion (A3)", `package T
 import System
 struct Token { var Raw int32 }
@@ -2211,7 +2220,7 @@ func Run(ref text string?) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("explicit-type-argument-conversion-removes-a-by-reference-fact (A3)", `package T
 import System
 import System.Linq
@@ -2232,7 +2241,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@15:16")
             Add("open-receiver-type-parameter-counts-as-a-conversion (A3)", `package T
 import System
 import System.Linq
@@ -2253,7 +2262,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@15:16")
             Add("inferred-and-substituted-type-arguments-keep-a-by-reference-fact (A3)", `package T
 import System
 import System.Collections.Generic
@@ -2284,7 +2293,7 @@ func Run(ref text string?, arr []int32, dt DateTime, n0 int32) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@9:16")
             Add("range-value-constructs-a-system-range (A3)", `package T
 import System
 import System.Text
@@ -2300,7 +2309,166 @@ func Run(ref text string?, arr []int32, s string, im ImmutableArray[int32], sp R
     }
     return n
 }
-func Main() { }`, "GS0158")
+func Main() { }`, "GS0158@10:16")
+            Add("nested-array-element-conversion-counts-for-a-by-reference-fact (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(v []int32) Token { return Token{Raw: 1} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Accept(d DateTimeOffset) { }
+func Accept(o object) { }
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, arr []int32, k Key, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let a = []Token{[]int32{1}}
+    }
+    return n
+}
+func Main() { }`, "GS0158@15:16")
+            Add("range-bound-conversion-counts-for-a-by-reference-fact (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(v []int32) Token { return Token{Raw: 1} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Accept(d DateTimeOffset) { }
+func Accept(o object) { }
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, arr []int32, k Key, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let v = arr[k..]
+    }
+    return n
+}
+func Main() { }`, "GS0158@15:16")
+            Add("from-end-bound-conversion-counts-for-a-by-reference-fact (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(v []int32) Token { return Token{Raw: 1} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Accept(d DateTimeOffset) { }
+func Accept(o object) { }
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, arr []int32, k Key, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let v = arr[..^k]
+    }
+    return n
+}
+func Main() { }`, "GS0158@15:16")
+            Add("conversion-overload-beats-an-object-overload (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(v []int32) Token { return Token{Raw: 1} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Accept(d DateTimeOffset) { }
+func Accept(o object) { }
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, arr []int32, k Key, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        Accept(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@15:16")
+            Add("string-argument-selects-a-span-overload (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(v []int32) Token { return Token{Raw: 1} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Accept(d DateTimeOffset) { }
+func Accept(o object) { }
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, arr []int32, k Key, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        Consume("ab")
+    }
+    return n
+}
+func Main() { }`, "GS0158@15:16")
+            Add("string-concatenation-selects-a-span-overload (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(v []int32) Token { return Token{Raw: 1} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Accept(d DateTimeOffset) { }
+func Accept(o object) { }
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, arr []int32, k Key, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        Consume("a" + "b")
+    }
+    return n
+}
+func Main() { }`, "GS0158@15:16")
+            Add("operator-argument-reaches-a-conversion-overload (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(value int32) Token { return Token{Raw: value} }
+func Use(t Token) { }
+func Use(w int64) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(n + 1)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("nested-arrays-and-exact-overloads-keep-a-by-reference-fact (A3)", `package T
+import System
+func Consume(n int32) { }
+func Consume(s ReadOnlySpan[char]) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let a = [][]int32{[]int32{1}, []int32{n}}
+        Console.WriteLine("a" + n.ToString())
+        Console.WriteLine("n=${n}")
+        Consume(n)
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }
