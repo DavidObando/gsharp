@@ -169,9 +169,6 @@ internal partial class StatementBinder {
         let resolved = ResolvedRegionWrites()
         if effects.ContainsConversionCandidate {
             resolved.RunsUserCodeOnWrite = true
-        } else if effects.ContainsElementConversion && ConversionsRunUserCode(effects) {
-            // An element, a key, a value or a length that a conversion operator converts is a call (rule W4).
-            resolved.RunsUserCodeOnWrite = true
         }
         // A returned name or constant runs no conversion operator when its type keeps its representation in the
         // return type, or when the return type is built in (a user conversion needs a type of the package).
@@ -1558,9 +1555,10 @@ internal partial class StatementBinder {
     }
 
     // The parameter lists of an index access: `int32` per dimension (or one `System.Index`) for an array, a slice or
-    // a string, and the indexers of an imported type with the receiver's type arguments substituted. A range slices
-    // only an array, a slice or a string without a conversion. A source indexer is a getter that runs user code
-    // (R14), which the read classification counts, so it is not listed.
+    // a string, and the indexers of an imported type with the receiver's type arguments substituted. A range argument
+    // is not matched: the binder slices the target, and the read classification decides whether that runs user code
+    // (R16, R17), as on main. A source indexer is a getter that runs user code (R14), which the read classification
+    // counts, so it is not listed.
     private func AddIndexParameterLists(receiver ReceiverType, call RegionCall, lists List[List[TypeSymbol]]) {
         let count = call.Arguments.Count
         var rank = 0
@@ -1595,11 +1593,6 @@ internal partial class StatementBinder {
                 lists.Add(fromEnd)
             }
             return
-        }
-        for form in call.ArgumentForms {
-            if form == RegionArgumentForm.Range {
-                return
-            }
         }
         var clrType = receiver.Clr
         var symbolic TypeSymbol? = nil

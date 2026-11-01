@@ -673,7 +673,7 @@ internal sealed class RegionEffectScanner {
                 pendingReceiverPath = receiverPath
                 Visit(index.Target)
                 for argument in index.Indices {
-                    // A range slices a built-in sequence without a `System.Range` (the consumer checks the target).
+                    // A range index slices the target without a `System.Range` value (the read is classified).
                     if UnwrapParentheses(argument) is RangeExpressionSyntax sliced {
                         VisitRangeBounds(sliced)
                     } else {
@@ -1935,9 +1935,9 @@ internal sealed class RegionEffectScanner {
     }
 
     // An element of an array, a stack allocation or a map literal, converted to its element, key or value type
-    // (`[]Token{1}`). Unlike a declaration, the site is a call only when the consumer finds a conversion operator.
+    // (`[]Token{1}`). The consumer checks it for a fact on by-reference storage. For other facts the expression
+    // that holds the literal (a declaration, an assignment, an argument or a read) is already a call (rule W4).
     private func RecordElementConversion(element ExpressionSyntax, target RegionReceiverPath?) {
-        current.ContainsElementConversion = true
         RecordConversion(element, target)
     }
 

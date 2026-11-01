@@ -309,7 +309,7 @@ internal enum RegionArgumentForm {
     Nil,
     /// A named argument, which the walker does not match to a parameter.
     Named,
-    /// A range index (`t[a..b]`), which slices a built-in sequence without a conversion.
+    /// A range index (`t[a..b]`), which the binder slices; the read classification decides whether that runs code.
     Range,
 }
 
@@ -542,13 +542,6 @@ internal sealed class RegionEffects {
         get;
     }
 
-    /// Whether an element of an array, a stack allocation or a map literal, or an allocation length, is converted
-    /// to its type. The site runs code only when the consumer finds a conversion operator (rule W4).
-    prop ContainsElementConversion bool {
-        get;
-        set;
-    }
-
     /// Whether a declaration with a type or an assignment takes a value that is not a literal. A user-defined
     /// conversion may run code there (rule W4); the consumer asks whether the package declares any.
     prop ContainsConversionCandidate bool {
@@ -639,7 +632,6 @@ internal sealed class RegionEffects {
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
         ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
-        ContainsElementConversion = ContainsElementConversion || other.ContainsElementConversion
         ReturnsConstant = ReturnsConstant || other.ReturnsConstant
         for name in other.ReturnedNames {
             if !ReturnedNames.Contains(name) {

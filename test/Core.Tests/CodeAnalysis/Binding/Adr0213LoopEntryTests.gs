@@ -2144,7 +2144,8 @@ func Run(ref text string?, flag bool, k Key, arr []int32, items List[Token]) int
 func Main() { }`, "GS0158")
             Add("index-arguments-and-elements-of-built-in-types-keep-a-by-reference-fact (A3)", `package T
 import System
-func Run(ref text string?, arr []int32, s string, idx Index) int32 {
+import System.Collections.Generic
+func Run(ref text string?, arr []int32, s string, idx Index, sp ReadOnlySpan[char], list List[int32]) int32 {
     if text == nil { return 0 }
     var n = 0
     while text.Length > 0 && n < 3 {
@@ -2152,6 +2153,8 @@ func Run(ref text string?, arr []int32, s string, idx Index) int32 {
         let v = arr[n] + arr[idx] + arr[n + 1]
         let w = s[1..n]
         let u = arr[1..^1]
+        let x = sp[1..n]
+        let y = list[1..n]
         let a = []int32{1, n}
         let b = [n]int32{}
         let t string? = nil
