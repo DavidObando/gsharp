@@ -545,7 +545,15 @@ internal partial class StatementBinder {
         for step in path.Steps {
             let next = List[ReceiverType]()
             for type in types {
-                if AddStepTypes(type, step, next) != StepFound {
+                let outcome = AddStepTypes(type, step, next)
+                // A call that the type does not declare binds an extension method; its result type is the step's.
+                if outcome == StepAbsent &&
+                    step.Kind == RegionReceiverStepKind.Call &&
+                    step.Name is {} method &&
+                    AddExtensionResultTypes(type, method, next) {
+                    continue
+                }
+                if outcome != StepFound {
                     return nil
                 }
             }
@@ -559,6 +567,33 @@ internal partial class StatementBinder {
     }
 
     private const MaxReceiverTypes int32 = 16
+
+    // The result types of the extension methods of that name for the receiver: the source extension functions that
+    // take it, or else the imported extension methods of that name whose result is a closed type. `false` when there
+    // is none or a result does not resolve.
+    private func AddExtensionResultTypes(receiver ReceiverType, method string, next List[ReceiverType]) bool {
+        if receiver.Symbol is {} symbol {
+            let functions = $scope.TryLookupExtensionFunctions(symbol, method)
+            if !functions.IsDefaultOrEmpty {
+                for function in functions {
+                    if !AddSymbolType(function.Type, next) {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+        let imported = MemberLookup(binderCtx).CollectImportedExtensionMethods(method)
+        if imported.Count == 0 {
+            return false
+        }
+        for candidate in imported {
+            if !AddClrType(candidate.ReturnType, ImmutableArray[TypeSymbol].Empty, nil, next) {
+                return false
+            }
+        }
+        return true
+    }
 
     private func Distinct(types List[ReceiverType]) List[ReceiverType] {
         let distinct = List[ReceiverType]()
@@ -757,6 +792,10 @@ internal partial class StatementBinder {
                     return StepFound
                 }
                 return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+            }
+            case EnumSymbol {
+                // An enum value has the members of `System.Enum`.
+                return AddClrStepTypes(typeof(Enum), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
             case imported is ImportedTypeSymbol {
                 if imported.OpenDefinition is {} definition && !imported.TypeArguments.IsDefaultOrEmpty {
@@ -996,28 +1035,19 @@ internal partial class StatementBinder {
     // For a fact on by-reference storage ([`forReferenceStorage`](paramref)), a source operator (of a type of the
     // package or an extension operator) is a plain call that ADR-0208 A3 exempts, as on main; an imported operator is
     // not.
-    private func OperatorsRunUserCode(
-        effects RegionEffects,
-        forReferenceStorage bool,
-        onlyResolvedOperands bool = false
-    ) bool {
+    private func OperatorsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
         for candidate in effects.Operators {
             // A known built-in operand type, or `nil` for an operand that is itself an operator expression.
             let operandTypes = List[TypeSymbol?]()
             for var index = 0; index < candidate.Operands.Count; index++ {
                 let operand = candidate.Operands[index]
                 if operand == nil {
-                    if !candidate.OperatorForms[index] && !onlyResolvedOperands {
+                    if !candidate.OperatorForms[index] {
                         return true
                     }
                     operandTypes.Add(nil)
                 } else if BuiltInOperandType(operand, effects) is {} operandType {
                     operandTypes.Add(operandType)
-                } else if onlyResolvedOperands {
-                    if ResolveReceiverPath(operand, effects) != nil {
-                        return true
-                    }
-                    operandTypes.Add(nil)
                 } else if !forReferenceStorage || OperandIsImportedType(operand, effects) {
                     return true
                 } else {
@@ -1152,10 +1182,10 @@ internal partial class StatementBinder {
             }
             let sourcePath = conversion.Source
             if sourcePath == nil {
-                // An operator or a literal of built-in operands converts only to a type that is not built in. A
-                // user-defined or extension operator of the region may return another type.
-                if !conversion.SourceIsBuiltInByForm ||
-                    OperatorsRunUserCode(effects, false, onlyResolvedOperands: true) {
+                // An operator or a literal of built-in operands converts only to a type that is not built in. An
+                // operator of the region that is user-defined, an extension, or has an operand that does not resolve
+                // may return another type (coordinator decision 2026-11-01).
+                if !conversion.SourceIsBuiltInByForm || OperatorsRunUserCode(effects, false) {
                     return true
                 }
                 for target in targets {
@@ -1190,56 +1220,94 @@ internal partial class StatementBinder {
         return false
     }
 
-    // Whether a call of the region passes a value that a user-defined or imported conversion operator converts to its
-    // parameter type (the predicate of the conversion classifier). The candidates are the functions or methods of
-    // the callee's name with as many parameters as arguments. A candidate that takes every argument without a
+    // Whether a call of the region passes a value that a user-defined or imported conversion operator can convert to
+    // its parameter type (the predicate of the conversion classifier). The candidates are the functions or methods
+    // of the callee's name with as many parameters as arguments. A candidate that takes every argument without a
     // conversion operator (the same or a built-in type, a reference conversion or a type parameter) is taken to be
-    // the one that binds. A call whose callee or arguments do not resolve is not checked.
+    // the one that binds. A call that the walker cannot check counts (coordinator decision 2026-11-01): a callee
+    // without such a candidate (an extension method, an expanded or optional argument), a named argument, an
+    // argument without a path, or an operator argument when an operator of the region can return another type.
     private func ArgumentsRunUserConversion(effects RegionEffects) bool {
+        let operatorResultsKnown = !OperatorsRunUserCode(effects, false)
         for call in effects.Calls {
-            if call.Arguments.Count == 0 || call.CalleeName is not{} name {
+            if call
+                .Arguments
+                .Count == 0 ||
+                (call.Kind != RegionCallKind.NamedInvocation && call.Kind != RegionCallKind.MemberInvocation) {
                 continue
             }
-            let argumentTypes = List[List[TypeSymbol]]()
-            var resolvedArguments = true
-            for argument in call.Arguments {
-                if argument == nil || ConversionTypes(argument, effects) is not{} types {
-                    resolvedArguments = false
-                    break
-                }
-                argumentTypes.Add(types)
+            if call.CalleeName is not{} name {
+                return true
             }
-            if !resolvedArguments {
-                continue
-            }
-            let candidates = ParameterLists(call, name, effects)
-            var anyFits = false
-            var anyNeedsOperator = false
-            for parameters in candidates {
-                if parameters.Count != argumentTypes.Count {
-                    continue
+            // A known type list per argument, or `nil` for a value of some built-in type or a skipped position.
+            let argumentTypes = List[List[TypeSymbol]?]()
+            let skipped = List[bool]()
+            for var index = 0; index < call.Arguments.Count; index++ {
+                let form = call.ArgumentForms[index]
+                if form == RegionArgumentForm.Named {
+                    return true
                 }
-                var fits = true
-                var convertible = true
-                for var index = 0; index < parameters.Count; index++ {
-                    for argumentType in argumentTypes[index] {
-                        if ArgumentFits(argumentType, parameters[index]) {
-                            continue
-                        }
-                        fits = false
-                        if !conversions.HasUserDefinedImplicitConversion(argumentType, parameters[index]) {
-                            convertible = false
-                        }
+                if form == RegionArgumentForm.ByReference ||
+                    form == RegionArgumentForm.FunctionLiteral ||
+                    form == RegionArgumentForm.Nil {
+                    argumentTypes.Add(nil)
+                    skipped.Add(true)
+                } else if form == RegionArgumentForm.BuiltInByForm {
+                    if !operatorResultsKnown {
+                        return true
                     }
+                    argumentTypes.Add(nil)
+                    skipped.Add(false)
+                } else {
+                    if call.Arguments[index] is not{} path {
+                        return true
+                    }
+                    if ConversionTypes(path, effects) is not{} types {
+                        return true
+                    }
+                    argumentTypes.Add(types)
+                    skipped.Add(false)
                 }
-                anyFits = anyFits || fits
-                anyNeedsOperator = anyNeedsOperator || (!fits && convertible)
             }
-            if !anyFits && anyNeedsOperator {
+            var anyFits = false
+            for parameters in ParameterLists(call, name, effects) {
+                if parameters.Count == argumentTypes.Count &&
+                    CandidateTakesArguments(parameters, argumentTypes, skipped) {
+                    anyFits = true
+                }
+            }
+            if !anyFits {
                 return true
             }
         }
         return false
+    }
+
+    private func CandidateTakesArguments(
+        parameters List[TypeSymbol],
+        argumentTypes List[List[TypeSymbol]?],
+        skipped List[bool]
+    ) bool {
+        for var index = 0; index < parameters.Count; index++ {
+            if skipped[index] {
+                continue
+            }
+            if argumentTypes[index] is not{} types {
+                // A value of some built-in type takes a built-in, `object` or type-parameter parameter.
+                let parameter = StripAllNullability(parameters[index]) ?? parameters[index]
+                if !MetadataTypeKeys.IsBuiltIn(parameter) && !object.Equals(parameter, TypeSymbol.Object) &&
+                    !TypeSymbol.ContainsTypeParameter(parameter) {
+                    return false
+                }
+                continue
+            }
+            for argumentType in types {
+                if !ArgumentFits(argumentType, parameters[index]) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol) bool {

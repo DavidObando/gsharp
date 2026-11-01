@@ -289,6 +289,22 @@ internal sealed class RegionConversion {
     }
 }
 
+/// How an argument reaches its parameter, for the consumer's check of argument conversions.
+internal enum RegionArgumentForm {
+    /// A value with a path (`nil` when the walker cannot follow it).
+    Path,
+    /// A `ref`, `out`, `in` or address argument, which binds by exact type.
+    ByReference,
+    /// An operator or literal expression, whose value is built in when its operators are predefined.
+    BuiltInByForm,
+    /// A function literal, which converts to a delegate without an operator.
+    FunctionLiteral,
+    /// `nil`, which stores the null value.
+    Nil,
+    /// A named argument, which the walker does not match to a parameter.
+    Named,
+}
+
 /// One call site found by the scanner.
 internal sealed class RegionCall {
     init(
@@ -300,8 +316,10 @@ internal sealed class RegionCall {
         position int32,
         receiverName string? = nil,
         receiver RegionReceiverPath? = nil,
-        arguments List[RegionReceiverPath?]? = nil
+        arguments List[RegionReceiverPath?]? = nil,
+        argumentForms List[RegionArgumentForm]? = nil
     ) {
+        ArgumentForms = argumentForms ?? List[RegionArgumentForm]()
         Kind = kind
         CalleeName = calleeName
         ReceiverName = receiverName
@@ -333,9 +351,13 @@ internal sealed class RegionCall {
         get;
     }
 
-    /// Gets the paths of the values passed by value, in argument order (`nil` for one the walker cannot follow), or an
-    /// empty list when an argument is named, passed by reference or expanded.
+    /// Gets the path of each argument, in argument order (`nil` for one that has no path; see (cref:ArgumentForms)).
     prop Arguments List[RegionReceiverPath?] {
+        get;
+    }
+
+    /// Gets the form of each argument, in argument order.
+    prop ArgumentForms List[RegionArgumentForm] {
         get;
     }
 

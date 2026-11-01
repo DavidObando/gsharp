@@ -2085,6 +2085,30 @@ func Run(ref text string?) ReadOnlySpan[char] {
     return ""
 }
 func Main() { }`, "GS0158")
+            Add("argument-without-a-path-counts-as-a-conversion (A3)", `package T
+import System
+func Use(s ReadOnlySpan[char]) { }
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(cast[string](o))
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("operator-with-an-unresolved-operand-counts-as-a-conversion (A3)", `package T
+import System
+func Run(ref text string?, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n = n + cast[int32](o)
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }

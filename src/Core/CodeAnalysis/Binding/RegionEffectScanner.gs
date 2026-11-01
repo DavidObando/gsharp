@@ -1072,7 +1072,8 @@ internal sealed class RegionEffectScanner {
                 call.Position,
                 receiverName,
                 receiver,
-                arguments
+                arguments,
+                call.ArgumentForms
             )
         }
         for var i = operatorsBefore; i < current.Operators.Count; i++ {
@@ -1758,6 +1759,31 @@ internal sealed class RegionEffectScanner {
         current.Operators.Add(RegionOperator(kind, operands, operatorForms))
     }
 
+    private func ArgumentForm(argument ExpressionSyntax) RegionArgumentForm {
+        var inner = argument
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        if argument is RefArgumentExpressionSyntax or
+            ConditionalRefArgumentExpressionSyntax or
+            UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} {
+            return RegionArgumentForm.ByReference
+        }
+        if argument is NamedArgumentExpressionSyntax {
+            return RegionArgumentForm.Named
+        }
+        if IsNilLiteral(inner) {
+            return RegionArgumentForm.Nil
+        }
+        if inner is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax {
+            return RegionArgumentForm.FunctionLiteral
+        }
+        if IsOperatorForm(inner) || inner is InterpolatedStringExpressionSyntax {
+            return RegionArgumentForm.BuiltInByForm
+        }
+        return RegionArgumentForm.Path
+    }
+
     private func IsOperatorForm(expression ExpressionSyntax?) bool {
         var inner = expression
         while inner is ParenthesizedExpressionSyntax parenthesized {
@@ -1892,15 +1918,18 @@ internal sealed class RegionEffectScanner {
         }
         // The values passed by value, for the consumer's check of argument conversions. A call with an argument
         // passed by reference or by address keeps none (it binds by exact type there).
-        var arguments List[RegionReceiverPath?]? = List[RegionReceiverPath?]()
+        let arguments = List[RegionReceiverPath?]()
+        let argumentForms = List[RegionArgumentForm]()
         for argument in call.Arguments {
-            if argument is RefArgumentExpressionSyntax or
-                ConditionalRefArgumentExpressionSyntax or
-                UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} {
-                arguments = nil
-            } else {
-                arguments?.Add(BuildPath(argument))
-            }
+            let form = ArgumentForm(argument)
+            argumentForms.Add(form)
+            arguments.Add(
+                if form == RegionArgumentForm.Path {
+                    BuildPath(argument)
+                } else {
+                    default(RegionReceiverPath?)
+                }
+            )
             switch argument {
                 case reference is RefArgumentExpressionSyntax {
                     NodesVisited++
@@ -1970,7 +1999,8 @@ internal sealed class RegionEffectScanner {
                     } else {
                         default(RegionReceiverPath?)
                     },
-                    arguments
+                    arguments,
+                    argumentForms
                 )
             )
         }
