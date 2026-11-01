@@ -974,16 +974,6 @@ internal partial class StatementBinder {
         if path == nil || path.Steps.Length > 0 && effects.ContainsMemberTypeTest {
             return true
         }
-        // An index on a type name is a generic type argument list (`o is Box[int32]`), not a read.
-        if read.Member == nil &&
-            path
-            .Steps
-            .Length == 0 &&
-            !path.RootIsCall &&
-            path.RootName is {} root &&
-            $scope.TryLookupSymbol(root) is not VariableSymbol && ResolveTypeName(root) != nil {
-            return false
-        }
         let types = ResolveReceiverPath(path, effects)
         if types == nil {
             return true

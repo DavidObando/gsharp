@@ -34,6 +34,8 @@ internal sealed class RegionEffectScanner {
     private var pendingReceiverPath RegionReceiverPath? = nil
     // The path of the value that the pattern being visited tests, or `nil` when the walker cannot follow it.
     private var patternSubject RegionReceiverPath? = nil
+    // The depth of name-shaped patterns being visited: their names are types or constants, which no getter reads.
+    private var constantPatternDepth int32 = 0
 
     /// The names that one declaration scope holds, and the `ref` locals of the scope with the name
     /// of the variable each one aliases (`nil` when the storage is not a plain variable).
@@ -432,6 +434,13 @@ internal sealed class RegionEffectScanner {
                 // The typed kind (rule P7) is given where the binder scopes the variable (`RetypePatternNames`).
                 Declare(pattern.Identifier, "pattern")
                 Declare(pattern.Designation, "pattern")
+                Visit(pattern.PropertyPattern)
+            }
+            case SyntaxKind.TypeOrConstantPattern {
+                let pattern = cast[TypeOrConstantPatternSyntax](node)
+                constantPatternDepth++
+                Visit(pattern.Expression)
+                constantPatternDepth--
                 Visit(pattern.PropertyPattern)
             }
             case SyntaxKind.PropertyPattern {
@@ -1665,7 +1674,7 @@ internal sealed class RegionEffectScanner {
     // ---------------------------------------------------------------- calls and members
 
     private func RecordRead(receiver RegionReceiverPath?, member string?) {
-        if Active() {
+        if Active() && constantPatternDepth == 0 {
             current.MemberReads.Add(RegionMemberRead(receiver, member))
         }
     }

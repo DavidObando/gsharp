@@ -1796,14 +1796,14 @@ class Holder {
     func Do() { }
 }
 interface IBox : IDisposable {
-    prop Child Holder { get; }
+    func GetChild() Holder;
 }
 func Run(ref s string?, box IBox) int32 {
     if s == nil { return 0 }
     var n = 0
     while s.Length > 0 && n < 3 {
         n++
-        box.Child.Do()
+        box.GetChild().Do()
     }
     return n
 }
