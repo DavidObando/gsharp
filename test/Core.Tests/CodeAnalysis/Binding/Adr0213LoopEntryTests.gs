@@ -2197,6 +2197,21 @@ func Run(ref text string?, flag bool, k Key, arr []int32, items List[Token]) int
     return n
 }
 func Main() { }`, "GS0158")
+            Add("nil-argument-to-a-value-type-counts-as-a-conversion (A3)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit(value string?) Token { return Token{Raw: 2} }
+func Use(t Token) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(nil)
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             Add("explicit-type-argument-conversion-removes-a-by-reference-fact (A3)", `package T
 import System
 import System.Linq
