@@ -982,7 +982,10 @@ Details per row:
   `x = nil`, or a call in a constant pattern, `x is Read(h)`) narrows neither branch, by the statement rule
   applied to the test's effects, whether or not a fact was removed before it (rows w25 to w28 and w30); a getter
   that cannot reach the path keeps the narrowing (row w29). The test reads the callable aliases at its own
-  evaluation point: an earlier operand's reassignment applies (row w35), a later one does not (row w33). The `Equals` call of a constant pattern and the
+  evaluation point: an earlier operand's reassignment applies (row w35), a later one does not (row w33). The
+  aliases follow a `&&` chain operand by operand on its true path, so an alias gained earlier in the chain reaches
+  the test (row w44); under `||` the walk joins both paths, so a conditional gain does not (row w46). The `if let`
+  header is read from the aliases it started with (row w45). The `Equals` call of a constant pattern and the
   accessors of a list pattern are not in the effect collector yet (#5593). A
   later operand that removes it (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
@@ -992,7 +995,7 @@ Details per row:
   static-access rule of R11 and R15 (#5520) and the imported accessor list of R17 to the condition too: a static
   read of a type with a non-literal `shared` initializer kills before the branches (row w36), a literal-only type
   keeps the fact (row w37), and a `Dictionary` indexer kills where a `List` indexer keeps it (row w38). Corpus
-  rows w01 to w43.
+  rows w01 to w46.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only

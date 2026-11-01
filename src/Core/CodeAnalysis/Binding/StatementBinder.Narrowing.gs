@@ -1837,7 +1837,8 @@ internal partial class StatementBinder {
     private func RestoreThenBranchConditionKills(
         outer List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?,
         entry NarrowingState,
-        header List[(Syntax SyntaxNode, Bound BoundExpression)]? = nil
+        header List[(Syntax SyntaxNode, Bound BoundExpression)]? = nil,
+        aliasesBeforeHeader HashSet[VariableSymbol]? = nil
     ) List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)] {
         let thenKills = conditionKillJournal!!
         conditionKillJournal = outer
@@ -1847,7 +1848,8 @@ internal partial class StatementBinder {
         var headerEffects AssignedRootsCollector? = nil
         var headerMutatesMemberPaths = false
         if thenKills.Count > 0 && header != nil && header.Count > 0 {
-            let collector = NewCollector(nil, externalCallableAliases)
+            // The header is walked in evaluation order from the aliases it started with.
+            let collector = NewCollector(nil, aliasesBeforeHeader ?? externalCallableAliases)
             for part in header {
                 collector.VisitExpression(part.Bound)
                 headerMutatesMemberPaths = headerMutatesMemberPaths || SyntaxMayMutateMemberPaths(part.Syntax)
