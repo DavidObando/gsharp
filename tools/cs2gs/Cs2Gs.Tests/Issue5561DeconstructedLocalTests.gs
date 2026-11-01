@@ -33,6 +33,8 @@ import Xunit
 /// | `Node n = entry.Item; (n, i) = entry;` (G# infers `n` from the initializer) | `n = nValue` | unchanged: the storage that the declaration emitted accepts nil |
 /// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets the conversion's result flow, not the element's |
 /// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
+/// | `var n = entry.Item ?? entry.Item` / `flag ? entry.Item : new Node()`, then `(n, i) = Empty()` | `n = nValue` | unchanged: storage inferred from a composed nullable read |
+/// | `var n = new Node(); (n, i) = entry` | GS0155 | `n = nValue!!`: the emitted initializer is certainly non-null |
 /// | `entry.Item is var p` / `is Node p`, then `(p, i) = Empty()` (no recorded storage) | `p = pValue` | unchanged (#5605): an unknown local is not bridged |
 /// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
 /// | `(holder.Value, i) = entry` into another project's `Holder<T>.Value`, which the consumer null-tests | GS0155 | `holder.Value = holderValue!!`: a field is decided by its declaration |
@@ -52,7 +54,9 @@ import Xunit
 /// The `Node n` row is decided by `EmittedLocalStorageAcceptsNil`; it throws at `n = nValue!!` when
 /// only a `var` local's storage follows its initializer. The pattern-variable row throws at
 /// `p = pValue!!` on 7c4638e68, which bridged a local with no record by its declared type. The
-/// `[AllowNull]` row throws at the bridged store on a31c75b9b, before #5577's query.
+/// `[AllowNull]` row throws at the bridged store on a31c75b9b, before #5577's query. The composed
+/// initializer rows throw at `n = nValue!!` on 0b5bbb009, which recorded a `var` local's storage from
+/// `IsNullablePromotedValue(initializer)`.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -248,6 +252,56 @@ namespace Demo
 }`)
         Assert.Equal("True:0 True:0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
         Assert.DoesNotContain("p = pValue!!", printed)
+    }
+
+    /// G# infers a `var` local from its emitted initializer, so its storage is non-null only when that
+    /// initializer is certainly non-null. A composed read of the widened property (`??`, `?:`) infers
+    /// `Node?`, and the null is stored; `new Node()` infers `Node`, and the store is bridged.
+    @Fact
+    func StoreIntoALocalOfAComposedInitializer_FollowsTheEmittedInitializer() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Coalesce(Entry entry)
+        {
+            var n = entry.Item ?? entry.Item;
+            int i;
+            (n, i) = Empty();
+            object o = n;
+            return (o == null) + ":" + i;
+        }
+        public static string Conditional(Entry entry, bool flag)
+        {
+            var n = flag ? entry.Item : new Node();
+            int i;
+            (n, i) = Empty();
+            object o = n;
+            return (o == null) + ":" + i;
+        }
+        public static string Fresh(Entry entry)
+        {
+            var n = new Node();
+            int i;
+            (n, i) = entry;
+            return n.ToString() + i;
+        }
+        public static string Run()
+        {
+            var entry = new Entry(new Node(), 1);
+            return Coalesce(entry) + " " + Conditional(entry, true) + " " + Fresh(entry);
+        }
+    }
+}`)
+        Assert.Equal("True:0 True:0 node1", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.Contains(
+            "func Fresh(entry Entry) string {\n        var n = Node()\n        var i int32\n        let (nValue, iValue) = entry\n        n = nValue!!\n",
+            printed
+        )
     }
 
     /// A user-defined conversion takes the element as its input, so the bridge asks the operator's

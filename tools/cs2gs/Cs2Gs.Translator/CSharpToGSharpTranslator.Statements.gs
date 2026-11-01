@@ -360,9 +360,9 @@ partial class CSharpToGSharpTranslator {
                     this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
                         type.IsNullable
                     } else {
-                        !(initializer is NonNullAssertionExpression) && this.IsNullablePromotedValue(
-                            declarator.Initializer?.Value
-                        )
+                        // G# infers the type from the emitted initializer; only an
+                        // initializer that is certainly non-null fixes non-null storage.
+                        !this.GSharpExpressionIsStaticallyNonNull(declarator.Initializer?.Value, initializer)
                     }
                 }
                 // Issue #4356: record the emitted G# nullability of this local

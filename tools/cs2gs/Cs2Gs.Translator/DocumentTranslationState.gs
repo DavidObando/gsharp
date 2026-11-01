@@ -419,7 +419,8 @@ internal class DocumentTranslationState {
     }
 
     // Issue #5561: for each local cs2gs EMITTED, whether its G# storage accepts
-    // nil: its type clause, or else the initializer that was actually emitted.
+    // nil: its type clause, or else whether the initializer that was actually
+    // emitted is not certainly non-null (`GSharpExpressionIsStaticallyNonNull`).
     // A deconstruction into the local stores its element as is when it does,
     // and bridges it when it does not.
     prop EmittedLocalStorageAcceptsNil Dictionary[ILocalSymbol, bool] {
