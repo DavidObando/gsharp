@@ -1053,6 +1053,16 @@ internal sealed class RegionEffectScanner {
                 kind = RegionCallKind.ExpressionInvocation
                 callee = nil
             }
+            let arguments = List[RegionReceiverPath?]()
+            for argument in call.Arguments {
+                arguments.Add(
+                    if argument == nil {
+                        default(RegionReceiverPath?)
+                    } else {
+                        Rebase(argument)
+                    }
+                )
+            }
             current.Calls[i] = RegionCall(
                 kind,
                 callee,
@@ -1061,7 +1071,8 @@ internal sealed class RegionEffectScanner {
                 call.HasUnresolvedOperand,
                 call.Position,
                 receiverName,
-                receiver
+                receiver,
+                arguments
             )
         }
         for var i = operatorsBefore; i < current.Operators.Count; i++ {
@@ -1125,6 +1136,10 @@ internal sealed class RegionEffectScanner {
     // decides a plain name and a constant with their types. A member or element read is an unknown getter already
     // (W5), which removes what a conversion can.
     private func RecordReturnedValue(value ExpressionSyntax?) {
+        if value != nil {
+            // The value converts to the return type of the enclosing function.
+            RecordConversion(value, RootPath(ReturnTypeRoot))
+        }
         var inner = value
         while inner is ParenthesizedExpressionSyntax parenthesized {
             inner = parenthesized.Expression
@@ -1772,6 +1787,9 @@ internal sealed class RegionEffectScanner {
         current.Conversions.Add(RegionConversion(BuildPath(value), target, builtInByForm))
     }
 
+    /// The root name of the path that stands for the return type of the enclosing function (no identifier).
+    internal const ReturnTypeRoot string = "<return>"
+
     private func RootPath(name string) RegionReceiverPath -> RegionReceiverPath(
         name,
         false,
@@ -1872,7 +1890,17 @@ internal sealed class RegionEffectScanner {
         if call.Callee != nil {
             Visit(call.Callee)
         }
+        // The values passed by value, for the consumer's check of argument conversions. A call with an argument
+        // passed by reference or by address keeps none (it binds by exact type there).
+        var arguments List[RegionReceiverPath?]? = List[RegionReceiverPath?]()
         for argument in call.Arguments {
+            if argument is RefArgumentExpressionSyntax or
+                ConditionalRefArgumentExpressionSyntax or
+                UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} {
+                arguments = nil
+            } else {
+                arguments?.Add(BuildPath(argument))
+            }
             switch argument {
                 case reference is RefArgumentExpressionSyntax {
                     NodesVisited++
@@ -1941,7 +1969,8 @@ internal sealed class RegionEffectScanner {
                         receiverPath
                     } else {
                         default(RegionReceiverPath?)
-                    }
+                    },
+                    arguments
                 )
             )
         }

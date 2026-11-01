@@ -2045,6 +2045,46 @@ func Run(ref text string?, k int32) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("argument-conversion-removes-a-by-reference-fact (A3)", `package T
+import System
+func Consume(s ReadOnlySpan[char]) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Consume("ab")
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("argument-without-conversion-keeps-a-by-reference-fact (A3)", `package T
+import System
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Console.WriteLine("ab")
+        Console.WriteLine(n)
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("return-conversion-in-a-resumed-loop-removes-a-by-reference-fact (A3)", `package T
+import System
+func Run(ref text string?) ReadOnlySpan[char] {
+    if text == nil { return "" }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        try {
+            if n > 5 { return "ab" }
+        } catch (InvalidOperationException) { }
+    }
+    return ""
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }

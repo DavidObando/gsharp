@@ -580,6 +580,10 @@ internal partial class StatementBinder {
     // The types of a root: a variable of the entry scope (declared, narrowed and type-tested in the region), a type,
     // or the result of a named call (a construction or the functions of that name).
     private func AddRootTypes(root string, isCall bool, effects RegionEffects, types List[ReceiverType]) bool {
+        if root == RegionEffectScanner.ReturnTypeRoot {
+            let enclosing = function
+            return enclosing != nil && !enclosing.IsReturnTypeInferred && AddSymbolType(enclosing.Type, types)
+        }
         if isCall {
             if ResolveTypeName(root) is {} constructed {
                 types.Add(ReceiverType(constructed, nil))
@@ -1139,8 +1143,9 @@ internal partial class StatementBinder {
             }
             let sourcePath = conversion.Source
             if sourcePath == nil {
-                // An operator or a literal of built-in operands converts only to a type that is not built in.
-                if !conversion.SourceIsBuiltInByForm {
+                // An operator or a literal of built-in operands converts only to a type that is not built in. A
+                // user-defined or extension operator of the region may return another type.
+                if !conversion.SourceIsBuiltInByForm || OperatorsRunUserCode(effects, false) {
                     return true
                 }
                 for target in targets {
@@ -1173,6 +1178,154 @@ internal partial class StatementBinder {
             }
         }
         return false
+    }
+
+    // Whether a call of the region passes a value that a user-defined or imported conversion operator converts to its
+    // parameter type (the predicate of the conversion classifier). The candidates are the functions or methods of
+    // the callee's name with as many parameters as arguments. A candidate that takes every argument without a
+    // conversion operator (the same or a built-in type, a reference conversion or a type parameter) is taken to be
+    // the one that binds. A call whose callee or arguments do not resolve is not checked.
+    private func ArgumentsRunUserConversion(effects RegionEffects) bool {
+        for call in effects.Calls {
+            if call.Arguments.Count == 0 || call.CalleeName is not{} name {
+                continue
+            }
+            let argumentTypes = List[List[TypeSymbol]]()
+            var resolvedArguments = true
+            for argument in call.Arguments {
+                if argument == nil || ConversionTypes(argument, effects) is not{} types {
+                    resolvedArguments = false
+                    break
+                }
+                argumentTypes.Add(types)
+            }
+            if !resolvedArguments {
+                continue
+            }
+            let candidates = ParameterLists(call, name, effects)
+            var anyFits = false
+            var anyNeedsOperator = false
+            for parameters in candidates {
+                if parameters.Count != argumentTypes.Count {
+                    continue
+                }
+                var fits = true
+                var convertible = true
+                for var index = 0; index < parameters.Count; index++ {
+                    for argumentType in argumentTypes[index] {
+                        if ArgumentFits(argumentType, parameters[index]) {
+                            continue
+                        }
+                        fits = false
+                        if !conversions.HasUserDefinedImplicitConversion(argumentType, parameters[index]) {
+                            convertible = false
+                        }
+                    }
+                }
+                anyFits = anyFits || fits
+                anyNeedsOperator = anyNeedsOperator || (!fits && convertible)
+            }
+            if !anyFits && anyNeedsOperator {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol) bool {
+        let stripped = StripAllNullability(parameter) ?? parameter
+        return object.Equals(argument, stripped) || TypeSymbol.ContainsTypeParameter(stripped) || object.Equals(
+            stripped,
+            TypeSymbol.Object
+        ) ||
+            (MetadataTypeKeys.IsBuiltIn(argument) && MetadataTypeKeys.IsBuiltIn(stripped)) ||
+            Conversion.IsRepresentationPreservingImplicit(argument, stripped)
+    }
+
+    // The parameter types of each function or method that the call can bind: the functions of the scope with the
+    // callee's name, or the methods of that name on the receiver's types.
+    private func ParameterLists(call RegionCall, name string, effects RegionEffects) List[List[TypeSymbol]] {
+        let lists = List[List[TypeSymbol]]()
+        var receivers List[ReceiverType]? = nil
+        if call.Kind == RegionCallKind.NamedInvocation {
+            for function in $scope.TryLookupFunctions(name) {
+                lists.Add(ParameterTypes(function))
+            }
+            return lists
+        }
+        if call.Kind != RegionCallKind.MemberInvocation {
+            return lists
+        }
+        if call.ReceiverName is {} receiverName {
+            let types = List[ReceiverType]()
+            if AddRootTypes(receiverName, false, effects, types) {
+                receivers = types
+            }
+        } else if call.Receiver is {} path {
+            receivers = ResolveReceiverPath(path, effects)
+        }
+        if receivers == nil {
+            return lists
+        }
+        for receiver in receivers {
+            AddMethodParameterLists(receiver, name, lists)
+        }
+        return lists
+    }
+
+    private func ParameterTypes(function FunctionSymbol) List[TypeSymbol] {
+        let types = List[TypeSymbol]()
+        for parameter in function.Parameters {
+            types.Add(parameter.Type)
+        }
+        return types
+    }
+
+    private func AddMethodParameterLists(receiver ReceiverType, name string, lists List[List[TypeSymbol]]) {
+        var clrType = receiver.Clr
+        switch receiver.Symbol {
+            case declared is StructSymbol {
+                for level in declared.GetHierarchy() {
+                    for candidate in level.GetMembers() {
+                        if candidate is FunctionSymbol function && function.Name == name {
+                            lists.Add(ParameterTypes(function))
+                        }
+                    }
+                }
+                clrType = declared.GetHierarchy().Last().ImportedBaseType?.ClrType
+            }
+            case contract is InterfaceSymbol {
+                for level in contract.SelfAndAllBaseInterfaces() {
+                    level.EnsureMembersResolved()
+                    for function in level.GetMethods(name) {
+                        lists.Add(ParameterTypes(function))
+                    }
+                }
+            }
+            case imported is ImportedTypeSymbol {
+                clrType = imported.OpenDefinition ?? imported.ClrType
+            }
+            default {
+                clrType = clrType ?? receiver.Symbol?.ClrType
+            }
+        }
+        if clrType == nil || ReflectionType(clrType) is not{} reflected {
+            return
+        }
+        try {
+            for member in reflected.GetMember(
+                name,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            ) {
+                if member is MethodInfo method {
+                    let types = List[TypeSymbol]()
+                    for parameter in method.GetParameters() {
+                        types.Add(ClrNullability.GetParameterTypeSymbol(parameter))
+                    }
+                    lists.Add(types)
+                }
+            }
+        } catch (ex NotSupportedException) { }
     }
 
     private func ConversionTypes(path RegionReceiverPath, effects RegionEffects) List[TypeSymbol]? {
@@ -1768,7 +1921,8 @@ internal partial class StatementBinder {
                     resolved.NilCompareRunsUserOperator ||
                     ReadsRunUserCode(effects) ||
                     OperatorsRunUserCode(effects, true) ||
-                    ConversionsRunUserCode(effects)
+                    ConversionsRunUserCode(effects) ||
+                    ArgumentsRunUserConversion(effects)
             }
             indirectCall = resolved.ReadsRunUserCode == true
         }

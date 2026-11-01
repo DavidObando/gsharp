@@ -299,12 +299,14 @@ internal sealed class RegionCall {
         hasUnresolvedOperand bool,
         position int32,
         receiverName string? = nil,
-        receiver RegionReceiverPath? = nil
+        receiver RegionReceiverPath? = nil,
+        arguments List[RegionReceiverPath?]? = nil
     ) {
         Kind = kind
         CalleeName = calleeName
         ReceiverName = receiverName
         Receiver = receiver
+        Arguments = arguments ?? List[RegionReceiverPath?]()
         ByReferenceNames = byReferenceNames
         ByValueNames = byValueNames
         HasUnresolvedOperand = hasUnresolvedOperand
@@ -328,6 +330,12 @@ internal sealed class RegionCall {
     /// Gets the path of the receiver of a member invocation whose receiver is not a plain name of the entry scope,
     /// or `nil` when the walker cannot follow it.
     prop Receiver RegionReceiverPath? {
+        get;
+    }
+
+    /// Gets the paths of the values passed by value, in argument order (`nil` for one the walker cannot follow), or an
+    /// empty list when an argument is named, passed by reference or expanded.
+    prop Arguments List[RegionReceiverPath?] {
         get;
     }
 
