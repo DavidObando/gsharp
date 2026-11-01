@@ -2465,6 +2465,105 @@ internal partial class DeclarationBinder {
         BindStructSharedEvents(syntax, $package, structSymbol, memberBinding)
     }
 
+    /// Issue #5520: whether a `shared` field initializer runs no code: `nil` into a reference or `T?` field type, or
+    /// a literal of a built-in field type, possibly parenthesized or under predefined unary operators (`-1`). A
+    /// literal of another field type, or `nil` into a value type, can call a user-defined conversion
+    /// (`var Seed Token = 1`, `var Seed Token = nil`), a unary operator that is not predefined for its operand
+    /// (`-"x"`) calls a user-defined or extension operator, and anything else (a call, a name, a construction) is
+    /// user code or may be, so it counts (ADR-0208 R11 and R15 read it through
+    /// `DeclaresNonLiteralSharedFieldInitializer`). The answer reads only the syntax and the declared field type.
+    private func IsLiteralInitializerSyntax(initializer ExpressionSyntax, fieldType TypeSymbol) bool {
+        let unaryOperators = List[SyntaxKind]()
+        var current = initializer
+        for var depth = 0; depth < 64; depth++ {
+            if current is LiteralExpressionSyntax literal {
+                if literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
+                    return unaryOperators.Count == 0 && (fieldType is NullableTypeSymbol || !fieldType.IsValueType)
+                }
+                return PredefinedUnaryResultType(unaryOperators, BuiltInLiteralType(literal.Value)) != nil &&
+                    IsBuiltInLiteralTarget(fieldType)
+            }
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            } else if current is UnaryExpressionSyntax unary {
+                // `-2147483648` is the `int32` literal `int32.MinValue`, as the expression binder reads it.
+                if ExpressionBinder.IsNegatedInt32MinValueLiteral(unary.OperatorToken.Kind, unary.Operand) {
+                    return PredefinedUnaryResultType(unaryOperators, TypeSymbol.Int32) != nil &&
+                        IsBuiltInLiteralTarget(fieldType)
+                }
+                unaryOperators.Add(unary.OperatorToken.Kind)
+                current = unary.Operand
+            } else {
+                return false
+            }
+        }
+        return false
+    }
+
+    /// Issue #5520: the result type of [`operators`](paramref) (outermost first) applied from the innermost outwards
+    /// to [`operandType`](paramref), or `nil` when one of them is not predefined for its operand. A `char` operand
+    /// is promoted to `int32` first, as the expression binder does.
+    private func PredefinedUnaryResultType(operators List[SyntaxKind], operandType TypeSymbol?) TypeSymbol? {
+        var current = operandType
+        for var index = operators.Count - 1; index >= 0 && current != nil; index-- {
+            var operand = current
+            if ExpressionBinder.TryGetPromotedCharUnaryType(operators[index], operand, out var promoted) &&
+                promoted != nil {
+                operand = promoted
+            }
+            current = BoundUnaryOperator.Bind(operators[index], operand)?.Type
+        }
+        return current
+    }
+
+    /// Issue #5520: the built-in type of a literal value (as `BoundLiteralExpression` infers it), or `nil` when the
+    /// value has no built-in type.
+    private func BuiltInLiteralType(value object?) TypeSymbol? -> switch value {
+        case int8: TypeSymbol.Int8
+        case uint8: TypeSymbol.UInt8
+        case int16: TypeSymbol.Int16
+        case uint16: TypeSymbol.UInt16
+        case int32: TypeSymbol.Int32
+        case uint32: TypeSymbol.UInt32
+        case int64: TypeSymbol.Int64
+        case uint64: TypeSymbol.UInt64
+        case nint: TypeSymbol.NInt
+        case nuint: TypeSymbol.NUInt
+        case float32: TypeSymbol.Float32
+        case float64: TypeSymbol.Float64
+        case decimal: TypeSymbol.Decimal
+        case bool: TypeSymbol.Bool
+        case char: TypeSymbol.Char
+        case string: TypeSymbol.String
+        default: nil
+    }
+
+    /// Issue #5520: a built-in type, or `T?` of one, that a literal initializes without a user-defined conversion.
+    private func IsBuiltInLiteralTarget(fieldType TypeSymbol) bool {
+        let target = if fieldType is NullableTypeSymbol nullable {
+            nullable.UnderlyingType
+        } else {
+            fieldType
+        }
+        return target == TypeSymbol.Bool ||
+            target == TypeSymbol.Int8 ||
+            target == TypeSymbol.UInt8 ||
+            target == TypeSymbol.Int16 ||
+            target == TypeSymbol.UInt16 ||
+            target == TypeSymbol.Int32 ||
+            target == TypeSymbol.UInt32 ||
+            target == TypeSymbol.Int64 ||
+            target == TypeSymbol.UInt64 ||
+            target == TypeSymbol.NInt ||
+            target == TypeSymbol.NUInt ||
+            target == TypeSymbol.Float32 ||
+            target == TypeSymbol.Float64 ||
+            target == TypeSymbol.Decimal ||
+            target == TypeSymbol.Char ||
+            target == TypeSymbol.String ||
+            target == TypeSymbol.Object
+    }
+
     private func BindStructSharedFields(
         syntax StructDeclarationSyntax,
         structSymbol StructSymbol,
@@ -2576,8 +2675,11 @@ internal partial class DeclarationBinder {
                 Binder.AttachDocumentation(fieldSymbol, fieldSyntax)
                 // Issue #262 / issue #1070: defer initializer binding to the
                 // consolidated pass so it can see all sibling static/const members.
-                if fieldSyntax.Initializer != nil {
-                    pendingStaticFieldInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType))
+                if fieldSyntax.Initializer is {} staticInitializer {
+                    pendingStaticFieldInitializers.Add((fieldSymbol, staticInitializer, fieldType))
+                    if !IsLiteralInitializerSyntax(staticInitializer, fieldType) {
+                        structSymbol.DeclaresNonLiteralSharedFieldInitializer = true
+                    }
                 } else if MagicCollectionZeroValue.MightNeedZeroValue(fieldType) {
                     // Issue #3310 / ADR-0159 (extended by #3319 for
                     // struct-typed fields): a candidate zero-value static
