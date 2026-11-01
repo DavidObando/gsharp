@@ -437,7 +437,8 @@ partial class CSharpToGSharpTranslator {
                 expression is IdentifierNameSyntax ||
                     expression is MemberAccessExpressionSyntax ||
                     expression is ElementAccessExpressionSyntax ||
-                    expression is InvocationExpressionSyntax
+                    expression is InvocationExpressionSyntax ||
+                    expression is AwaitExpressionSyntax
             ) {
                 return false
             }
@@ -461,6 +462,21 @@ partial class CSharpToGSharpTranslator {
             let parent SyntaxNode? = written.Parent
             // `items.Add(value)`, `items.Insert(0, value)`, `map.Add(key, value)` and an
             // index argument such as `lookup[value]`.
+            // An expanded `params` argument is an element of the parameter's array.
+            if parent is ArgumentSyntax expandedArgument {
+                let (paramsParameter, paramsPrefix) = ArgumentDestination(expandedArgument, this.context.SemanticModel)
+                if paramsParameter != nil &&
+                    paramsPrefix == "0" &&
+                    paramsParameter
+                    .OriginalDefinition
+                    .Type is IArrayTypeSymbol paramsArray &&
+                    expandedArgument
+                    .Parent
+                    ?.Parent is ExpressionSyntax paramsCall &&
+                    this.CallSlotIsNullable(paramsCall, paramsArray.ElementType) {
+                    return true
+                }
+            }
             if parent is ArgumentSyntax argument &&
                 this
                 .context
@@ -744,14 +760,7 @@ partial class CSharpToGSharpTranslator {
                 return arms
             }
             if value is AwaitExpressionSyntax awaitExpression {
-                return if IsGenericTaskLike(model.GetTypeInfo(awaitExpression.Expression).Type) {
-                    Filtered(
-                        model.GetTypeInfo(value).Type,
-                        Subtree(this.ObliviousPositionsOf(awaitExpression.Expression, model, flow), "0")
-                    )
-                } else {
-                    nil
-                }
+                return this.ObliviousAwaitedPositions(awaitExpression, model, flow)
             }
             if !(
                 value is IdentifierNameSyntax ||
@@ -811,6 +820,44 @@ partial class CSharpToGSharpTranslator {
             this.state.CurrentBodyScope = bodyScope
             modelScope.Dispose()
             return narrowed
+        }
+
+        // The positions of an awaited result: the awaitable's positions carried
+        // through its `GetAwaiter()` and the awaiter's `GetResult()`, so a task, a
+        // value task and a configured awaitable (`ConfigureAwait(false)`) read alike.
+        private func ObliviousAwaitedPositions(
+            awaitExpression AwaitExpressionSyntax,
+            model SemanticModel,
+            flow ObliviousContainerFlow
+        ) ObliviousPositionSet? {
+            let info = model.GetAwaitExpressionInfo(awaitExpression)
+            let getAwaiter IMethodSymbol? = info.GetAwaiterMethod
+            let getResult IMethodSymbol? = info.GetResultMethod
+            if getAwaiter == nil ||
+                getResult == nil ||
+                getAwaiter.IsExtensionMethod ||
+                getAwaiter.ContainingType == nil ||
+                getResult.ContainingType == nil {
+                return nil
+            }
+            let operand = this.ObliviousPositionsOf(awaitExpression.Expression, model, flow)
+            if operand == nil {
+                return nil
+            }
+            let awaitableBindings = TypeParameterMap()
+            Unify(
+                getAwaiter.ContainingType.OriginalDefinition,
+                model.GetTypeInfo(awaitExpression.Expression).Type,
+                operand,
+                awaitableBindings
+            )
+            let awaiter = ObliviousPositionSet()
+            Substitute(getAwaiter.OriginalDefinition.ReturnType, awaitableBindings, "", awaiter)
+            let awaiterBindings = TypeParameterMap()
+            Unify(getResult.ContainingType.OriginalDefinition, getAwaiter.ReturnType, awaiter, awaiterBindings)
+            let result = ObliviousPositionSet()
+            Substitute(getResult.OriginalDefinition.ReturnType, awaiterBindings, "", result)
+            return Filtered(model.GetTypeInfo(awaitExpression).Type, result)
         }
 
         // The positions that the receiver of a member read and the arguments of a

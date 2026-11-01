@@ -471,6 +471,65 @@ public static class Use
             }, []string{"Async", "11"})
     }
 
+    /// Review of #5571: an awaited generic result reads the nullable position that the
+    /// awaitable's argument gives it, so a dereference gets `!!` and a nil test does not.
+    @Fact
+    func An_Awaited_Generic_Result_Reads_A_Nullable_Element() {
+        this.Check("Review10", `using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static Task<T> AsTask<T>(T x) { return Task.FromResult(x); }
+    static async Task<int> ReadAsync(string p) { string[] lines; lines = Node.Lines(p); return (await AsTask(lines[0])).Length; }
+    static async Task<int> NilAsync(string p) { string[] lines; lines = Node.Holes(p); return (await AsTask(lines[1])) == null ? 1 : 0; }
+    static async Task<int> ThrowsAsync(string p) { string[] lines; lines = Node.Holes(p); try { return (await AsTask(lines[1])).Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int Await(string p) { return ReadAsync(p).Result; }
+    public static int AwaitNil(string p) { return NilAsync(p).Result; }
+    public static int AwaitThrows(string p) { return ThrowsAsync(p).Result; }
+}`, []string{
+                "return (await AsTask(lines[0]))!!.Length",
+                "return if (await AsTask(lines[1])) == nil { 1 } else { 0 }"
+            }, []string{"Await", "2", "AwaitNil", "1", "AwaitThrows", "-1"})
+    }
+
+    /// Review of #5571: a configured awaitable (`ConfigureAwait(false)`) and a value task
+    /// carry the result's nullable element through `GetAwaiter().GetResult()`.
+    @Fact
+    func A_Configured_Await_Keeps_The_Result_Element() {
+        this.Check("Review11", `using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static async Task<string[]> LoadAsync(string p) { await Task.Yield(); return Node.Holes(p); }
+    static async ValueTask<string[]> LoadValueAsync(string p) { await Task.Yield(); return Node.Holes(p); }
+    static async Task<int> CopyAsync(string p) { var copy = await LoadAsync(p).ConfigureAwait(false); return copy[0].Length + (copy[1] == null ? 10 : 0); }
+    static async Task<int> ValueAsync(string p) { var copy = await LoadValueAsync(p).ConfigureAwait(false); return copy[0].Length; }
+    public static int Configured(string p) { return CopyAsync(p).Result; }
+    public static int Value(string p) { return ValueAsync(p).Result; }
+}`, []string{
+                "return copy[0]!!.Length + (if copy[1] == nil { 10 } else { 0 })"
+            }, []string{"Configured", "12", "Value", "2"})
+    }
+
+    /// Review of #5571: an expanded `params T[]` argument for a type argument that the
+    /// call binds to `T?` passes a nil element through.
+    @Fact
+    func An_Expanded_Generic_Params_Argument_Passes_A_Nil_Element() {
+        this.Check("Review12", `using ObLib;
+
+public static class Use
+{
+    static T[] Pack<T>(params T[] xs) { return xs; }
+    public static int Stated(string p) { string[] lines; lines = Node.Holes(p); return Pack<string>(lines[1])[0] == null ? 1 : 0; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Holes(p); return Pack(lines[1])[0] == null ? 1 : 0; }
+}`, []string{
+                "return if Pack[string?](lines[1])[0] == nil { 1 } else { 0 }",
+                "return if Pack(lines[1])[0] == nil { 1 } else { 0 }"
+            }, []string{"Stated", "1", "Inferred", "1"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
