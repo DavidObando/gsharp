@@ -2440,9 +2440,9 @@ partial class CSharpToGSharpTranslator {
             if this.state.EmittedLocalGSharpNullability.TryGetValue(local, out var recorded) {
                 return recorded
             }
-            // Issue #5582: a `var` capture has the G# type of its input.
+            // Issue #5582: a `var` capture has the G# type of its input. The record keeps a chain linear.
             if this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
-                return !narrowedByTypeTest &&
+                let captureIsNullable = !narrowedByTypeTest &&
                     (
                     if input != nil {
                         this.IsGSharpNullableAnalyzerExpression(input)
@@ -2450,6 +2450,8 @@ partial class CSharpToGSharpTranslator {
                         this.IsGSharpNullableAnalyzerApiMember(member)
                     }
                 )
+                this.state.EmittedLocalGSharpNullability[local] = captureIsNullable
+                return captureIsNullable
             }
             return RoslynAnalyzerApiMap.IsGSharpNullableCapableType(
                 RoslynTypeMetadataName(local.Type as INamedTypeSymbol)
@@ -3786,6 +3788,10 @@ partial class CSharpToGSharpTranslator {
         /// @returns `false` when cs2gs cannot name the input. The caller then uses its other rules.
         private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
             isNonNull = false
+            if this.state.VarCaptureInputNonNull.TryGetValue(local, out var decided) {
+                isNonNull = decided
+                return true
+            }
             if !this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
                 return false
             }
@@ -3800,6 +3806,7 @@ partial class CSharpToGSharpTranslator {
                     (member as IFieldSymbol)?.Type ?? (member as IPropertySymbol)?.Type
                 )
             }
+            this.state.VarCaptureInputNonNull[local] = isNonNull
             return true
         }
 

@@ -70,6 +70,7 @@ internal class DocumentTranslationState {
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         LiftedStaticLocalFunctions = Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
@@ -420,6 +421,13 @@ internal class DocumentTranslationState {
     // Issue #4445: semantic/CFG default provenance is invariant per local and
     // can be queried repeatedly while lowering one declaration.
     prop InferredLocalDefaultTypedDeclarations Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: whether the input of a `var` pattern capture is non-null in G#. The answer is invariant
+    // per capture and each read asks it. A capture whose input is another capture asks again, so the cache
+    // keeps a chain of captures linear.
+    prop VarCaptureInputNonNull Dictionary[ILocalSymbol, bool] {
         get;
     }
 
