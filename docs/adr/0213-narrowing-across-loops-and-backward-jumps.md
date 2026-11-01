@@ -1285,19 +1285,26 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is
   a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared type, on the type its
   entry fact narrows it to, and on each type that a type test of the region (`is`, a `switch` case or arm) applies to
-  that name, because the binder looks up the member on the tested type where the test holds (`if o is Holder {
-  o.Count() }`). Each type counts with its base types, base interfaces (source and imported), constraints and `object`
-  members. A tested type is resolved by its name and arity; a name-shaped pattern whose name is a constant (`case
-  Kind.A`) tests no type, and a tested type without a name (an array, tuple or function type) or that the entry scope
-  does not resolve can have any member. The call invokes a function value, which is indirect, when it calls `Invoke`,
-  `BeginInvoke` or `DynamicInvoke` on a receiver of function or delegate type (`callback.Invoke()`), or when one of
-  the types has a field, a property or an event of that name (a function-typed member of a class, an interface or a
-  tuple element). Another method of a delegate (`callback.GetHashCode()`) is a method. The call is a plain call (A3)
-  when the types have only methods of that name, or none and an extension method of that name is visible
-  (`values.Count()`); otherwise it is indirect. The member of any other receiver (an element, a member chain, a call
-  result) is taken for a method, as in slice L0 and the A3 rows (`frames[i].TryGetValue(path, out found)`), unless it
-  is `Invoke`, `BeginInvoke` or `DynamicInvoke` (`holder.Cb.Invoke()`). A function-typed field called through a chain
-  (`a.b.Cb()`) stays a plain call.
+  that name itself (not a property or list subpattern, which tests a member), because the binder looks up the member
+  on the tested type where the test holds (`if o is Holder { o.Count() }`). Each type counts with its base types, base
+  interfaces (source and imported), constraints and `object` members. A tested type is resolved by its name and arity
+  (a source or an imported type); a name-shaped pattern whose name is a constant (`case Kind.A`) tests no type, and a
+  tested type without a name (an array, tuple or function type) or that the entry scope does not resolve can have any
+  member. The call invokes a function value, which is indirect, when it calls `Invoke`, `BeginInvoke` or
+  `DynamicInvoke` on a receiver of function or delegate type (`callback.Invoke()`), or when one of the types has a
+  field, a property or an event of that name (a function-typed member of a class, an interface or a tuple element).
+  Another method of a delegate (`callback.GetHashCode()`) is a method. The call is a plain call (A3) when the types
+  have only methods of that name, or none and an extension method of that name is visible (`values.Count()`);
+  otherwise it is indirect. Any other receiver is followed as a path from a root that the entry scope resolves: a
+  member chain (`holder.Inner.Cb()`), an element (`frames[i].TryGetValue(path, out found)`), a call result
+  (`Make().Cb()`, `s.Trim().Length`), and a local of the region, which stands for its declared type, its initializer
+  (`let local = holder`) or the element of the collection that a `for ... in` iterates. Each step takes the type of
+  the field, property, event, method result, indexer or element that it names; a type parameter of an imported generic
+  type is its type argument. The call is decided on the types at the end of the path as above. A path that does not
+  resolve (a type parameter that a member returns, an unknown root, a local without such an origin or one that the
+  region type-tests), and a path with steps in a region that type-tests a member or an element, can reach a function
+  value, so the call is indirect; `Invoke`, `BeginInvoke` and `DynamicInvoke` (`holder.Cb.Invoke()`) are always
+  indirect.
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.

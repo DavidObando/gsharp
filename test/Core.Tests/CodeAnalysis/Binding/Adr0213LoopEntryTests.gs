@@ -1435,6 +1435,340 @@ func Run() int32 {
     return n
 }
 func Main() { }`, "")
+            Add("region-local-alias-function-field-call-is-indirect (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let local = holder
+        local.Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("member-chain-function-field-call-is-indirect (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Inner!!.Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("call-result-function-field-call-is-indirect (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Make().Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("list-element-function-field-call-is-indirect (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        list[0].Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("type-tested-local-call-is-indirect (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let local object = holder
+        if local is Holder { local.Cb() }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("member-chain-method-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Items[0].Do()
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("slice-element-method-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        arr[0].Do()
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("local-from-a-call-method-call-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let h = Make()
+        h.Do()
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("call-inside-a-chain-is-a-member-call (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let s = "abc"
+        n = n + s.Trim().Length * 0
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("property-subpattern-type-tests-a-member-not-the-subject (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if p is { Child: Child } { p.Do() }
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("source-generic-tested-type-keeps-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is Box[int32] { o.Do() }
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

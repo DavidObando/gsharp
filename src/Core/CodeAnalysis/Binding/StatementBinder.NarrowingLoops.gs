@@ -307,9 +307,8 @@ internal partial class StatementBinder {
     // invokes a receiver of function or delegate type, or when either type has a field, a property or an event of
     // the member's name (a function value of a class, an interface or a tuple element). It is a method call when
     // the types have only methods of that name, or none and an extension method of that name is visible. Otherwise
-    // the region narrows the receiver to a type that the entry scope does not show, and the call is indirect. The
-    // member of any other receiver (an element, a member chain, a call result) is taken for a method, as in slice
-    // L0, unless it invokes a delegate.
+    // the region narrows the receiver to a type that the entry scope does not show, and the call is indirect. Any
+    // other receiver is followed as a path (`ReceiverPathCallIsIndirect`).
     private func MemberCallIsIndirect(call RegionCall, effects RegionEffects) bool {
         let member = call.CalleeName
         let receiverName = call.ReceiverName
@@ -317,7 +316,7 @@ internal partial class StatementBinder {
             return true
         }
         if receiverName == nil {
-            return InvokesDelegate(member)
+            return InvokesDelegate(member) || ReceiverPathCallIsIndirect(call.Receiver, member, effects)
         }
         let symbol = $scope.TryLookupSymbol(receiverName)
         var shape = 0
@@ -354,21 +353,35 @@ internal partial class StatementBinder {
     // any member. A name-shaped pattern whose name is not a type tests a constant (`case Kind.Name`), which
     // narrows nothing.
     private func TestedMemberShape(test RegionTypeTest, member string) int32 {
-        let typeName = test.TypeName
-        if typeName == nil {
-            return MemberIsValue
-        }
-        if ResolveTestedType(typeName, test.Arity) is {} type {
+        if TestedType(test, out var testsConstant) is {} type {
             return MemberShape(type, member)
         }
+        return if testsConstant {
+            0
+        } else {
+            MemberIsValue
+        }
+    }
+
+    // The type of a type test, or `nil` with [`testsConstant`](paramref) set when the pattern names a constant.
+    private func TestedType(test RegionTypeTest, out testsConstant bool) TypeSymbol? {
+        testsConstant = false
+        let typeName = test.TypeName
+        if typeName == nil {
+            return nil
+        }
+        if ResolveTestedType(typeName, test.Arity) is {} type {
+            return type
+        }
         if test.MayBeConstant && $scope.TryLookupSymbol(typeName) != nil {
-            return 0
+            testsConstant = true
+            return nil
         }
         let dot = typeName.LastIndexOf('.')
         if test.MayBeConstant && dot > 0 && ResolveTypeName(typeName.Substring(0, dot)) != nil {
-            return 0
+            testsConstant = true
         }
-        return MemberIsValue
+        return nil
     }
 
     // The type that a type test names: a type of the scope, an imported class of that arity or a full CLR name.
@@ -380,6 +393,8 @@ internal partial class StatementBinder {
             if ResolveTypeName(name) is {} named {
                 return named
             }
+        } else if $scope.TryLookupTypeAlias(name, arity, out var source) && source != nil {
+            return source
         } else if $scope.TryLookupImportedClassByArity(name, arity, nil, out var imported) && imported != nil {
             return TypeSymbol.FromClrTypeWithoutNullability(imported.ClassType, NullabilityFreeReason.ResolvedTypeName)
         }
@@ -403,6 +418,421 @@ internal partial class StatementBinder {
             return ResolveConstructedType(name)
         }
         return nil
+    }
+
+    // A resolved receiver type: a type symbol, or a closed CLR type that a member of an imported type returns.
+    private sealed class ReceiverType {
+        init(symbol TypeSymbol?, clr Type?) {
+            Symbol = symbol
+            Clr = clr
+        }
+
+        prop Symbol TypeSymbol? {
+            get;
+        }
+
+        prop Clr Type? {
+            get;
+        }
+    }
+
+    // A member call on a receiver that is not a plain name of the entry scope (a member chain, an element, a call
+    // result, a local of the region) is a plain call only when the walker follows the receiver's path to types
+    // whose members of that name are methods. A path that the entry scope cannot resolve, or one whose member
+    // the region type-tests, is a function value of unknown origin.
+    private func ReceiverPathCallIsIndirect(path RegionReceiverPath?, member string, effects RegionEffects) bool {
+        if path == nil || path.Steps.Length > 0 && effects.ContainsMemberTypeTest {
+            return true
+        }
+        let types = ResolveReceiverPath(path, effects)
+        if types == nil {
+            return true
+        }
+        var shape = 0
+        for type in types {
+            shape = shape | ReceiverShape(type, member)
+        }
+        if (shape & MemberIsValue) != 0 {
+            return true
+        }
+        if (shape & MemberIsMethod) != 0 {
+            return false
+        }
+        for type in types {
+            if HasExtensionFunction(type.Symbol, member) {
+                return false
+            }
+        }
+        return MemberLookup(binderCtx).CollectImportedExtensionMethods(member).Count == 0
+    }
+
+    private func ReceiverShape(type ReceiverType, member string) int32 {
+        if type.Clr is {} clr {
+            return ClrTypeShape(clr, member)
+        }
+        return MemberShape(type.Symbol, member)
+    }
+
+    // The types that the receiver can have at the call site, or `nil` when a part does not resolve.
+    private func ResolveReceiverPath(path RegionReceiverPath, effects RegionEffects) List[ReceiverType]? {
+        var types = List[ReceiverType]()
+        if path.RootType != nil {
+            if ResolveTypeClause(path.RootType) is not{} declared {
+                return nil
+            }
+            types.Add(ReceiverType(declared, nil))
+        } else if path.RootLiteralType != nil {
+            if Type.GetType(path.RootLiteralType) is not{} literal {
+                return nil
+            }
+            types.Add(ReceiverType(nil, literal))
+        } else if path.RootName is {} root {
+            if !AddRootTypes(root, path.RootIsCall, effects, types) {
+                return nil
+            }
+        } else {
+            return nil
+        }
+        for step in path.Steps {
+            let next = List[ReceiverType]()
+            for type in types {
+                if !AddStepTypes(type, step, next) {
+                    return nil
+                }
+            }
+            if next.Count == 0 {
+                return nil
+            }
+            types = next
+        }
+        return types
+    }
+
+    // The types of a root: a variable of the entry scope (declared, narrowed and type-tested in the region), a type,
+    // or the result of a named call (a construction or the functions of that name).
+    private func AddRootTypes(root string, isCall bool, effects RegionEffects, types List[ReceiverType]) bool {
+        if isCall {
+            if ResolveTypeName(root) is {} constructed {
+                types.Add(ReceiverType(constructed, nil))
+                return true
+            }
+            let functions = $scope.TryLookupFunctions(root)
+            if functions.IsDefaultOrEmpty {
+                return false
+            }
+            for function in functions {
+                if !AddSymbolType(function.Type, types) {
+                    return false
+                }
+            }
+            return true
+        }
+        let symbol = $scope.TryLookupSymbol(root)
+        if symbol is VariableSymbol variable {
+            if !AddSymbolType(variable.Type, types) {
+                return false
+            }
+            let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
+            if narrowed != nil && !AddSymbolType(narrowed, types) {
+                return false
+            }
+            for test in effects.TypeTests {
+                if test.Name == root {
+                    let tested = TestedType(test, out var testsConstant)
+                    if tested != nil {
+                        types.Add(ReceiverType(tested, nil))
+                    } else if !testsConstant {
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+        if ResolveTypeName(root) is {} named {
+            types.Add(ReceiverType(named, nil))
+            return true
+        }
+        return false
+    }
+
+    // Adds a type symbol without its nullability. A type parameter that a member returns is substituted by the
+    // binder, which the walker does not do, so it does not resolve.
+    private func AddSymbolType(type TypeSymbol?, types List[ReceiverType]) bool {
+        let stripped = StripAllNullability(type)
+        if stripped == nil || stripped is TypeParameterSymbol {
+            return false
+        }
+        types.Add(ReceiverType(stripped, nil))
+        return true
+    }
+
+    private func ResolveTypeClause(type TypeClauseSyntax) TypeSymbol? {
+        if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
+            return nil
+        }
+        let arity = if type.TypeArguments is {} arguments {
+            arguments.Count
+        } else {
+            0
+        }
+        return ResolveTestedType(type.DottedName, arity)
+    }
+
+    // Adds the types of one step from a receiver type, or returns `false` when the step does not resolve.
+    private func AddStepTypes(type ReceiverType, step RegionReceiverStep, next List[ReceiverType]) bool {
+        if type.Clr is {} clr {
+            return AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
+        }
+        let symbol = type.Symbol
+        switch symbol {
+            case nil {
+                return false
+            }
+            case array is ArrayTypeSymbol {
+                if step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element {
+                    return AddSymbolType(array.ElementType, next)
+                }
+            }
+            case slice is SliceTypeSymbol {
+                if step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element {
+                    return AddSymbolType(slice.ElementType, next)
+                }
+            }
+            case rectangular is RectangularArrayTypeSymbol {
+                if step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element {
+                    return AddSymbolType(rectangular.ElementType, next)
+                }
+            }
+            case tuple is TupleTypeSymbol {
+                if step.Kind == RegionReceiverStepKind.Member && step.Name != nil && tuple.TryGetElementIndexByName(
+                    step.Name,
+                    out var element
+                ) {
+                    return AddSymbolType(tuple.ElementTypes[element], next)
+                }
+            }
+            case declared is StructSymbol {
+                if step.Kind == RegionReceiverStepKind.Element {
+                    return false
+                }
+                var found = false
+                let hierarchy = declared.GetHierarchy()
+                for level in hierarchy {
+                    for candidate in level.GetMembers() {
+                        if StepSelects(candidate, step) {
+                            found = true
+                            if !AddSymbolType(MemberType(candidate), next) {
+                                return false
+                            }
+                        }
+                    }
+                }
+                if found {
+                    return true
+                }
+                if hierarchy.Last().ImportedBaseType is {} importedBase {
+                    return AddStepTypes(ReceiverType(importedBase, nil), step, next)
+                }
+                return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+            }
+            case contract is InterfaceSymbol {
+                if step.Kind == RegionReceiverStepKind.Element {
+                    return false
+                }
+                var found = false
+                for level in contract.SelfAndAllBaseInterfaces() {
+                    level.EnsureMembersResolved()
+                    for candidate in InterfaceMembers(level) {
+                        if StepSelects(candidate, step) {
+                            found = true
+                            if !AddSymbolType(MemberType(candidate), next) {
+                                return false
+                            }
+                        }
+                    }
+                    for clrBase in level.BaseClrInterfaces {
+                        let before = next.Count
+                        if !AddStepTypes(ReceiverType(clrBase, nil), step, next) {
+                            return false
+                        }
+                        found = found || next.Count > before
+                    }
+                }
+                if found {
+                    return true
+                }
+                return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+            }
+            case imported is ImportedTypeSymbol {
+                if imported.OpenDefinition is {} definition && !imported.TypeArguments.IsDefaultOrEmpty {
+                    return AddClrStepTypes(definition, step, imported.TypeArguments, definition, next)
+                }
+            }
+            default { }
+        }
+        if symbol?.ClrType is not{} clrType {
+            return false
+        }
+        return AddClrStepTypes(clrType, step, ImmutableArray[TypeSymbol].Empty, nil, next)
+    }
+
+    private func InterfaceMembers(contract InterfaceSymbol) List[Symbol] {
+        let members = List[Symbol]()
+        members.AddRange(contract.Properties)
+        members.AddRange(contract.Events)
+        members.AddRange(contract.Methods)
+        members.AddRange(contract.StaticMethods)
+        members.AddRange(contract.StaticFields)
+        members.AddRange(contract.ConstFields)
+        return members
+    }
+
+    private func StepSelects(candidate Symbol, step RegionReceiverStep) bool {
+        switch step.Kind {
+            case RegionReceiverStepKind.Member {
+                return candidate.Name == step.Name &&
+                    (
+                    candidate is FieldSymbol ||
+                        candidate is PropertySymbol{IsIndexer: false} ||
+                        candidate is EventSymbol
+                )
+            }
+            case RegionReceiverStepKind.Call {
+                return candidate.Name == step.Name && candidate is FunctionSymbol
+            }
+            case RegionReceiverStepKind.Index {
+                return candidate is PropertySymbol{IsIndexer: true}
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func MemberType(candidate Symbol) TypeSymbol? {
+        switch candidate {
+            case field is FieldSymbol {
+                return field.Type
+            }
+            case property is PropertySymbol {
+                return property.Type
+            }
+            case function is FunctionSymbol {
+                return function.Type
+            }
+            case declaredEvent is EventSymbol {
+                return declaredEvent.Type
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
+    // The CLR form of a step. [`definition`](paramref) is the open definition of an imported generic type whose
+    // type arguments are [`arguments`](paramref); a member type that is one of its type parameters is the argument.
+    private func AddClrStepTypes(
+        type Type,
+        step RegionReceiverStep,
+        arguments ImmutableArray[TypeSymbol],
+        definition Type?,
+        next List[ReceiverType]
+    ) bool {
+        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
+        BindingFlags.FlattenHierarchy
+        let searched = List[Type]()
+        searched.Add(type)
+        if type.IsInterface {
+            searched.AddRange(type.GetInterfaces())
+            searched.Add(typeof(object))
+        }
+        switch step.Kind {
+            case RegionReceiverStepKind.Element {
+                if type.IsArray && type.GetElementType() is {} arrayElement {
+                    return AddClrType(arrayElement, arguments, definition, next)
+                }
+                for contract in searched {
+                    if contract.IsGenericType && contract.GetGenericTypeDefinition()
+                        .FullName == "System.Collections.Generic.IEnumerable`1" {
+                        return AddClrType(contract.GetGenericArguments()[0], arguments, definition, next)
+                    }
+                }
+                for contract in type.GetInterfaces() {
+                    if contract.IsGenericType && contract.GetGenericTypeDefinition()
+                        .FullName == "System.Collections.Generic.IEnumerable`1" {
+                        return AddClrType(contract.GetGenericArguments()[0], arguments, definition, next)
+                    }
+                }
+                return false
+            }
+            case RegionReceiverStepKind.Index {
+                if type.IsArray && type.GetElementType() is {} arrayElement {
+                    return AddClrType(arrayElement, arguments, definition, next)
+                }
+                var found = false
+                for searchedType in searched {
+                    for property in searchedType.GetProperties(flags) {
+                        if property.GetIndexParameters().Length > 0 {
+                            found = true
+                            if !AddClrType(property.PropertyType, arguments, definition, next) {
+                                return false
+                            }
+                        }
+                    }
+                }
+                return found
+            }
+            default {
+                var found = false
+                for searchedType in searched {
+                    for clrMember in searchedType.GetMember(step.Name ?? "", flags) {
+                        var memberType Type? = nil
+                        if step.Kind == RegionReceiverStepKind.Member {
+                            if clrMember is FieldInfo field {
+                                memberType = field.FieldType
+                            } else if clrMember is PropertyInfo property && property.GetIndexParameters().Length == 0 {
+                                memberType = property.PropertyType
+                            }
+                        } else if clrMember is MethodInfo method {
+                            memberType = method.ReturnType
+                        }
+                        if memberType != nil {
+                            found = true
+                            if !AddClrType(memberType, arguments, definition, next) {
+                                return false
+                            }
+                        }
+                    }
+                }
+                return found
+            }
+        }
+    }
+
+    // Adds a CLR member type: a type parameter of the definition is its type argument; another open type does not
+    // resolve.
+    private func AddClrType(
+        type Type,
+        arguments ImmutableArray[TypeSymbol],
+        definition Type?,
+        next List[ReceiverType]
+    ) bool {
+        if type.IsGenericParameter {
+            if definition == nil ||
+                type.DeclaringMethod != nil ||
+                type
+                .DeclaringType
+                ?.FullName != definition.FullName ||
+                type.GenericParameterPosition >= arguments.Length {
+                return false
+            }
+            return AddSymbolType(arguments[type.GenericParameterPosition], next)
+        }
+        if type.ContainsGenericParameters || type.FullName == "System.Void" {
+            return false
+        }
+        next.Add(ReceiverType(nil, type))
+        return true
     }
 
     private func HasExtensionFunction(receiverType TypeSymbol?, member string) bool {
@@ -500,19 +930,23 @@ internal partial class StatementBinder {
                 if type?.ClrType is not{} clrType {
                     return 0
                 }
-                if ClrTypeUtilities.IsDelegateType(clrType) && InvokesDelegate(member) {
-                    return MemberIsValue
-                }
-                var shape = ClrMemberShape(clrType, member)
-                if clrType.IsInterface {
-                    shape = shape | ClrMemberShape(typeof(object), member)
-                    for contract in clrType.GetInterfaces() {
-                        shape = shape | ClrMemberShape(contract, member)
-                    }
-                }
-                return shape
+                return ClrTypeShape(clrType, member)
             }
         }
+    }
+
+    private func ClrTypeShape(clrType Type, member string) int32 {
+        if ClrTypeUtilities.IsDelegateType(clrType) && InvokesDelegate(member) {
+            return MemberIsValue
+        }
+        var shape = ClrMemberShape(clrType, member)
+        if clrType.IsInterface {
+            shape = shape | ClrMemberShape(typeof(object), member)
+            for contract in clrType.GetInterfaces() {
+                shape = shape | ClrMemberShape(contract, member)
+            }
+        }
+        return shape
     }
 
     private func ClrMemberShape(type Type, member string) int32 {

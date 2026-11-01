@@ -4,8 +4,10 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 
 /// The value that a write stores, for proof rule P7 (ADR-0213 section 8). The
 /// scanner records the syntax shape. The consumer decides with the binder's
@@ -133,6 +135,92 @@ internal sealed class RegionTypeTest {
     }
 }
 
+/// A step of a receiver path: a member read, a method call or an indexing (`Element` is the element of an
+/// iteration).
+internal enum RegionReceiverStepKind {
+    Member,
+    Call,
+    Index,
+    Element,
+}
+
+/// One step of a receiver path.
+internal sealed class RegionReceiverStep {
+    init(kind RegionReceiverStepKind, name string?) {
+        Kind = kind
+        Name = name
+    }
+
+    prop Kind RegionReceiverStepKind {
+        get;
+    }
+
+    /// Gets the member name of a `Member` or `Call` step, or `nil`.
+    prop Name string? {
+        get;
+    }
+}
+
+/// The receiver of a member call that is not a plain name of the entry scope (ADR-0213, function values): a root
+/// that the entry scope resolves, and the member reads, calls and indexings that follow it. A local of the region
+/// is replaced by the path of its declared type or of its initializer.
+internal sealed class RegionReceiverPath {
+    init(
+        rootName string?,
+        rootIsCall bool,
+        rootType TypeClauseSyntax?,
+        rootLiteralType string?,
+        steps ImmutableArray[RegionReceiverStep]
+    ) {
+        RootName = rootName
+        RootIsCall = rootIsCall
+        RootType = rootType
+        RootLiteralType = rootLiteralType
+        Steps = steps
+    }
+
+    /// Gets the root name: a name of the entry scope, or the callee of a call when (cref:RootIsCall) is set.
+    prop RootName string? {
+        get;
+    }
+
+    prop RootIsCall bool {
+        get;
+    }
+
+    /// Gets the declared type of a local of the region that roots the path.
+    prop RootType TypeClauseSyntax? {
+        get;
+    }
+
+    /// Gets the CLR type name of a literal that roots the path.
+    prop RootLiteralType string? {
+        get;
+    }
+
+    prop Steps ImmutableArray[RegionReceiverStep] {
+        get;
+    }
+
+    /// Returns the path with one more step.
+    func Append(kind RegionReceiverStepKind, name string?) RegionReceiverPath -> RegionReceiverPath(
+        RootName,
+        RootIsCall,
+        RootType,
+        RootLiteralType,
+        Steps.Add(RegionReceiverStep(kind, name))
+    )
+
+    /// Returns the path with the steps of [`tail`](paramref) after its own.
+    func Concat(tail RegionReceiverPath) RegionReceiverPath -> RegionReceiverPath(
+        RootName,
+        RootIsCall,
+        RootType,
+        RootLiteralType,
+        Steps.AddRange(tail.Steps)
+    )
+}
+
 /// One call site found by the scanner.
 internal sealed class RegionCall {
     init(
@@ -142,11 +230,13 @@ internal sealed class RegionCall {
         byValueNames List[string],
         hasUnresolvedOperand bool,
         position int32,
-        receiverName string? = nil
+        receiverName string? = nil,
+        receiver RegionReceiverPath? = nil
     ) {
         Kind = kind
         CalleeName = calleeName
         ReceiverName = receiverName
+        Receiver = receiver
         ByReferenceNames = byReferenceNames
         ByValueNames = byValueNames
         HasUnresolvedOperand = hasUnresolvedOperand
@@ -164,6 +254,12 @@ internal sealed class RegionCall {
 
     /// Gets the plain name of the receiver of a member invocation when the region does not declare it, or `nil`.
     prop ReceiverName string? {
+        get;
+    }
+
+    /// Gets the path of the receiver of a member invocation whose receiver is not a plain name of the entry scope,
+    /// or `nil` when the walker cannot follow it.
+    prop Receiver RegionReceiverPath? {
         get;
     }
 
@@ -214,6 +310,12 @@ internal sealed class RegionEffects {
     /// Gets the call sites with an operand analysis, in source order of the walk.
     prop Calls List[RegionCall] {
         get;
+    }
+
+    /// Whether the region has a type test of something other than a plain name (a member or an element).
+    prop ContainsMemberTypeTest bool {
+        get;
+        set;
     }
 
     /// Gets the type tests of names that the region does not declare, in source order of the walk.
@@ -374,6 +476,7 @@ internal sealed class RegionEffects {
             return
         }
         Calls.AddRange(other.Calls)
+        ContainsMemberTypeTest = ContainsMemberTypeTest || other.ContainsMemberTypeTest
         TypeTests.AddRange(other.TypeTests)
         ContainsCall = ContainsCall || other.ContainsCall
         ContainsMemberWrite = ContainsMemberWrite || other.ContainsMemberWrite

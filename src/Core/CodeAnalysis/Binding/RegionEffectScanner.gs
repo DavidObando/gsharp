@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 
 /// The region walker of ADR-0213 section 7 (rules W1 to W7). It maps each
@@ -30,6 +31,7 @@ internal sealed class RegionEffectScanner {
     private var patternNames HashSet[string] = HashSet[string]()
     private var pendingReceiver ExpressionSyntax? = nil
     private var pendingReceiverIsRoot bool = false
+    private var pendingReceiverPath RegionReceiverPath? = nil
 
     /// The names that one declaration scope holds, and the `ref` locals of the scope with the name
     /// of the variable each one aliases (`nil` when the storage is not a plain variable).
@@ -39,6 +41,13 @@ internal sealed class RegionEffectScanner {
             Kinds = Dictionary[string, string]()
             Aliases = Dictionary[string, string?]()
             LocalAliases = HashSet[string]()
+            Origins = Dictionary[string, RegionReceiverPath?]()
+        }
+
+        /// Gets the receiver path of each local of the scope whose type the entry scope can resolve: its declared
+        /// type, its initializer or the collection it iterates. A local without an entry has no path.
+        prop Origins Dictionary[string, RegionReceiverPath?] {
+            get;
         }
 
         /// Gets the `ref` locals of the scope whose storage is a variable that the region declares.
@@ -258,8 +267,10 @@ internal sealed class RegionEffectScanner {
         // The receiver of a member call is valid for the node that follows the dot only.
         let receiver = pendingReceiver
         let receiverIsRoot = pendingReceiverIsRoot
+        let receiverPath = pendingReceiverPath
         pendingReceiver = nil
         pendingReceiverIsRoot = false
+        pendingReceiverPath = nil
         NodesVisited++
         let kind = node.Kind
         let effectClass = RegionEffectKindTable.Classify(kind)
@@ -596,10 +607,10 @@ internal sealed class RegionEffectScanner {
                 VisitChildren(node)
             }
             case SyntaxKind.CallExpression {
-                VisitCall(cast[CallExpressionSyntax](node), receiver, receiverIsRoot)
+                VisitCall(cast[CallExpressionSyntax](node), receiver, receiverIsRoot, receiverPath)
             }
             case SyntaxKind.AccessorExpression {
-                VisitAccessor(cast[AccessorExpressionSyntax](node), receiver != nil)
+                VisitAccessor(cast[AccessorExpressionSyntax](node), receiver, receiverIsRoot, receiverPath)
             }
             case SyntaxKind.IndexExpression, SyntaxKind.FieldAccessExpression {
                 RecordMemberRead()
@@ -838,6 +849,13 @@ internal sealed class RegionEffectScanner {
 
     private func VisitVariableDeclaration(declaration VariableDeclarationSyntax) {
         Visit(declaration.Initializer)
+        let origin = if declaration.TypeClause != nil {
+            TypeOrigin(declaration.TypeClause)
+        } else if declaration.Initializer is RefArgumentExpressionSyntax {
+            default(RegionReceiverPath?)
+        } else {
+            BuildPath(declaration.Initializer)
+        }
         if Active() && declaration.Initializer != nil {
             current.ContainsConversionCandidate = true
         }
@@ -865,6 +883,7 @@ internal sealed class RegionEffectScanner {
             }
         }
         Declare(declaration.Identifier)
+        SetOrigin(name, origin)
         if declaration.HasRefKindModifier && scopes.Count > 0 {
             if Active() {
                 current.ContainsAliasTake = true
@@ -949,14 +968,17 @@ internal sealed class RegionEffectScanner {
         let callsBefore = current.Calls.Count
         let testsBefore = current.TypeTests.Count
         current.AbsorbFlags(record, Active())
-        // A nested type test of a name that the enclosing region declares tests no entry-scope receiver.
+        // A nested type test of a name that the enclosing region declares tests no entry-scope receiver; the local
+        // has a type that its origin does not show.
         for var i = current.TypeTests.Count - 1; i >= testsBefore; i-- {
-            if IsDeclared(current.TypeTests[i].Name) {
+            let name = current.TypeTests[i].Name
+            if IsDeclared(name) {
+                SetOrigin(name, nil)
                 current.TypeTests.RemoveAt(i)
             }
         }
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
-        // call whose receiver the enclosing region declares has a receiver that the entry scope cannot resolve.
+        // call whose receiver the enclosing region declares has the receiver's origin as its path.
         for var i = callsBefore; i < current.Calls.Count; i++ {
             let call = current.Calls[i]
             if call.Kind == RegionCallKind.MemberInvocation &&
@@ -968,7 +990,20 @@ internal sealed class RegionEffectScanner {
                     call.ByReferenceNames,
                     call.ByValueNames,
                     call.HasUnresolvedOperand,
-                    call.Position
+                    call.Position,
+                    nil,
+                    OriginOf(call.ReceiverName)
+                )
+            } else if call.Kind == RegionCallKind.MemberInvocation && call.Receiver != nil {
+                current.Calls[i] = RegionCall(
+                    RegionCallKind.MemberInvocation,
+                    call.CalleeName,
+                    call.ByReferenceNames,
+                    call.ByValueNames,
+                    call.HasUnresolvedOperand,
+                    call.Position,
+                    nil,
+                    Rebase(call.Receiver)
                 )
             } else if call.Kind == RegionCallKind.NamedInvocation &&
                 call.CalleeName != nil &&
@@ -1123,6 +1158,7 @@ internal sealed class RegionEffectScanner {
                 }
                 Push()
                 Declare(loop.Identifier)
+                SetOrigin(loop.Identifier.ValueText, BuildPath(loop.LowerBound))
                 Visit(loop.Body)
                 Pop()
             }
@@ -1134,9 +1170,17 @@ internal sealed class RegionEffectScanner {
                 if !topLevel {
                     Visit(loop.Collection)
                 }
+                let element = if loop.TypeClause != nil {
+                    TypeOrigin(loop.TypeClause)
+                } else {
+                    BuildPath(loop.Collection)?.Append(RegionReceiverStepKind.Element, nil)
+                }
                 Push()
                 Declare(loop.FirstIdentifier)
                 Declare(loop.SecondIdentifier)
+                if loop.SecondIdentifier == nil {
+                    SetOrigin(loop.FirstIdentifier.ValueText, element)
+                }
                 Visit(loop.Body)
                 Pop()
             }
@@ -1599,20 +1643,44 @@ internal sealed class RegionEffectScanner {
         }
     }
 
-    private func VisitAccessor(accessor AccessorExpressionSyntax, isRightPartOfAccessor bool) {
-        // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5).
+    // [`receiver`](paramref) is the part before the dot that this accessor follows, or `nil` at the start of a chain.
+    private func VisitAccessor(
+        accessor AccessorExpressionSyntax,
+        receiver ExpressionSyntax?,
+        receiverIsRoot bool,
+        prefix RegionReceiverPath?
+    ) {
+        let isRightPartOfAccessor = receiver != nil
+        // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
+        // `a.M().b` the call `M()` is the left part of the accessor that follows `a.`, and `a` is its receiver.
+        if isRightPartOfAccessor && accessor.LeftPart.Kind == SyntaxKind.CallExpression {
+            pendingReceiver = receiver
+            pendingReceiverIsRoot = receiverIsRoot
+            pendingReceiverPath = prefix
+        }
         Visit(accessor.LeftPart)
         let right = accessor.RightPart
         if right.Kind != SyntaxKind.CallExpression {
             RecordMemberRead()
         }
         // The receiver of the call is a plain root only when this accessor does not itself follow a dot.
+        let leftPath = if isRightPartOfAccessor {
+            AppendPath(prefix, accessor.LeftPart)
+        } else {
+            BuildPath(accessor.LeftPart)
+        }
         pendingReceiver = accessor.LeftPart
         pendingReceiverIsRoot = !isRightPartOfAccessor
+        pendingReceiverPath = leftPath
         Visit(right)
     }
 
-    private func VisitCall(call CallExpressionSyntax, receiver ExpressionSyntax?, receiverIsRoot bool) {
+    private func VisitCall(
+        call CallExpressionSyntax,
+        receiver ExpressionSyntax?,
+        receiverIsRoot bool,
+        receiverPath RegionReceiverPath?
+    ) {
         if Active() {
             current.ContainsCall = true
         }
@@ -1704,25 +1772,192 @@ internal sealed class RegionEffectScanner {
                     byValue,
                     unresolved,
                     call.Span.Start,
-                    receiverName
+                    receiverName,
+                    if kind == RegionCallKind.MemberInvocation && receiverName == nil {
+                        receiverPath
+                    } else {
+                        default(RegionReceiverPath?)
+                    }
                 )
             )
         }
     }
 
     // The name of a plain variable operand: a name, through parentheses and `!!`. Otherwise `nil`.
+    // ---------------------------------------------------------------- receiver paths
+
+    // The path of an expression whose type the consumer resolves at the entry scope, or `nil`. A local of the
+    // region stands for its origin; a name of the entry scope, a named call and a literal are roots.
+    private func BuildPath(expression ExpressionSyntax?) RegionReceiverPath? {
+        switch expression {
+            case nil {
+                return nil
+            }
+            case parenthesized is ParenthesizedExpressionSyntax {
+                return BuildPath(parenthesized.Expression)
+            }
+            case assertion is UnaryExpressionSyntax when assertion.OperatorToken.Kind == SyntaxKind.BangBangToken {
+                return BuildPath(assertion.Operand)
+            }
+            case name is NameExpressionSyntax {
+                return OriginOf(name.IdentifierToken.ValueText)
+            }
+            case call is CallExpressionSyntax {
+                if call.Callee != nil || call.TypeArgumentList != nil || IsDeclared(call.Identifier.ValueText) {
+                    return nil
+                }
+                return RegionReceiverPath(
+                    call.Identifier.ValueText,
+                    true,
+                    nil,
+                    nil,
+                    ImmutableArray[RegionReceiverStep].Empty
+                )
+            }
+            case literal is LiteralExpressionSyntax {
+                let type = if literal.LiteralToken.Kind == SyntaxKind.StringToken {
+                    "System.String"
+                } else {
+                    literal.Value?.GetType().FullName
+                }
+                if type == nil {
+                    return nil
+                }
+                return RegionReceiverPath(nil, false, nil, type, ImmutableArray[RegionReceiverStep].Empty)
+            }
+            case index is IndexExpressionSyntax {
+                return BuildPath(index.Target)?.Append(RegionReceiverStepKind.Index, nil)
+            }
+            case accessor is AccessorExpressionSyntax {
+                return AppendPath(BuildPath(accessor.LeftPart), accessor.RightPart)
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
+    // The path of the part that follows a dot after [`prefix`](paramref).
+    private func AppendPath(prefix RegionReceiverPath?, part ExpressionSyntax) RegionReceiverPath? {
+        if prefix == nil {
+            return nil
+        }
+        switch part {
+            case name is NameExpressionSyntax {
+                return prefix.Append(RegionReceiverStepKind.Member, name.IdentifierToken.ValueText)
+            }
+            case call is CallExpressionSyntax {
+                if call.Callee != nil || call.TypeArgumentList != nil {
+                    return nil
+                }
+                return prefix.Append(RegionReceiverStepKind.Call, call.Identifier.ValueText)
+            }
+            case index is IndexExpressionSyntax {
+                return AppendPath(prefix, index.Target)?.Append(RegionReceiverStepKind.Index, nil)
+            }
+            case accessor is AccessorExpressionSyntax {
+                return AppendPath(AppendPath(prefix, accessor.LeftPart), accessor.RightPart)
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
+    // A local of the region stands for its origin (`nil` when it has none); any other name is a root.
+    private func OriginOf(name string) RegionReceiverPath? {
+        let frame = DeclaringFrame(name)
+        if frame >= 0 {
+            return if scopes[frame].Origins.TryGetValue(name, out var origin) {
+                origin
+            } else {
+                default(RegionReceiverPath?)
+            }
+        }
+        return RegionReceiverPath(name, false, nil, nil, ImmutableArray[RegionReceiverStep].Empty)
+    }
+
+    // A path of a nested record whose root the enclosing region declares starts at the root's origin.
+    private func Rebase(path RegionReceiverPath) RegionReceiverPath? {
+        let root = path.RootName
+        if root == nil || !IsDeclared(root) {
+            return path
+        }
+        if path.RootIsCall {
+            return nil
+        }
+        return OriginOf(root)?.Concat(path)
+    }
+
+    private func SetOrigin(name string, origin RegionReceiverPath?) {
+        let frame = DeclaringFrame(name)
+        if frame >= 0 {
+            scopes[frame].Origins[name] = origin
+        }
+    }
+
+    private func TypeOrigin(type TypeClauseSyntax?) RegionReceiverPath? -> if type == nil {
+        default(RegionReceiverPath?)
+    } else {
+        RegionReceiverPath(nil, false, type, nil, ImmutableArray[RegionReceiverStep].Empty)
+    }
+
     // A type test of a plain name narrows the name where the test holds, so a member call on it can bind a
-    // member of the tested type (ADR-0213, function values). Every type of the pattern counts.
+    // member of the tested type (ADR-0213, function values). Only the types that the pattern tests the subject
+    // against count: a property or list subpattern tests a member or an element of it.
     private func RecordTypeTests(subject ExpressionSyntax?, pattern PatternSyntax?) {
-        if pattern == nil || !Active() || NameOf(subject) is not{} name || IsDeclared(name) {
+        if pattern == nil || !Active() {
             return
         }
+        let tested = List[PatternSyntax]()
+        CollectSubjectTypePatterns(pattern, tested)
+        var all = 0
         for node in pattern.DescendantNodesAndSelf() {
+            if node is TypePatternSyntax || node is TypeOrConstantPatternSyntax {
+                all++
+            }
+        }
+        // A local of the region or a member that a test narrows has a type that its origin does not show.
+        if all > tested.Count {
+            current.ContainsMemberTypeTest = true
+        }
+        if tested.Count == 0 {
+            return
+        }
+        if NameOf(subject) is not{} name {
+            current.ContainsMemberTypeTest = true
+            return
+        }
+        if IsDeclared(name) {
+            SetOrigin(name, nil)
+            return
+        }
+        for node in tested {
             if node is TypePatternSyntax typePattern {
                 current.TypeTests.Add(TypeTest(name, typePattern.Type, false))
             } else if node is TypeOrConstantPatternSyntax candidate {
                 current.TypeTests.Add(TypeTest(name, candidate.CandidateType, true))
             }
+        }
+    }
+
+    // The type patterns that test the subject itself, through parentheses, `not`, `and` and `or`.
+    private func CollectSubjectTypePatterns(pattern PatternSyntax, tested List[PatternSyntax]) {
+        switch pattern {
+            case parenthesized is ParenthesizedPatternSyntax {
+                CollectSubjectTypePatterns(parenthesized.Pattern, tested)
+            }
+            case notPattern is NotPatternSyntax {
+                CollectSubjectTypePatterns(notPattern.Pattern, tested)
+            }
+            case binary is BinaryPatternSyntax {
+                CollectSubjectTypePatterns(binary.Left, tested)
+                CollectSubjectTypePatterns(binary.Right, tested)
+            }
+            case TypePatternSyntax, TypeOrConstantPatternSyntax {
+                tested.Add(pattern)
+            }
+            default { }
         }
     }
 
