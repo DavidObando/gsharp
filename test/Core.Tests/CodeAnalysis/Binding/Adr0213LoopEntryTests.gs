@@ -1934,6 +1934,22 @@ func Run(ref text string?, holder Holder) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("qualified-member-name-is-not-a-bare-property-read (R14)", `package T
+import System
+class Holder {
+    prop Length int32 {
+        get { return 1 }
+    }
+    func Run(ref s string?) int32 {
+        if s == nil { return 0 }
+        var n = 0
+        while s.Length > 0 && n < 3 {
+            n++
+        }
+        return n
+    }
+}
+func Main() { }`, "")
             return rows
         }
     }

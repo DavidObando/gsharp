@@ -322,7 +322,8 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.NameExpression {
                 let read = cast[NameExpressionSyntax](node).IdentifierToken.ValueText
-                if Active() && DeclaringStorageFrame(read) < 0 && !current.BareReads.Contains(read) {
+                // A name after a dot is a member of the receiver, not a bare read (rule W5).
+                if receiver == nil && Active() && DeclaringStorageFrame(read) < 0 && !current.BareReads.Contains(read) {
                     current.BareReads.Add(read)
                 }
             }
@@ -651,7 +652,14 @@ internal sealed class RegionEffectScanner {
                     },
                     nil
                 )
-                VisitChildren(node)
+                // In `a.b[i]` the target `b` is a member of `a`.
+                pendingReceiver = receiver
+                pendingReceiverIsRoot = receiverIsRoot
+                pendingReceiverPath = receiverPath
+                Visit(index.Target)
+                for argument in index.Indices {
+                    Visit(argument)
+                }
             }
             case SyntaxKind.FieldAccessExpression {
                 RecordMemberRead()
@@ -1695,12 +1703,9 @@ internal sealed class RegionEffectScanner {
     ) {
         let isRightPartOfAccessor = receiver != nil
         // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
-        // `a.M().b` and `a.b[i].c` the call `M()` and the index `b[i]` are the left part of the accessor that
-        // follows `a.`, and `a` is their receiver.
-        if isRightPartOfAccessor &&
-            (
-            accessor.LeftPart.Kind == SyntaxKind.CallExpression || accessor.LeftPart.Kind == SyntaxKind.IndexExpression
-        ) {
+        // `a.b.c`, `a.M().b` and `a.b[i].c` the name `b`, the call `M()` and the index `b[i]` are the left part of
+        // the accessor that follows `a.`, and `a` is their receiver.
+        if isRightPartOfAccessor {
             pendingReceiver = receiver
             pendingReceiverIsRoot = receiverIsRoot
             pendingReceiverPath = prefix
