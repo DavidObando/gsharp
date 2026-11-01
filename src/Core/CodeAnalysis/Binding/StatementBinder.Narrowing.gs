@@ -34,6 +34,9 @@ internal partial class StatementBinder {
     private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
     // ADR-0208 R18: reused for each condition; read only before the branches are bound.
     private var conditionRemovedFacts Dictionary[AccessPath, TypeSymbol]?
+    // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
+    // so the sibling else-branch can be bound without them. `nil` outside such a branch.
+    private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -489,6 +492,9 @@ internal partial class StatementBinder {
                     // The frames are visited innermost first, so the recorded type is the one a read saw.
                     if removedFacts != nil && !removedFacts.ContainsKey(key) {
                         removedFacts[key] = frame[key]
+                    }
+                    if removedFacts != nil {
+                        conditionKillJournal?.Add((frame, key, frame[key]))
                     }
                     frame.Remove(key)
                 }
@@ -1804,6 +1810,58 @@ internal partial class StatementBinder {
         }
         before.ExceptWith(externalCallableAliases)
         return before
+    }
+
+    /// ADR-0208 section 9 and row R18 (#5534): the else-branch of an `if` statement is bound under the state after
+    /// the condition, not after the then-branch. The condition of an `if` statement nested in the then-branch runs
+    /// only on that path, so the facts it removed from the enclosing frames are put back for the else-branch
+    /// (`if flag if Check(h) { } else { } else { return x.Value }`). Returns the journal of the enclosing branch.
+    private func BeginThenBranchConditionKills() List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]? {
+        let outer = conditionKillJournal
+        conditionKillJournal = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        return outer
+    }
+
+    /// Puts back the facts that the then-branch's conditions removed from frames that are still on the stack,
+    /// before the else-branch is bound, and restores the journal of the enclosing branch. Only a fact that held
+    /// in [`entry`](paramref), the state the else-branch starts from, is put back.
+    private func RestoreThenBranchConditionKills(
+        outer List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?,
+        entry NarrowingState
+    ) List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)] {
+        let thenKills = conditionKillJournal!!
+        conditionKillJournal = outer
+        let restored = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        for kill in thenKills {
+            if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
+                entry.NarrowedType(kill.Path),
+                kill.Type
+            ) {
+                kill.Frame[kill.Path] = kill.Type
+                restored.Add(kill)
+            }
+        }
+        outer?.AddRange(thenKills)
+        return restored
+    }
+
+    /// After the else-branch: the then-branch can have run, so the facts put back for the else-branch are removed
+    /// again, unless the else-branch changed them.
+    private func EndThenBranchConditionKills(restored List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]) {
+        for entry in restored {
+            if entry.Frame.TryGetValue(entry.Path, out var current) && current == entry.Type {
+                entry.Frame.Remove(entry.Path)
+            }
+        }
+    }
+
+    private func IsOnNarrowingStack(frame NarrowingFrame) bool {
+        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
+            if object.ReferenceEquals(binderCtx.NarrowedVariables[i], frame) {
+                return true
+            }
+        }
+        return false
     }
 
     /// ADR-0208 section 9 and row R18 (#5534): the effects of a branching condition apply to the narrowing facts

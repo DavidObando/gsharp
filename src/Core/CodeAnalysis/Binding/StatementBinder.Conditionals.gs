@@ -59,12 +59,22 @@ internal partial class StatementBinder {
             let shadowFlow = ShadowBegin(condition)
             let joinEntry = binderCtx.Narrowing
             let joinExits = List[NarrowingState]()
+            let outerConditionKills = if syntax.ElseClause == nil {
+                conditionKillJournal
+            } else {
+                BeginThenBranchConditionKills()
+            }
             let thenStatement = BindWithPatternVariables(
                 patternThen,
                 () -> {
                     return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow)
                 }
             )
+            let restoredConditionKills = if syntax.ElseClause == nil {
+                default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
+            } else {
+                RestoreThenBranchConditionKills(outerConditionKills, joinEntry)
+            }
             AddBranchExits(joinExits, thenStatement)
             ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
@@ -79,6 +89,9 @@ internal partial class StatementBinder {
                         return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, elseNarrow)
                     }
                 )
+            }
+            if restoredConditionKills != nil {
+                EndThenBranchConditionKills(restoredConditionKills)
             }
             if elseStatement == nil {
                 joinExits.Add(SkippedBranchExit(joinEntry, elseNarrow))
@@ -130,12 +143,22 @@ internal partial class StatementBinder {
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initJoinEntry = binderCtx.Narrowing
         let initJoinExits = List[NarrowingState]()
+        let initOuterConditionKills = if syntax.ElseClause == nil {
+            conditionKillJournal
+        } else {
+            BeginThenBranchConditionKills()
+        }
         let initThen = BindWithPatternVariables(
             initPatternThen,
             () -> {
                 return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow)
             }
         )
+        let initRestoredConditionKills = if syntax.ElseClause == nil {
+            default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
+        } else {
+            RestoreThenBranchConditionKills(initOuterConditionKills, initJoinEntry)
+        }
         AddBranchExits(initJoinExits, initThen)
         ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
@@ -150,6 +173,9 @@ internal partial class StatementBinder {
                     return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, initElseNarrow)
                 }
             )
+        }
+        if initRestoredConditionKills != nil {
+            EndThenBranchConditionKills(initRestoredConditionKills)
         }
         if initElse == nil {
             initJoinExits.Add(SkippedBranchExit(initJoinEntry, initElseNarrow))
@@ -631,7 +657,7 @@ internal partial class StatementBinder {
         switch condition {
             case isExpr is BoundIsExpression {
                 {
-                    let operandType = TypeTestOperandTypeAfterEffects(isExpr.Expression, removedFacts)
+                    let operandType = TypeTestOperandTypeAfterEffects(isExpr, removedFacts)
                     if isExpr.Pattern is BoundNotPattern notPattern {
                         return (
                             nil,
@@ -703,18 +729,23 @@ internal partial class StatementBinder {
     /// has the removed type), the test is classified against the declared type of the path, the type the path has
     /// after the effects. Otherwise the bound type is the current one and `nil` keeps it. Only a fact that strips
     /// `?` or `!` from a reference type qualifies: its read emits no conversion, so the test sees the current
-    /// value. A subtype fact (`castclass`) or a nullable value (an unwrap) would test the stale read.
+    /// value. A subtype fact (`castclass`) or a nullable value (an unwrap) would test the stale read. A pattern
+    /// that can itself remove the fact after the read (a getter with user code in a property sub-pattern) proves
+    /// nothing about the value the branch reads, so it keeps the bound type too.
     private func TypeTestOperandTypeAfterEffects(
-        operand BoundExpression,
+        isExpr BoundIsExpression,
         removedFacts Dictionary[AccessPath, TypeSymbol]?
     ) TypeSymbol? {
         if removedFacts == nil {
             return nil
         }
+        let operand = isExpr.Expression
         if operand is BoundVariableExpression variable {
-            return if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) &&
+            let path AccessPath = variable.Variable
+            return if removedFacts.TryGetValue(path, out var removedType) &&
                 operand.Type == removedType &&
-                IsNullabilityOnlyFact(variable.Variable.Type, removedType) {
+                IsNullabilityOnlyFact(variable.Variable.Type, removedType) &&
+                !PatternMayRemoveFact(isExpr, path) {
                 variable.Variable.Type
             } else {
                 default(TypeSymbol?)
@@ -723,13 +754,20 @@ internal partial class StatementBinder {
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
             removedFacts.TryGetValue(path!!, out var removedMemberType) && currentType == removedMemberType {
             let declared = MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
-            return if IsNullabilityOnlyFact(declared, currentType!!) {
+            return if IsNullabilityOnlyFact(declared, currentType!!) && !PatternMayRemoveFact(isExpr, path!!) {
                 declared
             } else {
                 default(TypeSymbol?)
             }
         }
         return nil
+    }
+
+    // The one statement rule (cref:StatementKillsPath), applied to the effects of the test itself.
+    private func PatternMayRemoveFact(isExpr BoundIsExpression, path AccessPath) bool {
+        let collector = NewCollector(nil, externalCallableAliases)
+        collector.Visit(isExpr)
+        return StatementKillsPath(collector, path, collector.MayMutateMemberPaths, collector.MayMutateReferenceStorage)
     }
 
     private func IsNullabilityOnlyFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {
@@ -2099,6 +2137,14 @@ internal partial class StatementBinder {
                     }
                 }
                 case BoundNotPattern { }
+                // ADR-0208 R18 (#5534): a property pattern does not match nil. It restores only a fact that the
+                // condition's own effects removed; `operandType` is then a nullable reference or platform type.
+                case BoundPropertyPattern when operandType is NullableTypeSymbol restoredNullable {
+                    narrowedType = restoredNullable.UnderlyingType
+                }
+                case BoundPropertyPattern when operandType is PlatformTypeSymbol restoredPlatform {
+                    narrowedType = restoredPlatform.UnderlyingType
+                }
                 case BoundRelationalPattern, BoundPropertyPattern, BoundListPattern { }
             }
             return if narrowedType == nil {
