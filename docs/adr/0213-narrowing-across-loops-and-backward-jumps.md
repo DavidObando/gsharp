@@ -1316,7 +1316,11 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   returned value, a by-value argument against the parameters of the callee's candidates) runs a conversion operator
   when the conversion classifier finds one between the types of its value and its target
   (`HasUserDefinedImplicitConversion`); an argument is taken to bind a candidate that takes every argument without a
-  conversion operator, and a call whose callee or arguments do not resolve is not checked; a conversion between
+  conversion operator, and a call that the walker cannot check runs one (a callee or an argument that does not
+  resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
+  without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
+  built-in types can return a value of another type, so its converted result runs one (`n = n + Pick(m)` with a
+  generic `Pick`); a conversion between
   built-in types is predefined, and a value of another type converted to a generic type, a `??`, a deconstruction or a
   multiple assignment can run one; a bare static field (not a constant) or static property of a type whose initializer
   runs user code runs it (R11, #5520). The walker records each read, operator and conversion site with paths for its
