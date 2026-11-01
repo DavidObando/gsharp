@@ -1219,6 +1219,47 @@ func Run(ref text string?, o object) int32 {
     return n
 }
 func Main() { }`, "GS0158")
+            Add("delegate-base-member-call-is-indirect (A3)", `package T
+import System
+func Run(ref text string?, callback Delegate) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        callback.DynamicInvoke()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("tuple-element-named-like-an-extension-is-indirect (A3)", `package T
+import System
+import System.Linq
+func Run(ref text string?, pair (Count Action, N int32)) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        pair.Count()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("interface-property-named-like-an-extension-is-indirect (A3)", `package T
+import System
+import System.Linq
+interface IHolder {
+    prop Count Action { get; }
+}
+func Run(ref text string?, holder IHolder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Count()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }
