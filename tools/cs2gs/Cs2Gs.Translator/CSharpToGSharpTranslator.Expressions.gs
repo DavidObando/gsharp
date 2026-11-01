@@ -2885,11 +2885,21 @@ partial class CSharpToGSharpTranslator {
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 expression = parenthesized.Expression
             }
-            return this
-                .context
-                .GetSymbolInfo(expression)
-                .Symbol is {} symbol &&
-                (this.state.PatternBindings.ContainsKey(symbol) || this.state.NativePatternVariables.Contains(symbol))
+            let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
+            if symbol == nil {
+                return false
+            }
+            if this.state.NativePatternVariables.Contains(symbol) {
+                // Issue #5582: a native `var` capture has the G# type of its input.
+                return !(
+                    symbol is ILocalSymbol capture && this.TryGetVarCaptureStaticNonNull(
+                        capture,
+                        out var inputIsNonNull
+                    ) &&
+                        !inputIsNonNull
+                )
+            }
+            return this.state.PatternBindings.ContainsKey(symbol)
         }
 
         private func ForgiveNullableReferenceValue(
@@ -3665,6 +3675,9 @@ partial class CSharpToGSharpTranslator {
                 if this.ForEachBindingInfersNonNullElement(inferredLocal) {
                     return true
                 }
+                if this.TryGetVarCaptureStaticNonNull(inferredLocal, out var inputIsNonNull) {
+                    return inputIsNonNull
+                }
             }
             let type ITypeSymbol? = switch symbol {
                 case field is IFieldSymbol: field.Type
@@ -3674,6 +3687,11 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol when method.MethodKind != MethodKind.Constructor: method.ReturnType
                 default: this.context.GetTypeInfo(expression).Type
             }
+            return this.DeclaredValueIsStaticallyNonNull(symbol, type)
+        }
+
+        // Whether a value of `symbol`, of C# type `type`, is non-null in the emitted G#.
+        private func DeclaredValueIsStaticallyNonNull(symbol ISymbol?, type ITypeSymbol?) bool {
             if type != nil && type.IsValueType == true {
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             }
@@ -3722,6 +3740,73 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             isNonNull = this.GSharpExpressionIsStaticallyNonNull(initializer)
+            return true
+        }
+
+        /// Issue #5582: decides a `var` pattern capture as an inferred local. C# types the capture `T?`, but
+        /// G# gives it the G# type of the value that the pattern matches. Thus the capture is non-null when
+        /// that input is non-null.
+        /// @remarks This is the one decision for `x is var c`, a switch arm `var c =>`, a `case var c:` label
+        /// and a property subpattern `{ P: var c }` at any depth. The input of a top-level capture is the
+        /// scrutinee. The input of a subpattern capture is the member that it reads.
+        /// @returns `false` when cs2gs cannot name the input, for example in a positional subpattern
+        /// (issue #4576) or a list pattern. The caller then uses its other rules.
+        private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
+            isNonNull = false
+            let designation = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if !(
+                designation is SingleVariableDesignationSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax
+                }
+            ) {
+                return false
+            }
+            var pattern Microsoft.CodeAnalysis.SyntaxNode = designation.Parent!!
+            while pattern.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
+                pattern = parenthesized
+            }
+            let input Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch pattern.Parent {
+                case isPattern is IsPatternExpressionSyntax: isPattern.Expression
+                case Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression
+                }: switchExpression.GoverningExpression
+                case CasePatternSwitchLabelSyntax{
+                    Parent: {Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement}
+                }: switchStatement.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if input != nil {
+                isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
+                return true
+            }
+            let memberPath Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if pattern.Parent is SubpatternSyntax{
+                Parent: PropertyPatternClauseSyntax
+            } subpattern {
+                subpattern.ExpressionColon?.Expression
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if memberPath == nil {
+                return false
+            }
+            let member ISymbol? = this.context.GetSymbolInfo(memberPath).Symbol
+            let memberType ITypeSymbol? = switch member {
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                default: default(ITypeSymbol?)
+            }
+            if memberType == nil {
+                return false
+            }
+            isNonNull = this.DeclaredValueIsStaticallyNonNull(member, memberType)
             return true
         }
 
