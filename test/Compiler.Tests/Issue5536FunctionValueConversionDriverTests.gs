@@ -876,6 +876,85 @@ class Program {
         }
     }
 
+    /// Issue #5569 (review of 7c9c7101): the backward `goto` check of a `return` value's conversion to the delegate
+    /// result waits for the choice of the function type. Here the other `return` makes the natural result
+    /// `string?`, which takes the nil `s`, so the check does not apply and the call binds as C# binds it. (A
+    /// `string` natural result keeps the check; see the test above.)
+    @Fact
+    func DeferredReturnNarrowingCheck_WaitsForTheNaturalType() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let literal = `() -> {
+        var s string? = "a"
+        var n = 0
+        if s != nil {
+            L: if n > 0 {
+                return s
+            }
+            n++
+            s = nil
+            goto L
+        }
+        return default(string?)
+    }`
+        let oracleLiteral = "() => { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return s; } n++; " +
+            "s = null; goto L; } return default(string?); }"
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
+        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        for shape in[]string{"Calls.Ns(|, 1)", "Calls.NsIn(|, 1)", "NsCtor(|, 1).Kind", "NsInCtor(|, 1).Kind"} {
+            source.Append("    Console.Write(").Append(shape.Replace("|", literal)).Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(OracleShape(shape).Replace("|", oracleLiteral))
+                .Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "F<null>F<null>F<null>F<null>")
+    }
+
+    /// Issue #5569 (review of 7c9c7101): a loop body that binds again after an inherited narrowing changes
+    /// discards the held returns of its first bind. So a call where no overload applies reports the held target
+    /// diagnostics of a speculative literal once: the same set as the same loop without the rebind (`s = nil`
+    /// replaced by a call), and for methods the set that main reports for the by-value form.
+    @Fact
+    func LoopRebind_InASpeculativeLiteral_ReportsTheHeldDiagnosticsOnce() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let literal = `() -> {
+        var s string? = "a"
+        if s != nil {
+            for var i = 0; i < 2; i++ {
+                if flag {
+                    return true ? "s" : "t"
+                }
+                #
+            }
+        }
+        return 1
+    }`
+        let Errors = func (shape string, statement string)[]string {
+            return RejectConsumerErrors(
+                fixture,
+                "import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n    Console.Write(" +
+                    shape.Replace("|", literal.Replace("#", statement)) + ")\n}\n"
+            )
+                .Select(
+                (error(Code string, Line int32, Column int32)) -> error.Code + " (" + error.Line.ToString() +
+                    "," +
+                    error
+                    .Column
+                    .ToString() + ")"
+            )
+                .ToArray()
+        }
+        for shape in[]string{"Calls.M(|, \"x\")", "Calls.In(|, \"x\")", "C(|, \"x\").Kind", "InCtor(|, \"x\").Kind"} {
+            let rebound = Errors(shape, "s = nil")
+            Assert.Equal(Errors(shape, "Console.Write(\"\")"), rebound)
+            if shape.StartsWith("Calls.", StringComparison.Ordinal) {
+                Assert.Equal([]string{"GS0159 (5,25)", "GS0155 (10,35)", "GS0155 (10,41)"}, rebound)
+            }
+        }
+    }
+
     /// Issue #5569 (review of b9401fdc): the natural-type fallback also applies when the other candidate takes the
     /// literal in the expanded form of a `params` array (at the array's position or past it), when a destructured
     /// parameter's written element types do not fit the delegate, and when an interpolated `return` value is
@@ -1420,6 +1499,31 @@ class Program {
         RejectConsumer(fixture, source, diagnostic, line, column, length)
     }
 
+    // Compiles a consumer that must fail, with no output, and gives its errors (code and start) in report order.
+    private func RejectConsumerErrors(fixture CSharpFixture, source string)[](Code string, Line int32, Column int32) {
+        for path in OutputPaths(fixture) {
+            File.Delete(path)
+        }
+        let result = Compile(fixture, source)
+        Assert.NotEqual(0, result.Code)
+        for path in OutputPaths(fixture) {
+            Assert.False(File.Exists(path))
+        }
+        return Regex
+            .Matches(
+            Encoding.UTF8.GetString(result.Bytes) + result.Error,
+            `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+        )
+            .Select(
+            (match Match) -> (
+                match.Groups[5].Value,
+                int32.Parse(match.Groups[1].Value),
+                int32.Parse(match.Groups[2].Value)
+            )
+        )
+            .ToArray()
+    }
+
     // Compiles a consumer that must fail with exactly one error, at the given span, and no output.
     private func RejectConsumer(
         fixture CSharpFixture,
@@ -1632,10 +1736,10 @@ namespace FunctionControl {
         public static string Dg(object o, long x) => Kinds.OfB(o);
         public static string DgIn(in System.Func<System.IDisposable> f, int x) => "F";
         public static string DgIn(object o, long x) => Kinds.OfB(o);
-        public static string NsOne(System.Func<string> f) => "F" + f().Length;
-        public static string Ns(System.Func<string> f, int x) => "F" + f().Length;
+        public static string NsOne(System.Func<string> f) => "F" + (f()?.Length.ToString() ?? "<null>");
+        public static string Ns(System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
         public static string Ns(object o, long x) => "O";
-        public static string NsIn(in System.Func<string> f, int x) => "F" + f().Length;
+        public static string NsIn(in System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
         public static string NsIn(object o, long x) => "O";
         public static string Pa(System.Func<long> f, int x) => "F";
         public static string Pa(params object[] xs) => "P" + Kinds.OfS(xs[0]);
@@ -1658,12 +1762,12 @@ namespace FunctionControl {
     }
     public class NsCtor {
         public string Kind;
-        public NsCtor(System.Func<string> f, int x) { Kind = "F" + f().Length; }
+        public NsCtor(System.Func<string> f, int x) { Kind = "F" + (f()?.Length.ToString() ?? "<null>"); }
         public NsCtor(object o, long x) { Kind = "O"; }
     }
     public class NsInCtor {
         public string Kind;
-        public NsInCtor(in System.Func<string> f, int x) { Kind = "F" + f().Length; }
+        public NsInCtor(in System.Func<string> f, int x) { Kind = "F" + (f()?.Length.ToString() ?? "<null>"); }
         public NsInCtor(object o, long x) { Kind = "O"; }
     }
     public class PaCtor {

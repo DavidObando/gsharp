@@ -401,8 +401,7 @@ internal class ConversionClassifier {
                 )
             )
         ) &&
-            !(type is NullableTypeSymbol) &&
-            !(type is PlatformTypeSymbol) {
+            ConversionNeedsNarrowedSource(type) {
             binderCtx.TrackBackwardGotoNarrowingUse(
                 path!!,
                 diagnosticLocation,
@@ -3763,6 +3762,14 @@ internal class ConversionClassifier {
     }
 
     shared {
+        /// Gets a value indicating whether a conversion of a narrowed read to [`target`](paramref) needs the
+        /// narrowing, so a backward `goto` that removes it is checked. A nullable or platform target also takes the
+        /// declared value. Issue #5569: a speculative lambda's natural result type uses the same rule.
+        /// @param target The conversion target.
+        /// @returns `true` when the conversion needs the narrowed source.
+        func ConversionNeedsNarrowedSource(target TypeSymbol?) bool -> !(target is NullableTypeSymbol) &&
+            !(target is PlatformTypeSymbol)
+
         // Issue #4400: name prefix of the readonly temp an implicit-`in` rvalue is
         // spilled into (see CreateImplicitInReference / IsImplicitInTemp).
         private const ImplicitInTempPrefix string = "<inArgument"

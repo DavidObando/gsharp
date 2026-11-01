@@ -1506,7 +1506,11 @@ internal class LambdaBinder {
                 true,
                 deferredReturns
             )
-            let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.Skip(trialMark))
+            // A backward `goto` narrowing check of a target conversion fails the target, as the eager bind does.
+            let targetDiagnostics = deferredReturns
+                .NarrowingDiagnostics()
+                .AddRange(deferredReturns.OperandDiagnostics())
+                .AddRange(Diagnostics.Skip(trialMark))
             Diagnostics.TruncateTo(trialMark)
             // The body fits the target only when the target-typed inference adopts the target return type, which
             // also checks a trailing value that is not a `return`.
@@ -1517,9 +1521,11 @@ internal class LambdaBinder {
             } else {
                 TypeSymbol.Error
             }
+            // The natural type is not used when its result also needs a narrowing that a held use reports.
             if naturalReturnType != TypeSymbol.Error && !Diagnostics.Skip(startMark).Any(
                 (diagnostic Diagnostic) -> diagnostic.IsError
             ) &&
+                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
                 acceptsNaturalType!!(
                 FunctionTypeSymbol.Get(
                     parameterTypes.ToImmutable(),
@@ -2583,6 +2589,11 @@ internal class LambdaBinder {
             ReferenceEqualityComparer.Instance
         )
 
+        // The backward `goto` narrowing uses of the target conversions and their diagnostics, in report order.
+        private let narrowingUses List[
+            (Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+        ] = List[(Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])]()
+
         /// Records the target-typed value of a return statement and the diagnostics of both passes.
         /// @param syntax The return statement.
         /// @param value The target-typed value.
@@ -2640,6 +2651,59 @@ internal class LambdaBinder {
             converted = nil
             diagnostics = ImmutableArray[Diagnostic].Empty
             return false
+        }
+
+        /// Records a backward `goto` that removes a narrowing which a target conversion of a `return` value
+        /// (cref:HoldConversion) needs, with the diagnostic that the `goto` check reported for it.
+        /// @param access The narrowing use.
+        /// @param diagnostics The diagnostics of the use.
+        internal func HoldNarrowingUse(access BackwardGotoNarrowingAccess, diagnostics ImmutableArray[Diagnostic]) {
+            narrowingUses.Add((access, diagnostics))
+        }
+
+        /// Gets the diagnostics of the held narrowing uses, in report order.
+        /// @returns The diagnostics.
+        internal func NarrowingDiagnostics() ImmutableArray[Diagnostic] {
+            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+            for use in narrowingUses {
+                builder.AddRange(use.Diagnostics)
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Gets a value indicating whether the natural function type needs a narrowing that a held use reports
+        /// as removed: its result type converts the same narrowed reads, under the rule of
+        /// (cref:ConversionClassifier.ConversionNeedsNarrowedSource).
+        /// @param naturalReturnType The natural result type.
+        /// @returns `true` when the natural type cannot take the place of the target.
+        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Count > 0 &&
+            ConversionClassifier.ConversionNeedsNarrowedSource(naturalReturnType)
+
+        /// Captures the held values, conversions and narrowing uses, for a binder that discards a bind (see
+        /// `StatementBinder.CaptureSpeculativeBindState`).
+        /// @returns The captured collections.
+        internal func Capture() DeferredReturnSnapshot -> DeferredReturnSnapshot(
+            operands.ToArray(),
+            targetValues.ToArray(),
+            targetConversions.ToArray(),
+            narrowingUses.ToArray()
+        )
+
+        /// Puts back the collections that (cref:Capture) captured.
+        /// @param snapshot The captured collections.
+        internal func Restore(snapshot DeferredReturnSnapshot) {
+            operands.Clear()
+            operands.AddRange(snapshot.Operands)
+            targetValues.Clear()
+            for entry in snapshot.TargetValues {
+                targetValues.Add(entry.Key, entry.Value)
+            }
+            targetConversions.Clear()
+            for entry in snapshot.TargetConversions {
+                targetConversions.Add(entry.Key, entry.Value)
+            }
+            narrowingUses.Clear()
+            narrowingUses.AddRange(snapshot.NarrowingUses)
         }
 
         /// Gets the diagnostics of every held target pass, in source order.
@@ -2702,6 +2766,40 @@ internal class LambdaBinder {
                 }
                 return base.RewriteReturnStatement(node)
             }
+        }
+    }
+
+    /// Issue #5569: the collections of a (cref:DeferredReturnState) at one point of a body bind.
+    internal sealed class DeferredReturnSnapshot {
+        internal let Operands[](
+            Value BoundExpression,
+            Diagnostics ImmutableArray[Diagnostic],
+            NaturalDiagnostics ImmutableArray[Diagnostic]
+        )
+        internal let TargetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression]
+        internal let TargetConversions[]KeyValuePair[
+            BoundExpression,
+            (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ]
+        internal let NarrowingUses[](Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+
+        init(
+            operands[](
+                Value BoundExpression,
+                Diagnostics ImmutableArray[Diagnostic],
+                NaturalDiagnostics ImmutableArray[Diagnostic]
+            ),
+            targetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression],
+            targetConversions[]KeyValuePair[
+                BoundExpression,
+                (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+            ],
+            narrowingUses[](Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+        ) {
+            Operands = operands
+            TargetValues = targetValues
+            TargetConversions = targetConversions
+            NarrowingUses = narrowingUses
         }
     }
 

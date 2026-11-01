@@ -351,8 +351,9 @@ internal partial class StatementBinder {
 
     /// The function-wide binder state that a speculative bind can change: diagnostics, narrowing frame
     /// contents, pending exit and goto narrowing states, labels and jumps, callable aliases, assignment
-    /// generations, reachability, finally and cleanup bookkeeping, and the synthetic local counter. A loop
-    /// body (issue #2943) and a speculative lambda return value (issue #5569) bind again after a restore.
+    /// generations, reachability, finally and cleanup bookkeeping, the synthetic local counter, and the held
+    /// returns of a speculative lambda body (issue #5569). A loop body (issue #2943) and a speculative lambda
+    /// return value (issue #5569) bind again after a restore.
     private sealed class SpeculativeBindState {
         internal let DiagnosticCount int32
         internal let NarrowingFrames[]Dictionary[AccessPath, TypeSymbol]
@@ -394,6 +395,8 @@ internal partial class StatementBinder {
         internal let ActiveCleanupRegions[]GotoCleanupRegion
         internal let CurrentStatementListFallsThrough bool
         internal let SyntheticLocalCounter int32
+        internal let DeferredReturns LambdaBinder.DeferredReturnState?
+        internal let DeferredReturnCollections LambdaBinder.DeferredReturnSnapshot?
 
         init(
             diagnosticCount int32,
@@ -421,7 +424,8 @@ internal partial class StatementBinder {
             activeCleanupStatements[]BoundStatement,
             activeCleanupRegions[]GotoCleanupRegion,
             currentStatementListFallsThrough bool,
-            syntheticLocalCounter int32
+            syntheticLocalCounter int32,
+            deferredReturns LambdaBinder.DeferredReturnState?
         ) {
             DiagnosticCount = diagnosticCount
             NarrowingFrames = narrowingFrames
@@ -449,6 +453,8 @@ internal partial class StatementBinder {
             ActiveCleanupRegions = activeCleanupRegions
             CurrentStatementListFallsThrough = currentStatementListFallsThrough
             SyntheticLocalCounter = syntheticLocalCounter
+            DeferredReturns = deferredReturns
+            DeferredReturnCollections = deferredReturns?.Capture()
         }
     }
 
@@ -493,7 +499,8 @@ internal partial class StatementBinder {
         activeCleanupStatements.ToArray(),
         activeCleanupRegions.ToArray(),
         currentStatementListFallsThrough,
-        binderCtx.SyntheticLocalCounter
+        binderCtx.SyntheticLocalCounter,
+        function?.DeferredReturns
     )
 
     /// Puts back the state that (cref:CaptureSpeculativeBindState) captured, and removes the diagnostics
@@ -545,6 +552,16 @@ internal partial class StatementBinder {
         RestoreStack(activeCleanupRegions, state.ActiveCleanupRegions)
         currentStatementListFallsThrough = state.CurrentStatementListFallsThrough
         this.binderCtx.SyntheticLocalCounter = state.SyntheticLocalCounter
+        // Issue #5569: the held values, conversions and narrowing uses of a speculative lambda body.
+        let deferredReturnCollections = state.DeferredReturnCollections
+        if deferredReturnCollections != nil {
+            Invariant.Required(
+                state.DeferredReturns,
+                "captured collections have a state",
+                expression: "state.DeferredReturns"
+            )
+                .Restore(deferredReturnCollections)
+        }
     }
 
     private func RestoreEntries[TKey, TValue](
@@ -721,8 +738,9 @@ internal partial class StatementBinder {
     }
 
     // Issue #5569: converts a return value of a speculative lambda body to the target where the value binds, as an
-    // eager bind does, so the conversion's narrowing checks (backward `goto` uses) apply. The result and its
-    // diagnostics wait in the body's state for the lambda binder's decision.
+    // eager bind does, so the conversion's narrowing checks (backward `goto` uses) apply. The result, its
+    // diagnostics and the narrowing uses that only this conversion records wait in the body's state for the lambda
+    // binder's decision.
     private func HoldDeferredReturnConversion(
         deferredReturns LambdaBinder.DeferredReturnState,
         location TextLocation,
@@ -730,7 +748,14 @@ internal partial class StatementBinder {
         targetType TypeSymbol
     ) {
         let mark = Diagnostics.Count
-        let converted = conversions.BindConversion(location, value, targetType)
+        let outerOwner = binderCtx.DeferredReturnNarrowingOwner
+        this.binderCtx.DeferredReturnNarrowingOwner = deferredReturns
+        var converted BoundExpression
+        try {
+            converted = conversions.BindConversion(location, value, targetType)
+        } finally {
+            this.binderCtx.DeferredReturnNarrowingOwner = outerOwner
+        }
         deferredReturns.HoldConversion(value, converted, Diagnostics.Skip(mark).ToImmutableArray())
         Diagnostics.TruncateTo(mark)
     }
