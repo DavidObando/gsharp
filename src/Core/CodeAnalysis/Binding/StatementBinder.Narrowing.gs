@@ -5116,13 +5116,17 @@ internal partial class StatementBinder {
         /// | ----------------------------------------------------------------- | -------------------------- | ------------------------- |
         /// | `shared { init { ... } }` of a class (not `beforefieldinit`)       | yes                        | yes                       |
         /// | `shared { init { ... } }` of a value type (a literal is `initobj`) | no                         | yes                       |
-        /// | `shared` field initializers only (`beforefieldinit`)               | no                         | no (known limitation, #5520) |
+        /// | `shared` field initializers only, one not a literal (`beforefieldinit`) | no                   | yes (#5520) |
+        /// | `shared` field initializers only, all literals                      | no                         | no                        |
         ///
         /// The test reads the declaration (`DeclaresStaticInitializerBlock`), not the bound statements, which exist
         /// only after the body of the type is bound.
         internal func TypeInitializationRunsUserCode(type StructSymbol, atStaticMemberAccess bool) bool {
             let definition = type.Definition ?? type
-            return definition.DeclaresStaticInitializerBlock && (atStaticMemberAccess || definition.IsClass)
+            if definition.DeclaresStaticInitializerBlock && (atStaticMemberAccess || definition.IsClass) {
+                return true
+            }
+            return atStaticMemberAccess && definition.DeclaresNonLiteralSharedFieldInitializer
         }
 
         /// ADR-0208 R14 and R16 (#5231): whether [`node`](paramref) reads an imported (CLR) property whose getter

@@ -1045,10 +1045,51 @@ Details per row:
   read or write and to a static event subscription. The type that counts is the type that declares the member (an
   inherited member triggers the base, a hiding member triggers the hiding type). A `shared { init }` block of a
   class or of a value type counts. A constant, an enum member and a static method call (already a call) need no
-  rule. Known limitation (#5520): the initializer of a `shared` field of a `beforefieldinit` type also runs at
-  the first static field access (probe s12 throws `NullReferenceException`), but counting it adds `GS0158` and
-  `GS0154` in `src/Core` (a static read kills member-path and by-reference facts), so it keeps the fact for now.
-  Corpus rows s01 to s27 (issue #5504).
+  rule. Issue #5520 completes the type-initializer classification with the wide rule (maintainer decision): the
+  initializer of a `shared` field of a `beforefieldinit` type runs at the first static member access, so a
+  static field, property or event access of a type with a non-literal `shared` field initializer counts as a
+  call. It kills member-path and by-reference facts as well as the R11 and R15 roots
+  (`MarkMayMutateGlobalRoots`), exactly like a call. `DeclaresNonLiteralSharedFieldInitializer` is the one
+  declaration-pass fact (like `DeclaresStaticInitializerBlock`, it does not depend on binding order), and
+  `TypeInitializationRunsUserCode(type, atStaticMemberAccess)` is still the one decision. An initializer
+  runs no code when it is `nil` into a reference or `T?` field type, or a literal token (possibly parenthesized or
+  under unary operators that are predefined for the literal's type, `-1`, with the expression binder's
+  `int32.MinValue` and `char` promotion rules) of a built-in field type (a numeric
+  type, `bool`, `char`, `string`, `object`, or `T?` of one). A literal of another field type, or `nil` into a value
+  type, can call a user-defined conversion, a unary operator that is not predefined (`-"x"`) calls a user-defined
+  or extension operator, and anything else (a call, a name, a construction) is code, on purpose, so the answer
+  reads only the syntax and the declared field type. Constructing the type does not run
+  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and v01 to v27 (issue #5520).
+
+  Contract of #5520 (each row is a compiler corpus row; the mutation witness is a product change that makes the row
+  fail, recorded in the PR):
+
+  | shape | before | after | row | mutation witness |
+  | --- | --- | --- | --- | --- |
+  | static field read, non-literal `shared` initializer, closure-assigned local or mutable global | accepted, `NullReferenceException` | `GS0158` | s12 (R11, R15) | no `shared` field initializer counts (`IsLiteralInitializerSyntax` is always true) |
+  | the same read, fact on a member path | accepted | `GS0158` | v01 | the same |
+  | the same read, fact on a `ref` parameter | accepted | `GS0158` | v02 | the same |
+  | static property read, static field write, static event subscription | accepted | `GS0158` | v08, v09, v10 | the same |
+  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | v11 | the same |
+  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | v12, v13, v14 | the same |
+  | access in a body of the type itself (static or instance) | accepted | `GS0158` | v16, v17 | the same |
+  | access in a loop between guard and use | accepted | `GS0158` | v18 | the same |
+  | literal initializer of a field type with a user-defined conversion (`var Seed Token = 1`) | accepted, `NullReferenceException` | `GS0158` | v22 | a literal counts as no code whatever the field type |
+  | `nil` initializer of a value type with a user-defined conversion (`var Seed Token = nil`) | accepted, `NullReferenceException` | `GS0158` | v23 | `nil` counts as no code whatever the field type |
+  | `nil` initializer of `T?` of that value type (`var Spare Token? = nil`) | accepted | accepted | v24 | `nil` counts as code whatever the field type |
+  | literal under an extension unary operator (`var Seed int32 = -"x"`) | accepted, `NullReferenceException` | `GS0158` | v25 | any unary operator over a literal counts as no code |
+  | `-2147483648` and `-'a'` (the expression binder's `int32.MinValue` and `char` promotion rules) | accepted | accepted | v26, v27 | the initializer test omits the `int32.MinValue` rule; it omits the `char` promotion |
+  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, v03, v04 | every initializer counts as non-literal; every static access counts |
+  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | v15 | the same |
+  | `shared` field without an initializer | accepted | accepted | v19 | every static access counts |
+  | `const` read | accepted | accepted | v05 | a constant counts as a static access |
+  | construction (`Trigger{}`) | accepted | accepted | s27, v06 | construction counts as a static access |
+  | instance member read | accepted | accepted | v07 | an instance field counts as a static access |
+  | plain local (no closure assigns it) across a static read | accepted | accepted | v20 | a node that runs user code drops every local |
+  | static read only inside a function literal that is not called | accepted | accepted | v21 | the collector walks a function literal body |
+
+  The `src/Core` reads of `TypeSymbol.Error` and `TypeSymbol.Void` between a guard and a use now read the guarded
+  value from a local (`UserTokenResolver`, `LambdaBinder`). The translator mirrors the rule (cs2gs, same PR).
   The external-callable alias set follows the same rule (#5482): a call that
   `MayRunEscapedClosure` drops an alias when a closure can assign the alias
   or the plain variable in its `ref` chain, not only when the alias's own

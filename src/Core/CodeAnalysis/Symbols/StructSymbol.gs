@@ -651,6 +651,12 @@ class StructSymbol : TypeSymbol {
     /// so a body that is bound earlier reads the same answer as one bound later.
     internal prop DeclaresStaticInitializerBlock bool -> StaticInitializerFunction != nil
 
+    /// Gets a value indicating whether a `shared` block field has an initializer that is not a literal (#5520).
+    /// Such a type initializer is `beforefieldinit` and runs at the first static member access. Like
+    /// (cref:DeclaresStaticInitializerBlock), it is set from the syntax in the declaration pass, before any body
+    /// is bound, so every body reads the same answer. A `const` and a field with no initializer do not count.
+    internal prop DeclaresNonLiteralSharedFieldInitializer bool
+
     /// Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for
     /// non-generic types and for constructed instances.
     private var _typeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
