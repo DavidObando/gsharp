@@ -439,10 +439,35 @@ class PublishJobTests(unittest.TestCase):
             writes = "contents: write" in block
             self.assertEqual(writes, name in {"publish-github-release", "publish-finalize"}, name)
             self.assertNotIn("environment:", block)
-        for secret, owner in (("NUGET_API_KEY", {"publish-nuget-compiler", "publish-nuget-sdk"}),
+        for secret, owner in (("NUGET_API_KEY", set()),
                               ("VSCE_PAT", {"publish-vscode-marketplace", "publish-visual-studio-marketplace"})):
             self.assertEqual({n for n in self.JOBS if f"secrets.{secret}" in job(self.text, n)}, owner)
         self.assertIn("runs-on: windows-latest", job(self.text, "publish-visual-studio-marketplace"))
+
+    def test_the_nuget_jobs_use_trusted_publishing(self):
+        # #5535: nuget.org trusted publishing. Only the two NuGet jobs get id-token: write, and no job reads the
+        # long-lived secret. Each job requests its own short-lived key right before its push.
+        self.assertNotIn("secrets.NUGET_API_KEY", self.text)
+        oidc = {n for n in self.JOBS if re.search(r"(?m)^    permissions:\n(?:\s+#.*\n)*(?:      [\w-]+: \w+\n)*"
+                                                   r"      id-token: write$", job(self.text, n))}
+        self.assertEqual(oidc, {"publish-nuget-compiler", "publish-nuget-sdk"})
+        for name, group, after in (("publish-nuget-compiler", "compiler", "--wait-minutes 30"),
+                                   ("publish-nuget-sdk", "sdk", "--wait-minutes 15 --require-sdk")):
+            with self.subTest(job=name):
+                block = job(self.text, name)
+                self.assertRegex(block, r"(?m)^      contents: read$")
+                login = block.index("uses: NuGet/login@v1")
+                self.assertIn("id: nuget-login\n        uses: NuGet/login@v1\n        with:\n          user: david-obando\n",
+                              block)
+                key = "NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}\n"
+                self.assertEqual(block.count("steps.nuget-login.outputs"), 1)
+                push = block.index(f"nuget-push --group {group}")
+                self.assertLess(login, block.index(key))
+                self.assertLess(block.index(key), push)
+                # Only the feed checks follow the push; they need no key, so a long wait cannot outlive it.
+                self.assertLess(push, block.index(after))
+                # The push step is the next step after the login step.
+                self.assertEqual(block[login:push].count("      - name:"), 1)
 
     def test_scripts_vsce_pin_draft_and_artifacts(self):
         self.assertIn("nuget-push --group compiler", job(self.text, "publish-nuget-compiler"))

@@ -1208,6 +1208,11 @@ jobs:
     needs: [publish-verify]
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      # nuget.org trusted publishing (#5535): id-token: write lets NuGet/login get a GitHub OIDC token.
+      # A job-level permissions key replaces the defaults, so contents: read keeps actions/checkout working.
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v5
@@ -1223,11 +1228,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # nuget.org trusted publishing (#5535). The key is valid for one hour, so this step runs right before the push.
+      # Each job and each re-run requests its own key. The steps after the push do not use the key.
+      - name: Get a short-lived nuget.org API key (trusted publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: david-obando
+
       # ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version with
       # PackageDownload, so the six RID packages go first. --skip-duplicate makes a re-run push only what is missing.
       - name: Push the six RID compiler packages to NuGet
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: python3 build/release-publish.py nuget-push --group compiler --nupkgs ./nupkgs
 
       - name: Wait until the six RID compiler packages are on NuGet
@@ -1237,6 +1250,11 @@ jobs:
     needs: [publish-verify, publish-nuget-compiler]
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish-verify.result == 'success' && needs.publish-nuget-compiler.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      # nuget.org trusted publishing (#5535): id-token: write lets NuGet/login get a GitHub OIDC token.
+      # A job-level permissions key replaces the defaults, so contents: read keeps actions/checkout working.
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v5
@@ -1256,9 +1274,17 @@ jobs:
       - name: Check that the six RID compiler packages are on NuGet
         run: python3 build/check-rid-packages.py --packages ./nupkgs
 
+      # nuget.org trusted publishing (#5535). The key is valid for one hour, so this step runs right before the push.
+      # Each job and each re-run requests its own key. The steps after the push do not use the key.
+      - name: Get a short-lived nuget.org API key (trusted publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: david-obando
+
       - name: Push Gsharp.NET.Sdk and the remaining packages to NuGet
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: python3 build/release-publish.py nuget-push --group sdk --nupkgs ./nupkgs
 
       - name: Check that the SDK and all six RID compiler packages exist on NuGet
