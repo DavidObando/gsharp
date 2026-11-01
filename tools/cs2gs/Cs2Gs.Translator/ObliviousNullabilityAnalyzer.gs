@@ -2688,13 +2688,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     // reference in the emitted G#: not `T?`, not a value or open type, not a
     // declaration whose attribute contract widens it (`[AllowNull]`, a `null`
     // data row), and not an oblivious contract this run does not emit (G# reads
-    // that as `T!`, which takes `nil`). The attributes are read on the slot as
-    // the call binds it, as the translation reads them: a sibling's
-    // `[AllowNull]` seen through its emitted reference is a non-null store
-    // target there (#5577). An async result is the awaited value.
+    // that as `T!`, which takes `nil`). `[AllowNull]` is read with the store
+    // bridge's query, so a sibling's `[AllowNull]` seen through its emitted
+    // reference takes the null here as it does there (#5577). An async result
+    // is the awaited value.
     private func KeepsNonNullContract(slot ISymbol, graphs List[NullArgumentGraph]) bool {
         let declaration ISymbol? = OriginalNullArgumentDeclaration(slot) ?? slot.OriginalDefinition
-        if HasAllowNullWriteContract(declaration) || HasNullDataRowArgument(declaration) {
+        if HasRunAllowNullWriteContract(declaration, graphs.Select((graph NullArgumentGraph) -> graph.Owner)) ||
+            HasNullDataRowArgument(declaration) {
             return false
         }
         let type ITypeSymbol? = switch slot {
@@ -2730,31 +2731,105 @@ internal shared class ObliviousNullabilityAnalyzer {
     // declaration seen through a run project's emitted reference stands for.
     private func SourceDeclarationsInRun(symbol ISymbol, graphs List[NullArgumentGraph]) List[ISymbol] {
         let sources = List[ISymbol]()
+        for source in RunSourceDeclarations(symbol, graphs.Select((graph NullArgumentGraph) -> graph.Owner)) {
+            sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+        }
+        return sources
+    }
+
+    // Issue #5577: the source declarations that `symbol` stands for when it is
+    // seen through the emitted reference of a run project. They are found by
+    // documentation id in each run compilation with the same assembly identity.
+    // A linked source file gives one declaration for each such compilation.
+    private func RunSourceDeclarations(symbol ISymbol, compilations IEnumerable[Compilation]) List[ISymbol] {
+        let sources = List[ISymbol]()
         let identity = symbol.ContainingAssembly?.Identity
-        let id = NullArgumentId(symbol)
-        if identity == nil || id == nil {
+        if identity == nil {
             return sources
         }
-        for graph in graphs {
-            if graph.Owner is not CSharpCompilation csharp || !csharp.Assembly.Identity.Equals(identity) {
+        var id string? = nil
+        for compilation in compilations {
+            if compilation is not CSharpCompilation csharp || !csharp.Assembly.Identity.Equals(identity) {
                 continue
             }
-            var source ISymbol? = nil
-            if id.StartsWith("P:M:", StringComparison.Ordinal) {
-                let separator = id.LastIndexOf('#')
-                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
-                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
-                IMethodSymbol method && ordinal < method.Parameters.Length {
-                    source = method.Parameters[ordinal]
-                }
-            } else {
-                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
+            id = id ?? NullArgumentId(symbol)
+            if id == nil {
+                return sources
             }
-            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
-                sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+            if DeclarationOfNullArgumentId(id, csharp) is {} source && source.DeclaringSyntaxReferences.Length != 0 {
+                sources.Add(source)
             }
         }
         return sources
+    }
+
+    // Issue #5577: the declaration that `id` (a `NullArgumentId`) names in
+    // `compilation`. A parameter id is `P:` and its owner's id (a method or an
+    // indexer) and `#` and its ordinal.
+    private func DeclarationOfNullArgumentId(id string, compilation Compilation) ISymbol? {
+        if !(id.Length > 4 && id.StartsWith("P:", StringComparison.Ordinal) && id[3] == ':') {
+            return DocumentationCommentId.GetFirstSymbolForDeclarationId(id, compilation)
+        }
+        let separator = id.LastIndexOf('#')
+        let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
+        let parameters ImmutableArray[IParameterSymbol] = switch DocumentationCommentId.GetFirstSymbolForDeclarationId(
+            id.Substring(2, separator - 2),
+            compilation
+        ) {
+            case method is IMethodSymbol: method.Parameters
+            case indexer is IPropertySymbol: indexer.Parameters
+            default: ImmutableArray[IParameterSymbol].Empty
+        }
+        return if ordinal >= 0 && ordinal < parameters.Length {
+            parameters[ordinal]
+        } else {
+            default(ISymbol?)
+        }
+    }
+
+    /// Issue #5577: (cref:HasAllowNullWriteContract) for a slot as a
+    /// migration run binds it. A consumer sees a field, property or parameter
+    /// of another run project through that project's emitted reference, which
+    /// has no source attributes. The producer's translation emits the slot
+    /// `T?` from its source `[AllowNull]` (#3694), so the answer comes from
+    /// that source declaration. The store bridge and the null-argument pin rule
+    /// (#5574) both use this query, so they read the same contract.
+    ///
+    /// The query answers as the producer emits the slot. The slot's declared
+    /// type must be a reference type, so a `T` that is not constrained to a
+    /// class stays `T`. A `params` carrier stays `...T`, because its attribute
+    /// admits a null array, not a null element. A reduced extension parameter
+    /// is read at its unreduced ordinal.
+    /// @param symbol The slot as the call or store binds it.
+    /// @param runCompilations Every compilation of the run, or `nil`.
+    /// @returns `true` when the run emits the slot with null as an accepted input.
+    func HasRunAllowNullWriteContract(symbol ISymbol?, runCompilations IEnumerable[Compilation]?) bool {
+        let slot ISymbol? = if symbol is IParameterSymbol parameter {
+            ReducedExtensionParameter(parameter)
+        } else {
+            symbol
+        }
+        let declared ITypeSymbol? = switch slot?.OriginalDefinition {
+            case parameter is IParameterSymbol when !parameter.IsParams: parameter.Type
+            case field is IFieldSymbol: field.Type
+            case property is IPropertySymbol: property.Type
+            default: default(ITypeSymbol?)
+        }
+        if declared?.IsReferenceType != true {
+            return false
+        }
+        if HasAllowNullWriteContract(slot) {
+            return true
+        }
+        if runCompilations == nil || slot!!.OriginalDefinition.DeclaringSyntaxReferences.Length != 0 {
+            return false
+        }
+        for source in RunSourceDeclarations(slot!!, runCompilations) {
+            if HasAllowNullWriteContract(source) {
+                return true
+            }
+        }
+        return false
     }
 
     // Issue #5574: `IsDeclaredInThisRun` for the run as a whole: a source
@@ -3072,18 +3147,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .GetDisplayName() != identity {
                 continue
             }
-            var source ISymbol? = nil
-            if id.StartsWith("P:M:", StringComparison.Ordinal) {
-                let separator = id.LastIndexOf('#')
-                let ordinal = int32.Parse(id.Substring(separator + 1), CultureInfo.InvariantCulture)
-                if DocumentationCommentId.GetFirstSymbolForDeclarationId(id.Substring(2, separator - 2), csharp) is
-                IMethodSymbol method && ordinal < method.Parameters.Length {
-                    source = method.Parameters[ordinal]
-                }
-            } else {
-                source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
-            }
-            if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
+            if DeclarationOfNullArgumentId(id, csharp) is {} source && source.DeclaringSyntaxReferences.Length != 0 {
                 keys.AddRange(NullArgumentKeys(OriginalNullArgumentDeclaration(source)))
             }
         }

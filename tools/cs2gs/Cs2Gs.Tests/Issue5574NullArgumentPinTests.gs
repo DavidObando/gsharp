@@ -259,11 +259,11 @@ namespace Demo
         Assert.Contains("Forward(maybe!!", TranslateFile(c, "Go.cs", siblings))
     }
 
-    /// A sibling project's `[AllowNull]` slot seen through its emitted reference assembly is a
-    /// non-null store target for this translation (it bridges a `Node?` stored into it, #5577), so it pins
-    /// the parameter stored into it, and no `p!!` throws on the null the C# stores.
+    /// A sibling project's `[AllowNull]` slot seen through its emitted reference assembly takes the
+    /// null: the sibling's translation emits it `T?`, and this translation stores a `Node?` into it
+    /// without a bridge (#5577). So it does not pin the parameter stored into it.
     @Fact
-    func AnAllowNullSlotThroughAnEmittedReference_PinsAsTheTranslationReadsIt() {
+    func AnAllowNullSlotThroughAnEmittedReference_DoesNotPin() {
         let library = CompileFiles("Lib", nil, ("Holder.cs", `
 using System.Diagnostics.CodeAnalysis;
 namespace Demo
@@ -285,8 +285,8 @@ namespace Demo
     }
 }`))
         let printed = TranslateFile(app, "Use.cs", []CSharpCompilation{library, app})
-        Assert.Contains("Put(h Holder, p Node)", printed)
-        Assert.DoesNotContain("p!!", printed)
+        Assert.Contains("Put(h Holder, p Node?)", printed)
+        Assert.DoesNotContain("!!", printed)
     }
 
     /// An async result is the awaited value: a `Task<Node?>` result takes the null and does not
