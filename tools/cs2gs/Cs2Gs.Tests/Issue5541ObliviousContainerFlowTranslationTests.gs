@@ -638,6 +638,75 @@ public static class Use
             }, []string{"Iterator", "2", "Bound", "1"})
     }
 
+    /// Review of #5571: an indexer's key and value slots are bound by the receiver's
+    /// storage, as a method's parameters are. An unchanged `Dictionary<string, int>`
+    /// keeps the key's `!!`; a promoted `List[string?]` takes a nil value.
+    @Fact
+    func An_Indexer_Slot_Is_Bound_By_Its_Receiver() {
+        this.Check("Review18", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Get(string p) { string[] lines; lines = Node.Lines(p); Dictionary<string, int> table = new Dictionary<string, int> { ["ab"] = 3 }; return table[lines[0]]; }
+    public static int Set(string p) { string[] lines; lines = Node.Lines(p); Dictionary<string, int> table = new Dictionary<string, int>(); table[lines[0]] = 4; return table["ab"]; }
+    public static int Promoted(string p) { string[] lines; lines = Node.Holes(p); List<string> list = new List<string>(lines); list[0] = lines[1]; return list[0] == null ? 1 : 0; }
+}`, []string{
+                "return table[lines[0]!!]",
+                "table[lines[0]!!] = 4",
+                "list[0] = lines[1]\n"
+            }, []string{"Get", "3", "Set", "4", "Promoted", "1"})
+    }
+
+    /// Review of #5571: a value returned from a property or indexer getter is stored
+    /// in the property, so a construction there states the property's positions and
+    /// takes a nil argument as it is.
+    @Fact
+    func A_Getter_Return_Is_Stored_In_Its_Property() {
+        this.Check("Review19", `using ObLib;
+
+public class Box<T> { public T Value; public Box(T value) { Value = value; } }
+public class Holder
+{
+    public bool Flag;
+    public string P = "";
+    public Box<string> Prop { get { string[] lines; lines = Node.Holes(P); if (Flag) { return new Box<string>(lines[0]); } string? s = null; return new Box<string>(s); } }
+    public Box<string> this[int i] { get { string[] lines; lines = Node.Holes(P); if (i == 0) { return new Box<string>(lines[1]); } string? s = null; return new Box<string>(s); } }
+}
+public static class Use
+{
+    public static int Getter(string p) { var h = new Holder { P = p }; return h.Prop.Value == null ? 1 : 0; }
+    public static int GetterFlag(string p) { var h = new Holder { P = p, Flag = true }; return h.Prop.Value.Length; }
+    public static int Indexer(string p) { var h = new Holder { P = p }; return (h[1].Value == null ? 1 : 0) + (h[0].Value == null ? 10 : 0); }
+    public static int Throws(string p) { var h = new Holder { P = p }; try { return h[0].Value.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "prop Prop Box[string?] {",
+                "return Box[string?](s)\n"
+            }, []string{"Getter", "1", "GetterFlag", "2", "Indexer", "11", "Throws", "-1"})
+    }
+
+    /// Review of #5571: an array literal or collection expression states the whole
+    /// position subtree of its element, so `new[] { lines }` is `[][]string?{lines}`.
+    @Fact
+    func An_Array_Literal_States_Nested_Positions() {
+        this.Check("Review20", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Implicit(string p) { string[] lines; lines = Node.Holes(p); var wrapped = new[] { lines }; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Explicit(string p) { string[] lines; lines = Node.Holes(p); var wrapped = new string[][] { lines }; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Collection(string p) { string[] lines; lines = Node.Holes(p); string[][] wrapped = [lines]; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Listed(string p) { string[] lines; lines = Node.Holes(p); List<string[]> wrapped = [lines]; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); var wrapped = new[] { lines }; try { return wrapped[0][1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "let wrapped = [][]string?{lines}",
+                "let wrapped [][]string? = [][]string?{lines}",
+                "let wrapped List[[]string?] = List[[]string?]{ lines }",
+                "return wrapped[0][0]!!.Length"
+            }, []string{"Implicit", "12", "Explicit", "12", "Collection", "12", "Listed", "12", "Throws", "-1"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {

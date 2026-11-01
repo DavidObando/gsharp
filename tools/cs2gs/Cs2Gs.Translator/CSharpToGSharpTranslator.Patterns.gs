@@ -3107,12 +3107,8 @@ partial class CSharpToGSharpTranslator {
                 elementType = MakeNullable(elementType)
             }
             // Issue #5537: an array stored in oblivious container storage has its
-            // element type.
-            if elementType != nil && elementType.IsNullable == false && this.ObliviousContainerSinkPromotesArrayElement(
-                creation
-            ) {
-                elementType = MakeNullable(elementType)
-            }
+            // element type, nested positions included (#5541).
+            elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
             return ArrayAllocationExpression(elementType, length)
         }
 
@@ -4119,8 +4115,14 @@ partial class CSharpToGSharpTranslator {
                 .typeMapper
                 .Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference
             let targetRef NamedTypeReference? = if isConstructibleClassTarget {
+                // Issue #5541: the construction states the positions that its storage
+                // and its elements give it, as an array literal does.
                 cast[NamedTypeReference](
-                    this.typeMapper.Map(cast[INamedTypeSymbol](target), this.context, collection.GetLocation())
+                    this.PromoteObliviousCollectionTarget(
+                        this.typeMapper.Map(cast[INamedTypeSymbol](target), this.context, collection.GetLocation()),
+                        target,
+                        collection
+                    )
                 )
             } else {
                 default(NamedTypeReference?)

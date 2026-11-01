@@ -344,8 +344,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         // The declared positions and type of the storage that receives a value. An
-        // `async` method receives its task's result.
-        private func SinkStorage(sink ISymbol?)(Positions HashSet[string]?, Type ITypeSymbol?) {
+        // `async` method receives its task's result, and a property or indexer
+        // accessor stands for its property.
+        private func SinkStorage(resolved ISymbol?)(Positions HashSet[string]?, Type ITypeSymbol?) {
+            let sink ISymbol? = AccessorStorage(resolved)
             let positions = this.ObliviousContainerPositions(sink)
             let type ITypeSymbol? = StorageType(sink?.OriginalDefinition)
             if sink is IMethodSymbol method && method.IsAsync && IsGenericTaskLike(type) {
@@ -443,18 +445,76 @@ partial class CSharpToGSharpTranslator {
         /// storage has a nullable element.
         /// @param creation The array construction.
         /// @returns True when the element type is nullable.
-        private func ObliviousContainerSinkPromotesArrayElement(creation ExpressionSyntax?) bool {
-            let (positions, type) = this.SinkStorage(this.ResolveValueSink(creation))
-            if type is IArrayTypeSymbol && positions?.Contains("0") == true {
-                return true
+        private func ObliviousContainerSinkPromotesArrayElement(creation ExpressionSyntax?) bool -> this
+            .ObliviousArrayLiteralPositions(creation).Contains("0")
+
+        /// Issue #5541: the element type that an array construction, a bare array
+        /// initializer or a collection expression states: the whole position subtree
+        /// below its element position `0`, as a construction states its type
+        /// arguments (`new[] { lines }` is `[][]string?{lines}`). Every array literal
+        /// emitter asks this.
+        /// @param elementType The mapped element type.
+        /// @param elementTypeSymbol The C# element type.
+        /// @param literal The construction, initializer or collection expression.
+        /// @returns The element type to emit.
+        private func PromoteObliviousArrayElement(
+            elementType GTypeReference?,
+            elementTypeSymbol ITypeSymbol?,
+            literal ExpressionSyntax?
+        ) GTypeReference? {
+            if elementType == nil || elementTypeSymbol == nil {
+                return elementType
             }
-            // Issue #5541: an array literal holds the nullable element that it is given
-            // (`new[] { l }` is `[]string?` for a `string?` element).
-            return (creation is ArrayCreationExpressionSyntax || creation is ImplicitArrayCreationExpressionSyntax) &&
-                this
-                .ObliviousValuePositions(creation)
-                ?.Nullable
-                .Contains("0") == true
+            let positions = this.ObliviousArrayLiteralPositions(literal)
+            return if positions.Count == 0 {
+                elementType
+            } else {
+                PromoteNestedPosition(elementType, elementTypeSymbol, positions, "0")
+            }
+        }
+
+        /// Issue #5541: a collection expression that builds a class (`List<T> l = [x]`)
+        /// states the same positions as an array literal, below its type argument.
+        /// @param type The mapped target type.
+        /// @param targetType The C# target type.
+        /// @param collection The collection expression.
+        /// @returns The target type to emit.
+        private func PromoteObliviousCollectionTarget(
+            type GTypeReference?,
+            targetType ITypeSymbol?,
+            collection CollectionExpressionSyntax
+        ) GTypeReference? {
+            let positions = this.ObliviousArrayLiteralPositions(collection)
+            positions.Remove("")
+            return if positions.Count == 0 {
+                type
+            } else {
+                PromoteNestedPositions(type, targetType, positions, "")
+            }
+        }
+
+        // The nullable positions of an array literal's type: those of the storage
+        // that receives it (an `async` method's task result included) and those that
+        // its elements give it.
+        private func ObliviousArrayLiteralPositions(literal ExpressionSyntax?) HashSet[string] {
+            let positions = HashSet[string](System.StringComparer.Ordinal)
+            if literal == nil || !this.ObliviousContainerFlowState().HasNullable {
+                return positions
+            }
+            let literalType ITypeSymbol? = ElementLiteralType(literal, this.context.SemanticModel)
+            let (sinkPositions, sinkType) = this.SinkStorage(this.ResolveValueSink(literal))
+            if sinkPositions != nil &&
+                (literalType is IArrayTypeSymbol || literal is CollectionExpressionSyntax) &&
+                SameContainerShape(literalType, sinkType) {
+                positions.UnionWith(sinkPositions)
+            }
+            if IsElementLiteral(literal) {
+                let own = this.ObliviousValuePositions(literal)
+                if own != nil {
+                    positions.UnionWith(own.Nullable)
+                }
+            }
+            return positions
         }
 
         /// Issue #5537: whether [`value`](paramref) reads an element that oblivious
@@ -550,8 +610,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 if receiver != nil &&
                     StorageType(member?.OriginalDefinition) is ITypeParameterSymbol receiverParameter {
-                    return NullableTypeArgumentViolatesTranslatedConstraints(receiverParameter) ||
-                        !this.ElementPositionIsPromoted(receiver, member)
+                    return this.SlotTypeProvesNonNull(assignment.Left, receiverParameter)
                 }
                 return true
             }
@@ -651,19 +710,39 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             // A type parameter of the receiver's type, which the receiver's storage
-            // binds: `list.Add(value)` on `List[string]` storage.
-            if parameter.TypeParameterKind == TypeParameterKind.Type &&
-                call is InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax target} invocation &&
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is IMethodSymbol method &&
-                method.ReducedFrom == nil &&
-                !method.IsStatic &&
-                !(target.Expression is ThisExpressionSyntax || target.Expression is BaseExpressionSyntax) {
-                return !this.CallSlotIsNullable(invocation, slotType)
+            // binds: `list.Add(value)` on `List[string]` storage, the key of
+            // `table[key]` and the value of `table[key] = value` or `box.Value = value`.
+            if parameter.TypeParameterKind == TypeParameterKind.Type && this.ReceiverBoundMember(call) != nil {
+                return !this.CallSlotIsNullable(call!!, slotType)
             }
             return false
+        }
+
+        // The instance member that [`access`](paramref) reaches through a receiver
+        // whose storage binds the member's type parameters: a method call, an indexer
+        // read or write, or a field or property read or write. An extension call, a
+        // static member and a `this` or `base` receiver bind nothing.
+        private func ReceiverBoundMember(access ExpressionSyntax?) ISymbol? {
+            let receiver ExpressionSyntax? = switch access {
+                case invocation is InvocationExpressionSyntax: (
+                    invocation.Expression as MemberAccessExpressionSyntax
+                )?.Expression
+                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
+                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                default: default(ExpressionSyntax?)
+            }
+            if receiver == nil || receiver is ThisExpressionSyntax || receiver is BaseExpressionSyntax {
+                return nil
+            }
+            let member ISymbol? = this.context.GetSymbolInfo(access!!).Symbol
+            return if member == nil ||
+                member.IsStatic ||
+                (member is IMethodSymbol method && method.ReducedFrom != nil) ||
+                !(member is IMethodSymbol || member is IPropertySymbol || member is IFieldSymbol) {
+                nil
+            } else {
+                member
+            }
         }
 
         // Whether [`value`](paramref) is written into a slot that the analysis makes
@@ -799,6 +878,11 @@ partial class CSharpToGSharpTranslator {
                 .GetSymbolInfo(invocation)
                 .Symbol is IMethodSymbol method {
                 bindings = this.ObliviousMemberTypeArguments(invocation, method, model, flow)
+            } else if (call is ElementAccessExpressionSyntax || call is MemberAccessExpressionSyntax) &&
+                this.ReceiverBoundMember(call) is {} member {
+                // An indexer, field or property binds its type's parameters to the
+                // receiver's positions, as a method call does.
+                bindings = this.ObliviousMemberTypeArguments(call, member, model, flow)
             } else if call is BaseObjectCreationExpressionSyntax creation &&
                 this
                 .context
@@ -971,21 +1055,8 @@ partial class CSharpToGSharpTranslator {
             if value is AwaitExpressionSyntax awaitExpression {
                 return this.ObliviousAwaitedPositions(awaitExpression, model, flow)
             }
-            // An array literal holds the positions of its elements below position `0`.
-            let arrayInitializer InitializerExpressionSyntax? = switch value {
-                case explicitArray is ArrayCreationExpressionSyntax: explicitArray.Initializer
-                case implicitArray is ImplicitArrayCreationExpressionSyntax: implicitArray.Initializer
-                default: default(InitializerExpressionSyntax?)
-            }
-            if arrayInitializer != nil {
-                let elements = ObliviousPositionSet()
-                for element in arrayInitializer.Expressions {
-                    let elementPositions = this.ObliviousPositionsOf(element, model, flow)
-                    if elementPositions != nil {
-                        elements.UnionWith(Prefixed(elementPositions, "0"))
-                    }
-                }
-                return Filtered(model.GetTypeInfo(value!!).Type, elements)
+            if IsElementLiteral(value!!) {
+                return this.ObliviousLiteralPositions(value!!, model, flow)
             }
             if !(
                 value is IdentifierNameSyntax ||
@@ -1434,7 +1505,7 @@ partial class CSharpToGSharpTranslator {
                         // result keeps its declared top level, as a return does.
                         if positions != nil {
                             let mapped = if prefix == "" {
-                                MapToStorageType(model.GetTypeInfo(value).Type, destinationType, positions)
+                                MapToStorageType(StoredValueType(value, model), destinationType, positions)
                             } else if destination is IParameterSymbol {
                                 Prefixed(positions, prefix)
                             } else {
@@ -1481,7 +1552,7 @@ partial class CSharpToGSharpTranslator {
                         // initializer (TranslateValueWithNullForgiveness), so only its
                         // nested positions follow the value.
                         let stored = if kind == 2 {
-                            EnumeratedPositions(model.GetTypeInfo(value).Type, positions, compilation)
+                            EnumeratedPositions(StoredValueType(value, model), positions, compilation)
                         } else if destinationType?.NullableAnnotation == Microsoft
                             .CodeAnalysis
                             .NullableAnnotation
@@ -1498,7 +1569,7 @@ partial class CSharpToGSharpTranslator {
                                 flow,
                                 original,
                                 destinationType,
-                                MapToStorageType(model.GetTypeInfo(value).Type, destinationType, positions)
+                                MapToStorageType(StoredValueType(value, model), destinationType, positions)
                             )
                         }
                     }
@@ -1750,6 +1821,59 @@ partial class CSharpToGSharpTranslator {
             return changed
         }
 
+        // The positions of an element literal: each element's positions below position
+        // `0`, and each spread element's positions below its own position `0`.
+        private func ObliviousLiteralPositions(
+            literal ExpressionSyntax,
+            model SemanticModel,
+            flow ObliviousContainerFlow
+        ) ObliviousPositionSet? {
+            let literalType ITypeSymbol? = ElementLiteralType(literal, model)
+            if !ElementIsPositionZero(literalType) {
+                return nil
+            }
+            let initializer InitializerExpressionSyntax? = switch literal {
+                case explicitArray is ArrayCreationExpressionSyntax: explicitArray.Initializer
+                case implicitArray is ImplicitArrayCreationExpressionSyntax: implicitArray.Initializer
+                case bare is InitializerExpressionSyntax: bare
+                default: default(InitializerExpressionSyntax?)
+            }
+            let positions = ObliviousPositionSet()
+            if initializer != nil {
+                for element in initializer.Expressions {
+                    this.AddLiteralElementPositions(element, false, model, flow, positions)
+                }
+            }
+            if literal is CollectionExpressionSyntax collection {
+                for element in collection.Elements {
+                    if element is ExpressionElementSyntax expressionElement {
+                        this.AddLiteralElementPositions(expressionElement.Expression, false, model, flow, positions)
+                    } else if element is SpreadElementSyntax spread {
+                        this.AddLiteralElementPositions(spread.Expression, true, model, flow, positions)
+                    }
+                }
+            }
+            return Filtered(literalType, positions)
+        }
+
+        private func AddLiteralElementPositions(
+            element ExpressionSyntax,
+            spread bool,
+            model SemanticModel,
+            flow ObliviousContainerFlow,
+            positions ObliviousPositionSet
+        ) {
+            let elementPositions = this.ObliviousPositionsOf(element, model, flow)
+            if elementPositions == nil {
+                return
+            }
+            if !spread {
+                positions.UnionWith(Prefixed(elementPositions, "0"))
+            } else if ElementIsPositionZero(model.GetTypeInfo(element).Type) {
+                positions.UnionWith(Prefixed(Subtree(elementPositions, "0"), "0"))
+            }
+        }
+
         shared {
             private let ObliviousContainerFlowCache ConditionalWeakTable[
                 Compilation,
@@ -1966,6 +2090,54 @@ partial class CSharpToGSharpTranslator {
                 return writes
             }
 
+            // Issue #5541: an array literal (explicit, implicit or a bare array
+            // initializer) or a collection expression. Its element type is position `0`
+            // of its type, and its elements and spread elements give that position's
+            // subtree.
+            private func IsElementLiteral(value ExpressionSyntax) bool -> value is ArrayCreationExpressionSyntax{
+                Initializer: {}
+            } ||
+                value is ImplicitArrayCreationExpressionSyntax ||
+                value is CollectionExpressionSyntax ||
+                value.IsKind(SyntaxKind.ArrayInitializerExpression)
+
+            // The type of an element literal: an array construction states its own, and a
+            // bare initializer or a collection expression takes its target's.
+            private func ElementLiteralType(literal ExpressionSyntax, model SemanticModel) ITypeSymbol? {
+                let info = model.GetTypeInfo(literal)
+                return if literal is ArrayCreationExpressionSyntax || literal is ImplicitArrayCreationExpressionSyntax {
+                    info.Type
+                } else {
+                    info.ConvertedType ?? info.Type
+                }
+            }
+
+            // The type of a value that is stored: an element literal's own type (a bare
+            // initializer or a collection expression has only its target's).
+            private func StoredValueType(
+                value ExpressionSyntax,
+                model SemanticModel
+            ) ITypeSymbol? -> if IsElementLiteral(value) {
+                ElementLiteralType(value, model)
+            } else {
+                model.GetTypeInfo(value).Type
+            }
+
+            // Whether position `0` of [`type`](paramref) is the element of a literal or a
+            // spread of that type: an array, or a generic type whose one type argument is
+            // its collection element (`List[T]`, `Span[T]`, `IEnumerable[T]`).
+            private func ElementIsPositionZero(type ITypeSymbol?) bool {
+                if type is IArrayTypeSymbol {
+                    return true
+                }
+                return type is INamedTypeSymbol named && named.TypeArguments.Length == 1 && FlatTypeArguments(
+                    named
+                ).Count == 1 &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(GetCollectionElementTypeSymbol(named), named.TypeArguments[0])
+            }
+
             // Whether [`value`](paramref) is written inside the call, not the call.
             private func IsWrittenIn(call SyntaxNode, value ExpressionSyntax?) bool -> value != nil &&
                 value.SyntaxTree == call.SyntaxTree &&
@@ -2015,9 +2187,8 @@ partial class CSharpToGSharpTranslator {
             }
 
             // Only these values can carry positions (see ObliviousPositionsOf).
-            private func CanCarryPositions(value ExpressionSyntax) bool -> value is IdentifierNameSyntax ||
-                value is ArrayCreationExpressionSyntax ||
-                value is ImplicitArrayCreationExpressionSyntax ||
+            private func CanCarryPositions(value ExpressionSyntax) bool -> IsElementLiteral(value) ||
+                value is IdentifierNameSyntax ||
                 value is MemberAccessExpressionSyntax ||
                 value is ElementAccessExpressionSyntax ||
                 value is InvocationExpressionSyntax ||
@@ -2553,13 +2724,24 @@ partial class CSharpToGSharpTranslator {
                     return nil
                 }
                 if method.MethodKind == MethodKind.PropertyGet {
-                    return method.AssociatedSymbol
+                    return AccessorStorage(method)
                 }
                 return if method.MethodKind == MethodKind.Ordinary || method.MethodKind == MethodKind.LocalFunction {
                     method
                 } else {
                     nil
                 }
+            }
+
+            // The storage that a property or indexer accessor reads and writes: its
+            // property. The analysis records positions there, so every lookup of a
+            // sink that is an accessor goes through this.
+            private func AccessorStorage(symbol ISymbol?) ISymbol? -> if symbol is IMethodSymbol accessor &&
+                (accessor.MethodKind == MethodKind.PropertyGet || accessor.MethodKind == MethodKind.PropertySet) &&
+                accessor.AssociatedSymbol is IPropertySymbol property {
+                property
+            } else {
+                symbol
             }
 
             private func ReturnPrefix(enclosing ISymbol?) string -> if enclosing is IMethodSymbol method &&

@@ -911,11 +911,18 @@ partial class CSharpToGSharpTranslator {
         // compiling. Symmetry, not extra permissiveness: the decision is the
         // declaration's, taken once, and every write of it follows.
         private func PromoteElementTypeForNullElements(
-            elementType GTypeReference?,
+            mappedElementType GTypeReference?,
             elementTypeSymbol ITypeSymbol?,
             elements IEnumerable[ExpressionSyntax],
             literal ExpressionSyntax? = nil
         ) GTypeReference? {
+            // Issue #5541: the positions that oblivious container storage and the
+            // elements give the literal's element type, nested positions included.
+            let elementType GTypeReference? = if literal != nil {
+                this.PromoteObliviousArrayElement(mappedElementType, elementTypeSymbol, literal)
+            } else {
+                mappedElementType
+            }
             if elementType == nil ||
                 elementType.IsNullable ||
                 !(elementTypeSymbol != nil && elementTypeSymbol.IsReferenceType == true) ||
@@ -925,11 +932,7 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return elementType
             }
-            if literal != nil &&
-                (
-                this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) ||
-                    this.ObliviousContainerSinkPromotesArrayElement(literal)
-            ) {
+            if literal != nil && this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) {
                 return MakeNullable(elementType)
             }
             for element in elements {
