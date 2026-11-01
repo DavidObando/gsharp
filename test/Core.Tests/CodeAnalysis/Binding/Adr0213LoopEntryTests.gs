@@ -1559,7 +1559,8 @@ func Main() { }`, "GS0158")
             Add("type-tested-local-call-is-indirect (A3)", `package T
 import System
 import System.Linq
-class Holder {
+interface IBase { }
+class Holder : IBase {
     var Count Action = Action(func() { })
 }
 func Run(ref text string?, holder Holder) int32 {
@@ -1567,7 +1568,7 @@ func Run(ref text string?, holder Holder) int32 {
     var n = 0
     while text.Length > 0 && n < 3 {
         n++
-        let local object = holder
+        let local IBase = holder
         if local is Holder { local.Count() }
     }
     return n

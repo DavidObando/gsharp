@@ -501,12 +501,32 @@ internal partial class StatementBinder {
                     return nil
                 }
             }
-            if next.Count == 0 {
+            types = Distinct(next)
+            // Overloads and unions can multiply the candidates at each step; a path with too many does not resolve.
+            if types.Count == 0 || types.Count > MaxReceiverTypes {
                 return nil
             }
-            types = next
         }
         return types
+    }
+
+    private const MaxReceiverTypes int32 = 16
+
+    private func Distinct(types List[ReceiverType]) List[ReceiverType] {
+        let distinct = List[ReceiverType]()
+        for type in types {
+            var seen = false
+            for kept in distinct {
+                if object.ReferenceEquals(kept.Symbol, type.Symbol) && kept.Clr == type.Clr {
+                    seen = true
+                    break
+                }
+            }
+            if !seen {
+                distinct.Add(type)
+            }
+        }
+        return distinct
     }
 
     // The types of a root: a variable of the entry scope (declared, narrowed and type-tested in the region), a type,
