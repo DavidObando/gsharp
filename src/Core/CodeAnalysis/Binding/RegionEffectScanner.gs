@@ -1759,6 +1759,10 @@ internal sealed class RegionEffectScanner {
         while inner is ParenthesizedExpressionSyntax parenthesized {
             inner = parenthesized.Expression
         }
+        // `nil` stores the null value of a reference or nullable target; it calls no conversion operator.
+        if IsNilLiteral(inner) {
+            return
+        }
         var builtInByForm = inner is BinaryExpressionSyntax ||
             inner is LiteralExpressionSyntax ||
             inner is InterpolatedStringExpressionSyntax

@@ -862,8 +862,8 @@ internal partial class StatementBinder {
         definition Type?,
         next List[ReceiverType]
     ) int32 {
-        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
-        BindingFlags.FlattenHierarchy
+        // Only a public member can be named after a dot or indexed; an explicit interface implementation cannot.
+        let flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
         let searched = List[Type]()
         searched.Add(type)
         if type.IsInterface {
@@ -1005,7 +1005,7 @@ internal partial class StatementBinder {
                     operandTypes.Add(nil)
                 } else if BuiltInOperandType(operand, effects) is {} operandType {
                     operandTypes.Add(operandType)
-                } else if !forReferenceStorage || !OperandIsSourceType(operand, effects) {
+                } else if !forReferenceStorage || OperandIsImportedType(operand, effects) {
                     return true
                 } else {
                     operandTypes.Add(nil)
@@ -1032,16 +1032,29 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func OperandIsSourceType(operand RegionReceiverPath, effects RegionEffects) bool {
+    // Whether an operand resolves to an imported type that is not built in, whose operators are imported methods. An
+    // operand that does not resolve is not counted here (the walker cannot type a call result such as an extension
+    // method's).
+    private func OperandIsImportedType(operand RegionReceiverPath, effects RegionEffects) bool {
         if ResolveReceiverPath(operand, effects) is not{} types {
             return false
         }
         for type in types {
-            if type.Symbol is not StructSymbol {
-                return false
+            let symbol = if type.Clr is {} clr {
+                BuiltInType(clr.FullName)
+            } else {
+                type.Symbol
+            }
+            if symbol == nil && type.Clr != nil {
+                return true
+            }
+            if symbol is not StructSymbol && symbol is not EnumSymbol && symbol != nil && !MetadataTypeKeys.IsBuiltIn(
+                symbol
+            ) {
+                return true
             }
         }
-        return true
+        return false
     }
 
     private func IsPredefinedBinary(kind SyntaxKind, left TypeSymbol?, right TypeSymbol?) bool {
@@ -1062,19 +1075,25 @@ internal partial class StatementBinder {
     }
 
     // The one built-in type of an operand, or `nil` when it does not resolve to one.
+    // The built-in type of an operand, or `nil` when it does not resolve to one. Candidates of several built-in types
+    // (the overloads of `Math.Max`) give the first, since each has the same operators by kind.
     private func BuiltInOperandType(operand RegionReceiverPath, effects RegionEffects) TypeSymbol? {
-        if ResolveReceiverPath(operand, effects) is not{} types || types.Count != 1 {
+        if ResolveReceiverPath(operand, effects) is not{} types || types.Count == 0 {
             return nil
         }
-        let type = if types[0].Clr is {} clr {
-            BuiltInType(clr.FullName)
-        } else {
-            types[0].Symbol
+        var first TypeSymbol? = nil
+        for candidate in types {
+            let type = if candidate.Clr is {} clr {
+                BuiltInType(clr.FullName)
+            } else {
+                candidate.Symbol
+            }
+            if type == nil || !MetadataTypeKeys.IsBuiltIn(type) || object.Equals(type, TypeSymbol.Object) {
+                return nil
+            }
+            first ??= type
         }
-        if type == nil || !MetadataTypeKeys.IsBuiltIn(type) || object.Equals(type, TypeSymbol.Object) {
-            return nil
-        }
-        return type
+        return first
     }
 
     private func BuiltInType(clrName string?) TypeSymbol? {
