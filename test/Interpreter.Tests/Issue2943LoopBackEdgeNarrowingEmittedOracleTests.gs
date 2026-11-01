@@ -104,7 +104,13 @@ run()`)
             )
             Assert.Equal(66, result.Value)
         } else {
-            Assert.True(result.Diagnostics.Any((d Diagnostic) -> d.IsError), "$shape/$$scope must be rejected")
+            // The rejection is the narrowing error at the `c.Value` read of the loop body, and nothing else.
+            let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+            Assert.True(errors.Length > 0, "$shape/$$scope must be rejected")
+            for error in errors {
+                Assert.Equal("GS0158", error.Id)
+                Assert.Contains("Value", error.Message)
+            }
         }
     }
 

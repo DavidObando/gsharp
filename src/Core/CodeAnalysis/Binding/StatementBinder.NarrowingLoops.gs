@@ -120,6 +120,19 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        /// Whether a bare static member that the region reads or writes has an owner whose initializer runs user
+        /// code (ADR-0208 R11, #5520).
+        prop TouchesInitializingType bool {
+            get;
+            set;
+        }
+
+        /// Whether a nil comparison of the region can select a user-defined `==`.
+        prop NilCompareRunsUserOperator bool {
+            get;
+            set;
+        }
     }
 
     private var packageDeclaresConversions bool? = nil
@@ -182,7 +195,9 @@ internal partial class StatementBinder {
             }
         }
         if effects.ContainsOperatorCandidate {
-            resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand
+            // A unary operator that is not predefined for a literal or a built-in operand calls a user-defined or
+            // an extension operator (`-"x"`), as does a binary one with an extension operator.
+            resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand || OperatorsRunUserCode(effects, false)
             for name in effects.OperatorOperandNames {
                 // A declaration of the region is not found here, and its type is unknown: it counts.
                 if $scope.TryLookupSymbol(name) is VariableSymbol operand {
@@ -209,6 +224,7 @@ internal partial class StatementBinder {
                         (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType))
                 ) {
                     resolved.RunsUserOperator = true
+                    resolved.NilCompareRunsUserOperator = true
                 }
             }
         }
@@ -220,6 +236,10 @@ internal partial class StatementBinder {
             if symbol is ImplicitPropertyVariableSymbol{Property: {IsAutoProperty: false}} or
                 ImplicitStaticPropertyVariableSymbol{Property: {IsAutoProperty: false}} {
                 resolved.ReadsUserCodeProperty = true
+            }
+            if BareStaticOwnerInitializes(symbol) {
+                resolved.TouchesInitializingType = true
+                resolved.RunsUserCodeOnWrite = true
             }
         }
         for write in effects.Writes {
@@ -434,25 +454,7 @@ internal partial class StatementBinder {
     }
 
     private func ResolveTypeName(name string) TypeSymbol? {
-        for builtin in[]TypeSymbol{
-            TypeSymbol.Bool,
-            TypeSymbol.UInt8,
-            TypeSymbol.Int8,
-            TypeSymbol.Int16,
-            TypeSymbol.UInt16,
-            TypeSymbol.Int32,
-            TypeSymbol.UInt32,
-            TypeSymbol.Int64,
-            TypeSymbol.UInt64,
-            TypeSymbol.NInt,
-            TypeSymbol.NUInt,
-            TypeSymbol.Float32,
-            TypeSymbol.Float64,
-            TypeSymbol.Decimal,
-            TypeSymbol.Char,
-            TypeSymbol.String,
-            TypeSymbol.Object
-        } {
+        for builtin in BuiltInTypes() {
             if builtin.Name == name {
                 return builtin
             }
@@ -669,6 +671,11 @@ internal partial class StatementBinder {
             case slice is SliceTypeSymbol {
                 if elementStep {
                     return Outcome(AddSymbolType(slice.ElementType, next))
+                }
+                // The length and the capacity of a slice are intrinsic `int32` reads.
+                if step.Kind == RegionReceiverStepKind.Member && (step.Name == "Length" || step.Name == "Capacity") {
+                    next.Add(ReceiverType(TypeSymbol.Int32, nil))
+                    return StepFound
                 }
             }
             case rectangular is RectangularArrayTypeSymbol {
@@ -959,6 +966,216 @@ internal partial class StatementBinder {
         return true
     }
 
+    // Whether a bare name binds to a static field (not a constant) or a static property whose owner runs user code
+    // in its initializer at a static member access.
+    private func BareStaticOwnerInitializes(symbol Symbol?) bool {
+        switch symbol {
+            case field is ImplicitStaticFieldVariableSymbol {
+                return !field
+                    .Field
+                    .IsConst &&
+                    field.StructType is {} owner &&
+                    TypeInitializationRunsUserCode(owner, true)
+            }
+            case property is ImplicitStaticPropertyVariableSymbol {
+                return TypeInitializationRunsUserCode(property.StructType, true)
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    // Whether an operator of the region can be user code: an operand whose type does not resolve, is not built in or
+    // is `object`, a unary operator that is not predefined for its operand (after `char` promotion, as the
+    // expression binder does), or a binary operator that is not predefined and has an extension operator.
+    // For a fact on by-reference storage ([`forReferenceStorage`](paramref)), a source operator (of a type of the
+    // package or an extension operator) is a plain call that ADR-0208 A3 exempts, as on main; an imported operator is
+    // not.
+    private func OperatorsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
+        for candidate in effects.Operators {
+            // A known built-in operand type, or `nil` for an operand that is itself an operator expression.
+            let operandTypes = List[TypeSymbol?]()
+            for var index = 0; index < candidate.Operands.Count; index++ {
+                let operand = candidate.Operands[index]
+                if operand == nil {
+                    if !candidate.OperatorForms[index] {
+                        return true
+                    }
+                    operandTypes.Add(nil)
+                } else if BuiltInOperandType(operand, effects) is {} operandType {
+                    operandTypes.Add(operandType)
+                } else if !forReferenceStorage || !OperandIsSourceType(operand, effects) {
+                    return true
+                } else {
+                    operandTypes.Add(nil)
+                }
+            }
+            if operandTypes.Count == 1 {
+                if operandTypes[0] is not{} operandType {
+                    continue
+                }
+                var promotedType = operandType
+                if ExpressionBinder.TryGetPromotedCharUnaryType(candidate.Kind, operandType, out var promoted) &&
+                    promoted != nil {
+                    promotedType = promoted
+                }
+                if !forReferenceStorage && BoundUnaryOperator.Bind(candidate.Kind, promotedType) == nil {
+                    return true
+                }
+            } else if !forReferenceStorage &&
+                !IsPredefinedBinary(candidate.Kind, operandTypes[0], operandTypes[1]) &&
+                HasExtensionOperator(candidate.Kind, operandTypes[0], operandTypes[1]) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func OperandIsSourceType(operand RegionReceiverPath, effects RegionEffects) bool {
+        if ResolveReceiverPath(operand, effects) is not{} types {
+            return false
+        }
+        for type in types {
+            if type.Symbol is not StructSymbol {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func IsPredefinedBinary(kind SyntaxKind, left TypeSymbol?, right TypeSymbol?) bool {
+        if left == nil || right == nil {
+            return false
+        }
+        return BoundBinaryOperator.Bind(kind, left, right) != nil
+    }
+
+    private func HasExtensionOperator(kind SyntaxKind, left TypeSymbol?, right TypeSymbol?) bool {
+        if OperatorNames.TryGetBinaryName(kind) is not{} name {
+            return false
+        }
+        if left != nil && $scope.TryLookupExtensionFunction(left, name, out var leftOperator) {
+            return true
+        }
+        return right != nil && $scope.TryLookupExtensionFunction(right, name, out var rightOperator)
+    }
+
+    // The one built-in type of an operand, or `nil` when it does not resolve to one.
+    private func BuiltInOperandType(operand RegionReceiverPath, effects RegionEffects) TypeSymbol? {
+        if ResolveReceiverPath(operand, effects) is not{} types || types.Count != 1 {
+            return nil
+        }
+        let type = if types[0].Clr is {} clr {
+            BuiltInType(clr.FullName)
+        } else {
+            types[0].Symbol
+        }
+        if type == nil || !MetadataTypeKeys.IsBuiltIn(type) || object.Equals(type, TypeSymbol.Object) {
+            return nil
+        }
+        return type
+    }
+
+    private func BuiltInType(clrName string?) TypeSymbol? {
+        for builtin in BuiltInTypes() {
+            if builtin.ClrType?.FullName == clrName {
+                return builtin
+            }
+        }
+        return nil
+    }
+
+    private func BuiltInTypes()[]TypeSymbol -> []TypeSymbol{
+        TypeSymbol.Bool,
+        TypeSymbol.UInt8,
+        TypeSymbol.Int8,
+        TypeSymbol.Int16,
+        TypeSymbol.UInt16,
+        TypeSymbol.Int32,
+        TypeSymbol.UInt32,
+        TypeSymbol.Int64,
+        TypeSymbol.UInt64,
+        TypeSymbol.NInt,
+        TypeSymbol.NUInt,
+        TypeSymbol.Float32,
+        TypeSymbol.Float64,
+        TypeSymbol.Decimal,
+        TypeSymbol.Char,
+        TypeSymbol.String,
+        TypeSymbol.Object
+    }
+
+    // Whether a conversion site can run a user-defined or imported conversion operator (the predicate of the
+    // conversion classifier, `HasUserDefinedImplicitConversion`). A site that the walker cannot follow can.
+    private func ConversionsRunUserCode(effects RegionEffects) bool {
+        for conversion in effects.Conversions {
+            let targetPath = conversion.Target
+            if targetPath == nil {
+                return true
+            }
+            let targets = ConversionTypes(targetPath, effects)
+            if targets == nil {
+                return true
+            }
+            let sourcePath = conversion.Source
+            if sourcePath == nil {
+                // An operator or a literal of built-in operands converts only to a type that is not built in.
+                if !conversion.SourceIsBuiltInByForm {
+                    return true
+                }
+                for target in targets {
+                    if !MetadataTypeKeys.IsBuiltIn(target) {
+                        return true
+                    }
+                }
+                continue
+            }
+            let sources = ConversionTypes(sourcePath, effects)
+            if sources == nil {
+                return true
+            }
+            // A generic target type resolves to its definition here, which no conversion operator names, so a
+            // value of another type converted to it may call one.
+            if targetPath.RootType?.HasTypeArguments == true && targetPath.Steps.Length == 0 {
+                return true
+            }
+            for source in sources {
+                for target in targets {
+                    // Between built-in types the conversion is predefined (numeric, boxing or identity).
+                    if object.Equals(source, target) ||
+                        (MetadataTypeKeys.IsBuiltIn(source) && MetadataTypeKeys.IsBuiltIn(target)) {
+                        continue
+                    }
+                    if conversions.HasUserDefinedImplicitConversion(source, target) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private func ConversionTypes(path RegionReceiverPath, effects RegionEffects) List[TypeSymbol]? {
+        if ResolveReceiverPath(path, effects) is not{} types {
+            return nil
+        }
+        let result = List[TypeSymbol]()
+        for type in types {
+            if type.Symbol is {} symbol {
+                result.Add(symbol)
+            } else if type.Clr is {} clr {
+                result.Add(
+                    BuiltInType(clr.FullName) ?? TypeSymbol.FromClrTypeWithoutNullability(
+                        clr,
+                        NullabilityFreeReason.ResolvedTypeName
+                    )
+                )
+            }
+        }
+        return result
+    }
+
     private func NamesReferenceStorage(path AccessPath) bool {
         let root = path.Root
         return (
@@ -1030,7 +1247,10 @@ internal partial class StatementBinder {
                         } else if candidate.Name == member {
                             switch candidate {
                                 case field is FieldSymbol {
-                                    return field.IsStatic && TypeInitializationRunsUserCode(level, true)
+                                    // A constant is inlined and initializes nothing.
+                                    return field.IsStatic &&
+                                        !field.IsConst &&
+                                        TypeInitializationRunsUserCode(level, true)
                                 }
                                 case property is PropertySymbol {
                                     return !property.IsAutoProperty ||
@@ -1520,9 +1740,16 @@ internal partial class StatementBinder {
         // alternative): a getter or an indexer that can run user code (ADR-0208 R14, R16 and R17) removes the fact
         // of storage that a reference names, as on main, because the code can write the storage that the
         // reference aliases. Only such a fact needs the answer, so the reads are resolved only for it.
+        // The same holds for a user-defined or imported operator or conversion and a static initializer (ADR-0208
+        // A3 exempts only a plain call to a method).
         if !indirectCall && NamesReferenceStorage(path) {
             if resolved.ReadsRunUserCode == nil {
-                resolved.ReadsRunUserCode = resolved.ReadsUserCodeProperty || ReadsRunUserCode(effects)
+                resolved.ReadsRunUserCode = resolved.ReadsUserCodeProperty ||
+                    resolved.TouchesInitializingType ||
+                    resolved.NilCompareRunsUserOperator ||
+                    ReadsRunUserCode(effects) ||
+                    OperatorsRunUserCode(effects, true) ||
+                    ConversionsRunUserCode(effects)
             }
             indirectCall = resolved.ReadsRunUserCode == true
         }

@@ -1305,16 +1305,23 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   region type-tests), and a path with steps in a region that type-tests a member or an element, can reach a function
   value, so the call is indirect; `Invoke`, `BeginInvoke` and `DynamicInvoke` (`holder.Cb.Invoke()`) are always
   indirect.
-- *Getters and indexers on by-reference storage (coordinator decision 2026-11-01, pending maintainer review; A3 is the
-  more permissive alternative).* A member or index read that can run user code removes the fact of a `ref` or `out`
+- *User code on by-reference storage (coordinator decision 2026-11-01, pending maintainer review; A3 is the more
+  permissive alternative).* User code that ADR-0208 amendment A3 does not exempt removes the fact of a `ref` or `out`
   parameter, a `ref` local or an external-storage alias, as on main, because a `ref` parameter can alias storage that
-  the code writes (`Foo(ref s_field)`). The read uses the classification of the straight-line pass: a field, a tuple
-  element, an array or slice element or length, and an enum member run no user code; a source property runs user code
-  unless it is an auto property (R14); an imported property or indexer runs user code unless `IsStableClrAccessor`
-  lists it (R16, R17), and an index read over a type-parameter argument always does. The walker records each read with
-  its receiver path (a property-pattern field reads a member of the pattern's subject); a read whose receiver does not
-  resolve can run user code. So `Environment.CurrentDirectory` and `dict["a"]` remove the fact, and `list[i]`,
-  `text.Length` and an auto property keep it. Under A3 alone a read would keep it.
+  the code writes (`Foo(ref s_field)`). A3 exempts only a plain call to a method; a source operator (of a type of the
+  package, or an extension operator) is one. The rest uses the classifications of the straight-line pass: a member or
+  index read runs user code unless it is a field, a tuple element, an array or slice element or length, an enum
+  member, a source auto property (R14) or an imported property or indexer that `IsStableClrAccessor` lists (R16, R17);
+  an imported operator runs user code; a conversion site (an assigned or typed value, a non-`bool` condition) runs a
+  conversion operator when the conversion classifier finds one between the types of its value and its target
+  (`HasUserDefinedImplicitConversion`); a conversion between built-in types is predefined, and a value of another type
+  converted to a generic type, a `??`, a deconstruction or a multiple assignment can run one; a bare static field (not
+  a constant) or static property of a type whose initializer runs user code runs it (R11, #5520). The walker records
+  each read, operator and conversion site with paths for its operands; a path that does not resolve can run user code.
+  So `Environment.CurrentDirectory`, `dict["a"]` and `let s ReadOnlySpan[char] = "ab"` remove the fact, and `list[i]`,
+  `text.Length`, an auto property, a constant, `let d decimal = k` and an extension operator keep it. Separately, a
+  unary operator that is not predefined for its operand, a literal included (`-"x"` with an extension operator), is a
+  call for every fact (W4).
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.

@@ -594,11 +594,13 @@ internal sealed class RegionEffectScanner {
                     // The two operands meet in one type, which a structural projection or a user conversion
                     // may reach (rule W4).
                     current.ContainsConversionCandidate = true
+                    current.Conversions.Add(RegionConversion(nil, nil, false))
                 }
                 if Active() && IsOperatorCandidate(binary) {
                     current.ContainsOperatorCandidate = true
                     RecordOperatorOperand(binary.Left)
                     RecordOperatorOperand(binary.Right)
+                    RecordOperator(binary.OperatorToken.Kind, binary.Left, binary.Right)
                 } else if Active() &&
                     (
                     binary
@@ -906,8 +908,11 @@ internal sealed class RegionEffectScanner {
         } else {
             BuildPath(declaration.Initializer)
         }
-        if Active() && declaration.Initializer != nil {
+        if Active() && declaration.Initializer is {} initialized {
             current.ContainsConversionCandidate = true
+            if declaration.TypeClause != nil {
+                RecordConversion(initialized, TypeOrigin(declaration.TypeClause))
+            }
         }
         let name = declaration.Identifier.ValueText
         // The storage that a `ref` local names is fixed where it is declared, before a later declaration
@@ -1017,6 +1022,8 @@ internal sealed class RegionEffectScanner {
         let bareBefore = current.BareReads.ToArray()
         let callsBefore = current.Calls.Count
         let readsBefore = current.MemberReads.Count
+        let operatorsBefore = current.Operators.Count
+        let conversionsBefore = current.Conversions.Count
         let testsBefore = current.TypeTests.Count
         current.AbsorbFlags(record, Active())
         // A nested type test of a name that the enclosing region declares tests no entry-scope receiver; the local
@@ -1057,6 +1064,39 @@ internal sealed class RegionEffectScanner {
                 receiver
             )
         }
+        for var i = operatorsBefore; i < current.Operators.Count; i++ {
+            let rebased = List[RegionReceiverPath?]()
+            for operand in current.Operators[i].Operands {
+                rebased.Add(
+                    if operand == nil {
+                        default(RegionReceiverPath?)
+                    } else {
+                        Rebase(operand)
+                    }
+                )
+            }
+            current.Operators[i] = RegionOperator(
+                current.Operators[i].Kind,
+                rebased,
+                current.Operators[i].OperatorForms
+            )
+        }
+        for var i = conversionsBefore; i < current.Conversions.Count; i++ {
+            let conversion = current.Conversions[i]
+            current.Conversions[i] = RegionConversion(
+                if conversion.Source == nil {
+                    default(RegionReceiverPath?)
+                } else {
+                    Rebase(conversion.Source)
+                },
+                if conversion.Target == nil {
+                    default(RegionReceiverPath?)
+                } else {
+                    Rebase(conversion.Target)
+                },
+                conversion.SourceIsBuiltInByForm
+            )
+        }
         for var i = readsBefore; i < current.MemberReads.Count; i++ {
             let read = current.MemberReads[i]
             if read.Receiver != nil {
@@ -1077,6 +1117,7 @@ internal sealed class RegionEffectScanner {
     private func RecordDeconstruction() {
         if Active() {
             current.ContainsConversionCandidate = true
+            current.Conversions.Add(RegionConversion(nil, nil, false))
         }
     }
 
@@ -1119,6 +1160,7 @@ internal sealed class RegionEffectScanner {
     private func VisitCondition(condition ExpressionSyntax?) {
         if condition != nil && Active() && !IsBooleanByForm(condition) {
             current.ContainsConversionCandidate = true
+            RecordConversion(condition, RootPath("bool"))
         }
         Visit(condition)
     }
@@ -1346,6 +1388,11 @@ internal sealed class RegionEffectScanner {
                 current.ContainsOperatorCandidate = true
                 RecordOperatorOperand(name)
                 RecordOperatorOperand(subscription.Value)
+                if SyntaxFacts.TryGetCompoundAssignmentBaseOperator(subscription.OperatorToken.Kind, out var baseKind) {
+                    RecordOperator(baseKind, name, subscription.Value)
+                } else {
+                    RecordOperator(subscription.OperatorToken.Kind, name, nil)
+                }
             }
         } else {
             // An event subscription, a compound member write or an increment of a member.
@@ -1373,6 +1420,7 @@ internal sealed class RegionEffectScanner {
     private func VisitMultiAssignment(statement MultiAssignmentStatementSyntax) {
         if Active() {
             current.ContainsConversionCandidate = true
+            current.Conversions.Add(RegionConversion(nil, nil, false))
         }
         for value in statement.Values {
             Visit(value)
@@ -1405,6 +1453,7 @@ internal sealed class RegionEffectScanner {
         var rightName string? = nil
         if Active() && value != nil {
             current.ContainsConversionCandidate = true
+            RecordConversion(value, OriginOf(name))
         }
         if value != nil {
             ClassifyProof(value, out proof, out typeName, out rightName)
@@ -1541,6 +1590,7 @@ internal sealed class RegionEffectScanner {
         if Active() && IsUnaryOperatorCandidate(unary) {
             current.ContainsOperatorCandidate = true
             RecordOperatorOperand(unary.Operand)
+            RecordOperator(unary.OperatorToken.Kind, unary.Operand, nil)
         }
         Visit(unary.Operand)
     }
@@ -1680,6 +1730,51 @@ internal sealed class RegionEffectScanner {
     }
 
     // ---------------------------------------------------------------- calls and members
+
+    private func RecordOperator(kind SyntaxKind, left ExpressionSyntax?, right ExpressionSyntax?) {
+        let operands = List[RegionReceiverPath?]()
+        let operatorForms = List[bool]()
+        operands.Add(BuildPath(left))
+        operatorForms.Add(IsOperatorForm(left))
+        if right != nil {
+            operands.Add(BuildPath(right))
+            operatorForms.Add(IsOperatorForm(right))
+        }
+        current.Operators.Add(RegionOperator(kind, operands, operatorForms))
+    }
+
+    private func IsOperatorForm(expression ExpressionSyntax?) bool {
+        var inner = expression
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        return inner is BinaryExpressionSyntax ||
+            (inner is UnaryExpressionSyntax unary && unary.OperatorToken.Kind != SyntaxKind.BangBangToken)
+    }
+
+    // A value converted to the type of [`target`](paramref). An operator or a literal has a built-in value when
+    // its operands do (the operator itself is classified as an operator).
+    private func RecordConversion(value ExpressionSyntax, target RegionReceiverPath?) {
+        var inner ExpressionSyntax = value
+        while inner is ParenthesizedExpressionSyntax parenthesized {
+            inner = parenthesized.Expression
+        }
+        var builtInByForm = inner is BinaryExpressionSyntax ||
+            inner is LiteralExpressionSyntax ||
+            inner is InterpolatedStringExpressionSyntax
+        if inner is UnaryExpressionSyntax unary && unary.OperatorToken.Kind != SyntaxKind.BangBangToken {
+            builtInByForm = true
+        }
+        current.Conversions.Add(RegionConversion(BuildPath(value), target, builtInByForm))
+    }
+
+    private func RootPath(name string) RegionReceiverPath -> RegionReceiverPath(
+        name,
+        false,
+        nil,
+        nil,
+        ImmutableArray[RegionReceiverStep].Empty
+    )
 
     private func RecordRead(receiver RegionReceiverPath?, member string?) {
         if Active() && constantPatternDepth == 0 {

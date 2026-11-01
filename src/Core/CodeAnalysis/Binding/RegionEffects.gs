@@ -240,6 +240,55 @@ internal sealed class RegionMemberRead {
     }
 }
 
+/// An operator whose operands are names or literals; the consumer decides whether it is predefined
+/// (ADR-0208 construct table: a user-defined operator is a call).
+internal sealed class RegionOperator {
+    init(kind SyntaxKind, operands List[RegionReceiverPath?], operatorForms List[bool]) {
+        Kind = kind
+        Operands = operands
+        OperatorForms = operatorForms
+    }
+
+    /// Gets the operator token kind (a compound assignment gives its base operator).
+    prop Kind SyntaxKind {
+        get;
+    }
+
+    /// Gets the paths of the operands: one for a unary operator, two for a binary one.
+    prop Operands List[RegionReceiverPath?] {
+        get;
+    }
+
+    /// Gets, for each operand, whether it is itself an operator expression, whose value has a built-in type when
+    /// its own operands do (that operator is recorded on its own).
+    prop OperatorForms List[bool] {
+        get;
+    }
+}
+
+/// A site where the binder converts a value to a target type (rule W4); the consumer asks whether a user-defined
+/// or imported conversion operator can run there. A `nil` source or target is one the walker cannot follow.
+internal sealed class RegionConversion {
+    init(source RegionReceiverPath?, target RegionReceiverPath?, sourceIsBuiltInByForm bool) {
+        Source = source
+        Target = target
+        SourceIsBuiltInByForm = sourceIsBuiltInByForm
+    }
+
+    prop Source RegionReceiverPath? {
+        get;
+    }
+
+    prop Target RegionReceiverPath? {
+        get;
+    }
+
+    /// Whether the source is an operator or a literal, whose value has a built-in type when its operands do.
+    prop SourceIsBuiltInByForm bool {
+        get;
+    }
+}
+
 /// One call site found by the scanner.
 internal sealed class RegionCall {
     init(
@@ -319,6 +368,8 @@ internal sealed class RegionEffects {
         ReturnedNames = List[string]()
         TypeTests = List[RegionTypeTest]()
         MemberReads = List[RegionMemberRead]()
+        Operators = List[RegionOperator]()
+        Conversions = List[RegionConversion]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -329,6 +380,16 @@ internal sealed class RegionEffects {
 
     /// Gets the call sites with an operand analysis, in source order of the walk.
     prop Calls List[RegionCall] {
+        get;
+    }
+
+    /// Gets the operators whose operands are names or literals, in source order of the walk.
+    prop Operators List[RegionOperator] {
+        get;
+    }
+
+    /// Gets the conversion sites, in source order of the walk.
+    prop Conversions List[RegionConversion] {
         get;
     }
 
@@ -502,6 +563,8 @@ internal sealed class RegionEffects {
         }
         Calls.AddRange(other.Calls)
         MemberReads.AddRange(other.MemberReads)
+        Operators.AddRange(other.Operators)
+        Conversions.AddRange(other.Conversions)
         ContainsMemberTypeTest = ContainsMemberTypeTest || other.ContainsMemberTypeTest
         TypeTests.AddRange(other.TypeTests)
         ContainsCall = ContainsCall || other.ContainsCall

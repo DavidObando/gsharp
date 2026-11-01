@@ -1950,6 +1950,101 @@ class Holder {
     }
 }
 func Main() { }`, "")
+            Add("extension-unary-operator-on-a-literal-is-a-call (W4)", `package T
+import System
+var g string? = "safe"
+func (s string) operator -() int32 {
+    g = nil
+    return 5
+}
+func Run(flag bool) string {
+    if g == nil { return "" }
+    var i = 0
+    for {
+        if i > 0 { return g }
+        i++
+        -"x"
+    }
+}
+func Main() { }`, "GS0155")
+            Add("extension-operator-keeps-a-by-reference-fact (A3)", `package T
+import System
+func (s string) operator -() int32 {
+    return 5
+}
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let t = -"x"
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("bare-static-member-of-an-initializing-type-removes-a-by-reference-fact (R11)", `package T
+import System
+class Trigger {
+    shared {
+        var Seed int32 = Compute()
+        func Compute() int32 { return 1 }
+    }
+    func Run(ref text string?) int32 {
+        if text == nil { return 0 }
+        var n = 0
+        while text.Length > 0 && n < 3 {
+            n++
+            let c = Seed
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0158")
+            Add("imported-conversion-removes-a-by-reference-fact (A3)", `package T
+import System
+
+func Run(ref text string?, k int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let s ReadOnlySpan[char] = "ab"
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("constant-of-an-initializing-type-keeps-a-by-reference-fact (R11)", `package T
+import System
+class Lim {
+    shared {
+        const Count int32 = 3
+        var Max int32 = Compute()
+        func Compute() int32 { return 3 }
+    }
+}
+func Run(ref text string?, k int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + Lim.Count * 0
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("predefined-numeric-conversion-keeps-a-by-reference-fact (A3)", `package T
+import System
+
+func Run(ref text string?, k int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let d decimal = k
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }
