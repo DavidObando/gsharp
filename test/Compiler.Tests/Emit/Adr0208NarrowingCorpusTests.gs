@@ -376,6 +376,9 @@ open class Adr0208NarrowingCorpusTests {
                 "w33_5534_alias_assigned_after_a_test_keeps_the_test_R18",
                 "w34_5534_if_let_guard_fact_does_not_hide_the_outer_fact_for_the_else_branch_R18",
                 "w35_5534_alias_assigned_before_a_test_reaches_the_test_R18",
+                "w36_5534_static_read_of_a_type_with_a_call_initializer_in_a_condition_kills_R18",
+                "w37_5534_static_read_of_a_literal_only_type_in_a_condition_keeps_the_fact_R18",
+                "w38_5534_imported_indexer_in_a_condition_follows_the_stable_list_R18",
                 "x01_5215_getter_in_condition_kills_the_member_path_R14",
                 "x02_5215_stable_read_in_condition_keeps_the_member_path_R14"
             },
@@ -6575,6 +6578,110 @@ func Run(callback () -> string) int32 {
     return 2
 }
 Console.WriteLine(Run(() -> "abc"))`, "GS0158@44:18", "reject", "", "R18"}
+            yield[]object{"w36_5534_static_read_of_a_type_with_a_call_initializer_in_a_condition_kills_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+class Lit {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Trigger.Count > 0 { return b.Pet.Name }
+    return "z"
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@24:41", "reject", "", "R18"}
+            yield[]object{"w37_5534_static_read_of_a_literal_only_type_in_a_condition_keeps_the_fact_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+class Lit {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Lit.Count > 0 { return b.Pet.Name }
+    return "z"
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R18"}
+            yield[]object{"w38_5534_imported_indexer_in_a_condition_follows_the_stable_list_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    let d = Dictionary[string, int32]{}
+    d["a"] = 1
+    let l = List[int32]{1}
+    if x == nil { return 0 }
+    if l[0] > 0 {
+        let v = x.Value
+    }
+    if d["a"] > 0 {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@46:18", "reject", "", "R18"}
             yield[]object{"x01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
     var Name string = "a"
     prop Tag string {

@@ -983,7 +983,11 @@ Details per row:
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
   tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
   `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
-  and `for` (ADR-0213), and the bindings of `if let`. Corpus rows w01 to w35.
+  and `for` (ADR-0213), and the bindings of `if let`. Which accesses in a condition count as calls is the one statement rule, so R18 applies the
+  static-access rule of R11 and R15 (#5520) and the imported accessor list of R17 to the condition too: a static
+  read of a type with a non-literal `shared` initializer kills before the branches (row w36), a literal-only type
+  keeps the fact (row w37), and a `Dictionary` indexer kills where a `List` indexer keeps it (row w38). Corpus
+  rows w01 to w38.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only
