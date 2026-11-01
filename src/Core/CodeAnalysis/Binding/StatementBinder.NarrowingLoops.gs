@@ -996,19 +996,28 @@ internal partial class StatementBinder {
     // For a fact on by-reference storage ([`forReferenceStorage`](paramref)), a source operator (of a type of the
     // package or an extension operator) is a plain call that ADR-0208 A3 exempts, as on main; an imported operator is
     // not.
-    private func OperatorsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
+    private func OperatorsRunUserCode(
+        effects RegionEffects,
+        forReferenceStorage bool,
+        onlyResolvedOperands bool = false
+    ) bool {
         for candidate in effects.Operators {
             // A known built-in operand type, or `nil` for an operand that is itself an operator expression.
             let operandTypes = List[TypeSymbol?]()
             for var index = 0; index < candidate.Operands.Count; index++ {
                 let operand = candidate.Operands[index]
                 if operand == nil {
-                    if !candidate.OperatorForms[index] {
+                    if !candidate.OperatorForms[index] && !onlyResolvedOperands {
                         return true
                     }
                     operandTypes.Add(nil)
                 } else if BuiltInOperandType(operand, effects) is {} operandType {
                     operandTypes.Add(operandType)
+                } else if onlyResolvedOperands {
+                    if ResolveReceiverPath(operand, effects) != nil {
+                        return true
+                    }
+                    operandTypes.Add(nil)
                 } else if !forReferenceStorage || OperandIsImportedType(operand, effects) {
                     return true
                 } else {
@@ -1145,7 +1154,8 @@ internal partial class StatementBinder {
             if sourcePath == nil {
                 // An operator or a literal of built-in operands converts only to a type that is not built in. A
                 // user-defined or extension operator of the region may return another type.
-                if !conversion.SourceIsBuiltInByForm || OperatorsRunUserCode(effects, false) {
+                if !conversion.SourceIsBuiltInByForm ||
+                    OperatorsRunUserCode(effects, false, onlyResolvedOperands: true) {
                     return true
                 }
                 for target in targets {
