@@ -133,6 +133,9 @@ internal partial class StatementBinder {
         let initializerAliasesAtEntry = externalCallableAliases.ToArray()
         let initStatement BoundStatement? = BindStatement(syntax.Initializer!!)
         if initStatement != nil {
+            // ADR-0208 R18: the initializer runs before the condition and both branches, as the statement before
+            // an `if` in the block this form lowers to.
+            ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement)
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
@@ -250,6 +253,7 @@ internal partial class StatementBinder {
         let elseEntry = binderCtx.Narrowing
         var outerConditionKills = conditionKillJournal
         var thenKillsStarted = false
+        let header = List[(Syntax SyntaxNode, Bound BoundExpression)]()
         let (clauses, guard_, thenStatement) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -260,6 +264,7 @@ internal partial class StatementBinder {
             (initializer ExpressionSyntax) -> {
                 let bound = bindExpression(initializer, false)
                 ApplyHeaderCallableEffects(bound)
+                header.Add((initializer, bound))
                 return bound
             },
             (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
@@ -269,10 +274,15 @@ internal partial class StatementBinder {
             ),
             (guardSyntax ExpressionSyntax) -> {
                 let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
-                ApplyHeaderCallableEffects(bound)
+                testAliases = AliasesBeforeHeader(ApplyHeaderCallableEffects(bound))
+                header.Add((guardSyntax, bound))
                 return bound
             },
-            (boundGuard BoundExpression) -> ClassifyIfConditionNarrowing(boundGuard).Then,
+            (boundGuard BoundExpression) -> {
+                let guardThen = ClassifyIfConditionNarrowing(boundGuard).Then
+                testAliases = nil
+                return guardThen
+            },
             () -> {
                 callableEntry = CaptureExternalCallableAliases()
                 if syntax.ElseClause != nil {
@@ -285,10 +295,11 @@ internal partial class StatementBinder {
                 return then
             }
         )
+        testAliases = nil
         // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
-        // the then-branch removed.
+        // the then-branch removed. The header runs on the else path too, so a fact that it can remove stays removed.
         let restoredConditionKills = if thenKillsStarted {
-            RestoreThenBranchConditionKills(outerConditionKills, elseEntry)
+            RestoreThenBranchConditionKills(outerConditionKills, elseEntry, header)
         } else {
             default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
         }
@@ -805,6 +816,9 @@ internal partial class StatementBinder {
             return false
         }
         CompilationMeasurements.Count("narrowing.pattern-effect-walks")
+        if isExpr.Syntax is {} anchor {
+            EnsureClosureAssignedNames(anchor)
+        }
         let collector = NewCollector(nil, testAliases ?? externalCallableAliases)
         collector.Visit(isExpr)
         return StatementKillsPath(

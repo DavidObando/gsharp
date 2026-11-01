@@ -1836,15 +1836,37 @@ internal partial class StatementBinder {
     /// in [`entry`](paramref), the state the else-branch starts from, is put back.
     private func RestoreThenBranchConditionKills(
         outer List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?,
-        entry NarrowingState
+        entry NarrowingState,
+        header List[(Syntax SyntaxNode, Bound BoundExpression)]? = nil
     ) List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)] {
         let thenKills = conditionKillJournal!!
         conditionKillJournal = outer
         let restored = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        // The effects of a header that the else path also runs and that are not applied before the branches
+        // (the `if let` initializers and guard, #5545 shape 4).
+        var headerEffects AssignedRootsCollector? = nil
+        var headerMutatesMemberPaths = false
+        if thenKills.Count > 0 && header != nil && header.Count > 0 {
+            let collector = NewCollector(nil, externalCallableAliases)
+            for part in header {
+                collector.VisitExpression(part.Bound)
+                headerMutatesMemberPaths = headerMutatesMemberPaths || SyntaxMayMutateMemberPaths(part.Syntax)
+            }
+            headerEffects = collector
+        }
         for kill in thenKills {
             if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
                 entry.NarrowedType(kill.Path),
                 kill.Type
+            ) &&
+                !(
+                headerEffects != nil &&
+                    StatementKillsPath(
+                    headerEffects,
+                    kill.Path,
+                    headerMutatesMemberPaths || headerEffects.MayMutateMemberPaths,
+                    headerEffects.MayMutateReferenceStorage
+                )
             ) {
                 kill.Frame[kill.Path] = kill.Type
                 restored.Add(kill)
@@ -1862,6 +1884,20 @@ internal partial class StatementBinder {
                 entry.Frame.Remove(entry.Path)
             }
         }
+    }
+
+    /// ADR-0208 R18: applies the effects of the initializer of `if init; cond` before the condition is bound. Inside
+    /// a then-branch the removed facts are recorded, as a condition's are, for the sibling else-branch.
+    private func ApplyInitializerEffectsToNarrowings(syntax SyntaxNode, initializer BoundStatement) {
+        if !HasAnyActiveNarrowings() {
+            return
+        }
+        let removedFacts = if conditionKillJournal == nil {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            Dictionary[AccessPath, TypeSymbol]()
+        }
+        InvalidateNarrowingsForAssignedVariables(syntax, initializer, removedFacts)
     }
 
     private func IsOnNarrowingStack(frame NarrowingFrame) bool {

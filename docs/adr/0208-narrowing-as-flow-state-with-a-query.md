@@ -971,7 +971,12 @@ Details per row:
   sibling else-branch is bound and removed again after it, as section 9 binds the else-branch from the state after
   the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows w20
   to w22). The then-branch of `if let` and its else-branch are siblings in the same way (rows w31 and w32); its
-  else-branch starts from the state before the header, so a guard's fact does not hide an outer one (row w34). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
+  else-branch starts from the state before the header, so a guard's fact does not hide an outer one (row w34). The
+  `if let` header runs on the else path too and its effects are not applied before the branches (#5545 shape 4), so
+  a fact that the header can remove is not put back (row w41). The initializer of `if init; cond` runs before the
+  condition and both branches, so its effects apply first, as for the statement before an `if` in a block (rows w39
+  and w40). The `if let` guard reads the callable aliases at each test as the `if` condition does (row w42), and the
+  pattern check computes the function's closure-assigned names first (row w43). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
   test does (rows w23 and w24). (6) A pattern runs after its operand is read, so a test whose own pattern can
   remove the tested path (a getter with user code in a property sub-pattern, `x is Dog { P: 1 }` where `P` sets
   `x = nil`, or a call in a constant pattern, `x is Read(h)`) narrows neither branch, by the statement rule
@@ -987,7 +992,7 @@ Details per row:
   static-access rule of R11 and R15 (#5520) and the imported accessor list of R17 to the condition too: a static
   read of a type with a non-literal `shared` initializer kills before the branches (row w36), a literal-only type
   keeps the fact (row w37), and a `Dictionary` indexer kills where a `List` indexer keeps it (row w38). Corpus
-  rows w01 to w38.
+  rows w01 to w43.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only
