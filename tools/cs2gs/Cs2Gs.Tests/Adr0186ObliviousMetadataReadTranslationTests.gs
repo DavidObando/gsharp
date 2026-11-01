@@ -602,7 +602,7 @@ public static class Use
             "return items[0]!!.Length",
             "var nested List[List[string]?]\n",
             "return nested[0]!![0].Length",
-            "let alias []string? = lines",
+            "let alias = lines\n",
             "return alias[0]!!.Length",
             "var box Box[string?]",
             "return box.Value!!.Length + box.Get()!!.Length",

@@ -467,11 +467,26 @@ partial class CSharpToGSharpTranslator {
                 // target, so `.Where((d T?) -> d != nil)` infers the whole
                 // sequence as `sequence[T?]` and every downstream member
                 // access runs on a nullable receiver.
-                return this.MapParameter(
+                let mapped = this.MapParameter(
                     symbol,
                     parameter,
                     promoteNullability: !this.LambdaParameterAnnotationFeedsTypeInference(parameter)
                 )
+                // Issue #5541: a lambda parameter that receives an element of oblivious
+                // container storage states the element's nullable positions.
+                let promoted = this.PromoteObliviousContainerStorage(mapped.Type, symbol)
+                return if object.ReferenceEquals(promoted, mapped.Type) {
+                    mapped
+                } else {
+                    Parameter(
+                        mapped.Name,
+                        promoted!!,
+                        mapped.IsVariadic,
+                        mapped.RefKind,
+                        mapped.DefaultValue,
+                        mapped.Attributes
+                    )
+                }
             }
             let type GTypeReference? = if parameter.Type != nil {
                 this.MapTypeSyntax(parameter.Type)
@@ -589,11 +604,14 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
-            let type GTypeReference? = if typeSymbol != nil {
+            var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {
                 cast[GTypeReference](NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType))
             }
+            // Issue #5541: a target-typed construction states the same nullable
+            // positions as an explicit one.
+            type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
                 creation.ArgumentList?.Arguments ?? default(Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax])
