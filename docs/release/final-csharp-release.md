@@ -20,9 +20,9 @@ commit.
 | Fact | Source |
 |---|---|
 | `build.yml` runs on `push` of tags matching `v*`. The same file runs for pushes to `main` and PRs into `main`. | `.github/workflows/build.yml:3-11` |
-| The tag only gets a clean version (no `-g<sha>` suffix) if it matches `^refs/tags/v\d+(?:\.\d+)*$`. A tag such as `v0.4.NNNN-rc1` still triggers `publish` (`startsWith(github.ref, 'refs/tags/v')`), but it publishes packages with a prerelease `-g<sha>` version. | `version.json:9-12`, `build.yml:717` |
+| The tag only gets a clean version (no `-g<sha>` suffix) if it matches `^refs/tags/v\d+(?:\.\d+)*$`. A tag with a SemVer prerelease suffix such as `v0.5.NNN-rc1` is a *prerelease* (`build/release-publish.py tag-kind`): it publishes packages with a `<number>-g<sha>` version, a pre-release VS Code extension and a draft GitHub release marked as a prerelease, and skips the Visual Studio Marketplace (ADR-0218). | `version.json:9-12`, `build/release-publish.py` |
 | The version comes from the tagged commit's git height, not from the tag name. Nothing compares the two (#4639). Builds on `main` are also public, so the `main` push run of the freeze commit already prints the version the tag will publish. | `version.json:7-12`, `build.yml:48-62` |
-| `publish` waits for `build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension`. `nullable-hygiene` and the hot-core guard are not in the list; the hot-core guard only runs on PRs. | `build.yml:716`, `build.yml:567` |
+| `publish-verify` waits for the `ci` aggregate, which needs every job of `build.yml`; `ci` passes when `r2r-compiler-smoke` fails on a tag (ADR-0218, advisory), and the platforms whose leg did not pass are named in the release body. `verify` also fails the run before any push when the tag does not match the package version (#4639). | `build.yml` (`ci`, `publish-verify`) |
 | No job declares an `environment:`, so publishing has no approval gate: pushing the tag is the approval. Repository environments are only `copilot` and `github-pages` (`gh api repos/DavidObando/gsharp/environments`, read 2026-10-02). | `build.yml` (no `environment:` key) |
 
 ### Stage-2 publication gate
@@ -69,17 +69,17 @@ report MUST NOT satisfy this gate. Until the workflow enforces these checks, a
 
 ### Publish order (one tag run)
 
-Rows marked "build" produce artifacts before anything is published; publishing is steps 1-4.
+Seven jobs, one per destination (ADR-0218). The only retry tool is "Re-run failed jobs" on the tag run.
 
-| # | Step | What it publishes | Source |
-|---|---|---|---|
-| build | `build` job, `Build` + `Upload NuGet packages` | Packs `out/bin/Release/nupkgs/*` into artifact `nuget-packages` (6 `.nupkg` + 5 `.snupkg`; `Gsharp.Templates` has no symbols) | `build.yml:64-84`; `build/gsharp.build.props:81,110-111`; `src/Sdk/Gsharp.Templates/Gsharp.Templates.csproj:11` |
-| build | `vsix` job | Stamps `src/vscode-gsharp/package.json` with `nbgv get-version -v SimpleVersion` (`0.4.NNNN`), packs `vscode-gsharp.vsix` | `build.yml:490-508` |
-| build | `visual-studio-extension` job | Builds `GSharp.VisualStudio.vsix` (version `GetVsixVersion` = `FileVersion`, e.g. `0.4.NNNN.<n>`) with the VS project templates XmlPoked to `Gsharp.NET.Sdk/0.4.NNNN` | `build.yml:510-540`; `src/vs-gsharp/src/VsGsharp/VsGsharp.csproj:81-83,96-114` |
-| 1 | `publish`: Create GitHub Release | `gh release create "$GITHUB_REF_NAME" --generate-notes` if it doesn't already exist, then uploads every `.nupkg`, `.snupkg` and both `.vsix` with `--clobber` | `build.yml:741-747` |
-| 2 | `publish`: Push to NuGet | `dotnet nuget push ./nupkgs/*.nupkg --skip-duplicate` to nuget.org. The matching `.snupkg` files go to the symbol server automatically (the v0.4.591 run logged 9 pushes: 5 packages + 4 symbol packages). | `build.yml:754-755` |
-| 3 | `publish`: Publish to VS Code Marketplace | `npx @vscode/vsce publish --packagePath ./vsix/vscode-gsharp.vsix` | `build.yml:762-765` |
-| 4 | `publish-visual-studio-extension` (`needs: publish`) | `VsixPublisher.exe publish` of `GSharp.VisualStudio.vsix` with `src/vs-gsharp/vs-publish.json` (publisher `gsharplang`, internal name `GSharp-VisualStudio`) | `build.yml:767-806` |
+| Job | What it does |
+|---|---|
+| `publish-verify` | `release-publish.py verify`: the package inventory (6 RID compiler packages, 6 other packages, 5 symbol packages), one version, tag against version, both VSIX versions and the pre-release marker, the template SDK pins. Fails before the first push. |
+| `publish-github-release` | Creates the release as a **draft** (`--prerelease` for a prerelease tag) and uploads every `.nupkg`, `.snupkg` and both `.vsix` with `--clobber`. |
+| `publish-nuget-compiler` | Pushes the six `Gsharp.NET.Sdk.Compiler.<rid>` packages with `--skip-duplicate`, then waits up to 30 minutes for them on the flat container. |
+| `publish-nuget-sdk` | Needs the previous job. Checks the six RID packages are on the feed, pushes `Gsharp.NET.Sdk` and the remaining packages, each `.nupkg` (with `--no-symbols`) then its `.snupkg`, so each symbol package is pushed once, then checks the SDK is on the feed. |
+| `publish-vscode-marketplace` | Needs `publish-nuget-sdk`. Skips when the version is already published; otherwise `vsce@3.9.2 publish --skip-duplicate`, then asks the marketplace again. |
+| `publish-visual-studio-marketplace` | Needs `publish-nuget-sdk`. Skipped on any prerelease tag. Skips when the version is published; otherwise `VsixPublisher.exe publish`, then asks again. |
+| `publish-finalize` | Runs after a failure too. When every destination has the version it writes the "Publication notes" section of the release body (unverified platforms; no Visual Studio publication for a prerelease) and un-drafts the release. Otherwise it fails and names what is missing. |
 
 The NuGet packages, all built from projects with `IsPackable=true`:
 
@@ -187,53 +187,86 @@ The tag must be exactly `v` plus the printed version, digits and dots only
 
 ### 3. Watch the tag run
 
-`build.yml` runs in full on the tag. `publish` starts only after all ten jobs
-it needs pass. If one of them fails, read its job log first and prove the
-failure is unrelated to the release (for example, the same failure on `main`
-or on an unrelated PR) before running `gh run rerun <run-id> --failed`. Don't
-re-run a failure you haven't explained.
+`build.yml` runs in full on the tag. `publish-verify` starts only after `ci`
+passes. If a job fails, read its log first and prove the failure is unrelated
+to the release (for example, the same failure on `main` or on an unrelated PR)
+before running "Re-run failed jobs" (or `gh run rerun <run-id> --failed`).
+Don't re-run a failure you haven't explained.
 
-Re-running the GitHub release and NuGet steps is safe:
+Every publish job is safe to re-run, and "Re-run failed jobs" also runs the
+jobs that were skipped behind the failed one. Read the failure by job:
 
-- the GitHub release step is `view || create` plus `upload --clobber` (`build.yml:745-747`);
-- NuGet uses `--skip-duplicate` (`build.yml:755`).
+| Failed job | Meaning | Recovery |
+|---|---|---|
+| `publish-verify` | Nothing was published. Read which step failed. | The `Verify the artifacts against the tag` step failed: the artifacts or the tag are wrong by construction; fix on `main` and push a new tag. A checkout or artifact download step failed: re-run failed jobs. |
+| `publish-github-release` | A draft release with some assets. The NuGet chain and the extensions go on. | Re-run failed jobs: upload uses `--clobber`. |
+| `publish-nuget-compiler` | Zero to six RID packages on nuget.org. The SDK and the extension jobs are skipped; `publish-finalize` runs and fails, naming the skipped jobs and the missing packages. | Re-run failed jobs: `--skip-duplicate` pushes only what is missing. |
+| `publish-nuget-sdk` | RID packages, and part of the SDK and tools, are on nuget.org. The extension jobs are skipped; `publish-finalize` runs and fails. | Re-run failed jobs. |
+| `publish-vscode-marketplace` | Everything else publishes. A timeout after the upload does not matter: the re-run finds the version and succeeds. | Re-run failed jobs. The Visual Studio job needs no re-run. |
+| `publish-visual-studio-marketplace` | Everything else is published. | Re-run failed jobs. |
+| `publish-finalize` | Either a check failed (the job summary marks the destination `MISSING`, or a query hit the network; the release stays a draft), or the checks passed and `gh release edit` failed (the log says the state of the release is unknown: the edit may have applied on the server). | Failed check: fix or re-run the named job, then re-run failed jobs. Failed edit: check the release (`gh release view <tag> --json isDraft,body`), then re-run failed jobs; finalize reads the release again and repeats the edit. |
 
-The VS Code Marketplace step is not reliably idempotent. A timeout or an error
-page (both seen in past releases, #4640) doesn't prove the upload was rejected:
-the Marketplace may have accepted the version before the client lost the
-response. `vsce publish` of a version that already exists fails, so a re-run
-would fail again and `publish-visual-studio-extension` would stay skipped.
-After any failure of that step, first query the Marketplace (the command in
-step 4) for `gsharplang.vscode-gsharp`:
+A skipped `publish-visual-studio-marketplace` on a prerelease tag is not a
+failure.
 
-- **0.4.NNNN absent:** run `gh run rerun <run-id> --failed`. This re-runs
-  `publish` (the release and NuGet steps are no-ops) and then the Visual Studio
-  job.
-- **0.4.NNNN present:** don't re-run `publish`. The Visual Studio VSIX still
-  has to be published by hand. Download the `visual-studio-gsharp-vsix`
-  artifact of the tag run (`gh run download <run-id> -n visual-studio-gsharp-vsix`).
-  Then, on Windows with the Visual Studio SDK, run the same command as
-  `build.yml:800-803`:
+A re-run uses the workflow and the scripts of the tagged commit. A defect in
+them is not fixed by a re-run: fix it on `main` and push a new tag.
 
-  ```powershell
-  # Read the PAT without echoing it or leaving it in shell history.
-  $pat = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Marketplace PAT')).Password
-  & $publisher publish -payload GSharp.VisualStudio.vsix `
-      -publishManifest src\vs-gsharp\vs-publish.json -personalAccessToken $pat
-  Remove-Variable pat
-  ```
+Each `.snupkg` is pushed once per attempt: the `.nupkg` push passes
+`--no-symbols`, and the `.snupkg` push follows it explicitly with
+`--skip-duplicate`. The SDK group pushes in this order, each package followed
+by its symbols: `Gsharp.NET.Sdk`, `Gsharp.Templates` (no symbols),
+`Gsharp.Repl`, `Gsharp.Gsfmt`, `Gsharp.Cs2Gs`,
+`GSharp.CodeAnalysis.Analyzers.Testing`. A push that fails three times stops
+the job, so the packages after it are not pushed. A re-run of
+`publish-nuget-sdk` pushes again symbol packages that may already be on the
+symbol server. Whether that server answers 409 (a warning with
+`--skip-duplicate`) is unverified until a tag run shows it (ADR-0218).
 
-  `$publisher` is `VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe`
-  under the Visual Studio installation, located the same way as
-  `build.yml:786-798`. Don't paste the PAT into a shared terminal, a log, or
-  an issue.
+If a re-run fails on a `.snupkg` push with any other answer, don't repeat it:
+every re-run stops at the same file. Instead:
 
-  Alternatively, upload the VSIX in the Marketplace publisher portal for
-  `gsharplang`. The `publish` job stays red in the run history; record the
-  manual publish in the release notes PR.
-- **The Visual Studio job itself failed after `publish` succeeded:**
-  `gh run rerun <run-id> --failed` re-runs only that job. Check the Visual
-  Studio Marketplace first for the same reason.
+1. Check the whole inventory. `python3 build/check-rid-packages.py --packages
+   <dir> --require-sdk` (with the `nuget-packages` artifact in `<dir>`) covers
+   the SDK and the six RID packages. For the other five ids, query
+   `https://api.nuget.org/v3-flatcontainer/<id-lowercase>/index.json` for the
+   version.
+2. Push each missing `.nupkg` by hand from the artifact, in the order above:
+   `dotnet nuget push <file>.nupkg --no-symbols --skip-duplicate --source
+   https://api.nuget.org/v3/index.json --api-key <key>`.
+3. The extension jobs stay skipped behind the failed job, and every re-run of
+   `publish-finalize` fails, because it requires those jobs to succeed. A
+   manual upload does not change their results. Use the manual publication
+   below, check every destination, add the "Publication notes" that finalize
+   would write (ADR-0218 section 2) to the release body, then un-draft the
+   release by hand (`gh release edit <tag> --draft=false`). Record the
+   symbol-server answer in #5530.
+
+Manual publication is the last resort when a run is older than 30 days or has
+been re-run 50 times. For VS Code use `npx @vscode/vsce@3.9.2 publish --packagePath vscode-gsharp.vsix --skip-duplicate` with the artifact
+of the tag run (`gh run download <run-id> -n vscode-gsharp-vsix`).
+
+To publish the Visual Studio VSIX by hand, download the `visual-studio-gsharp-vsix`
+artifact of the tag run (`gh run download <run-id> -n visual-studio-gsharp-vsix`).
+Then, on Windows with the Visual Studio SDK, run the same command as
+the `publish-visual-studio-marketplace` job:
+
+```powershell
+# Read the PAT without echoing it or leaving it in shell history.
+$pat = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Marketplace PAT')).Password
+& $publisher publish -payload GSharp.VisualStudio.vsix `
+    -publishManifest src\vs-gsharp\vs-publish.json -personalAccessToken $pat
+Remove-Variable pat
+```
+
+`$publisher` is `VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe`
+under the Visual Studio installation, located the same way as
+that job. Don't paste the PAT into a shared terminal, a log, or
+an issue.
+
+Alternatively, upload the VSIX in the Marketplace publisher portal for
+`gsharplang`. The failed job stays red in the run history; record the
+manual publish in the release notes PR.
 
 ### 4. Post-publish verification
 
@@ -250,8 +283,8 @@ gh release view "v$V" --repo DavidObando/gsharp --json assets --jq '.assets[].na
 
 - **NuGet:** expect all six ids to print `ok`. Indexing can take several
   minutes after "Your package was pushed".
-- **GitHub release:** expect 13 assets: 6 `.nupkg`, 5 `.snupkg`,
-  `vscode-gsharp.vsix` and `GSharp.VisualStudio.vsix`.
+- **GitHub release:** expect 19 assets: 12 `.nupkg` (the six `Gsharp.NET.Sdk.Compiler.<rid>` packages included), 5 `.snupkg`,
+  `vscode-gsharp.vsix` and `GSharp.VisualStudio.vsix`. `publish-finalize` has checked this and un-drafted the release.
 - **From a clean machine with only nuget.org:**
   - `dotnet new install Gsharp.Templates::$V --debug:custom-hive <tmp>`;
   - build `samples/Trail` with its pin changed to `$V`;
@@ -334,6 +367,7 @@ the patch-release steps in `docs/release/version-bump-checklist.md` (#4641):
   checklist shows. Then restore the snapshot's hand-written release-notes
   preamble;
 - fix the release-notes heading if step 1's prediction was wrong.
+- copy the "Publication notes" section of the GitHub release body (an unverified platform, or the omission from the Visual Studio Marketplace) into the release notes, so the ADR-0207 rule that an unverified platform is named in the notes holds.
 
 `build/check-release-version-refs.py` and `npm run test:content` must pass.
 Merging deploys the site (`pages.yml:167-181`).
