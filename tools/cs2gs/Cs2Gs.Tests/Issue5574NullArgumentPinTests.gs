@@ -762,6 +762,47 @@ namespace Demo
         Assert.DoesNotContain("!!", printed)
     }
 
+    /// A generic slot pins: the receiver of a generic reduced extension (`this T x`, `this T x`
+    /// with `T : class`, `this T? x` with and without `T : class`, a `T` result) and a parameter
+    /// that forwards to one. The translation asserts an inferred `T` argument with `!!` whatever
+    /// the slot's annotation, so a widened receiver would throw before the extension runs.
+    @Fact
+    func AGenericExtensionReceiver_Pins() {
+        let compilation = CompileFiles("App", nil, ("Exts.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class Exts
+    {
+        public static string Ext<T>(this T x) => x == null ? "null" : "set";
+        public static string ExtC<T>(this T x) where T : class => x == null ? "null" : "set";
+        public static string ExtN<T>(this T? x) where T : class => x == null ? "null" : "set";
+        public static string ExtU<T>(this T? x) => x == null ? "null" : "set";
+        public static T Id<T>(this T x) => x;
+    }
+    public static class P
+    {
+        public static string A(Node p) => p.Ext();
+        public static string B(Node p) => p.ExtC();
+        public static string C(Node p) => p.ExtN();
+        public static string D(Node p) => p.ExtU();
+        public static string E(Node p) { var y = p.Id(); return y == null ? "null" : "set"; }
+        public static string F(Node p) => Wrap(p);
+        public static string Wrap(Node q) => q.Ext() + "/" + q.ExtC();
+        public static string G(Node p) => p.Ext() + new Sink().Take(p);
+        public static string Run() =>
+            A(null!) + " " + B(null!) + " " + C(null!) + " " + D(null!) + " " + E(null!) + " " + F(null!) + " " + G(null!);
+    }
+}`))
+        let printed = TranslateFile(compilation, "Exts.cs", []CSharpCompilation{compilation})
+        Assert.Equal(
+            "null null null null null null/null nulltaken",
+            CompileAndRun([]string{printed}, "Demo.P.Run()").Trim()
+        )
+        Assert.DoesNotContain("!!", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

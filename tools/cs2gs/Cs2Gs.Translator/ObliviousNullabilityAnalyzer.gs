@@ -2628,7 +2628,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         } parameter ||
             arguments
             .Arguments
-            .IndexOf(argument) < parameter.Ordinal {
+            .IndexOf(argument) < parameter.Ordinal || MentionsTypeParameter(parameter.OriginalDefinition.Type) {
             return nil
         }
         return switch parameter.Type {
@@ -2652,9 +2652,15 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     // Issue #5574: a slot that receives a read. A nullable slot takes the null;
     // a declaration the rule may widen takes it exactly when it stays widened;
-    // a local, and every other non-null slot, does not.
+    // a local, a generic slot, and every other non-null slot, does not.
     private func ClassifyNullArgumentSlot(slot ISymbol?, run NullArgumentRun)(Safe bool, Slot string?) {
         if slot == nil || slot is ILocalSymbol {
+            return (false, default(string?))
+        }
+        // A slot whose declaration is typed by a type parameter (`this T x`,
+        // `T? x`, `List<T> xs`) is bound to the inferred argument, which the
+        // translation asserts with `!!` whatever the slot's annotation (#5254).
+        if MentionsTypeParameter(SymbolValueType(OriginalNullArgumentDeclaration(slot) ?? slot.OriginalDefinition)) {
             return (false, default(string?))
         }
         if !KeepsNonNullContract(slot, run.Members) {
@@ -2667,6 +2673,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             return (false, CanonicalNullArgumentKey(keys[0], run))
         }
         return (false, default(string?))
+    }
+
+    private func MentionsTypeParameter(type ITypeSymbol?) bool -> switch type {
+        case _ is ITypeParameterSymbol: true
+        case array is IArrayTypeSymbol: MentionsTypeParameter(array.ElementType)
+        case named is INamedTypeSymbol: named.TypeArguments.Any(
+            (argument ITypeSymbol) -> MentionsTypeParameter(argument)
+        )
+        default: false
     }
 
     // Issue #5574: whether `slot` (as the call or store binds it) is a non-null
