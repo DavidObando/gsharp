@@ -345,7 +345,9 @@ open class Adr0208NarrowingCorpusTests {
                 "w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18",
                 "w30_5534_constant_pattern_whose_call_removes_the_value_narrows_nothing_R18",
                 "w31_5534_condition_in_the_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
-                "w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18"
+                "w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
+                "x01_5215_getter_in_condition_kills_the_member_path_R14",
+                "x02_5215_stable_read_in_condition_keeps_the_member_path_R14"
             },
             names
         )
@@ -5789,6 +5791,38 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"x01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
+    var Name string = "a"
+    prop Tag string {
+        get {
+            return Name.ToUpperInvariant()
+        }
+    }
+}
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if b.Pet.Tag == "" { return "" }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "GS0158@16:18", "reject", "", "R14"}
+            yield[]object{"x02_5215_stable_read_in_condition_keeps_the_member_path_R14", `class Animal {
+    var Name string = "a"
+    let Tag string = "A"
+}
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if b.Pet.Tag == "" { return "" }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "", "run", "a", "R14"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
