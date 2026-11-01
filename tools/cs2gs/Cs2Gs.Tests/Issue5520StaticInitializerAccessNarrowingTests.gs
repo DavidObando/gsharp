@@ -253,6 +253,61 @@ public class Demo
         AssertCompilesWithGsc(printed)
     }
 
+    /// gsc counts `nil` into a function-pointer field as code (its type is a value type), so the read after the
+    /// static access needs `!!`. Mutation witness: `IsLiteralStaticInitializer` accepts `null` into a function
+    /// pointer.
+    @Fact
+    func OutParameter_ReadAfterAStaticFunctionPointerFieldWithANullInitializer_IsAsserted() {
+        let printed = Translate(`
+public sealed unsafe class Holder
+{
+    public static delegate*<int> Callback = null;
+}
+public class Demo
+{
+    static string? Pick() => null;
+    public static unsafe int Run(out string? text)
+    {
+        text = Pick();
+        if (text is null)
+        {
+            return 0;
+        }
+        var callback = Holder.Callback;
+        return callback == null ? text.Length : 1;
+    }
+}`, allowUnsafe: true)
+        Assert.Contains("text!!.Length", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
+    /// gsc counts `nil` into a pointer field as no code (a pointer is not a value type), so the read stays bare and
+    /// the translation compiles. Mutation witness: `IsLiteralStaticInitializer` rejects `null` into a pointer.
+    @Fact
+    func OutParameter_ReadAfterAStaticPointerFieldWithANullInitializer_StaysBare() {
+        let printed = Translate(`
+public sealed unsafe class Holder
+{
+    public static int* Slot = null;
+}
+public class Demo
+{
+    static string? Pick() => null;
+    public static unsafe int Run(out string? text)
+    {
+        text = Pick();
+        if (text is null)
+        {
+            return 0;
+        }
+        var slot = Holder.Slot;
+        return slot == null ? text.Length : 1;
+    }
+}`, allowUnsafe: true)
+        Assert.DoesNotContain("text!!", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
     /// Mutation witness for this row and the constant and construction rows: `NodeRunsStaticTypeInitializer` counts
     /// every name and member access.
     @Fact
@@ -472,7 +527,11 @@ Translated G#:
             return nil
         }
 
-        private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {
+        private func Translate(
+            source string,
+            outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary,
+            allowUnsafe bool = false
+        ) string {
             let tree = CSharpSyntaxTree.ParseText(
                 source,
                 CSharpParseOptions(LanguageVersion.Latest),
@@ -483,6 +542,7 @@ Translated G#:
                 []SyntaxTree{tree},
                 CSharpProjectLoader.RuntimeReferences(),
                 CSharpCompilationOptions(outputKind).WithNullableContextOptions(NullableContextOptions.Enable)
+                    .WithAllowUnsafe(allowUnsafe)
             )
             Assert.Empty(compilation.GetDiagnostics().Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error))
             let model = compilation.GetSemanticModel(tree)

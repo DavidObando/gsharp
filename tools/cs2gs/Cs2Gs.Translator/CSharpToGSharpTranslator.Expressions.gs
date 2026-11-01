@@ -4426,7 +4426,8 @@ partial class CSharpToGSharpTranslator {
         /// A literal that needs no conversion, with an optional sign: the emitted initializer is a literal token, so
         /// gsc does not count the static field as running code. The conversion is read on the whole initializer, so a
         /// signed literal that converts to the field type (`uint Max = +1`, emitted as `uint32(+1)`) counts as code, as
-        /// does anything else.
+        /// does anything else. gsc counts `nil` as code when the field type is a value type, so `null` into a function
+        /// pointer (a value type in G#) counts too; `null` into a pointer does not.
         private func IsLiteralStaticInitializer(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
             var current = value
             if current is Microsoft
@@ -4448,7 +4449,8 @@ partial class CSharpToGSharpTranslator {
             }
             let model = this.context.Compilation.GetSemanticModel(value.SyntaxTree)
             if literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression) {
-                return !model.GetConversion(value).IsUserDefined
+                return !model.GetConversion(value).IsUserDefined && model.GetTypeInfo(value)
+                    .ConvertedType is not IFunctionPointerTypeSymbol
             }
             let info = model.GetTypeInfo(value)
             return SymbolEqualityComparer.Default.Equals(info.Type, info.ConvertedType)
