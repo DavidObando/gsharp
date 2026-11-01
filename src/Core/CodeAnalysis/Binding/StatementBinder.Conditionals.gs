@@ -49,9 +49,9 @@ internal partial class StatementBinder {
         if syntax.Initializer == nil {
             let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             let removedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
-            testAliases = AliasesBeforeHeader(ApplyHeaderCallableEffects(condition), syntax.Condition)
+            testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(condition), syntax.Condition, condition)
             let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition, removedFacts)
-            testAliases = nil
+            testAliasesAt = nil
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
@@ -140,9 +140,9 @@ internal partial class StatementBinder {
         }
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         let initRemovedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
-        testAliases = AliasesBeforeHeader(ApplyHeaderCallableEffects(initCondition), syntax.Condition)
+        testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(initCondition), syntax.Condition, initCondition)
         let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition, initRemovedFacts)
-        testAliases = nil
+        testAliasesAt = nil
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
@@ -275,13 +275,13 @@ internal partial class StatementBinder {
             ),
             (guardSyntax ExpressionSyntax) -> {
                 let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
-                testAliases = AliasesBeforeHeader(ApplyHeaderCallableEffects(bound), guardSyntax)
+                testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(bound), guardSyntax, bound)
                 header.Add((guardSyntax, bound))
                 return bound
             },
             (boundGuard BoundExpression) -> {
                 let guardThen = ClassifyIfConditionNarrowing(boundGuard).Then
-                testAliases = nil
+                testAliasesAt = nil
                 return guardThen
             },
             () -> {
@@ -296,7 +296,7 @@ internal partial class StatementBinder {
                 return then
             }
         )
-        testAliases = nil
+        testAliasesAt = nil
         // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
         // the then-branch removed. The header runs on the else path too, so a fact that it can remove stays removed.
         let restoredConditionKills = if thenKillsStarted {
@@ -726,9 +726,7 @@ internal partial class StatementBinder {
                     // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
                     // The else frame is intentionally dropped — either operand could have been
                     // the false one, so we cannot single out a per-variable narrowing.
-                    let aliasesBeforeLeft = testAliases
                     let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts)
-                    testAliases = AliasesAfterTrue(binary.Left, aliasesBeforeLeft)
                     let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
                     if combinedThen == nil || combinedThen.Count == 0 {
@@ -746,9 +744,7 @@ internal partial class StatementBinder {
                     //     (canonical example: `x is T || x is T` keeps `{x → T}`).
                     //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
                     //     were false, so both negative narrowings apply.
-                    let aliasesBeforeLeft = testAliases
                     let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts)
-                    testAliases = AliasesAfter(binary.Left, aliasesBeforeLeft)
                     let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
                     let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
@@ -822,7 +818,11 @@ internal partial class StatementBinder {
         if isExpr.Syntax is {} anchor {
             EnsureClosureAssignedNames(anchor)
         }
-        let collector = NewCollector(nil, testAliases ?? externalCallableAliases)
+        var aliases HashSet[VariableSymbol] = externalCallableAliases
+        if testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(isExpr, out var atTest) {
+            aliases = atTest
+        }
+        let collector = NewCollector(nil, aliases)
         collector.Visit(isExpr)
         return StatementKillsPath(
             collector,
@@ -832,44 +832,81 @@ internal partial class StatementBinder {
         )
     }
 
-    /// ADR-0208 R18 (#5534): the callable aliases at the start of a condition, when its header effects removed
-    /// some or it assigns a variable. A test reads the aliases at its own evaluation point
-    /// (cref:AliasesAfterTrue), not after the whole condition: a later reassignment (`(x is action()) &&
+    /// ADR-0208 R18 (#5534): the callable aliases at each operand of a condition, when its header effects removed
+    /// some or it assigns a variable; otherwise `nil`, and the aliases after the condition apply. A test reads the
+    /// aliases at its own evaluation point, not after the whole condition: a later reassignment (`(x is action()) &&
     /// (action = f) ...`) does not change it, and an earlier one to an external callable (`(action = callback) is
-    /// {} a && (x is action())`) does.
-    private func AliasesBeforeHeader(removed HashSet[VariableSymbol]?, header SyntaxNode) HashSet[VariableSymbol]? {
+    /// {} a && (x is action())`) does. One walk in evaluation order visits each operand once.
+    private func AliasesAtTests(
+        removed HashSet[VariableSymbol]?,
+        header SyntaxNode,
+        condition BoundExpression
+    ) Dictionary[BoundExpression, HashSet[VariableSymbol]]? {
         if (removed == nil || removed.Count == 0) && !header.DescendantNodesAndSelf().Any(
             (node SyntaxNode) -> node is AssignmentExpressionSyntax
         ) {
             return nil
         }
-        let aliases = HashSet[VariableSymbol](externalCallableAliases)
+        let entry = HashSet[VariableSymbol](externalCallableAliases)
         if removed != nil {
-            aliases.UnionWith(removed)
+            entry.UnionWith(removed)
         }
-        return aliases
+        let aliasesAt = Dictionary[BoundExpression, HashSet[VariableSymbol]]()
+        WalkTestAliases(condition, entry, aliasesAt)
+        return aliasesAt
     }
 
-    // The aliases after [`operand`](paramref) when it is true, from the aliases before it: the right operand of
-    // `&&` runs only after the left one was true, so a chain is followed operand by operand. Each operand is read
-    // once, at its evaluation point. The sets are replaced, never changed in place.
-    private func AliasesAfterTrue(operand BoundExpression, before HashSet[VariableSymbol]?) HashSet[VariableSymbol]? {
-        if before == nil {
-            return nil
+    // Records the aliases before each operand and returns the aliases after [`expression`](paramref) when it is true
+    // and when it is false. The right operand of `&&` runs after a true left operand, the right operand of `||`
+    // after a false one, and a join keeps only the aliases of both paths. The sets are never changed in place.
+    private func WalkTestAliases(
+        expression BoundExpression,
+        before HashSet[VariableSymbol],
+        aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]
+    )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
+        switch expression {
+            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                {
+                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
+                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftTrue, aliasesAt)
+                    return (rightTrue, JoinAliases(leftFalse, rightFalse))
+                }
+            }
+            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                {
+                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
+                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftFalse, aliasesAt)
+                    return (JoinAliases(leftTrue, rightTrue), rightFalse)
+                }
+            }
+            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                {
+                    let (operandTrue, operandFalse) = WalkTestAliases(unary.Operand, before, aliasesAt)
+                    return (operandFalse, operandTrue)
+                }
+            }
+            default {
+                {
+                    aliasesAt[expression] = before
+                    let after = AliasesAfter(expression, before)
+                    return (after, after)
+                }
+            }
         }
-        return if operand is BoundBinaryExpression binary && binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-            AliasesAfterTrue(binary.Right, AliasesAfterTrue(binary.Left, before))
-        } else {
-            AliasesAfter(operand, before)
+    }
+
+    private func JoinAliases(first HashSet[VariableSymbol], second HashSet[VariableSymbol]) HashSet[VariableSymbol] {
+        if object.ReferenceEquals(first, second) {
+            return first
         }
+        let joined = HashSet[VariableSymbol](first)
+        joined.IntersectWith(second)
+        return joined
     }
 
     // The aliases after [`operand`](paramref) on every path, from the aliases before it. An assignment of an external
     // callable adds the alias.
-    private func AliasesAfter(operand BoundExpression, before HashSet[VariableSymbol]?) HashSet[VariableSymbol]? {
-        if before == nil {
-            return nil
-        }
+    private func AliasesAfter(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[VariableSymbol] {
         let collector = NewCollector(nil, before)
         collector.VisitExpression(operand)
         let after = HashSet[VariableSymbol](collector.DefinitelyExternalFunctionValues)

@@ -37,9 +37,9 @@ internal partial class StatementBinder {
     // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
     // so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
-    // ADR-0208 R18: the callable aliases at the operand being classified, while an `if` condition whose header
-    // effects removed aliases is classified; otherwise `nil`, and the current aliases apply.
-    private var testAliases HashSet[VariableSymbol]?
+    // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
+    // `nil` otherwise, and the current aliases apply.
+    private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
