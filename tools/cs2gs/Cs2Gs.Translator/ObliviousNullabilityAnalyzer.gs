@@ -2688,13 +2688,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     // reference in the emitted G#: not `T?`, not a value or open type, not a
     // declaration whose attribute contract widens it (`[AllowNull]`, a `null`
     // data row), and not an oblivious contract this run does not emit (G# reads
-    // that as `T!`, which takes `nil`). The attributes are read on the slot as
-    // the call binds it, as the translation reads them: a sibling's
-    // `[AllowNull]` seen through its emitted reference is a non-null store
-    // target there (#5577). An async result is the awaited value.
+    // that as `T!`, which takes `nil`). `[AllowNull]` is read with the store
+    // bridge's query, so a sibling's `[AllowNull]` seen through its emitted
+    // reference takes the null here as it does there (#5577). An async result
+    // is the awaited value.
     private func KeepsNonNullContract(slot ISymbol, graphs List[NullArgumentGraph]) bool {
         let declaration ISymbol? = OriginalNullArgumentDeclaration(slot) ?? slot.OriginalDefinition
-        if HasAllowNullWriteContract(declaration) || HasNullDataRowArgument(declaration) {
+        if HasRunAllowNullWriteContract(declaration, graphs.Select((graph NullArgumentGraph) -> graph.Owner)) ||
+            HasNullDataRowArgument(declaration) {
             return false
         }
         let type ITypeSymbol? = switch slot {
@@ -2730,14 +2731,30 @@ internal shared class ObliviousNullabilityAnalyzer {
     // declaration seen through a run project's emitted reference stands for.
     private func SourceDeclarationsInRun(symbol ISymbol, graphs List[NullArgumentGraph]) List[ISymbol] {
         let sources = List[ISymbol]()
+        for source in RunSourceDeclarations(symbol, graphs.Select((graph NullArgumentGraph) -> graph.Owner)) {
+            sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+        }
+        return sources
+    }
+
+    // Issue #5577: the source declarations that `symbol` stands for when it is
+    // seen through the emitted reference of a run project. They are found by
+    // documentation id in each run compilation with the same assembly identity.
+    // A linked source file gives one declaration for each such compilation.
+    private func RunSourceDeclarations(symbol ISymbol, compilations IEnumerable[Compilation]) List[ISymbol] {
+        let sources = List[ISymbol]()
         let identity = symbol.ContainingAssembly?.Identity
-        let id = NullArgumentId(symbol)
-        if identity == nil || id == nil {
+        if identity == nil {
             return sources
         }
-        for graph in graphs {
-            if graph.Owner is not CSharpCompilation csharp || !csharp.Assembly.Identity.Equals(identity) {
+        var id string? = nil
+        for compilation in compilations {
+            if compilation is not CSharpCompilation csharp || !csharp.Assembly.Identity.Equals(identity) {
                 continue
+            }
+            id = id ?? NullArgumentId(symbol)
+            if id == nil {
+                return sources
             }
             var source ISymbol? = nil
             if id.StartsWith("P:M:", StringComparison.Ordinal) {
@@ -2751,10 +2768,40 @@ internal shared class ObliviousNullabilityAnalyzer {
                 source = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, csharp)
             }
             if source != nil && source.DeclaringSyntaxReferences.Length != 0 {
-                sources.Add(OriginalNullArgumentDeclaration(source) ?? source)
+                sources.Add(source)
             }
         }
         return sources
+    }
+
+    /// Issue #5577: (cref:HasAllowNullWriteContract) for a slot as a
+    /// migration run binds it. A consumer sees a field, property or parameter
+    /// of another run project through that project's emitted reference, which
+    /// has no source attributes. The producer's translation emits the slot
+    /// `T?` from its source `[AllowNull]` (#3694), so the answer comes from
+    /// that source declaration. The store bridge and the null-argument pin rule
+    /// (#5574) both use this query, so they read the same contract.
+    /// @param symbol The slot as the call or store binds it.
+    /// @param runCompilations Every compilation of the run, or `nil`.
+    /// @returns `true` when the run emits the slot with null as an accepted input.
+    func HasRunAllowNullWriteContract(symbol ISymbol?, runCompilations IEnumerable[Compilation]?) bool {
+        if HasAllowNullWriteContract(symbol) {
+            return true
+        }
+        if runCompilations == nil ||
+            !((symbol is IPropertySymbol || symbol is IFieldSymbol || symbol is IParameterSymbol)) ||
+            symbol!!
+            .OriginalDefinition
+            .DeclaringSyntaxReferences
+            .Length != 0 {
+            return false
+        }
+        for source in RunSourceDeclarations(symbol!!, runCompilations) {
+            if HasAllowNullWriteContract(source) {
+                return true
+            }
+        }
+        return false
     }
 
     // Issue #5574: `IsDeclaredInThisRun` for the run as a whole: a source
