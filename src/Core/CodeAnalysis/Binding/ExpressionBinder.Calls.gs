@@ -2415,7 +2415,8 @@ internal partial class ExpressionBinder {
     }
 
     /// Issue #5569: binds a function literal against the delegate target that the delegate candidates agree on.
-    /// When another candidate takes a value at this position that is not a delegate, the bind is speculative: the
+    /// When another candidate takes a value at this position that is not a delegate (also as an element of the
+    /// expanded form of a trailing `params` array), the bind is speculative: the
     /// literal binds once with its return conversions deferred (see `LambdaBinder.BindLambdaExpression`). A
     /// literal whose `return` value does not convert to the target keeps its natural function type when such a
     /// candidate accepts that type. The delegate candidates are then not applicable, and overload resolution can
@@ -2425,7 +2426,8 @@ internal partial class ExpressionBinder {
     /// so nested literals cost linear work.
     /// @param lambdaSyntax The function literal.
     /// @param candidateParameterLists The parameter lists of the candidates.
-    /// @param slotOf Gives the parameter index of the literal in a candidate, or -1.
+    /// @param slotOf Gives the parameter index of the literal in a candidate (past the last parameter for an expanded
+    /// `params` position), or -1.
     /// @param target The agreed delegate function type.
     /// @param inferReturnTypeFromBody Whether the target's return slot is only a placeholder.
     /// @param convertToTarget Converts a target-typed literal to the nominal delegate of the slot.
@@ -2450,7 +2452,8 @@ internal partial class ExpressionBinder {
     /// Issue #5569: (cref:BindLambdaWithCandidateTarget) that also tells whether the literal keeps its natural type.
     /// @param lambdaSyntax The function literal.
     /// @param candidateParameterLists The parameter lists of the candidates.
-    /// @param slotOf Gives the parameter index of the literal in a candidate, or -1.
+    /// @param slotOf Gives the parameter index of the literal in a candidate (past the last parameter for an expanded
+    /// `params` position), or -1.
     /// @param target The agreed delegate function type.
     /// @param inferReturnTypeFromBody Whether the target's return slot is only a placeholder.
     /// @param convertToTarget Converts a target-typed literal to the nominal delegate of the slot.
@@ -2467,17 +2470,32 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         keepsNaturalType = false
         let alternatives = List[Type]()
-        for parameters in candidateParameterLists {
-            let index = slotOf(parameters)
-            if index < 0 || index >= parameters.Length {
-                continue
-            }
-            let slotType = ConversionClassifier.GetPlainValueClrParameterType(parameters[index])
+        let AddAlternative = func (slotType Type) {
             // A bare type parameter can take the natural type by inference, if its constraints accept it.
             if !slotType.IsByRef &&
                 (slotType.IsGenericParameter || !slotType.ContainsGenericParameters) &&
                 !MemberLookup.TryGetLambdaTargetFunctionType(slotType, out _) {
                 alternatives.Add(slotType)
+            }
+        }
+        for parameters in candidateParameterLists {
+            let index = slotOf(parameters)
+            if index < 0 {
+                continue
+            }
+            // A trailing `params` array also takes the literal as an element of its expanded form.
+            let last = parameters.Length - 1
+            if last >= 0 && index >= last && ClrOverloadResolution.IsParamsArrayParameter(parameters[last]) {
+                AddAlternative(
+                    Invariant.Required(
+                        parameters[last].ParameterType.GetElementType(),
+                        "a params array has an element type",
+                        expression: "parameters[last].ParameterType.GetElementType()"
+                    )
+                )
+            }
+            if index < parameters.Length {
+                AddAlternative(ConversionClassifier.GetPlainValueClrParameterType(parameters[index]))
             }
         }
         if alternatives.Count == 0 {
@@ -2540,7 +2558,8 @@ internal partial class ExpressionBinder {
     /// @param paramOffset The number of leading parameters that no source argument fills.
     /// @param sourceArgIndex The source argument index.
     /// @param argName The argument name, when the argument is named.
-    /// @returns The parameter index, or -1 when the candidate has no such parameter.
+    /// @returns The parameter index, or -1 when no parameter has the name. A positional index can be past the last
+    /// parameter, where only the expanded form of a trailing `params` array takes the argument.
     private func FindCandidateSlot(
         parameters[]ParameterInfo,
         paramOffset int32,
@@ -2556,7 +2575,7 @@ internal partial class ExpressionBinder {
             return -1
         }
         let index = sourceArgIndex + paramOffset
-        return if index < 0 || index >= parameters.Length {
+        return if index < 0 {
             -1
         } else {
             index

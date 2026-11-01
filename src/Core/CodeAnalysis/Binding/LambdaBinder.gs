@@ -988,9 +988,15 @@ internal class LambdaBinder {
         let bindLambdaBodyExpression = bindLambdaBodyExpression!!
         let isAsync = syntax.IsAsync
         let arityMatchesTarget = targetFunctionType != nil && targetFunctionType.Arity == syntax.Parameters.Count
-        // Issue #5569: a speculative literal whose parameters are all written can fall back to its natural type.
+        // Issue #5569: a speculative literal whose parameter types are all written (a destructured parameter
+        // through the types of its elements) can fall back to its natural type.
         let naturalTypeAvailable = acceptsNaturalType != nil && syntax.Parameters.All(
-            (parameter ParameterSyntax) -> parameter.Type != nil
+            (parameter ParameterSyntax) -> parameter.Type != nil ||
+                (
+                parameter.DeconstructionPattern is {} written && written.Elements.All(
+                    (element ParameterSyntax) -> element.Type != nil
+                )
+            )
         )
         if naturalTypeAvailable && targetFunctionType != nil && !arityMatchesTarget {
             let arityMark = Diagnostics.Count
@@ -1096,6 +1102,7 @@ internal class LambdaBinder {
                         conversion.IsImplicit ||
                         conversions.HasUserDefinedImplicitConversion(targetParameterTypeForPattern, tupleParameterType)
                     if !compatible {
+                        let parameterMark = Diagnostics.Count
                         if conversion.Exists {
                             Diagnostics.ReportCannotConvertImplicitly(
                                 pattern.Location,
@@ -1108,6 +1115,11 @@ internal class LambdaBinder {
                                 targetParameterTypeForPattern,
                                 tupleParameterType
                             )
+                        }
+                        // Issue #5569: held as for an ordinary written parameter type.
+                        if naturalTypeAvailable {
+                            parameterTargetDiagnostics.AddRange(Diagnostics.Skip(parameterMark))
+                            Diagnostics.TruncateTo(parameterMark)
                         }
                         hasIncompatibleExplicitParameter = true
                     } else if !runtimeEquivalent {
@@ -1487,7 +1499,13 @@ internal class LambdaBinder {
             )
             let targetBody = deferredReturns.WithTargetOperands(boundBody)
             let trialMark = Diagnostics.Count
-            let converted = ApplyInferredReturnTypeConversion(targetBody, syntax, placeholderReturnType, true)
+            let converted = ApplyInferredReturnTypeConversion(
+                targetBody,
+                syntax,
+                placeholderReturnType,
+                true,
+                deferredReturns
+            )
             let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.Skip(trialMark))
             Diagnostics.TruncateTo(trialMark)
             // The body fits the target only when the target-typed inference adopts the target return type, which
@@ -2557,6 +2575,14 @@ internal class LambdaBinder {
             BoundExpression
         ](ReferenceEqualityComparer.Instance)
 
+        // The target conversion of each return value, by bound value identity, so each pass's value keeps its own.
+        private let targetConversions Dictionary[
+            BoundExpression,
+            (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ] = Dictionary[BoundExpression, (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])](
+            ReferenceEqualityComparer.Instance
+        )
+
         /// Records the target-typed value of a return statement and the diagnostics of both passes.
         /// @param syntax The return statement.
         /// @param value The target-typed value.
@@ -2570,6 +2596,50 @@ internal class LambdaBinder {
         ) {
             operands.Add((value, diagnostics, naturalDiagnostics))
             targetValues[syntax] = value
+        }
+
+        /// Gets a value indicating whether a return statement has a held target-typed value.
+        /// @param syntax The return statement.
+        /// @returns `true` when (cref:Hold) recorded a value for it.
+        internal func Holds(syntax ReturnStatementSyntax) bool -> targetValues.ContainsKey(syntax)
+
+        /// Records the conversion of a return value to the target, bound where the return value binds, as an eager
+        /// bind converts it. Narrowing checks (backward `goto` uses) apply there, so the decision after the body
+        /// uses this result and does not convert the value again.
+        /// @param value The return value, before the conversion.
+        /// @param converted The value converted to the target.
+        /// @param diagnostics The diagnostics of the conversion.
+        internal func HoldConversion(
+            value BoundExpression,
+            converted BoundExpression,
+            diagnostics ImmutableArray[Diagnostic]
+        ) {
+            targetConversions[value] = (converted, diagnostics)
+        }
+
+        /// Gets a value indicating whether a return value has a held conversion.
+        /// @param value The return value, before the conversion.
+        /// @returns `true` when (cref:HoldConversion) recorded it.
+        internal func HasConversion(value BoundExpression) bool -> targetConversions.ContainsKey(value)
+
+        /// Gets the held conversion of a return value to the target.
+        /// @param value The return value, before the conversion.
+        /// @param converted The converted value.
+        /// @param diagnostics The diagnostics of the conversion.
+        /// @returns `true` when (cref:HoldConversion) recorded it.
+        internal func TryGetConversion(
+            value BoundExpression,
+            @NotNullWhen(true) out converted BoundExpression?,
+            out diagnostics ImmutableArray[Diagnostic]
+        ) bool {
+            if targetConversions.TryGetValue(value, out var held) {
+                converted = held.Value
+                diagnostics = held.Diagnostics
+                return true
+            }
+            converted = nil
+            diagnostics = ImmutableArray[Diagnostic].Empty
+            return false
         }
 
         /// Gets the diagnostics of every held target pass, in source order.
@@ -2639,7 +2709,8 @@ internal class LambdaBinder {
         boundBody BoundExpression,
         syntax LambdaExpressionSyntax,
         returnType TypeSymbol,
-        atReturnValue bool = false
+        atReturnValue bool = false,
+        heldConversions DeferredReturnState? = nil
     ) BoundExpression {
         if returnType == TypeSymbol.Error {
             return boundBody
@@ -2652,7 +2723,8 @@ internal class LambdaBinder {
                 Diagnostics
             } else {
                 default(DiagnosticBag?)
-            }
+            },
+            heldConversions
         )
         if boundBody is BoundBlockExpression block {
             let newStatements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
@@ -2904,17 +2976,21 @@ internal class LambdaBinder {
         private let returnType TypeSymbol
         // Issue #5569: set for a deferred target conversion, which reports as the return statement does.
         private let deferredDiagnostics DiagnosticBag?
+        // Issue #5569: the target conversions that the return statements bound, for the target trial.
+        private let heldConversions DeferredReturnState?
 
         init(
             conversions ConversionClassifier,
             syntax LambdaExpressionSyntax,
             returnType TypeSymbol,
-            deferredDiagnostics DiagnosticBag?
+            deferredDiagnostics DiagnosticBag?,
+            heldConversions DeferredReturnState? = nil
         ) {
             this.conversions = conversions
             this.syntax = syntax
             this.returnType = returnType
             this.deferredDiagnostics = deferredDiagnostics
+            this.heldConversions = heldConversions
         }
 
         /// Rewrites the returns inside a lambda body's trailing value.
@@ -2945,6 +3021,21 @@ internal class LambdaBinder {
             // Issue #4965 (ADR-0202): convert any `return` nested inside the
             // operand first (`return if c { return a } else { b }`).
             let operand = RewriteExpression(value)
+            // Issue #5569: a deferred return value converted where it bound, with the eager bind's narrowing checks.
+            // A value whose nested returns changed converts here, as its own conversion does not depend on them.
+            let held = heldConversions
+            if held != nil && object.ReferenceEquals(operand, value) && held.TryGetConversion(
+                value,
+                out var heldValue,
+                out var heldDiagnostics
+            ) {
+                deferredDiagnostics?.AddRange(heldDiagnostics)
+                return if object.ReferenceEquals(heldValue, value) {
+                    cast[BoundStatement](node)
+                } else {
+                    cast[BoundStatement](BoundReturnStatement(node.Syntax, heldValue, node.IsRef))
+                }
+            }
             if operand.Type == returnType {
                 return if object.ReferenceEquals(operand, value) {
                     cast[BoundStatement](node)

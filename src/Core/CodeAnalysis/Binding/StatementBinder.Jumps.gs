@@ -673,19 +673,22 @@ internal partial class StatementBinder {
     /// @param value The return value.
     /// @param targetType The lambda's target return type.
     /// @param deferredReturns The state of the lambda body.
+    /// @param bindTarget Binds the target pass, when it is not the value bound with the target type.
     /// @returns The bound value for the body: the natural one, or the target-typed one when the natural pass fails.
     private func BindDeferredTargetTypedReturn(
         syntax ReturnStatementSyntax,
         value ExpressionSyntax,
         targetType TypeSymbol,
-        deferredReturns LambdaBinder.DeferredReturnState
+        deferredReturns LambdaBinder.DeferredReturnState,
+        bindTarget(() -> BoundExpression)? = nil
     ) BoundExpression {
         let beforeValue = CaptureSpeculativeBindState()
         let targetTyped = BindReturnValuePass(
             deferredReturns,
             true,
-            () -> bindExpressionWithTargetType(value, targetType)
+            bindTarget ?? (() -> bindExpressionWithTargetType(value, targetType))
         )
+        HoldDeferredReturnConversion(deferredReturns, value.Location, targetTyped, targetType)
         let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
         let afterTarget = CaptureSpeculativeBindState()
         let targetPassLabels = Dictionary[string, BoundLabel](binderCtx.UserLabels)
@@ -717,6 +720,21 @@ internal partial class StatementBinder {
         return natural
     }
 
+    // Issue #5569: converts a return value of a speculative lambda body to the target where the value binds, as an
+    // eager bind does, so the conversion's narrowing checks (backward `goto` uses) apply. The result and its
+    // diagnostics wait in the body's state for the lambda binder's decision.
+    private func HoldDeferredReturnConversion(
+        deferredReturns LambdaBinder.DeferredReturnState,
+        location TextLocation,
+        value BoundExpression,
+        targetType TypeSymbol
+    ) {
+        let mark = Diagnostics.Count
+        let converted = conversions.BindConversion(location, value, targetType)
+        deferredReturns.HoldConversion(value, converted, Diagnostics.Skip(mark).ToImmutableArray())
+        Diagnostics.TruncateTo(mark)
+    }
+
     // Binds one pass of a speculative return value in its own scope, with the pass recorded for nested returns.
     private func BindReturnValuePass(
         deferredReturns LambdaBinder.DeferredReturnState,
@@ -746,10 +764,35 @@ internal partial class StatementBinder {
             function != nil &&
             function!!.Type != TypeSymbol.Void &&
             isFormattableStringTargetType(function!!.Type) {
-            return BoundReturnStatement(
-                syntax,
-                bindInterpolatedStringAsFormattable(interpolatedReturn, function!!.Type)
-            )
+            let formattableType = function!!.Type
+            let deferredReturns = function!!.DeferredReturns
+            // Issue #5569: in a speculative lambda body the formattable value is the target pass of a retried value,
+            // so the literal can still take its natural type (a string). A return nested in a value's natural pass
+            // binds as a string, below. A hole with a function literal keeps the formattable bind.
+            if deferredReturns != nil &&
+                !deferredReturns.InTargetPass &&
+                !deferredReturns.InNaturalPass &&
+                !interpolatedReturn
+                .DescendantNodesAndSelf().Any(
+                (node SyntaxNode) -> node is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax
+            ) {
+                return BoundReturnStatement(
+                    syntax,
+                    BindDeferredTargetTypedReturn(
+                        syntax,
+                        interpolatedReturn,
+                        formattableType,
+                        deferredReturns,
+                        () -> bindInterpolatedStringAsFormattable(interpolatedReturn, formattableType)
+                    )
+                )
+            }
+            if deferredReturns?.InNaturalPass != true {
+                return BoundReturnStatement(
+                    syntax,
+                    bindInterpolatedStringAsFormattable(interpolatedReturn, formattableType)
+                )
+            }
         }
         // ADR-0100 / issue #795: a bare `return default` takes its type
         // from the enclosing function's declared return type. We special-
@@ -857,8 +900,26 @@ internal partial class StatementBinder {
         } else if function == nil {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location)
         } else if function!!.DefersReturnConversion {
-            // Issue #5569: the lambda binder converts the value, and reports a missing value, after the body.
-
+            // Issue #5569: the lambda binder decides the conversion, and reports a missing value, after the body.
+            // A value that has no held target-typed value converts to the target now, in the eager bind's state.
+            let deferredReturns = Invariant.Required(
+                function!!.DeferredReturns,
+                "a deferred return conversion has a state",
+                expression: "function.DeferredReturns"
+            )
+            if expression != nil && !deferredReturns.Holds(syntax) && !deferredReturns.HasConversion(expression) {
+                HoldDeferredReturnConversion(
+                    deferredReturns,
+                    Invariant.Required(
+                        syntax.Expression,
+                        "a return expression is present",
+                        expression: "syntax.Expression"
+                    )
+                        .Location,
+                    expression,
+                    function!!.Type
+                )
+            }
         } else if function!!.IsReturnTypeInferred {
             // ADR-0076 / issue #716: arrow-lambda binding deferred return-type
             // resolution to a post-bind pass. The expression has been bound,
