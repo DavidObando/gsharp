@@ -29,12 +29,19 @@ import Xunit
 /// | the same local passed to `Keep(Node node)` | `Keep(item)`, GS0154 | `Keep(item!!)` |
 /// | `Node n; (n, i) = entry;`, also nested | `n = nValue`, GS0155 | `n = nValue!!`, as `n = entry.Item!!` (store bridge) |
 /// | the same, when `entry.Item != null` taints the property itself | `n = nValue`, GS0155 | `var n Node?`, `n = nValue`; the null is stored (taint edge) |
+/// | `var n = entry.Item; (n, i) = entry;` (nullable storage) | `n = nValue` | unchanged: the target reads as nullable, so no bridge |
+/// | `(b, i) = entry` through `implicit operator Box(Node node)` | `b = bValue` | unchanged: the bridge asks the operator's parameter, and `b` gets no edge |
+/// | a record from another project's emitted reference | GS0155, GS0159 | as for a record of this project |
 /// @remarks Mutation witnesses (ADR-0154), each also failing on d12a50f86: with the
 /// `IsTranslatorWidenedDeclaration` local arms of `IsNullablePromotedValue` and
 /// `ReceiverValueIsPromotedNullable` reverted to `ShouldPromoteToNullableReference`, the first test
 /// fails binding (GS0159, GS0154); with `BridgeDeconstructedElementStore` returning its value, the second
 /// fails binding (GS0155); without the `CollectDeconstructedElementEdges` calls in `CollectEdges`,
-/// the third throws `NullReferenceException` at the bridged store, where C# stores the null.
+/// the third throws `NullReferenceException` at the bridged store, where C# stores the null. The
+/// other four rows answer the review of c05ce523f. The mutants, in order: no
+/// `IsNullablePromotedValue(target)` check in `BridgeDeconstructedElementStore`, no conversion-operator
+/// slot there, no `DeconstructedElementConversionOperator` check in `AddDeconstructedElementEdge`, and
+/// `SynthesizedDeconstructRecord` ignoring the run's compilations.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -137,12 +144,136 @@ namespace Demo
         Assert.DoesNotContain("!!", printed)
     }
 
+    /// A `var` local whose initializer is the widened property already has nullable storage, so a
+    /// deconstruction into it stores the null as C# does (review of c05ce523f).
+    @Fact
+    func StoreIntoAnInferredNullableLocal_IsNotBridged() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Inferred(Entry entry)
+        {
+            var n = entry.Item;
+            int i;
+            (n, i) = Empty();
+            object o = n;
+            return (o == null) + ":" + i;
+        }
+        public static string Run() => Inferred(new Entry(new Node(), 1));
+    }
+}`)
+        Assert.Equal("True:0", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.Contains("n = nValue\n", printed)
+    }
+
+    /// A user-defined conversion takes the element as its input, so the bridge asks the operator's
+    /// parameter, as the plain `b = entry.Item` does, and the null reaches the operator.
+    @Fact
+    func StoreThroughAUserDefinedConversion_AsksTheOperatorParameter() {
+        let printed = Translate(BoxSource(""))
+        Assert.Equal("null0 null", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.Contains("b = bValue\n", printed)
+    }
+
+    /// The conversion's result, not the element, is stored, so a target of a converted element gets no
+    /// taint edge from it, also when the taint widens the property itself.
+    @Fact
+    func ConvertedElement_DoesNotWidenTheTarget() {
+        let printed = Translate(BoxSource("public static bool HasItem(Entry entry) => entry.Item != null;"))
+        Assert.Equal("null0 null", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.Contains("func Convert(entry Entry) string {\n        var b Box\n", printed)
+    }
+
+    private func BoxSource(extra string) string -> `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public class Box
+    {
+        public string Tag;
+        public static implicit operator Box(Node node) => new Box { Tag = node == null ? "null" : "node" };
+    }
+    public static class Use
+    {
+        ` + extra + `
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Convert(Entry entry) { Box b; int i; (b, i) = entry; return b.Tag + i; }
+        public static string Plain(Entry entry) { Box b; b = entry.Item; return b.Tag; }
+        public static string Run() => Convert(Empty()) + " " + Plain(Empty());
+    }
+}`
+
+    /// A record from another project of the run is deconstructed through its emitted reference, where
+    /// the synthesized `Deconstruct` is not marked implicitly declared. It is matched through the
+    /// record's source declaration, whose positional property carries the producer's widening.
+    @Fact
+    func DeconstructionOfARecordFromAnotherProject_ReadsTheSourceProperty() {
+        let library = Compile("Lib", `
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Make { public static Entry Empty() => new Entry(null, 0); }
+}`, nil)
+        let app = Compile("App", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static string Store(Demo.Entry entry) { Demo.Node n; int i; (n, i) = entry; return n.ToString() + i; }
+        public static string Read(Demo.Entry entry) { var (item, id) = entry; return item.ToString() + id; }
+        public static string Run()
+        {
+            var entry = new Demo.Entry(new Demo.Node(), 1);
+            return Store(entry) + " " + Read(entry);
+        }
+    }
+}`, Emit(library))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = Translate(library, repository)
+        let appPrinted = Translate(app, repository)
+        Assert.Equal("node1 node1", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
+        Assert.Contains("Item Node?", libraryPrinted)
+        Assert.Contains("n = nValue!!", appPrinted)
+        Assert.Contains("return item!!.ToString() + id", appPrinted)
+    }
+
     private func Translate(source string) string {
-        let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Use.cs")
+        let compilation = Compile("Snippet", source, nil)
+        return Translate(compilation, []CSharpCompilation{compilation})
+    }
+
+    private func Translate(compilation CSharpCompilation, repository IReadOnlyList[CSharpCompilation]) string {
+        let tree = compilation.SyntaxTrees.Single()
+        let model = compilation.GetSemanticModel(tree)
+        let context = TranslationContext(
+            compilation,
+            model,
+            tree.FilePath,
+            siblingCompilations: repository,
+            repositoryCompilations: repository
+        )
+        return GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(LoadedDocument(tree.FilePath, tree, model), context)
+        )
+    }
+
+    private func Compile(name string, source string, reference MetadataReference?) CSharpCompilation {
+        let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: name + ".cs")
+        var references = CSharpProjectLoader.RuntimeReferences().ToList()
+        if reference != nil {
+            references.Add(reference)
+        }
         let compilation = CSharpCompilation.Create(
-            "Snippet",
+            name,
             []SyntaxTree{tree},
-            CSharpProjectLoader.RuntimeReferences(),
+            references,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
                 NullableContextOptions.Disable
             )
@@ -151,10 +282,14 @@ namespace Demo
             compilation.GetDiagnostics(),
             (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error
         )
-        let model = compilation.GetSemanticModel(tree)
-        let document = LoadedDocument(tree.FilePath, tree, model)
-        let context = TranslationContext(compilation, model, document.FilePath, []CSharpCompilation{compilation})
-        return GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        return compilation
+    }
+
+    private func Emit(compilation CSharpCompilation) MetadataReference {
+        let image = MemoryStream()
+        Assert.True(compilation.Emit(image).Success)
+        image.Position = 0
+        return MetadataReference.CreateFromStream(image)
     }
 
     private func CompileAndRun(printedFiles IReadOnlyList[string], callExpression string) string {

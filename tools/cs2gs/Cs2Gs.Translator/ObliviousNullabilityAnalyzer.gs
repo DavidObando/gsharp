@@ -2392,11 +2392,65 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// local that it declares (`var (a, b) = e`, `(T a, U b) = e`), or an existing variable, field or
     /// property that it assigns (`(a, b) = e`).
     /// @param model The semantic model of the target's tree.
+    /// @param compilations The compilations of the run, which identify a record's synthesized
+    /// `Deconstruct` seen through another project's emitted reference; null when there are none.
     /// @returns The `Deconstruct` out parameter at the target's position or, for a record's synthesized
     /// `Deconstruct`, the positional property that the emitted G# record deconstructs. A tuple
     /// deconstruction has no such declaration and gives null.
-    func DeconstructedElementDeclaration(target SyntaxNode, model SemanticModel) ISymbol? {
-        // Climb to the deconstruction root and record the element index at each level.
+    func DeconstructedElementDeclaration(
+        target SyntaxNode,
+        model SemanticModel,
+        compilations IReadOnlyList[CSharpCompilation]? = nil
+    ) ISymbol? {
+        if !TryResolveDeconstructionElement(target, model, out var element, out var index) ||
+            element.Method is not IMethodSymbol deconstruct {
+            return nil
+        }
+        // An unreduced extension `Deconstruct(this T value, out …)` starts its outputs at ordinal 1.
+        let ordinal = if deconstruct.IsExtensionMethod && deconstruct.ReducedFrom == nil {
+            index + 1
+        } else {
+            index
+        }
+        if ordinal >= deconstruct.Parameters.Length {
+            return nil
+        }
+        let parameter = deconstruct.Parameters[ordinal]
+        if SynthesizedDeconstructRecord(deconstruct, compilations) is {} record {
+            return record.GetMembers(parameter.Name).OfType[IPropertySymbol]().FirstOrDefault() ?? parameter
+        }
+        return parameter.OriginalDefinition
+    }
+
+    /// Issue #5561: the user-defined conversion that a deconstruction applies to the element before it
+    /// stores the result into [`target`](paramref) (`(box, i) = entry` with `implicit operator Box(Node)`).
+    /// @param target A deconstruction target, as for `DeconstructedElementDeclaration`.
+    /// @param model The semantic model of the target's tree.
+    /// @returns The conversion operator, or null for any other conversion.
+    func DeconstructedElementConversionOperator(target SyntaxNode, model SemanticModel) IMethodSymbol? {
+        if !TryResolveDeconstructionElement(target, model, out var element, out var index) {
+            return nil
+        }
+        let conversion = element.Nested[index].Conversion
+        return if conversion != nil && conversion.Value.IsUserDefined {
+            conversion.Value.MethodSymbol
+        } else {
+            default(IMethodSymbol?)
+        }
+    }
+
+    // Issue #5561: climbs from a deconstruction target to its root and walks the
+    // root's `DeconstructionInfo` back down. `element` is the level whose
+    // `Deconstruct` produces the target's value and `index` the target's
+    // position in it.
+    private func TryResolveDeconstructionElement(
+        target SyntaxNode,
+        model SemanticModel,
+        out element DeconstructionInfo,
+        out index int32
+    ) bool {
+        element = default(DeconstructionInfo)
+        index = -1
         let indexes = List[int32]()
         var current SyntaxNode = target
         var climbing = true
@@ -2424,35 +2478,62 @@ internal shared class ObliviousNullabilityAnalyzer {
         } else if current.Parent is ForEachVariableStatementSyntax forEach && forEach.Variable == current {
             info = model.GetDeconstructionInfo(forEach)
         } else {
-            return nil
+            return false
         }
         for var level = 0; level < indexes.Count; level++ {
-            let index = indexes[level]
-            let nested = info.Nested
-            if index < 0 || index >= nested.Length {
-                return nil
+            let position = indexes[level]
+            if position < 0 || position >= info.Nested.Length {
+                return false
             }
-            if level < indexes.Count - 1 {
-                info = nested[index]
+            if level == indexes.Count - 1 {
+                element = info
+                index = position
+                return true
+            }
+            info = info.Nested[position]
+        }
+        return false
+    }
+
+    // Issue #5574/#5561: the record whose synthesized `Deconstruct` `method`
+    // is, or null. Seen through a run project's emitted reference the method is
+    // not marked implicitly declared, so it is matched through the record's
+    // source declaration in that project, which is the record returned: its
+    // positional properties carry the producer's widening.
+    private func SynthesizedDeconstructRecord(
+        method IMethodSymbol,
+        compilations IReadOnlyList[CSharpCompilation]?
+    ) INamedTypeSymbol? {
+        if method.ContainingType is not{IsRecord: true} record {
+            return nil
+        }
+        if method.IsImplicitlyDeclared {
+            return record
+        }
+        if method.DeclaringSyntaxReferences.Length != 0 || compilations == nil {
+            return nil
+        }
+        let identity = record.ContainingAssembly?.Identity
+        let id = DocumentationCommentId.CreateDeclarationId(record.OriginalDefinition)
+        for compilation in compilations {
+            if compilation == nil || identity == nil || !compilation.Assembly.Identity.Equals(identity) {
                 continue
             }
-            if info.Method is not IMethodSymbol deconstruct {
-                return nil
+            if DocumentationCommentId.GetFirstSymbolForDeclarationId(id, compilation) is INamedTypeSymbol source &&
+                source
+                .DeclaringSyntaxReferences
+                .Length != 0 &&
+                source
+                .GetMembers(method.Name).Any(
+                (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
+                    synthesized
+                    .Parameters
+                    .Length == method
+                    .Parameters
+                    .Length
+            ) {
+                return source
             }
-            // An unreduced extension `Deconstruct(this T value, out …)` starts its outputs at ordinal 1.
-            let ordinal = if deconstruct.IsExtensionMethod && deconstruct.ReducedFrom == nil {
-                index + 1
-            } else {
-                index
-            }
-            if ordinal >= deconstruct.Parameters.Length {
-                return nil
-            }
-            let parameter = deconstruct.Parameters[ordinal]
-            if deconstruct.IsImplicitlyDeclared && deconstruct.ContainingType is {IsRecord: true} record {
-                return record.GetMembers(parameter.Name).OfType[IPropertySymbol]().FirstOrDefault() ?? parameter
-            }
-            return parameter.OriginalDefinition
         }
         return nil
     }
@@ -2496,39 +2577,24 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         edges List[(Target ISymbol, Source ISymbol)]
     ) {
+        // A user-defined conversion stores its result, not the element.
         if IsValueDeclarationSymbol(receiver) &&
             IsEligibleScalarTarget(receiver) &&
+            DeconstructedElementConversionOperator(target, model) == nil &&
             DeconstructedElementDeclaration(target, model) is {} element {
             edges.Add((Canonical(receiver)!!, Canonical(element)!!))
         }
     }
 
     // Issue #5574: the source record whose synthesized `Deconstruct` `method`
-    // is, or null. Seen through a run project's emitted reference the method is
-    // not marked implicitly declared, so it is matched through the record's
-    // source declaration.
-    private func SynthesizedDeconstructRecord(method IMethodSymbol, run NullArgumentRun) INamedTypeSymbol? {
-        let record = method.ContainingType.OriginalDefinition
-        if method.IsImplicitlyDeclared {
-            return record
-        }
-        if method.DeclaringSyntaxReferences.Length != 0 || !record.IsRecord {
-            return nil
-        }
-        for source in SourceDeclarationsInRun(record, run.Members) {
-            if source is INamedTypeSymbol sourceRecord && sourceRecord.GetMembers(method.Name).Any(
-                (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
-                    synthesized
-                    .Parameters
-                    .Length == method
-                    .Parameters
-                    .Length
-            ) {
-                return sourceRecord.OriginalDefinition
-            }
-        }
-        return nil
-    }
+    // is, or null, matched across the run's compilations.
+    private func SynthesizedDeconstructRecord(
+        method IMethodSymbol,
+        run NullArgumentRun
+    ) INamedTypeSymbol? -> SynthesizedDeconstructRecord(
+        method,
+        run.Members.Select((graph NullArgumentGraph) -> graph.Owner).OfType[CSharpCompilation]().ToList()
+    )?.OriginalDefinition
 
     private func AddNullArgumentRead(
         reads Dictionary[string, List[(Safe bool, Slot string?)]],

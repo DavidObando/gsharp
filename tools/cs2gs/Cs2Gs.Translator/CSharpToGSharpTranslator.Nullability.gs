@@ -1221,7 +1221,11 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is SingleVariableDesignationSyntax designation {
-                ObliviousNullabilityAnalyzer.DeconstructedElementDeclaration(designation, this.context.SemanticModel)
+                ObliviousNullabilityAnalyzer.DeconstructedElementDeclaration(
+                    designation,
+                    this.context.SemanticModel,
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                )
             } else {
                 default(ISymbol?)
             }
