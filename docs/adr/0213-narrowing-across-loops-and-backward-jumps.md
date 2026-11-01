@@ -1312,16 +1312,18 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   package, or an extension operator) is one. The rest uses the classifications of the straight-line pass: a member or
   index read runs user code unless it is a field, a tuple element, an array or slice element or length, an enum
   member, a source auto property (R14) or an imported property or indexer that `IsStableClrAccessor` lists (R16, R17);
-  an imported operator runs user code; a conversion site (an assigned or typed value, a non-`bool` condition) runs a
-  conversion operator when the conversion classifier finds one between the types of its value and its target
-  (`HasUserDefinedImplicitConversion`); a conversion between built-in types is predefined, and a value of another type
-  converted to a generic type, a `??`, a deconstruction or a multiple assignment can run one; a bare static field (not
-  a constant) or static property of a type whose initializer runs user code runs it (R11, #5520). The walker records
-  each read, operator and conversion site with paths for its operands; a path that does not resolve can run user code.
-  So `Environment.CurrentDirectory`, `dict["a"]` and `let s ReadOnlySpan[char] = "ab"` remove the fact, and `list[i]`,
-  `text.Length`, an auto property, a constant, `let d decimal = k` and an extension operator keep it. Separately, a
-  unary operator that is not predefined for its operand, a literal included (`-"x"` with an extension operator), is a
-  call for every fact (W4).
+  an imported operator runs user code; a conversion site (an assigned or typed value, a non-`bool` condition, a
+  returned value, a by-value argument against the parameters of the callee's candidates) runs a conversion operator
+  when the conversion classifier finds one between the types of its value and its target
+  (`HasUserDefinedImplicitConversion`); an argument is taken to bind a candidate that takes every argument without a
+  conversion operator, and a call whose callee or arguments do not resolve is not checked; a conversion between
+  built-in types is predefined, and a value of another type converted to a generic type, a `??`, a deconstruction or a
+  multiple assignment can run one; a bare static field (not a constant) or static property of a type whose initializer
+  runs user code runs it (R11, #5520). The walker records each read, operator and conversion site with paths for its
+  operands; a path that does not resolve can run user code. So `Environment.CurrentDirectory`, `dict["a"]` and `let s
+  ReadOnlySpan[char] = "ab"` remove the fact, and `list[i]`, `text.Length`, an auto property, a constant, `let d
+  decimal = k` and an extension operator keep it. Separately, a unary operator that is not predefined for its operand,
+  a literal included (`-"x"` with an extension operator), is a call for every fact (W4).
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.
