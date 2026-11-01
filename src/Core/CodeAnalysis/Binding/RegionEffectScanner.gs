@@ -32,6 +32,8 @@ internal sealed class RegionEffectScanner {
     private var pendingReceiver ExpressionSyntax? = nil
     private var pendingReceiverIsRoot bool = false
     private var pendingReceiverPath RegionReceiverPath? = nil
+    // The path of the value that the pattern being visited tests, or `nil` when the walker cannot follow it.
+    private var patternSubject RegionReceiverPath? = nil
 
     /// The names that one declaration scope holds, and the `ref` locals of the scope with the name
     /// of the variable each one aliases (`nil` when the storage is not a plain variable).
@@ -338,6 +340,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.ListPattern {
                 // A list pattern reads the length and the elements of its subject (rule W5).
                 RecordMemberRead()
+                RecordRead(nil, nil)
                 VisitChildren(node)
             }
             case SyntaxKind.IfStatement {
@@ -434,11 +437,17 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.PropertyPattern {
                 let pattern = cast[PropertyPatternSyntax](node)
                 Declare(pattern.Designation, "pattern")
-                // Each field of the pattern reads a member of the subject (rule W5). `{ }` is a null test.
+                // Each field of the pattern reads a member of the subject (rule W5), and its pattern tests that
+                // member. `{ }` is a null test.
+                let subject = patternSubject
                 for field in pattern.Fields {
                     RecordMemberRead()
+                    let name = field.Identifier.ValueText
+                    RecordRead(subject, name)
+                    patternSubject = subject?.Append(RegionReceiverStepKind.Member, name)
+                    Visit(field.Pattern)
                 }
-                VisitChildren(node)
+                patternSubject = subject
             }
             case SyntaxKind.SlicePattern {
                 let pattern = cast[SlicePatternSyntax](node)
@@ -451,7 +460,11 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.IsExpression {
                 let isExpression = cast[IsExpressionSyntax](node)
                 RecordTypeTests(isExpression.Expression, isExpression.Pattern)
-                VisitChildren(node)
+                Visit(isExpression.Expression)
+                let outer = patternSubject
+                patternSubject = BuildPath(isExpression.Expression)
+                Visit(isExpression.Pattern)
+                patternSubject = outer
             }
             case SyntaxKind.SwitchStatement {
                 let switchStatement = cast[SwitchStatementSyntax](node)
@@ -459,7 +472,10 @@ internal sealed class RegionEffectScanner {
                 for switchCase in switchStatement.Cases {
                     RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     Push()
+                    let outer = patternSubject
+                    patternSubject = BuildPath(switchStatement.Expression)
                     Visit(switchCase.Value)
+                    patternSubject = outer
                     VisitCondition(switchCase.Guard)
                     Visit(switchCase.Body)
                     Pop()
@@ -471,7 +487,10 @@ internal sealed class RegionEffectScanner {
                 for arm in switchExpression.Arms {
                     RecordTypeTests(switchExpression.Expression, arm.Value)
                     Push()
+                    let outer = patternSubject
+                    patternSubject = BuildPath(switchExpression.Expression)
                     Visit(arm.Value)
+                    patternSubject = outer
                     VisitCondition(arm.Guard)
                     Visit(arm.Result)
                     Pop()
@@ -612,8 +631,22 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.AccessorExpression {
                 VisitAccessor(cast[AccessorExpressionSyntax](node), receiver, receiverIsRoot, receiverPath)
             }
-            case SyntaxKind.IndexExpression, SyntaxKind.FieldAccessExpression {
+            case SyntaxKind.IndexExpression {
+                let index = cast[IndexExpressionSyntax](node)
                 RecordMemberRead()
+                RecordRead(
+                    if receiver != nil {
+                        AppendPath(receiverPath, index.Target)
+                    } else {
+                        BuildPath(index.Target)
+                    },
+                    nil
+                )
+                VisitChildren(node)
+            }
+            case SyntaxKind.FieldAccessExpression {
+                RecordMemberRead()
+                RecordRead(nil, nil)
                 VisitChildren(node)
             }
             case SyntaxKind.GotoStatement, SyntaxKind.LabeledStatement {
@@ -966,6 +999,7 @@ internal sealed class RegionEffectScanner {
         }
         let bareBefore = current.BareReads.ToArray()
         let callsBefore = current.Calls.Count
+        let readsBefore = current.MemberReads.Count
         let testsBefore = current.TypeTests.Count
         current.AbsorbFlags(record, Active())
         // A nested type test of a name that the enclosing region declares tests no entry-scope receiver; the local
@@ -1005,6 +1039,12 @@ internal sealed class RegionEffectScanner {
                 receiverName,
                 receiver
             )
+        }
+        for var i = readsBefore; i < current.MemberReads.Count; i++ {
+            let read = current.MemberReads[i]
+            if read.Receiver != nil {
+                current.MemberReads[i] = RegionMemberRead(Rebase(read.Receiver), read.Member)
+            }
         }
         // A name that an enclosing declaration of the region hides is no property read.
         for name in record.BareReads {
@@ -1624,6 +1664,12 @@ internal sealed class RegionEffectScanner {
 
     // ---------------------------------------------------------------- calls and members
 
+    private func RecordRead(receiver RegionReceiverPath?, member string?) {
+        if Active() {
+            current.MemberReads.Add(RegionMemberRead(receiver, member))
+        }
+    }
+
     private func RecordMemberRead() {
         if Active() {
             current.ContainsMemberRead = true
@@ -1640,22 +1686,39 @@ internal sealed class RegionEffectScanner {
     ) {
         let isRightPartOfAccessor = receiver != nil
         // `a.M(args)` is a call. `a.b` and `a.b.M()` read the member `b`: an unknown getter (rule W5). In
-        // `a.M().b` the call `M()` is the left part of the accessor that follows `a.`, and `a` is its receiver.
-        if isRightPartOfAccessor && accessor.LeftPart.Kind == SyntaxKind.CallExpression {
+        // `a.M().b` and `a.b[i].c` the call `M()` and the index `b[i]` are the left part of the accessor that
+        // follows `a.`, and `a` is their receiver.
+        if isRightPartOfAccessor &&
+            (
+            accessor.LeftPart.Kind == SyntaxKind.CallExpression || accessor.LeftPart.Kind == SyntaxKind.IndexExpression
+        ) {
             pendingReceiver = receiver
             pendingReceiverIsRoot = receiverIsRoot
             pendingReceiverPath = prefix
         }
         Visit(accessor.LeftPart)
         let right = accessor.RightPart
-        if right.Kind != SyntaxKind.CallExpression {
-            RecordMemberRead()
-        }
         // The receiver of the call is a plain root only when this accessor does not itself follow a dot.
         let leftPath = if isRightPartOfAccessor {
             AppendPath(prefix, accessor.LeftPart)
         } else {
             BuildPath(accessor.LeftPart)
+        }
+        if right.Kind != SyntaxKind.CallExpression {
+            RecordMemberRead()
+            // The member that follows the dot: `a.b`, `a.b.c`, `a.b[i]`; in `a.M().b` the call is no read.
+            var first ExpressionSyntax = right
+            if first is AccessorExpressionSyntax nested {
+                first = nested.LeftPart
+            }
+            if first is IndexExpressionSyntax indexed {
+                first = indexed.Target
+            }
+            if first is NameExpressionSyntax read {
+                RecordRead(leftPath, read.IdentifierToken.ValueText)
+            } else if first.Kind != SyntaxKind.CallExpression {
+                RecordRead(nil, nil)
+            }
         }
         pendingReceiver = accessor.LeftPart
         pendingReceiverIsRoot = !isRightPartOfAccessor

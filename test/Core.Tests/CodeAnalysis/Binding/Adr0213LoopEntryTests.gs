@@ -1808,6 +1808,132 @@ func Run(ref s string?, box IBox) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("imported-getter-with-user-code-removes-a-by-reference-fact (R16)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let c = Environment.CurrentDirectory
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("dictionary-indexer-removes-a-by-reference-fact (R17)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let x = dict["a"]
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("stable-list-indexer-keeps-a-by-reference-fact (R17)", `package T
+import System
+import System.Collections.Generic
+class Holder {
+    var Cb Action = Action(func() { })
+    var Inner Holder? = nil
+    var Items List[Holder] = List[Holder]()
+    func Do() { }
+}
+class Child {
+    var Do Action = Action(func() { })
+}
+class Parent {
+    var Child Child = Child()
+    func Do() { }
+}
+class Box[T] {
+    func Do() { }
+}
+func Make() Holder { return Holder() }
+func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let c = list[0]
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("source-getter-with-user-code-removes-a-by-reference-fact (R14)", `package T
+import System
+class Holder {
+    prop P int32 {
+        get { return 1 }
+    }
+    prop Q int32 { get; set; }
+}
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + holder.P * 0
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("source-auto-property-keeps-a-by-reference-fact (R14)", `package T
+import System
+class Holder {
+    prop P int32 {
+        get { return 1 }
+    }
+    prop Q int32 { get; set; }
+}
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + holder.Q * 0
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

@@ -1305,6 +1305,16 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   region type-tests), and a path with steps in a region that type-tests a member or an element, can reach a function
   value, so the call is indirect; `Invoke`, `BeginInvoke` and `DynamicInvoke` (`holder.Cb.Invoke()`) are always
   indirect.
+- *Getters and indexers on by-reference storage (coordinator decision 2026-11-01, pending maintainer review; A3 is the
+  more permissive alternative).* A member or index read that can run user code removes the fact of a `ref` or `out`
+  parameter, a `ref` local or an external-storage alias, as on main, because a `ref` parameter can alias storage that
+  the code writes (`Foo(ref s_field)`). The read uses the classification of the straight-line pass: a field, a tuple
+  element, an array or slice element or length, and an enum member run no user code; a source property runs user code
+  unless it is an auto property (R14); an imported property or indexer runs user code unless `IsStableClrAccessor`
+  lists it (R16, R17), and an index read over a type-parameter argument always does. The walker records each read with
+  its receiver path (a property-pattern field reads a member of the pattern's subject); a read whose receiver does not
+  resolve can run user code. So `Environment.CurrentDirectory` and `dict["a"]` remove the fact, and `list[i]`,
+  `text.Length` and an auto property keep it. Under A3 alone a read would keep it.
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.

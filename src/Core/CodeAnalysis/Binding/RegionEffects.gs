@@ -221,6 +221,25 @@ internal sealed class RegionReceiverPath {
     )
 }
 
+/// A member or index read that the consumer resolves to decide whether a getter or an indexer can run user code
+/// (ADR-0208 R14, R16 and R17; ADR-0213, coordinator decision 2026-11-01).
+internal sealed class RegionMemberRead {
+    init(receiver RegionReceiverPath?, member string?) {
+        Receiver = receiver
+        Member = member
+    }
+
+    /// Gets the path of the receiver, or `nil` when the walker cannot follow it.
+    prop Receiver RegionReceiverPath? {
+        get;
+    }
+
+    /// Gets the name of the member that is read, or `nil` for an index read.
+    prop Member string? {
+        get;
+    }
+}
+
 /// One call site found by the scanner.
 internal sealed class RegionCall {
     init(
@@ -299,6 +318,7 @@ internal sealed class RegionEffects {
         NilCompareOperandNames = List[string]()
         ReturnedNames = List[string]()
         TypeTests = List[RegionTypeTest]()
+        MemberReads = List[RegionMemberRead]()
     }
 
     /// Gets the writes to names that no declaration inside the region encloses (rule W1), in
@@ -309,6 +329,11 @@ internal sealed class RegionEffects {
 
     /// Gets the call sites with an operand analysis, in source order of the walk.
     prop Calls List[RegionCall] {
+        get;
+    }
+
+    /// Gets the member and index reads, in source order of the walk.
+    prop MemberReads List[RegionMemberRead] {
         get;
     }
 
@@ -476,6 +501,7 @@ internal sealed class RegionEffects {
             return
         }
         Calls.AddRange(other.Calls)
+        MemberReads.AddRange(other.MemberReads)
         ContainsMemberTypeTest = ContainsMemberTypeTest || other.ContainsMemberTypeTest
         TypeTests.AddRange(other.TypeTests)
         ContainsCall = ContainsCall || other.ContainsCall

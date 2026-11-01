@@ -102,6 +102,12 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        /// Whether such a property has a getter with user code (not an auto property, ADR-0208 R14).
+        prop ReadsUserCodeProperty bool {
+            get;
+            set;
+        }
     }
 
     private var packageDeclaresConversions bool? = nil
@@ -195,8 +201,13 @@ internal partial class StatementBinder {
             }
         }
         for name in effects.BareReads {
-            if $scope.TryLookupSymbol(name) is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
+            let symbol = $scope.TryLookupSymbol(name)
+            if symbol is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
                 resolved.ReadsProperty = true
+            }
+            if symbol is ImplicitPropertyVariableSymbol{Property: {IsAutoProperty: false}} or
+                ImplicitStaticPropertyVariableSymbol{Property: {IsAutoProperty: false}} {
+                resolved.ReadsUserCodeProperty = true
             }
         }
         for write in effects.Writes {
@@ -411,6 +422,29 @@ internal partial class StatementBinder {
     }
 
     private func ResolveTypeName(name string) TypeSymbol? {
+        for builtin in[]TypeSymbol{
+            TypeSymbol.Bool,
+            TypeSymbol.UInt8,
+            TypeSymbol.Int8,
+            TypeSymbol.Int16,
+            TypeSymbol.UInt16,
+            TypeSymbol.Int32,
+            TypeSymbol.UInt32,
+            TypeSymbol.Int64,
+            TypeSymbol.UInt64,
+            TypeSymbol.NInt,
+            TypeSymbol.NUInt,
+            TypeSymbol.Float32,
+            TypeSymbol.Float64,
+            TypeSymbol.Decimal,
+            TypeSymbol.Char,
+            TypeSymbol.String,
+            TypeSymbol.Object
+        } {
+            if builtin.Name == name {
+                return builtin
+            }
+        }
         let symbol = $scope.TryLookupSymbol(name)
         if symbol is TypeSymbol type {
             return type
@@ -913,6 +947,172 @@ internal partial class StatementBinder {
         return true
     }
 
+    private func NamesReferenceStorage(path AccessPath) bool {
+        let root = path.Root
+        return (
+            root is ParameterSymbol parameter && (parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out)
+        ) ||
+            IsByReferenceRoot(root) ||
+            IsExternalStorageAlias(root)
+    }
+
+    private func ReadsRunUserCode(effects RegionEffects) bool {
+        for read in effects.MemberReads {
+            if ReadRunsUserCode(read, effects) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Whether a member or index read can run user code, with the rules of the straight-line pass: a field, a
+    // tuple element, an array element and an enum member run none; a source property runs user code unless it is
+    // an auto property (R14); an imported property or indexer runs user code unless `IsStableClrAccessor` lists it
+    // (R16, R17). A receiver that does not resolve can run user code.
+    private func ReadRunsUserCode(read RegionMemberRead, effects RegionEffects) bool {
+        let path = read.Receiver
+        if path == nil || path.Steps.Length > 0 && effects.ContainsMemberTypeTest {
+            return true
+        }
+        // An index on a type name is a generic type argument list (`o is Box[int32]`), not a read.
+        if read.Member == nil &&
+            path
+            .Steps
+            .Length == 0 &&
+            !path.RootIsCall &&
+            path.RootName is {} root &&
+            $scope.TryLookupSymbol(root) is not VariableSymbol && ResolveTypeName(root) != nil {
+            return false
+        }
+        let types = ResolveReceiverPath(path, effects)
+        if types == nil {
+            return true
+        }
+        for type in types {
+            if ReadOfTypeRunsUserCode(type, read.Member) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ReadOfTypeRunsUserCode(type ReceiverType, member string?) bool {
+        if type.Clr is {} clr {
+            return ClrReadRunsUserCode(clr, member, false)
+        }
+        let symbol = type.Symbol
+        switch symbol {
+            case nil {
+                return true
+            }
+            case ArrayTypeSymbol, SliceTypeSymbol, RectangularArrayTypeSymbol {
+                // An element and the length of an array or a slice are intrinsic reads.
+                return false
+            }
+            case tuple is TupleTypeSymbol {
+                if member != nil {
+                    return false
+                }
+            }
+            case EnumSymbol {
+                return member == nil
+            }
+            case declared is StructSymbol {
+                let hierarchy = declared.GetHierarchy()
+                for level in hierarchy {
+                    for candidate in level.GetMembers() {
+                        if member == nil {
+                            if candidate is PropertySymbol{IsIndexer: true} {
+                                return true
+                            }
+                        } else if candidate.Name == member {
+                            switch candidate {
+                                case field is FieldSymbol {
+                                    return field.IsStatic && TypeInitializationRunsUserCode(level, true)
+                                }
+                                case property is PropertySymbol {
+                                    return !property.IsAutoProperty ||
+                                        property.IsStatic &&
+                                        TypeInitializationRunsUserCode(level, true)
+                                }
+                                default {
+                                    return true
+                                }
+                            }
+                        }
+                    }
+                }
+                if hierarchy.Last().ImportedBaseType is {} importedBase {
+                    return ReadOfTypeRunsUserCode(ReceiverType(importedBase, nil), member)
+                }
+                return true
+            }
+            case imported is ImportedTypeSymbol {
+                // An index read over a type-parameter argument is emitted through `IList` or `IDictionary` (R17).
+                if member == nil && imported.HasTypeParameterArgument {
+                    return true
+                }
+                if imported.OpenDefinition is {} definition {
+                    return ClrReadRunsUserCode(definition, member, true)
+                }
+            }
+            default { }
+        }
+        if symbol?.ClrType is not{} clrType {
+            return true
+        }
+        return ClrReadRunsUserCode(clrType, member, false)
+    }
+
+    // An imported read: a field or a constant runs no user code; a property or an indexer runs user code unless
+    // `IsStableClrAccessor` lists its getter. A member that is not found can run user code.
+    private func ClrReadRunsUserCode(type Type, member string?, isDefinition bool) bool {
+        if ReflectionType(type) is not{} reflected {
+            return true
+        }
+        try {
+            if member == nil && reflected.IsArray {
+                return false
+            }
+            // Only a public member can be read by name or by indexing; an explicit interface implementation cannot.
+            let flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            let searched = List[Type]()
+            searched.Add(reflected)
+            if reflected.IsInterface {
+                searched.AddRange(reflected.GetInterfaces())
+            }
+            var found = false
+            for searchedType in searched {
+                if member == nil {
+                    for property in searchedType.GetProperties(flags) {
+                        if property.GetIndexParameters().Length > 0 {
+                            found = true
+                            if !IsStableClrAccessor(property, isSetter: false) {
+                                return true
+                            }
+                        }
+                    }
+                } else {
+                    for clrMember in searchedType.GetMember(member, flags) {
+                        if clrMember is FieldInfo {
+                            found = true
+                        } else if clrMember is PropertyInfo property && property.GetIndexParameters().Length == 0 {
+                            found = true
+                            if !IsStableClrAccessor(property, isSetter: false) {
+                                return true
+                            }
+                        } else {
+                            return true
+                        }
+                    }
+                }
+            }
+            return !found
+        } catch (ex NotSupportedException) {
+            return true
+        }
+    }
+
     private func HasExtensionFunction(receiverType TypeSymbol?, member string) bool {
         if receiverType == nil {
             return false
@@ -1305,6 +1505,15 @@ internal partial class StatementBinder {
             if CallIsIndirect(call, effects) {
                 indirectCall = true
             }
+        }
+        // Coordinator decision 2026-11-01 (pending maintainer review; amendment A3 is the more permissive
+        // alternative): a getter or an indexer that can run user code (ADR-0208 R14, R16 and R17) removes the fact
+        // of storage that a reference names, as on main, because the code can write the storage that the
+        // reference aliases. Only such a fact needs the answer, so the reads are resolved only for it.
+        if !indirectCall &&
+            NamesReferenceStorage(path) &&
+            (resolved.ReadsUserCodeProperty || ReadsRunUserCode(effects)) {
+            indirectCall = true
         }
         // A member read is an unknown getter, which the table classes as a call (ADR-0208 R14). Amendment A3
         // (#5292) keeps the fact of a by-reference parameter across a call, so a read does not write the
