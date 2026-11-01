@@ -1320,9 +1320,17 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
   built-in types can return a value of another type, so its converted result runs one (`n = n + Pick(m)` with a
-  generic `Pick`); a conversion between
+  generic `Pick`); an index argument is checked the same way against `int32` (or a `System.Index`) for an array, a
+  slice or a string and against the indexers of an imported type, an element of an array, a stack allocation or a map
+  literal against its element, key or value type, and an allocation length against `int32`; `nil` runs one when its
+  target or parameter is a non-nullable value type; the parameter types of a candidate have the receiver's type
+  arguments substituted (`Add(T)` on `Dictionary[Token, DateTimeOffset]`), a type parameter takes an argument without
+  a conversion only when the call infers it (`Keep(dt)`, not `Keep[DateTimeOffset](dt)`), and a type parameter of the
+  receiver that stays open does not; a conversion between
   built-in types is predefined, and a value of another type converted to a generic type, a `??`, a deconstruction or a
-  multiple assignment can run one; a bare static field (not a constant) or static property of a type whose initializer
+  multiple assignment can run one; `^n` and a range value construct a `System.Index` or `System.Range` (a
+  constructor, which A3 does not exempt), while a range index slices its target and the read classification decides,
+  as on main; a bare static field (not a constant) or static property of a type whose initializer
   runs user code runs it (R11, #5520). The walker records each read, operator and conversion site with paths for its
   operands; a path that does not resolve can run user code. So `Environment.CurrentDirectory`, `dict["a"]` and `let s
   ReadOnlySpan[char] = "ab"` remove the fact, and `list[i]`, `text.Length`, an auto property, a constant, `let d
@@ -1331,6 +1339,8 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
 - *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
   or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
   can catch the exception after the filter has written the root.
+- *Scopes of expressions.* An `if` expression scopes its initializer and condition like an `if` statement
+  (`BindIfExpression`), so a name that it declares does not hide a later write to an outer variable of that name.
 - *Pattern variables (question 4).* The walker gives a type-pattern variable its type only where the binder
   scopes it (ADR-0166); see question 4 of section 23 for the rule and what stays out of L1.
 - *A loop the walker cannot name* (the synthetic loop of a collection spread) removes every fact.
