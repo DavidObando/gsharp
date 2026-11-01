@@ -613,6 +613,109 @@ class Program {
 `, "OOOOOF2F2F2F2")
     }
 
+    /// Issue #5569: a literal that keeps its natural type keeps its written parameter types, so the `object`
+    /// overload receives a `Func<long, string>` that it can call, as in C#.
+    @Fact
+    func NaturalLiteral_KeepsItsWrittenParameterTypes() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.Sig((x int64) -> { return "s" }, 1))
+    Console.Write(Calls.SigIn((x int64) -> { return "s" }, 1))
+    Console.Write(SigCtor((x int64) -> { return "s" }, 1).Kind)
+    Console.Write(SigInCtor((x int64) -> { return "s" }, 1).Kind)
+    Console.Write(Calls.Sig((x int64) -> "s", 1))
+    Console.Write(Calls.SigIn((x int64) -> "s", 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.Sig((long x) => { return "s"; }, 1));
+        Console.Write(Calls.SigIn((long x) => { return "s"; }, 1));
+        Console.Write(new SigCtor((long x) => { return "s"; }, 1).Kind);
+        Console.Write(new SigInCtor((long x) => { return "s"; }, 1).Kind);
+        Console.Write(Calls.Sig((long x) => "s", 1));
+        Console.Write(Calls.SigIn((long x) => "s", 1));
+    }
+}
+`, "OsOsOsOsOsOs")
+    }
+
+    /// Issue #5569: an open generic candidate infers its type argument from the literal's natural type, within
+    /// its constraints; and a return value that converts to the target does not stop another return value that
+    /// does not from selecting `object` with the natural type, as in C#.
+    @Fact
+    func NaturalLiteral_AtGenericCandidatesAndMixedReturns() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let flag = true
+    Console.Write(Calls.G(() -> { return "s" }, 1))
+    Console.Write(Calls.GV(() -> { return "s" }, 1))
+    Console.Write(Calls.GC(() -> { return "s" }, 1))
+    Console.Write(Calls.G(() -> 1, 1))
+    Console.Write(Calls.Dm(() -> {
+        if flag {
+            return flag ? D() : D()
+        }
+        return B()
+    }, 1))
+    Console.Write(Calls.DmIn(() -> {
+        if flag {
+            return flag ? D() : D()
+        }
+        return B()
+    }, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var flag = true;
+        Console.Write(Calls.G(() => { return "s"; }, 1));
+        Console.Write(Calls.GV(() => { return "s"; }, 1));
+        Console.Write(Calls.GC(() => { return "s"; }, 1));
+        Console.Write(Calls.G(() => 1, 1));
+        Console.Write(Calls.Dm(() => { if (flag) { return flag ? new D() : new D(); } return new B(); }, 1));
+        Console.Write(Calls.DmIn(() => { if (flag) { return flag ? new D() : new D(); } return new B(); }, 1));
+    }
+}
+`, "G:Func`1G:Func`1G:Func`1FOO")
+    }
+
+    /// Issue #5569: a constructor of a generic type with a same-compilation type argument binds the literal by
+    /// the same speculative rule, so a literal that its delegate does not accept selects `object`, as in C#.
+    @Fact
+    func SymbolicConstructorTarget_ThatDoesNotConvert_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+class Pt {
+    var X int32 = 3
+}
+func Main() {
+    Console.Write(SymHolder[Pt]((p Pt) -> { return "s" }, 1).Kind)
+    Console.Write(SymInHolder[Pt]((p Pt) -> { return "s" }, 1).Kind)
+    Console.Write(SymHolder[Pt]((p Pt) -> p.X, 1).Kind)
+    Console.Write(SymInHolder[Pt]((p Pt) -> p.X, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Pt { public int X = 3; }
+class Program {
+    static void Main() {
+        Console.Write(new SymHolder<Pt>((Pt p) => { return "s"; }, 1).Kind);
+        Console.Write(new SymInHolder<Pt>((Pt p) => { return "s"; }, 1).Kind);
+        Console.Write(new SymHolder<Pt>((Pt p) => p.X, 1).Kind);
+        Console.Write(new SymInHolder<Pt>((Pt p) => p.X, 1).Kind);
+    }
+}
+`, "OOFF")
+    }
+
     /// Issue #5569 control: with no other candidate, a target-typed block return value keeps the target bind and
     /// its diagnostic.
     @Fact
@@ -1278,6 +1381,45 @@ namespace FunctionControl {
         public static string PG(object o, string s) => "O";
         public static string Amb(in System.Func<long> f, int x) => "F";
         public static string Amb(in System.Func<int> o, long x) => "O";
+        public static string Sig(System.Func<int, long> f, int x) => "F";
+        public static string Sig(object o, long x) => Kinds.Of(o);
+        public static string SigIn(in System.Func<int, long> f, int x) => "F";
+        public static string SigIn(object o, long x) => Kinds.Of(o);
+        public static string G(in System.Func<long> f, int x) => "F";
+        public static string G<T>(T value, long x) => "G:" + typeof(T).Name;
+        public static string GV(System.Func<long> f, int x) => "F";
+        public static string GV<T>(T value, long x) => "G:" + typeof(T).Name;
+        public static string GC(in System.Func<long> f, int x) => "F";
+        public static string GC<T>(T value, long x) where T : class => "G:" + typeof(T).Name;
+        public static string Dm(System.Func<System.IDisposable> f, int x) => "F";
+        public static string Dm(object o, long x) => "O";
+        public static string DmIn(in System.Func<System.IDisposable> f, int x) => "F";
+        public static string DmIn(object o, long x) => "O";
+    }
+    public static class Kinds {
+        public static string Of(object o) => o is System.Func<long, string> g ? "O" + g(5) : "O:" + o.GetType();
+    }
+    public class B { }
+    public class D : B, System.IDisposable { public void Dispose() { } }
+    public class SigCtor {
+        public string Kind;
+        public SigCtor(System.Func<int, long> f, int x) { Kind = "F"; }
+        public SigCtor(object o, long x) { Kind = Kinds.Of(o); }
+    }
+    public class SigInCtor {
+        public string Kind;
+        public SigInCtor(in System.Func<int, long> f, int x) { Kind = "F"; }
+        public SigInCtor(object o, long x) { Kind = Kinds.Of(o); }
+    }
+    public class SymHolder<T> {
+        public string Kind;
+        public SymHolder(System.Func<T, long> f, int x) { Kind = "F"; }
+        public SymHolder(object o, long x) { Kind = "O"; }
+    }
+    public class SymInHolder<T> {
+        public string Kind;
+        public SymInHolder(in System.Func<T, long> f, int x) { Kind = "F"; }
+        public SymInHolder(object o, long x) { Kind = "O"; }
     }
     public class InReceiver {
         public string M(in System.Func<long> f, int x) => "F";

@@ -649,19 +649,21 @@ internal partial class StatementBinder {
         return BindErrorStatement()
     }
 
-    /// Issue #5569: binds a target-typed return value of a speculative lambda body. The value binds with the
-    /// target type first. When that reports an error, the binder state goes back to the state before the value
-    /// (see (cref:CaptureSpeculativeBindState)), and the value binds again with its natural type. The
-    /// target-typed value and its diagnostics wait in [`deferredReturns`](paramref) for the lambda binder's
-    /// decision. The binder keeps the state of the selected pass only. The caller passes only values without a
-    /// function literal, and a return nested in the value binds in the pass of the value without its own retry,
-    /// so each value binds at most twice and nested values do not multiply the work. Each pass has its own
+    /// Issue #5569: binds a target-typed return value of a speculative lambda body in two passes: with the
+    /// target type, then with its natural type from the binder state before the value (see
+    /// (cref:CaptureSpeculativeBindState)). The body keeps the natural value. The target-typed value and the
+    /// diagnostics of both passes wait in [`deferredReturns`](paramref) for the lambda binder's decision, so
+    /// another return that fails the target can still use this value's natural type. When the natural pass
+    /// fails, the target-typed value stays with its diagnostics. The binder keeps the state of the target pass
+    /// when that pass succeeds, and of the natural pass otherwise. The caller passes only values without a
+    /// function literal, and a return nested in the value binds in the pass of the value without its own
+    /// passes, so each value binds twice and nested values do not multiply the work. Each pass has its own
     /// scope, so a variable that the value declares is not declared twice.
-    /// @param value The return value.
     /// @param syntax The return statement.
+    /// @param value The return value.
     /// @param targetType The lambda's target return type.
     /// @param deferredReturns The state of the lambda body.
-    /// @returns The bound value: the target-typed one, or the natural one when target typing failed.
+    /// @returns The bound value for the body: the natural one, or the target-typed one when the natural pass fails.
     private func BindDeferredTargetTypedReturn(
         syntax ReturnStatementSyntax,
         value ExpressionSyntax,
@@ -675,23 +677,24 @@ internal partial class StatementBinder {
             () -> bindExpressionWithTargetType(value, targetType)
         )
         let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
-        if !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
-            return targetTyped
-        }
         let afterTarget = CaptureSpeculativeBindState()
         RestoreSpeculativeBindState(beforeValue)
         // Synthetic local names stay unique across both passes.
         this.binderCtx.SyntheticLocalCounter = afterTarget.SyntheticLocalCounter
         let natural = BindReturnValuePass(deferredReturns, false, () -> bindExpression(value, false))
-        if Diagnostics.Skip(beforeValue.DiagnosticCount).Any((diagnostic Diagnostic) -> diagnostic.IsError) {
-            let naturalCounter = binderCtx.SyntheticLocalCounter
-            Diagnostics.TruncateTo(beforeValue.DiagnosticCount)
-            Diagnostics.AddRange(targetDiagnostics)
+        let naturalDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let naturalCounter = binderCtx.SyntheticLocalCounter
+        let naturalFailed = naturalDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError)
+        Diagnostics.TruncateTo(beforeValue.DiagnosticCount)
+        if naturalFailed || !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
             RestoreSpeculativeBindState(afterTarget)
             this.binderCtx.SyntheticLocalCounter = naturalCounter
+        }
+        if naturalFailed {
+            Diagnostics.AddRange(targetDiagnostics)
             return targetTyped
         }
-        deferredReturns.Hold(syntax, targetTyped, targetDiagnostics)
+        deferredReturns.Hold(syntax, targetTyped, targetDiagnostics, naturalDiagnostics)
         return natural
     }
 

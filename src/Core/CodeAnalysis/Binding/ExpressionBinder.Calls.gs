@@ -1722,19 +1722,28 @@ internal partial class ExpressionBinder {
                 out var symbolicTarget
             ) &&
                 symbolicTarget is {} resolvedSymbolicTarget {
-                let literal = lambdas.BindLambdaExpression(ctorLambdaSyntax, resolvedSymbolicTarget.FunctionType)
+                // Issue #5569: the same speculative bind as every other candidate target.
+                let slotIndex = i
+                let argumentSyntax = syntax.Arguments[i]
                 boundArguments.Add(
-                    if ShouldConvertToNominalDelegate(resolvedSymbolicTarget.DelegateType) {
-                        conversions.BindConversion(
-                            syntax.Arguments[i].Location,
+                    BindLambdaWithCandidateTarget(
+                        ctorLambdaSyntax,
+                        ctorParameterLists,
+                        (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
+                        resolvedSymbolicTarget.FunctionType,
+                        false,
+                        (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                            argumentSyntax,
                             literal,
                             resolvedSymbolicTarget.DelegateType
-                        )
-                    } else {
-                        literal
-                    }
+                        ),
+                        out var keepsNaturalType
+                    )
                 )
-                symbolicCtorDelegateTargets[i] = resolvedSymbolicTarget.DelegateType
+                // The symbolic delegate shape applies only to a literal that keeps the delegate target.
+                if !keepsNaturalType {
+                    symbolicCtorDelegateTargets[i] = resolvedSymbolicTarget.DelegateType
+                }
                 continue
             }
             if inner is RefArgumentExpressionSyntax refArgument {
@@ -2428,7 +2437,35 @@ internal partial class ExpressionBinder {
         target FunctionTypeSymbol,
         inferReturnTypeFromBody bool,
         convertToTarget(BoundExpression) -> BoundExpression
+    ) BoundExpression -> BindLambdaWithCandidateTarget(
+        lambdaSyntax,
+        candidateParameterLists,
+        slotOf,
+        target,
+        inferReturnTypeFromBody,
+        convertToTarget,
+        out _
+    )
+
+    /// Issue #5569: (cref:BindLambdaWithCandidateTarget) that also tells whether the literal keeps its natural type.
+    /// @param lambdaSyntax The function literal.
+    /// @param candidateParameterLists The parameter lists of the candidates.
+    /// @param slotOf Gives the parameter index of the literal in a candidate, or -1.
+    /// @param target The agreed delegate function type.
+    /// @param inferReturnTypeFromBody Whether the target's return slot is only a placeholder.
+    /// @param convertToTarget Converts a target-typed literal to the nominal delegate of the slot.
+    /// @param keepsNaturalType Set when the literal keeps its natural function type.
+    /// @returns The bound literal.
+    private func BindLambdaWithCandidateTarget(
+        lambdaSyntax LambdaExpressionSyntax,
+        candidateParameterLists IReadOnlyList[[]ParameterInfo],
+        slotOf([]ParameterInfo) -> int32,
+        target FunctionTypeSymbol,
+        inferReturnTypeFromBody bool,
+        convertToTarget(BoundExpression) -> BoundExpression,
+        out keepsNaturalType bool
     ) BoundExpression {
+        keepsNaturalType = false
         let alternatives = List[Type]()
         for parameters in candidateParameterLists {
             let index = slotOf(parameters)
@@ -2436,10 +2473,10 @@ internal partial class ExpressionBinder {
                 continue
             }
             let slotType = ConversionClassifier.GetPlainValueClrParameterType(parameters[index])
-            if !slotType.IsByRef && !slotType.ContainsGenericParameters && !MemberLookup.TryGetLambdaTargetFunctionType(
-                slotType,
-                out _
-            ) {
+            // A bare type parameter can take the natural type by inference, if its constraints accept it.
+            if !slotType.IsByRef &&
+                (slotType.IsGenericParameter || !slotType.ContainsGenericParameters) &&
+                !MemberLookup.TryGetLambdaTargetFunctionType(slotType, out _) {
                 alternatives.Add(slotType)
             }
         }
@@ -2448,31 +2485,33 @@ internal partial class ExpressionBinder {
                 lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: inferReturnTypeFromBody)
             )
         }
-        var keepsNaturalType = false
+        var accepted = false
         let literal = lambdas.BindLambdaExpression(
             lambdaSyntax,
             target,
             inferReturnTypeFromBody: inferReturnTypeFromBody,
             acceptsNaturalType: (naturalType TypeSymbol) -> {
-                keepsNaturalType = GetEffectiveArgumentClrTypeForOverloadResolution(naturalType) is {} naturalClrType &&
-                    alternatives
-                    .Any(
-                    (slotType Type) -> ClrOverloadResolution.ClassifyImplicit(
-                        slotType,
-                        naturalClrType
-                    ) != ClrOverloadResolution
-                        .ImplicitConversionKind
-                        .None
-                )
-                return keepsNaturalType
+                accepted = GetEffectiveArgumentClrTypeForOverloadResolution(naturalType) is {} naturalClrType &&
+                    alternatives.Any((slotType Type) -> AcceptsNaturalLiteral(slotType, naturalClrType))
+                return accepted
             },
             discardedTargetDiagnostics: literalTargetDiagnostics
         )
-        return if keepsNaturalType {
+        keepsNaturalType = accepted
+        return if accepted {
             literal
         } else {
             convertToTarget(literal)
         }
+    }
+
+    // Issue #5569: whether a candidate slot that is not a delegate takes a literal of the natural CLR type.
+    private func AcceptsNaturalLiteral(slotType Type, naturalClrType Type) bool -> if slotType.IsGenericParameter {
+        ClrOverloadResolution.SatisfiesTypeParameterConstraints(slotType, naturalClrType)
+    } else {
+        ClrOverloadResolution.ClassifyImplicit(slotType, naturalClrType) != ClrOverloadResolution
+            .ImplicitConversionKind
+            .None
     }
 
     private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.Skip(mark).Any(

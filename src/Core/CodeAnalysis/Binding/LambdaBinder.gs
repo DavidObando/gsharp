@@ -1476,10 +1476,10 @@ internal class LambdaBinder {
             isAsync
         )
         if defersReturnConversion {
-            // Issue #5569: convert the returns as an eager target bind does. When a return does not convert, the
-            // literal keeps its natural type only if no other error occurred and another candidate accepts it.
-            // The return values whose target typing failed bound again with their natural type; the target-typed
-            // values and their diagnostics are in the placeholder's state.
+            // Issue #5569: convert the returns as an eager target bind does. When a return or the trailing value
+            // does not convert, the literal keeps its natural type only if no other error occurred and another
+            // candidate accepts it. The return values whose target typing failed bound again with their natural
+            // type; the target-typed values and their diagnostics are in the placeholder's state.
             let deferredReturns = Invariant.Required(
                 placeholder.DeferredReturns,
                 "a deferred return conversion has a state",
@@ -1490,7 +1490,11 @@ internal class LambdaBinder {
             let converted = ApplyInferredReturnTypeConversion(targetBody, syntax, placeholderReturnType, true)
             let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.Skip(trialMark))
             Diagnostics.TruncateTo(trialMark)
-            let naturalReturnType = if targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
+            // The body fits the target only when the target-typed inference adopts the target return type, which
+            // also checks a trailing value that is not a `return`.
+            let fitsTarget = !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) &&
+                InferLambdaReturnType(converted, syntax, targetFunctionType, isAsync) == placeholderReturnType
+            let naturalReturnType = if !fitsTarget {
                 InferLambdaReturnType(boundBody, syntax, nil, isAsync)
             } else {
                 TypeSymbol.Error
@@ -1506,7 +1510,10 @@ internal class LambdaBinder {
                 )
             ) {
                 discardedTargetDiagnostics?.Add(targetDiagnostics)
+                Diagnostics.AddRange(deferredReturns.NaturalDiagnostics())
                 returnType = naturalReturnType
+                // The natural literal keeps its written parameter types, so no adapter to the target applies.
+                needsExplicitParameterAdapter = false
             } else {
                 Diagnostics.AddRange(targetDiagnostics)
                 boundBody = converted
@@ -2531,27 +2538,56 @@ internal class LambdaBinder {
         internal prop InNaturalPass bool
 
         private let operands List[
-            (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-        ] = List[(Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])]()
+            (
+                Value BoundExpression,
+                Diagnostics ImmutableArray[Diagnostic],
+                NaturalDiagnostics ImmutableArray[Diagnostic]
+            )
+        ] = List[
+            (
+                Value BoundExpression,
+                Diagnostics ImmutableArray[Diagnostic],
+                NaturalDiagnostics ImmutableArray[Diagnostic]
+            )
+        ]()
 
-        /// Records the target-typed value of a return statement and the diagnostics of its target typing.
+        // The target-typed value of each held return statement, by syntax identity.
+        private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression] = Dictionary[
+            ReturnStatementSyntax,
+            BoundExpression
+        ](ReferenceEqualityComparer.Instance)
+
+        /// Records the target-typed value of a return statement and the diagnostics of both passes.
         /// @param syntax The return statement.
         /// @param value The target-typed value.
-        /// @param diagnostics The diagnostics of the target typing.
+        /// @param diagnostics The diagnostics of the target pass.
+        /// @param naturalDiagnostics The diagnostics of the natural pass.
         internal func Hold(
             syntax ReturnStatementSyntax,
             value BoundExpression,
-            diagnostics ImmutableArray[Diagnostic]
+            diagnostics ImmutableArray[Diagnostic],
+            naturalDiagnostics ImmutableArray[Diagnostic]
         ) {
-            operands.Add((syntax, value, diagnostics))
+            operands.Add((value, diagnostics, naturalDiagnostics))
+            targetValues[syntax] = value
         }
 
-        /// Gets the diagnostics of every held target typing, in source order.
+        /// Gets the diagnostics of every held target pass, in source order.
         /// @returns The diagnostics.
         internal func OperandDiagnostics() ImmutableArray[Diagnostic] {
             let builder = ImmutableArray.CreateBuilder[Diagnostic]()
             for operand in operands {
                 builder.AddRange(operand.Diagnostics)
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Gets the diagnostics of every held natural pass, in source order.
+        /// @returns The diagnostics.
+        internal func NaturalDiagnostics() ImmutableArray[Diagnostic] {
+            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+            for operand in operands {
+                builder.AddRange(operand.NaturalDiagnostics)
             }
             return builder.ToImmutable()
         }
@@ -2563,7 +2599,7 @@ internal class LambdaBinder {
             if operands.Count == 0 {
                 return body
             }
-            let rewriter = TargetOperandRewriter(operands)
+            let rewriter = TargetOperandRewriter(targetValues)
             if body is BoundBlockExpression block {
                 let statements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
                 for statement in block.Statements {
@@ -2579,25 +2615,20 @@ internal class LambdaBinder {
         }
 
         private class TargetOperandRewriter : BoundTreeRewriter {
-            private let operands List[
-                (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-            ]
+            private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression]
 
-            init(
-                operands List[
-                    (Syntax ReturnStatementSyntax, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-                ]
-            ) {
-                this.operands = operands
+            init(targetValues Dictionary[ReturnStatementSyntax, BoundExpression]) {
+                this.targetValues = targetValues
             }
 
             internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
 
             protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
-                for operand in operands {
-                    if object.ReferenceEquals(operand.Syntax, node.Syntax) {
-                        return BoundReturnStatement(node.Syntax, operand.Value, node.IsRef)
-                    }
+                if node.Syntax is ReturnStatementSyntax returnSyntax && targetValues.TryGetValue(
+                    returnSyntax,
+                    out var value
+                ) {
+                    return BoundReturnStatement(node.Syntax, value, node.IsRef)
                 }
                 return base.RewriteReturnStatement(node)
             }

@@ -7455,6 +7455,22 @@ internal shared class ClrOverloadResolution {
         return SatisfiesDeclaredConstraints(typeParams, typeArgs, typeArgSymbols, out _, out _)
     }
 
+    /// Issue #5569: whether a closed type argument satisfies the declared constraints of one method or type
+    /// parameter, by the rules that a candidate's inferred type arguments use.
+    /// @param typeParameter The generic parameter.
+    /// @param typeArgument The closed type argument.
+    /// @returns `true` when every declared constraint holds.
+    internal func SatisfiesTypeParameterConstraints(
+        typeParameter Type,
+        typeArgument Type
+    ) bool -> SatisfiesDeclaredConstraints(
+        []Type{typeParameter},
+        []Type{typeArgument},
+        default(ImmutableArray[TypeSymbol?]),
+        out _,
+        out _
+    )
+
     private func SatisfiesDeclaredConstraints(
         typeParams[]Type,
         typeArgs[]Type,
