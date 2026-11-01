@@ -818,11 +818,10 @@ internal partial class StatementBinder {
         next List[ReceiverType]
     ) bool {
         if type.IsGenericParameter {
+            let owner = type.DeclaringType?.FullName
             if definition == nil ||
                 type.DeclaringMethod != nil ||
-                type
-                .DeclaringType
-                ?.FullName != definition.FullName ||
+                owner != definition.FullName ||
                 type.GenericParameterPosition >= arguments.Length {
                 return false
             }
