@@ -314,8 +314,8 @@ open class Adr0208NarrowingCorpusTests {
                 "u11_5532_generic_span_read_keeps_the_fact_R17",
                 "u12_5532_generic_list_write_keeps_the_fact_R17",
                 "u13_5532_list_indexer_get_keeps_a_closure_assigned_local_R17",
-                "v01_5215_getter_in_condition_kills_the_member_path_R14",
-                "v02_5215_stable_read_in_condition_keeps_the_member_path_R14"
+                "x01_5215_getter_in_condition_kills_the_member_path_R14",
+                "x02_5215_stable_read_in_condition_keeps_the_member_path_R14"
             },
             names
         )
@@ -4298,7 +4298,7 @@ func Run() int32 {
     return x.Value + first
 }
 Console.WriteLine(Run())`, "", "run", "2", "R17"}
-            yield[]object{"v01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
+            yield[]object{"x01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
     var Name string = "a"
     prop Tag string {
         get {
@@ -4316,7 +4316,7 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "GS0158@16:18", "reject", "", "R14"}
-            yield[]object{"v02_5215_stable_read_in_condition_keeps_the_member_path_R14", `class Animal {
+            yield[]object{"x02_5215_stable_read_in_condition_keeps_the_member_path_R14", `class Animal {
     var Name string = "a"
     let Tag string = "A"
 }
