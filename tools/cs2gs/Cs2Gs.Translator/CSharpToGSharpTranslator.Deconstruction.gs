@@ -891,11 +891,41 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         this.TranslateExpression(targetExpr)
                     }
-                    statements.Add(AssignmentStatement(assignTarget, tempRead))
+                    statements.Add(
+                        AssignmentStatement(assignTarget, this.BridgeDeconstructedElementStore(targetExpr, tempRead))
+                    )
                 }
                 values.Add(tempRead)
             }
             return values
+        }
+
+        // Issue #5561: the store bridge of `target = element` for a variable,
+        // field or property that a deconstruction assigns. The temp holds the
+        // `Deconstruct` element, which G# types from its declaration, so a
+        // widened element stored into a target that stays non-null is asserted
+        // exactly as `n = entry.Item!!` is. A target that is widened itself
+        // takes the value unchanged. An element-access target is #5595.
+        private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
+            if !(target is IdentifierNameSyntax || target is MemberAccessExpressionSyntax) {
+                return value
+            }
+            let element = ObliviousNullabilityAnalyzer.DeconstructedElementDeclaration(
+                target,
+                this.context.SemanticModel
+            )
+            if element == nil || !this.IsTranslatorWidenedDeclaration(element) {
+                return value
+            }
+            let targetSymbol = this.GetProjectedAssignmentTarget(target, this.context.GetSymbolInfo(target).Symbol)
+            return if this.TargetWillRemainNonNullableReference(
+                this.GetAssignmentTargetType(target, targetSymbol),
+                targetSymbol
+            ) {
+                EnsureNonNullAssertion(value)
+            } else {
+                value
+            }
         }
 
         // G# tuple bindings are deliberately flat (ADR-0168; the issue #4300

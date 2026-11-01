@@ -2387,6 +2387,122 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    /// Issue #5508/#5561: the declaration whose value a deconstruction target receives.
+    /// @param target A target of a deconstruction or a deconstructing `foreach`: the designation of a
+    /// local that it declares (`var (a, b) = e`, `(T a, U b) = e`), or an existing variable, field or
+    /// property that it assigns (`(a, b) = e`).
+    /// @param model The semantic model of the target's tree.
+    /// @returns The `Deconstruct` out parameter at the target's position or, for a record's synthesized
+    /// `Deconstruct`, the positional property that the emitted G# record deconstructs. A tuple
+    /// deconstruction has no such declaration and gives null.
+    func DeconstructedElementDeclaration(target SyntaxNode, model SemanticModel) ISymbol? {
+        // Climb to the deconstruction root and record the element index at each level.
+        let indexes = List[int32]()
+        var current SyntaxNode = target
+        var climbing = true
+        while climbing {
+            switch current.Parent {
+                case nested is ParenthesizedVariableDesignationSyntax when current is VariableDesignationSyntax variable {
+                    indexes.Insert(0, nested.Variables.IndexOf(variable))
+                    current = nested
+                }
+                case declaration is DeclarationExpressionSyntax {
+                    current = declaration
+                }
+                case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
+                    indexes.Insert(0, tuple.Arguments.IndexOf(argument))
+                    current = tuple
+                }
+                default {
+                    climbing = false
+                }
+            }
+        }
+        var info DeconstructionInfo
+        if current.Parent is AssignmentExpressionSyntax assignment && assignment.Left == current {
+            info = model.GetDeconstructionInfo(assignment)
+        } else if current.Parent is ForEachVariableStatementSyntax forEach && forEach.Variable == current {
+            info = model.GetDeconstructionInfo(forEach)
+        } else {
+            return nil
+        }
+        for var level = 0; level < indexes.Count; level++ {
+            let index = indexes[level]
+            let nested = info.Nested
+            if index < 0 || index >= nested.Length {
+                return nil
+            }
+            if level < indexes.Count - 1 {
+                info = nested[index]
+                continue
+            }
+            if info.Method is not IMethodSymbol deconstruct {
+                return nil
+            }
+            // An unreduced extension `Deconstruct(this T value, out …)` starts its outputs at ordinal 1.
+            let ordinal = if deconstruct.IsExtensionMethod && deconstruct.ReducedFrom == nil {
+                index + 1
+            } else {
+                index
+            }
+            if ordinal >= deconstruct.Parameters.Length {
+                return nil
+            }
+            let parameter = deconstruct.Parameters[ordinal]
+            if deconstruct.IsImplicitlyDeclared && deconstruct.ContainingType is {IsRecord: true} record {
+                return record.GetMembers(parameter.Name).OfType[IPropertySymbol]().FirstOrDefault() ?? parameter
+            }
+            return parameter.OriginalDefinition
+        }
+        return nil
+    }
+
+    // Issue #5561: a deconstruction through a `Deconstruct` method stores each
+    // element into its target, as `target = element` does. The local, field,
+    // property or parameter that it declares or assigns therefore gets the same
+    // edge from the element's declaration. Tuple elements flow through
+    // `CollectDeconstructionFlow` instead, so they have no element declaration here.
+    private func CollectDeconstructedElementEdges(
+        target SyntaxNode,
+        model SemanticModel,
+        edges List[(Target ISymbol, Source ISymbol)]
+    ) {
+        switch target {
+            case tuple is TupleExpressionSyntax {
+                for argument in tuple.Arguments {
+                    CollectDeconstructedElementEdges(argument.Expression, model, edges)
+                }
+            }
+            case declaration is DeclarationExpressionSyntax {
+                CollectDeconstructedElementEdges(declaration.Designation, model, edges)
+            }
+            case parenthesized is ParenthesizedVariableDesignationSyntax {
+                for variable in parenthesized.Variables {
+                    CollectDeconstructedElementEdges(variable, model, edges)
+                }
+            }
+            case single is SingleVariableDesignationSyntax {
+                AddDeconstructedElementEdge(model.GetDeclaredSymbol(single), single, model, edges)
+            }
+            case expression is ExpressionSyntax {
+                AddDeconstructedElementEdge(ResolveAssignable(expression, model), expression, model, edges)
+            }
+        }
+    }
+
+    private func AddDeconstructedElementEdge(
+        receiver ISymbol?,
+        target SyntaxNode,
+        model SemanticModel,
+        edges List[(Target ISymbol, Source ISymbol)]
+    ) {
+        if IsValueDeclarationSymbol(receiver) &&
+            IsEligibleScalarTarget(receiver) &&
+            DeconstructedElementDeclaration(target, model) is {} element {
+            edges.Add((Canonical(receiver)!!, Canonical(element)!!))
+        }
+    }
+
     // Issue #5574: the source record whose synthesized `Deconstruct` `method`
     // is, or null. Seen through a run project's emitted reference the method is
     // not marked implicitly declared, so it is matched through the record's
@@ -4181,6 +4297,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                     // records a transitive edge so a nullable source propagates.
                     CollectScalarValueFlow(assignTarget, assign.Right, model, tainted, edges, scalarTupleEdges)
                 }
+                if assign.Left is TupleExpressionSyntax or DeclarationExpressionSyntax {
+                    CollectDeconstructedElementEdges(assign.Left, model, edges)
+                }
+            }
+            case loop is ForEachVariableStatementSyntax {
+                CollectDeconstructedElementEdges(loop.Variable, model, edges)
             }
             case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil {
                 if model.GetDeclaredSymbol(declarator) is ISymbol declared && IsValueDeclarationSymbol(declared) {
