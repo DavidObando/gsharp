@@ -686,6 +686,82 @@ namespace Demo
         Assert.Contains("Case(r Node)", printed)
     }
 
+    /// A record linked into A and B is one declaration. A seeds it with a null; C deconstructs B's
+    /// copy through B's emitted reference, which is matched by the positional parameter's canonical
+    /// key, so the read pins the record everywhere.
+    @Fact
+    func ADeconstructionOfALinkedRecordAlias_Pins() {
+        let entry = `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+}`
+        let a = CompileFiles("A", nil, ("Entry.cs", entry), ("SeedA.cs", `
+namespace Demo
+{
+    public static class SeedA { public static Entry Null() => new Entry(null!, 0); }
+}`))
+        let b = CompileFiles("B", nil, ("Entry.cs", entry), ("SinkB.cs", `
+namespace Demo
+{
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class MakeB { public static Entry Make() => new Entry(new Node(), 1); }
+}`))
+        let image = MemoryStream()
+        Assert.True(b.Emit(image).Success)
+        image.Position = 0
+        let c = CompileFiles("C", MetadataReference.CreateFromStream(image), ("Use.cs", `
+namespace Demo.C
+{
+    public static class Use
+    {
+        public static string Run()
+        {
+            (Demo.Node item, int id) = Demo.MakeB.Make();
+            return new Demo.Sink().Take(item) + id;
+        }
+    }
+}`))
+        let repository = []CSharpCompilation{a, b, c}
+        let entryInA = TranslateFile(a, "Entry.cs", repository)
+        let entryInB = TranslateFile(b, "Entry.cs", repository)
+        Assert.DoesNotContain("Item Node?", entryInA)
+        Assert.Equal(entryInA, entryInB)
+        Assert.Equal(
+            "taken1",
+            CompileAndRun(
+                []string{entryInB, TranslateFile(b, "SinkB.cs", repository), TranslateFile(c, "Use.cs", repository)},
+                "Demo.C.Use.Run()"
+            ).Trim()
+        )
+    }
+
+    /// An expanded `params` element is stored in the collection, so a nullable element type takes
+    /// the null and the forwarding parameter widens.
+    @Fact
+    func AnExpandedNullableParamsElement_DoesNotPin() {
+        let compilation = CompileFiles("App", nil, ("Params.cs", `
+using System.Collections.Generic;
+using System.Linq;
+namespace Demo
+{
+    public static class P
+    {
+        public static int Count(params string?[] values) => values.Length;
+        public static int Forward(string s) => Count(s, "x");
+        public static int CountE(params IEnumerable<string?> values) => values.Count();
+        public static int ForwardE(string s) => CountE(s);
+        public static string Run() => Forward(null!) + " " + ForwardE(null!);
+    }
+}`))
+        let printed = TranslateFile(compilation, "Params.cs", []CSharpCompilation{compilation})
+        Assert.Equal("2 1", CompileAndRun([]string{printed}, "Demo.P.Run()").Trim())
+        Assert.Contains("Forward(s string?)", printed)
+        Assert.Contains("ForwardE(s string?)", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

@@ -2182,9 +2182,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         let scopes = HashSet[SyntaxNode]()
         let scopeList = List[SyntaxNode]()
         var readsIndexers = false
-        // Issue #5574: records whose positional parameters are candidates, with
-        // those candidates: a synthesized `Deconstruct` reads every one of them.
-        let deconstructed = Dictionary[INamedTypeSymbol, List[string]](SymbolEqualityComparer.Default)
+        // Issue #5574: whether a candidate is a positional record parameter,
+        // which a synthesized `Deconstruct` reads.
+        var readsPositional = false
         for candidate in candidates {
             if !declarations.TryGetValue(candidate, out var symbols) {
                 continue
@@ -2211,12 +2211,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 parameterNames.Add(parameter.Name)
                 if parameter.ContainingSymbol is IMethodSymbol method && PositionalProperty(parameter, method) != nil {
                     memberNames.Add(parameter.Name)
-                    let record = method.ContainingType.OriginalDefinition
-                    if !deconstructed.TryGetValue(record, out var positional) {
-                        positional = List[string]()
-                        deconstructed[record] = positional
-                    }
-                    positional.Add(candidate)
+                    readsPositional = true
                 }
                 // A partial method's calls bind its defining part; the implementing
                 // part, which can name the parameter differently, has the body.
@@ -2245,16 +2240,21 @@ internal shared class ObliviousNullabilityAnalyzer {
         let Visit = func (owner Compilation, nodes sequence[SyntaxNode], names HashSet[string], indexers bool) {
             var model SemanticModel? = nil
             for node in nodes {
-                if deconstructed.Count != 0 && DeconstructingMethods(node, owner, ref model) is {Count: > 0} methods {
+                if readsPositional && DeconstructingMethods(node, owner, ref model) is {Count: > 0} methods {
                     for method in methods {
-                        if SynthesizedDeconstructRecord(method, run) is {} record && deconstructed.TryGetValue(
-                            record,
-                            out var positionalCandidates
-                        ) {
+                        if SynthesizedDeconstructRecord(method, run) is {} record {
                             // The deconstructed locals are G#-inferred from the widened
                             // properties and asserted at their later reads (#5508).
-                            for positionalCandidate in positionalCandidates {
-                                AddNullArgumentRead(reads, positionalCandidate, (false, default(string?)))
+                            // Each positional parameter is matched by its canonical
+                            // key, so every linked or emitted alias of the record
+                            // reads the same declaration.
+                            for positional in record.GetMembers().OfType[IPropertySymbol]() {
+                                if PositionalParameter(positional) is {} parameter &&
+                                    NullArgumentKeys(parameter) is {Count: > 0} keys &&
+                                    CanonicalNullArgumentKey(keys[0], run) is {} key &&
+                                    candidates.Contains(key) {
+                                    AddNullArgumentRead(reads, key, (false, default(string?)))
+                                }
                             }
                         }
                     }
@@ -2296,7 +2296,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     Visit(graph.Owner, linked.DescendantNodes(), parameterNames, false)
                 }
             }
-            if memberNames.Count != 0 || readsIndexers || deconstructed.Count != 0 {
+            if memberNames.Count != 0 || readsIndexers || readsPositional {
                 for tree in graph.Owner.SyntaxTrees {
                     Visit(graph.Owner, tree.GetRoot().DescendantNodes(), memberNames, readsIndexers)
                 }
@@ -2387,10 +2387,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    // Issue #5574: the record whose synthesized `Deconstruct` `method` is, or
-    // null. Seen through a run project's emitted reference the method is not
-    // marked implicitly declared, so it is matched through the record's source
-    // declaration, which is also the key its positional candidates use.
+    // Issue #5574: the source record whose synthesized `Deconstruct` `method`
+    // is, or null. Seen through a run project's emitted reference the method is
+    // not marked implicitly declared, so it is matched through the record's
+    // source declaration.
     private func SynthesizedDeconstructRecord(method IMethodSymbol, run NullArgumentRun) INamedTypeSymbol? {
         let record = method.ContainingType.OriginalDefinition
         if method.IsImplicitlyDeclared {
@@ -2574,8 +2574,18 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return ClassifyNullArgumentSlot(model.GetSymbolInfo(assignment.Left).Symbol, run)
             }
             case argument is ArgumentSyntax when argument.RefKindKeyword.IsKind(SyntaxKind.None) {
-                return if model.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} {
-                    ClassifyNullArgumentSlot(parameter, run)
+                if model.GetOperation(argument) is IArgumentOperation{
+                    ArgumentKind: ArgumentKind.Explicit,
+                    Parameter: {} parameter
+                } {
+                    return ClassifyNullArgumentSlot(parameter, run)
+                }
+                // An expanded `params` element is stored in the collection: it
+                // takes the null when the element type is nullable.
+                return if ExpandedParamsElementType(argument, model) is {
+                    NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                } {
+                    (true, default(string?))
                 } else {
                     unsafe
                 }
@@ -2603,6 +2613,28 @@ internal shared class ObliviousNullabilityAnalyzer {
             default {
                 return unsafe
             }
+        }
+    }
+
+    // Issue #5574: the element type of the `params` collection that `argument`
+    // is an expanded element of, or null.
+    private func ExpandedParamsElementType(argument ArgumentSyntax, model SemanticModel) ITypeSymbol? {
+        if argument.NameColon != nil ||
+            argument.Parent is not BaseArgumentListSyntax arguments ||
+            arguments.Parent is not{} call ||
+            model
+            .GetSymbolInfo(call).Symbol is not IMethodSymbol method || method.Parameters.LastOrDefault() is not{
+            IsParams: true
+        } parameter ||
+            arguments
+            .Arguments
+            .IndexOf(argument) < parameter.Ordinal {
+            return nil
+        }
+        return switch parameter.Type {
+            case array is IArrayTypeSymbol: array.ElementType
+            case collection is INamedTypeSymbol when collection.TypeArguments.Length == 1: collection.TypeArguments[0]
+            default: default(ITypeSymbol?)
         }
     }
 
