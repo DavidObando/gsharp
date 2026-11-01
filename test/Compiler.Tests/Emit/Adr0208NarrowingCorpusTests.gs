@@ -340,7 +340,9 @@ open class Adr0208NarrowingCorpusTests {
                 "v24_5520_nil_initializer_of_an_optional_value_type_keeps_the_fact",
                 "v25_5520_literal_under_an_extension_unary_operator",
                 "v26_5520_int32_min_value_literal_keeps_the_fact",
-                "v27_5520_negated_char_literal_keeps_the_fact"
+                "v27_5520_negated_char_literal_keeps_the_fact",
+                "x01_5215_getter_in_condition_kills_the_member_path_R14",
+                "x02_5215_stable_read_in_condition_keeps_the_member_path_R14"
             },
             names
         )
@@ -4939,6 +4941,38 @@ func Run() int32 {
     return x.Value + first
 }
 Console.WriteLine(Run())`, "", "run", "2", "R17"}
+            yield[]object{"x01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
+    var Name string = "a"
+    prop Tag string {
+        get {
+            return Name.ToUpperInvariant()
+        }
+    }
+}
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if b.Pet.Tag == "" { return "" }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "GS0158@16:18", "reject", "", "R14"}
+            yield[]object{"x02_5215_stable_read_in_condition_keeps_the_member_path_R14", `class Animal {
+    var Name string = "a"
+    let Tag string = "A"
+}
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if b.Pet.Tag == "" { return "" }
+    return b.Pet.Name
+}
+func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "", "run", "a", "R14"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
