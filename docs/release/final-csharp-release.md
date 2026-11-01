@@ -99,7 +99,7 @@ No workflow publishes to Open VSX.
 | Secret | Used by | Notes |
 |---|---|---|
 | `GITHUB_TOKEN` | GitHub release create/upload (`build.yml:743`); `publish` has `permissions: contents: write` (`build.yml:719-720`) | Automatic. |
-| `NUGET_API_KEY` | `dotnet nuget push` (`build.yml:755`) | The GitHub secret was last updated 2026-05-29; the key itself may be older. nuget.org keys expire after at most 365 days; check its expiry on nuget.org. Its scope must allow **pushing a new package id**, `GSharp.CodeAnalysis.Analyzers.Testing`, as well as new versions of the five existing ids. If it can't, that push is rejected and the step fails. Re-running is safe (`--skip-duplicate`). |
+| nuget.org trusted publishing (no secret) | `publish-nuget-compiler` and `publish-nuget-sdk` (step `NuGet/login@v1`, #5535) | The workflow does not use the `NUGET_API_KEY` secret. Each NuGet job has `id-token: write` and exchanges a GitHub OIDC token for a nuget.org API key that is valid for one hour, right before its push. The nuget.org trusted publishing policy `PublishingGsharp` (owner `david-obando`, repository `DavidObando/gsharp`, workflow `build.yml`, no environment, scope "Push new packages and package versions", glob `*`) must be active. Check it on nuget.org > Trusted Publishing before you push the tag. A changed workflow file name, repository name or owner breaks the match. A re-run of a NuGet job gets a new key, and `--skip-duplicate` makes the push safe to repeat. A tag on a commit before #5535 still reads the `NUGET_API_KEY` secret. |
 | `VSCE_PAT` | VS Code Marketplace (`build.yml:764`) **and** Visual Studio Marketplace (`build.yml:784`, passed as `VS_MARKETPLACE_PAT`) | The GitHub secret was last updated 2026-05-30; the PAT itself may be older. One Azure DevOps PAT with Marketplace (Manage) scope for the `gsharplang` publisher. Check its expiry in Azure DevOps. |
 
 There is no environment approval to give. The owner's approvals are pushing
@@ -234,6 +234,11 @@ every re-run stops at the same file. Instead:
 2. Push each missing `.nupkg` by hand from the artifact, in the order above:
    `dotnet nuget push <file>.nupkg --no-symbols --skip-duplicate --source
    https://api.nuget.org/v3/index.json --api-key <key>`.
+   Trusted publishing works only in the workflow, so a manual push needs a
+   nuget.org user API key. Create a key with a short expiry and the scope
+   "Push new packages and package versions" on nuget.org > API Keys, and
+   delete it after the push. Don't paste it into a shared terminal, a log,
+   or an issue.
 3. The extension jobs stay skipped behind the failed job, and every re-run of
    `publish-finalize` fails, because it requires those jobs to succeed. A
    manual upload does not change their results. Use the manual publication
@@ -243,7 +248,8 @@ every re-run stops at the same file. Instead:
    symbol-server answer in #5530.
 
 Manual publication is the last resort when a run is older than 30 days or has
-been re-run 50 times. For VS Code use `npx @vscode/vsce@3.9.2 publish --packagePath vscode-gsharp.vsix --skip-duplicate` with the artifact
+been re-run 50 times. For NuGet, push as in step 2 above, with a nuget.org user
+API key. For VS Code use `npx @vscode/vsce@3.9.2 publish --packagePath vscode-gsharp.vsix --skip-duplicate` with the artifact
 of the tag run (`gh run download <run-id> -n vscode-gsharp-vsix`).
 
 To publish the Visual Studio VSIX by hand, download the `visual-studio-gsharp-vsix`
