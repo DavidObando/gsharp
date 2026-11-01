@@ -1312,11 +1312,17 @@ internal partial class StatementBinder {
 
     private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol) bool {
         let stripped = StripAllNullability(parameter) ?? parameter
-        return object.Equals(argument, stripped) || TypeSymbol.ContainsTypeParameter(stripped) || object.Equals(
+        // A parameter of an open imported definition (`TKey` of `Dictionary`2`) takes its type argument.
+        if stripped.ClrType is {} clr && (clr.IsGenericParameter || clr.ContainsGenericParameters) {
+            return true
+        }
+        if object.Equals(argument, stripped) || TypeSymbol.ContainsTypeParameter(stripped) || object.Equals(
             stripped,
             TypeSymbol.Object
-        ) ||
-            (MetadataTypeKeys.IsBuiltIn(argument) && MetadataTypeKeys.IsBuiltIn(stripped)) ||
+        ) {
+            return true
+        }
+        return (MetadataTypeKeys.IsBuiltIn(argument) && MetadataTypeKeys.IsBuiltIn(stripped)) ||
             Conversion.IsRepresentationPreservingImplicit(argument, stripped)
     }
 
