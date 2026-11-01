@@ -2499,7 +2499,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     // is, or null. Seen through a run project's emitted reference the method is
     // not marked implicitly declared. With the run's `compilations` (the
     // translator's widening queries), it is matched through the record's source
-    // declaration in that project, which is the record returned: its positional
+    // declaration in that project (`RunSourceDeclarations`, #5577), which is the
+    // record returned: its positional
     // properties carry the producer's widening. Without them (the taint of one
     // compilation, whose edges are keyed on what its own reads bind), it is the
     // compiler-generated method, and the metadata record is returned.
@@ -2526,18 +2527,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 default(INamedTypeSymbol?)
             }
         }
-        let identity = record.ContainingAssembly?.Identity
-        let id = DocumentationCommentId.CreateDeclarationId(record.OriginalDefinition)
-        for compilation in compilations {
-            if compilation == nil || identity == nil || !compilation.Assembly.Identity.Equals(identity) {
-                continue
-            }
-            if DocumentationCommentId.GetFirstSymbolForDeclarationId(id, compilation) is INamedTypeSymbol source &&
-                source
-                .DeclaringSyntaxReferences
-                .Length != 0 &&
-                source
-                .GetMembers(method.Name).Any(
+        for source in RunSourceDeclarations(record.OriginalDefinition, compilations) {
+            if source is INamedTypeSymbol sourceRecord && sourceRecord.GetMembers(method.Name).Any(
                 (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
                     synthesized
                     .Parameters
@@ -2545,7 +2536,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     .Parameters
                     .Length
             ) {
-                return source
+                return sourceRecord
             }
         }
         return nil

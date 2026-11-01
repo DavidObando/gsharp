@@ -36,6 +36,7 @@ import Xunit
 /// | `entry.Item is var p` / `is Node p`, then `(p, i) = Empty()` (no recorded storage) | `p = pValue` | unchanged (#5605): an unknown local is not bridged |
 /// | the same, when the consumer tests `entry.Item != null` | GS0155 | `var n Node?`: the taint keys the metadata property, as `n = entry.Item` does |
 /// | `(holder.Value, i) = entry` into another project's `Holder<T>.Value`, which the consumer null-tests | GS0155 | `holder.Value = holderValue!!`: a field is decided by its declaration |
+/// | `(h.Stored, i) = entry` into another project's `[AllowNull]` property | GS0155 | `h.Stored = hValue`: the #5577 query (`HasRunAllowNullWriteContract`) keeps the slot `T?` |
 /// @remarks Mutation witnesses (ADR-0154), each also failing on d12a50f86: with the
 /// `IsTranslatorWidenedDeclaration` local arms of `IsNullablePromotedValue` and
 /// `ReceiverValueIsPromotedNullable` reverted to `ShouldPromoteToNullableReference`, the first test
@@ -50,7 +51,8 @@ import Xunit
 /// run's compilations. The field row fails on baacf938e (GS0155), whose exception covered fields too.
 /// The `Node n` row is decided by `EmittedLocalStorageAcceptsNil`; it throws at `n = nValue!!` when
 /// only a `var` local's storage follows its initializer. The pattern-variable row throws at
-/// `p = pValue!!` on 7c4638e68, which bridged a local with no record by its declared type.
+/// `p = pValue!!` on 7c4638e68, which bridged a local with no record by its declared type. The
+/// `[AllowNull]` row throws at the bridged store on a31c75b9b, before #5577's query.
 open class Issue5561DeconstructedLocalTests {
     /// Locals that a deconstruction declares hold the widened element, so their dereferences and
     /// their hand-off to a non-null parameter are asserted, as for `var item = entry.Item`.
@@ -360,6 +362,42 @@ namespace Demo.App
         Assert.Equal("True:1", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
         Assert.Contains("var Value T\n", libraryPrinted)
         Assert.Contains("holder.Value = holderValue!!", appPrinted)
+    }
+
+    /// Another project's `[AllowNull]` property, bound through its emitted reference, is emitted `T?`
+    /// (#5577), so the store bridge asks the same query as a plain store and stores the null.
+    @Fact
+    func StoreIntoAnAllowNullPropertyFromAnotherProject_IsNotBridged() {
+        let library = Compile("Lib", `
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public class Holder { [System.Diagnostics.CodeAnalysis.AllowNull] public Node Stored { get; set; } }
+    public static class Make { public static Entry Empty() => new Entry(null, 0); }
+}`, nil)
+        let app = Compile("App", `
+namespace Demo.App
+{
+    public static class Use
+    {
+        public static string Store(Demo.Entry entry)
+        {
+            var h = new Demo.Holder();
+            int i;
+            (h.Stored, i) = entry;
+            object o = h.Stored;
+            return (o == null) + ":" + i;
+        }
+        public static string Run() => Store(Demo.Make.Empty());
+    }
+}`, Emit(library))
+        let repository = []CSharpCompilation{library, app}
+        let libraryPrinted = Translate(library, repository)
+        let appPrinted = Translate(app, repository)
+        Assert.Equal("True:0", CompileAndRun([]string{libraryPrinted, appPrinted}, "Demo.App.Use.Run()").Trim())
+        Assert.Contains("Stored Node?", libraryPrinted)
+        Assert.DoesNotContain("Value!!", appPrinted)
     }
 
     private func BoxSource(extra string) string -> `
