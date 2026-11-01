@@ -169,6 +169,9 @@ internal partial class StatementBinder {
         let resolved = ResolvedRegionWrites()
         if effects.ContainsConversionCandidate {
             resolved.RunsUserCodeOnWrite = true
+        } else if effects.ContainsElementConversion && ConversionsRunUserCode(effects) {
+            // An element, a key, a value or a length that a conversion operator converts is a call (rule W4).
+            resolved.RunsUserCodeOnWrite = true
         }
         // A returned name or constant runs no conversion operator when its type keeps its representation in the
         // return type, or when the return type is built in (a user conversion needs a type of the package).
@@ -1176,6 +1179,12 @@ internal partial class StatementBinder {
             if targetPath == nil {
                 return true
             }
+            if conversion.SourceIsNil {
+                if !NilReachesTargetWithoutOperator(targetPath, effects) {
+                    return true
+                }
+                continue
+            }
             let targets = ConversionTypes(targetPath, effects)
             if targets == nil {
                 return true
@@ -1220,89 +1229,120 @@ internal partial class StatementBinder {
         return false
     }
 
-    // Whether a call of the region passes a value that a user-defined or imported conversion operator can convert to
-    // its parameter type (the predicate of the conversion classifier). The candidates are the functions or methods
-    // of the callee's name with as many parameters as arguments. A candidate that takes every argument without a
-    // conversion operator (the same or a built-in type, a reference conversion or a type parameter) is taken to be
-    // the one that binds. A call that the walker cannot check counts (coordinator decision 2026-11-01): a callee
-    // without such a candidate (an extension method, an expanded or optional argument), a named argument, an
-    // argument without a path, or an operator argument when an operator of the region can return another type.
+    // Whether a call or an index access of the region passes a value that a user-defined or imported conversion
+    // operator can convert to its parameter type (the predicate of the conversion classifier). The candidates are
+    // the functions or methods of the callee's name, or the indexers of the target, with as many parameters as
+    // arguments, after the receiver's type arguments are substituted. A candidate that takes every argument without
+    // a conversion operator (the same or a built-in type, a reference conversion, a type parameter that the call
+    // infers, or `nil` for a reference or nullable type) is taken to be the one that binds. A call that the walker
+    // cannot check counts (coordinator decision 2026-11-01): a callee without such a candidate (an extension method,
+    // an expanded or optional argument), a named argument, an argument without a path, an operator argument when an
+    // operator of the region can return another type, or a range that does not slice a built-in sequence.
     private func ArgumentsRunUserConversion(effects RegionEffects) bool {
         let operatorResultsKnown = !OperatorsRunUserCode(effects, false)
         for call in effects.Calls {
-            if call
-                .Arguments
-                .Count == 0 ||
-                (call.Kind != RegionCallKind.NamedInvocation && call.Kind != RegionCallKind.MemberInvocation) {
-                continue
-            }
-            if call.CalleeName is not{} name {
+            if CallArgumentsRunUserConversion(call, effects, operatorResultsKnown) {
                 return true
             }
-            // A known type list per argument, or `nil` for a value of some built-in type or a skipped position.
-            let argumentTypes = List[List[TypeSymbol]?]()
-            let skipped = List[bool]()
-            for var index = 0; index < call.Arguments.Count; index++ {
-                let form = call.ArgumentForms[index]
-                if form == RegionArgumentForm.Named {
-                    return true
-                }
-                if form == RegionArgumentForm.ByReference ||
-                    form == RegionArgumentForm.FunctionLiteral ||
-                    form == RegionArgumentForm.Nil {
-                    argumentTypes.Add(nil)
-                    skipped.Add(true)
-                } else if form == RegionArgumentForm.BuiltInByForm {
-                    if !operatorResultsKnown {
-                        return true
-                    }
-                    argumentTypes.Add(nil)
-                    skipped.Add(false)
-                } else {
-                    if call.Arguments[index] is not{} path {
-                        return true
-                    }
-                    if ConversionTypes(path, effects) is not{} types {
-                        return true
-                    }
-                    argumentTypes.Add(types)
-                    skipped.Add(false)
-                }
-            }
-            var anyFits = false
-            for parameters in ParameterLists(call, name, effects) {
-                if parameters.Count == argumentTypes.Count &&
-                    CandidateTakesArguments(parameters, argumentTypes, skipped) {
-                    anyFits = true
-                }
-            }
-            if !anyFits {
+        }
+        for access in effects.IndexAccesses {
+            if CallArgumentsRunUserConversion(access, effects, operatorResultsKnown) {
                 return true
             }
         }
         return false
     }
 
+    private const ArgumentSkipped int32 = 0
+    private const ArgumentBuiltIn int32 = 1
+    private const ArgumentTyped int32 = 2
+    private const ArgumentNil int32 = 3
+
+    private func CallArgumentsRunUserConversion(
+        call RegionCall,
+        effects RegionEffects,
+        operatorResultsKnown bool
+    ) bool {
+        if call
+            .Arguments
+            .Count == 0 ||
+            (call.Kind != RegionCallKind.NamedInvocation && call.Kind != RegionCallKind.MemberInvocation) {
+            return false
+        }
+        if call.CalleeName is not{} name {
+            return true
+        }
+        // A known type list per argument, or `nil` for a value of some built-in type, `nil` or a skipped position.
+        let argumentTypes = List[List[TypeSymbol]?]()
+        let kinds = List[int32]()
+        for var index = 0; index < call.Arguments.Count; index++ {
+            let form = call.ArgumentForms[index]
+            if form == RegionArgumentForm.Named {
+                return true
+            }
+            if form == RegionArgumentForm.ByReference ||
+                form == RegionArgumentForm.FunctionLiteral ||
+                form == RegionArgumentForm.Range {
+                argumentTypes.Add(nil)
+                kinds.Add(ArgumentSkipped)
+            } else if form == RegionArgumentForm.Nil {
+                argumentTypes.Add(nil)
+                kinds.Add(ArgumentNil)
+            } else if form == RegionArgumentForm.BuiltInByForm {
+                if !operatorResultsKnown {
+                    return true
+                }
+                argumentTypes.Add(nil)
+                kinds.Add(ArgumentBuiltIn)
+            } else {
+                if call.Arguments[index] is not{} path {
+                    return true
+                }
+                if ConversionTypes(path, effects) is not{} types {
+                    return true
+                }
+                argumentTypes.Add(types)
+                kinds.Add(ArgumentTyped)
+            }
+        }
+        for parameters in ParameterLists(call, name, effects) {
+            if parameters.Count == argumentTypes.Count &&
+                CandidateTakesArguments(parameters, argumentTypes, kinds, call.HasTypeArguments) {
+                return false
+            }
+        }
+        return true
+    }
+
     private func CandidateTakesArguments(
         parameters List[TypeSymbol],
         argumentTypes List[List[TypeSymbol]?],
-        skipped List[bool]
+        kinds List[int32],
+        explicitTypeArguments bool
     ) bool {
         for var index = 0; index < parameters.Count; index++ {
-            if skipped[index] {
+            let kind = kinds[index]
+            let parameter = parameters[index]
+            if kind == ArgumentSkipped {
+                continue
+            }
+            if kind == ArgumentNil {
+                if !AcceptsNilWithoutOperator(parameter) {
+                    return false
+                }
                 continue
             }
             if argumentTypes[index] is not{} types {
-                // A value of some built-in type takes a built-in, `object` or type-parameter parameter.
-                let parameter = StripAllNullability(parameters[index]) ?? parameters[index]
-                if !MetadataTypeKeys.IsBuiltIn(parameter) && !object.Equals(parameter, TypeSymbol.Object) &&
-                    !TypeSymbol.ContainsTypeParameter(parameter) {
+                // A value of some built-in type takes a built-in, `object` or inferred type-parameter parameter.
+                let stripped = StripAllNullability(parameter) ?? parameter
+                if !MetadataTypeKeys.IsBuiltIn(stripped) && !object.Equals(stripped, TypeSymbol.Object) &&
+                    !TypeParameterTakesArgument(stripped, explicitTypeArguments) {
                     return false
                 }
                 continue
             }
             for argumentType in types {
-                if !ArgumentFits(argumentType, parameters[index]) {
+                if !ArgumentFits(argumentType, parameter, explicitTypeArguments) {
                     return false
                 }
             }
@@ -1310,24 +1350,98 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol) bool {
+    private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol, explicitTypeArguments bool) bool {
         let stripped = StripAllNullability(parameter) ?? parameter
-        // A parameter of an open imported definition (`TKey` of `Dictionary`2`) takes its type argument.
-        if stripped.ClrType is {} clr && (clr.IsGenericParameter || clr.ContainsGenericParameters) {
+        if object.Equals(argument, stripped) || object.Equals(stripped, TypeSymbol.Object) {
             return true
         }
-        if object.Equals(argument, stripped) || TypeSymbol.ContainsTypeParameter(stripped) || object.Equals(
-            stripped,
-            TypeSymbol.Object
-        ) {
+        if argument.ClrType is {} argumentClr &&
+            stripped.ClrType is {} parameterClr &&
+            !parameterClr.ContainsGenericParameters &&
+            ClrTypeUtilities.AreSame(argumentClr, parameterClr) {
+            return true
+        }
+        if TypeParameterTakesArgument(stripped, explicitTypeArguments) {
             return true
         }
         return (MetadataTypeKeys.IsBuiltIn(argument) && MetadataTypeKeys.IsBuiltIn(stripped)) ||
             Conversion.IsRepresentationPreservingImplicit(argument, stripped)
     }
 
-    // The parameter types of each function or method that the call can bind: the functions of the scope with the
-    // callee's name, or the methods of that name on the receiver's types.
+    // A parameter of a type parameter takes an argument without a conversion when the call infers the type argument
+    // from it. A type argument that the call names can need a conversion, and a type parameter of the receiver's type
+    // that is still open was not substituted (the walker does not know its argument).
+    private func TypeParameterTakesArgument(parameter TypeSymbol, explicitTypeArguments bool) bool {
+        if explicitTypeArguments {
+            return false
+        }
+        if parameter is TypeParameterSymbol typeParameter {
+            return typeParameter.IsMethodTypeParameter
+        }
+        if parameter.ClrType is {} clr && clr.ContainsGenericParameters {
+            return HasOnlyMethodTypeParameters(clr)
+        }
+        return TypeSymbol.ContainsTypeParameter(parameter)
+    }
+
+    private func HasOnlyMethodTypeParameters(type Type) bool {
+        if type.IsGenericParameter {
+            return type.IsGenericMethodParameter
+        }
+        if type.HasElementType {
+            return type.GetElementType() is {} element && HasOnlyMethodTypeParameters(element)
+        }
+        if type.IsGenericType {
+            for argument in type.GetGenericArguments() {
+                if !HasOnlyMethodTypeParameters(argument) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    // `nil` reaches a reference type, a nullable type or a type parameter without an operator. A non-nullable value
+    // type takes it only through a conversion operator (`func operator implicit(value string?) Token`).
+    private func AcceptsNilWithoutOperator(type TypeSymbol) bool {
+        if type is NullableTypeSymbol || type is TypeParameterSymbol || type is ByRefTypeSymbol || !type.IsValueType {
+            return true
+        }
+        return type.ClrType is {} clr && clr.IsGenericType && clr.Namespace == "System" && clr.Name == "Nullable`1"
+    }
+
+    // Whether `nil` reaches the target of a conversion without an operator. The receiver resolution strips
+    // nullability, so a nullable declaration is read from the type clause, the variable or the return type.
+    private func NilReachesTargetWithoutOperator(target RegionReceiverPath, effects RegionEffects) bool {
+        if target.Steps.Length == 0 && !target.RootIsCall {
+            if target.RootType is {} clause {
+                if clause.IsNullable {
+                    return true
+                }
+            } else if target.RootName == RegionEffectScanner.ReturnTypeRoot {
+                if function is {} enclosing &&
+                    !enclosing.IsReturnTypeInferred &&
+                    enclosing.Type is {} returnType &&
+                    AcceptsNilWithoutOperator(returnType) {
+                    return true
+                }
+            } else if target.RootName is {} name && $scope.TryLookupSymbol(name) is VariableSymbol variable {
+                if variable.Type is {} variableType && AcceptsNilWithoutOperator(variableType) {
+                    return true
+                }
+            }
+        }
+        if ConversionTypes(target, effects) is not{} types {
+            return false
+        }
+        for type in types {
+            if !AcceptsNilWithoutOperator(type) {
+                return false
+            }
+        }
+        return true
+    }
+
     private func ParameterLists(call RegionCall, name string, effects RegionEffects) List[List[TypeSymbol]] {
         let lists = List[List[TypeSymbol]]()
         var receivers List[ReceiverType]? = nil
@@ -1352,7 +1466,11 @@ internal partial class StatementBinder {
             return lists
         }
         for receiver in receivers {
-            AddMethodParameterLists(receiver, name, lists)
+            if name == RegionEffectScanner.IndexMemberName {
+                AddIndexParameterLists(receiver, call, lists)
+            } else {
+                AddMethodParameterLists(receiver, name, lists)
+            }
         }
         return lists
     }
@@ -1365,32 +1483,47 @@ internal partial class StatementBinder {
         return types
     }
 
+    // The parameter types of the methods of a name on a receiver, with the receiver's type arguments substituted
+    // (`Add(T)` on `List[Token]` takes a `Token`).
     private func AddMethodParameterLists(receiver ReceiverType, name string, lists List[List[TypeSymbol]]) {
         var clrType = receiver.Clr
+        var symbolic TypeSymbol? = nil
         switch receiver.Symbol {
             case declared is StructSymbol {
                 for level in declared.GetHierarchy() {
                     for candidate in level.GetMembers() {
                         if candidate is FunctionSymbol function && function.Name == name {
-                            lists.Add(ParameterTypes(function))
+                            let types = List[TypeSymbol]()
+                            for parameter in function.Parameters {
+                                types.Add(level.SubstituteMemberType(parameter.Type) ?? parameter.Type)
+                            }
+                            lists.Add(types)
                         }
                     }
                 }
-                clrType = declared.GetHierarchy().Last().ImportedBaseType?.ClrType
+                let importedBase = declared.GetHierarchy().Last().ImportedBaseType
+                clrType = importedBase?.ClrType
+                symbolic = importedBase
             }
             case contract is InterfaceSymbol {
                 for level in contract.SelfAndAllBaseInterfaces() {
                     level.EnsureMembersResolved()
                     for function in level.GetMethods(name) {
-                        lists.Add(ParameterTypes(function))
+                        let types = List[TypeSymbol]()
+                        for parameter in function.Parameters {
+                            types.Add(level.SubstituteMemberType(parameter.Type))
+                        }
+                        lists.Add(types)
                     }
                 }
             }
             case imported is ImportedTypeSymbol {
                 clrType = imported.OpenDefinition ?? imported.ClrType
+                symbolic = imported
             }
             default {
                 clrType = clrType ?? receiver.Symbol?.ClrType
+                symbolic = receiver.Symbol
             }
         }
         if clrType == nil || ReflectionType(clrType) is not{} reflected {
@@ -1402,9 +1535,111 @@ internal partial class StatementBinder {
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
             ) {
                 if member is MethodInfo method {
+                    lists.Add(ClrParameterTypes(symbolic, method, method.GetParameters()))
+                }
+            }
+        } catch (ex NotSupportedException) { }
+    }
+
+    private func ClrParameterTypes(symbolic TypeSymbol?, method MethodBase, parameters[]ParameterInfo) List[
+        TypeSymbol
+    ] {
+        let types = List[TypeSymbol]()
+        for var index = 0; index < parameters.Length; index++ {
+            types.Add(
+                if symbolic != nil {
+                    MemberLookup.GetClrMethodParameterTypeSymbol(symbolic, method, index)
+                } else {
+                    ClrNullability.GetParameterTypeSymbol(parameters[index])
+                }
+            )
+        }
+        return types
+    }
+
+    // The parameter lists of an index access: `int32` per dimension (or one `System.Index`) for an array, a slice or
+    // a string, and the indexers of an imported type with the receiver's type arguments substituted. A range slices
+    // only an array, a slice or a string without a conversion. A source indexer is a getter that runs user code
+    // (R14), which the read classification counts, so it is not listed.
+    private func AddIndexParameterLists(receiver ReceiverType, call RegionCall, lists List[List[TypeSymbol]]) {
+        let count = call.Arguments.Count
+        var rank = 0
+        switch receiver.Symbol {
+            case ArrayTypeSymbol, SliceTypeSymbol {
+                rank = 1
+            }
+            case rectangular is RectangularArrayTypeSymbol {
+                rank = rectangular.Rank
+            }
+            default {
+                if object.Equals(receiver.Symbol, TypeSymbol.String) {
+                    rank = 1
+                } else if receiver.Clr is {} clr && clr.IsArray {
+                    rank = clr.GetArrayRank()
+                } else if receiver.Clr is {} text && ClrTypeUtilities.AreSame(text, typeof(string)) {
+                    rank = 1
+                }
+            }
+        }
+        if rank > 0 {
+            if rank == count {
+                let dimensions = List[TypeSymbol]()
+                for var index = 0; index < rank; index++ {
+                    dimensions.Add(TypeSymbol.Int32)
+                }
+                lists.Add(dimensions)
+            }
+            if count == 1 {
+                let fromEnd = List[TypeSymbol]()
+                fromEnd.Add(TypeSymbol.FromClrTypeWithoutNullability(typeof(Index), NullabilityFreeReason.TypeLiteral))
+                lists.Add(fromEnd)
+            }
+            return
+        }
+        for form in call.ArgumentForms {
+            if form == RegionArgumentForm.Range {
+                return
+            }
+        }
+        var clrType = receiver.Clr
+        var symbolic TypeSymbol? = nil
+        switch receiver.Symbol {
+            case StructSymbol {
+                return
+            }
+            case imported is ImportedTypeSymbol {
+                clrType = imported.OpenDefinition ?? imported.ClrType
+                symbolic = imported
+            }
+            default {
+                clrType = clrType ?? receiver.Symbol?.ClrType
+                symbolic = receiver.Symbol
+            }
+        }
+        if clrType == nil || ReflectionType(clrType) is not{} reflected {
+            return
+        }
+        try {
+            let searched = List[Type]()
+            searched.Add(reflected)
+            if reflected.IsInterface {
+                searched.AddRange(reflected.GetInterfaces())
+            }
+            for searchedType in searched {
+                for property in searchedType.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+                    let indexParameters = property.GetIndexParameters()
+                    if indexParameters.Length != count {
+                        continue
+                    }
                     let types = List[TypeSymbol]()
-                    for parameter in method.GetParameters() {
-                        types.Add(ClrNullability.GetParameterTypeSymbol(parameter))
+                    for var index = 0; index < count; index++ {
+                        types.Add(
+                            if symbolic != nil {
+                                MemberLookup.GetIndexerParameterTypeSymbol(symbolic, property, index)
+                            } else {
+                                ClrNullability.GetParameterTypeSymbol(indexParameters[index])
+                            }
+                        )
                     }
                     lists.Add(types)
                 }

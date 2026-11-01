@@ -2110,6 +2110,179 @@ func Run(ref text string?, m int32) int32 {
     return n
 }
 func Main() { }`, "GS0158")
+            Add("if-expression-initializer-is-scoped-to-the-expression (W1)", `package T
+func Run(flag bool, s0 string?) int32 {
+    var s = s0
+    if s == nil { return 0 }
+    var n = 0
+    while s.Length > 0 && n < 3 {
+        n++
+        let m = if var s = 0; flag { 1 } else { 2 }
+        s = nil
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("index-argument-conversion-counts-for-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+struct Token { var Raw int32 }
+func operator implicit(value int32) Token { return Token{Raw: value} }
+func operator implicit(value string?) Token { return Token{Raw: 2} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+
+func Run(ref text string?, flag bool, k Key, arr []int32, items List[Token]) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let v = arr[k]
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("index-arguments-and-elements-of-built-in-types-keep-a-by-reference-fact (A3)", `package T
+import System
+func Run(ref text string?, arr []int32, s string, idx Index) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let v = arr[n] + arr[idx] + arr[n + 1]
+        let w = s[1..n]
+        let u = arr[1..^1]
+        let a = []int32{1, n}
+        let b = [n]int32{}
+        let t string? = nil
+        var d DateTime? = nil
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("array-element-conversion-removes-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+func Use(s ReadOnlySpan[char]) { }
+
+func Run(ref text string?, dt DateTime, items List[DateTimeOffset], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let a = []DateTimeOffset{dt}
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("nil-to-a-value-type-counts-as-a-conversion (A3)", `package T
+import System
+import System.Collections.Generic
+struct Token { var Raw int32 }
+func operator implicit(value int32) Token { return Token{Raw: value} }
+func operator implicit(value string?) Token { return Token{Raw: 2} }
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+
+func Run(ref text string?, flag bool, k Key, arr []int32, items List[Token]) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let t Token = nil
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("explicit-type-argument-conversion-removes-a-by-reference-fact (A3)", `package T
+import System
+import System.Linq
+import System.Collections.Generic
+struct Token { var Raw int32 }
+func Keep[T](x T) T -> x
+class Box[T] {
+    var Item T? = nil
+    func Put(x T) { }
+}
+
+func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTimeOffset], box Box[DateTimeOffset], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let r = Keep[DateTimeOffset](dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("open-receiver-type-parameter-counts-as-a-conversion (A3)", `package T
+import System
+import System.Linq
+import System.Collections.Generic
+struct Token { var Raw int32 }
+func Keep[T](x T) T -> x
+class Box[T] {
+    var Item T? = nil
+    func Put(x T) { }
+}
+
+func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTimeOffset], box Box[DateTimeOffset], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        dict.Add(tok, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("inferred-and-substituted-type-arguments-keep-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+struct Token { var Raw int32 }
+func Keep[T](x T) T -> x
+func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTimeOffset]) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let k = Keep(dt)
+        if dict.TryGetValue(tok, out var found) { n++ }
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("from-end-index-constructs-a-system-index (A3)", `package T
+import System
+import System.Text
+import System.Collections.Generic
+
+func Run(ref text string?, arr []int32, dt DateTime, n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let v = arr[^n]
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("range-value-constructs-a-system-range (A3)", `package T
+import System
+import System.Text
+import System.Collections.Generic
+import System.Collections.Immutable
+
+func Run(ref text string?, arr []int32, s string, im ImmutableArray[int32], sp ReadOnlyMemory[char], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let r = 1..n
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }

@@ -269,10 +269,11 @@ internal sealed class RegionOperator {
 /// A site where the binder converts a value to a target type (rule W4); the consumer asks whether a user-defined
 /// or imported conversion operator can run there. A `nil` source or target is one the walker cannot follow.
 internal sealed class RegionConversion {
-    init(source RegionReceiverPath?, target RegionReceiverPath?, sourceIsBuiltInByForm bool) {
+    init(source RegionReceiverPath?, target RegionReceiverPath?, sourceIsBuiltInByForm bool, sourceIsNil bool = false) {
         Source = source
         Target = target
         SourceIsBuiltInByForm = sourceIsBuiltInByForm
+        SourceIsNil = sourceIsNil
     }
 
     prop Source RegionReceiverPath? {
@@ -285,6 +286,11 @@ internal sealed class RegionConversion {
 
     /// Whether the source is an operator or a literal, whose value has a built-in type when its operands do.
     prop SourceIsBuiltInByForm bool {
+        get;
+    }
+
+    /// Whether the source is `nil`, which reaches a non-nullable value type only through a conversion operator.
+    prop SourceIsNil bool {
         get;
     }
 }
@@ -303,6 +309,8 @@ internal enum RegionArgumentForm {
     Nil,
     /// A named argument, which the walker does not match to a parameter.
     Named,
+    /// A range index (`t[a..b]`), which slices a built-in sequence without a conversion.
+    Range,
 }
 
 /// One call site found by the scanner.
@@ -317,9 +325,11 @@ internal sealed class RegionCall {
         receiverName string? = nil,
         receiver RegionReceiverPath? = nil,
         arguments List[RegionReceiverPath?]? = nil,
-        argumentForms List[RegionArgumentForm]? = nil
+        argumentForms List[RegionArgumentForm]? = nil,
+        hasTypeArguments bool = false
     ) {
         ArgumentForms = argumentForms ?? List[RegionArgumentForm]()
+        HasTypeArguments = hasTypeArguments
         Kind = kind
         CalleeName = calleeName
         ReceiverName = receiverName
@@ -348,6 +358,11 @@ internal sealed class RegionCall {
     /// Gets the path of the receiver of a member invocation whose receiver is not a plain name of the entry scope,
     /// or `nil` when the walker cannot follow it.
     prop Receiver RegionReceiverPath? {
+        get;
+    }
+
+    /// Whether the call names its type arguments (`F[T](x)`), so a parameter of a type parameter has that type.
+    prop HasTypeArguments bool {
         get;
     }
 
@@ -391,6 +406,7 @@ internal sealed class RegionEffects {
     init() {
         Writes = List[RegionWrite]()
         Calls = List[RegionCall]()
+        IndexAccesses = List[RegionCall]()
         Declared = List[string]()
         BareReads = List[string]()
         OperatorOperandNames = List[string]()
@@ -410,6 +426,12 @@ internal sealed class RegionEffects {
 
     /// Gets the call sites with an operand analysis, in source order of the walk.
     prop Calls List[RegionCall] {
+        get;
+    }
+
+    /// Gets the index accesses (`t[i]`), each as a call of the member `[]` on the target, for the consumer's check of
+    /// index argument conversions. They are not calls.
+    prop IndexAccesses List[RegionCall] {
         get;
     }
 
@@ -520,6 +542,13 @@ internal sealed class RegionEffects {
         get;
     }
 
+    /// Whether an element of an array, a stack allocation or a map literal, or an allocation length, is converted
+    /// to its type. The site runs code only when the consumer finds a conversion operator (rule W4).
+    prop ContainsElementConversion bool {
+        get;
+        set;
+    }
+
     /// Whether a declaration with a type or an assignment takes a value that is not a literal. A user-defined
     /// conversion may run code there (rule W4); the consumer asks whether the package declares any.
     prop ContainsConversionCandidate bool {
@@ -592,6 +621,7 @@ internal sealed class RegionEffects {
             return
         }
         Calls.AddRange(other.Calls)
+        IndexAccesses.AddRange(other.IndexAccesses)
         MemberReads.AddRange(other.MemberReads)
         Operators.AddRange(other.Operators)
         Conversions.AddRange(other.Conversions)
@@ -609,6 +639,7 @@ internal sealed class RegionEffects {
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
         ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
+        ContainsElementConversion = ContainsElementConversion || other.ContainsElementConversion
         ReturnsConstant = ReturnsConstant || other.ReturnsConstant
         for name in other.ReturnedNames {
             if !ReturnedNames.Contains(name) {
