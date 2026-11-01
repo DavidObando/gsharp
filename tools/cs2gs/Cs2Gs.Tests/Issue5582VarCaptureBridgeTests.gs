@@ -8,21 +8,19 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import System
-import System.Diagnostics
-import System.IO
-import System.Text
 import Xunit
 
 /// Issue #5582: a `var` pattern capture has the G# type of the value that the pattern matches. C# types
 /// the capture `T?`, so a switch arm (`var c =>`) and a `case var c:` label bridged `Take(c!!)` and threw
-/// where C# passes the null on, while `x is var c` passed `c` unbridged. Now one decision covers each form
-/// and each property subpattern: the capture is non-null exactly when its input is non-null in the emitted
-/// G#. A capture of a nullable or widened input keeps its bridge, also in the `is var` form.
+/// where C# passes the null on, while `x is var c` passed `c` unbridged. Now one decision covers each form,
+/// each property subpattern and each conjunction: the capture is non-null exactly when its input is non-null
+/// in the emitted G#. A capture of a nullable or widened input keeps its bridge, also in the `is var` form.
 /// @remarks Mutation witnesses (ADR-0154): on 24bb628bb (before this fix) and with
 /// `TryGetVarCaptureStaticNonNull` always `false`, the switch-arm and case-label rows emit `c!!` and the
-/// translated program throws `NullReferenceException`. On 24bb628bb and with the `IsActivePatternBinding`
-/// exclusion removed, the `is var` control rows emit `Take(captured)` with `captured Node?`, which does not
-/// bind (GS0154).
+/// translated program throws `NullReferenceException`. On 24bb628bb, and with the decision limited to
+/// native `is` bindings, to the scrutinee, or to a capture outside a conjunction, a control row emits
+/// `Take(m)` or `Take(c)` with a `Node?` capture, which does not bind (GS0154). Without the type-test rule
+/// for a conjunction, `o is Node and var c` emits a redundant `c!!`.
 open class Issue5582VarCaptureBridgeTests {
     /// The issue's repro: a `var` capture of a non-null parameter, in the `is`, switch-arm and case-label
     /// forms, takes the null on as C# does.
@@ -45,13 +43,16 @@ namespace Demo
                 case var c: return new Sink().Take(c);
             }
         }
-        public static string Run() => Is(null!) + " " + Arm(null!) + " " + Case(null!);
+        public static string And(Node s) => s is (var c and _) ? new Sink().Take(c) : "none";
+        public static string Typed(object? o) => o is Node and var c ? new Sink().Take(c) : "none";
+        public static string Run() =>
+            Is(null!) + " " + Arm(null!) + " " + Case(null!) + " " + And(null!) + " " + Typed(new Node());
     }
 }`)
         Assert.Contains("case var c: Sink().Take(c)\n", printed)
         Assert.Contains("return Sink().Take(c)\n", printed)
         Assert.DoesNotContain("!!", printed)
-        Assert.Equal("taken taken taken", CompileAndRun(printed, "P.Run()").Trim())
+        RunsAs(printed, "taken taken taken taken taken")
     }
 
     /// A `var` capture in a property subpattern, at the top level and nested, has the type of the member
@@ -84,15 +85,17 @@ namespace Demo
         }
         public static string NestedIs(Holder h) => h is { Inner: { Child: var c } } ? new Sink().Take(c) : "none";
         public static string NestedArm(Holder h) => h switch { { Inner: { Child: var c } } => new Sink().Take(c), _ => "none" };
+        public static string TypedArm(Holder h) => h switch { Holder { Child: var c } => new Sink().Take(c) };
         static Holder Make() => new Holder(null!, new Holder(null!, null));
         public static string Run() =>
-            Is(Make()) + " " + Arm(Make()) + " " + Case(Make()) + " " + NestedIs(Make()) + " " + NestedArm(Make());
+            Is(Make()) + " " + Arm(Make()) + " " + Case(Make()) + " " + NestedIs(Make()) + " " + NestedArm(Make()) + " " +
+            TypedArm(Make());
     }
 }`)
         Assert.Contains("prop Child Node {", printed)
         Assert.Contains("case { Inner: { Child: var c } }: Sink().Take(c)\n", printed)
         Assert.DoesNotContain("!!", printed)
-        Assert.Equal("taken taken taken taken taken", CompileAndRun(printed, "P.Run()").Trim())
+        RunsAs(printed, "taken taken taken taken taken taken")
     }
 
     /// Control: a capture of a `Node?` parameter or member has the type `Node?`, so each form keeps the
@@ -119,9 +122,13 @@ namespace Demo
         }
         public static string MemberIs(Holder h) => h is { Maybe: var m } ? new Sink().Take(m!) : "none";
         public static string MemberArm(Holder h) => h switch { { Maybe: var m } => new Sink().Take(m!) };
+        public static string TypedArm(Holder h) => h switch { Holder { Maybe: var m } => new Sink().Take(m!) };
+        public static string And(Node? s) => s is (var c and _) ? new Sink().Take(c!) : "none";
+        public static string NotNullArm(Node? t) => t switch { not null and var c => new Sink().Take(c), _ => "none" };
         public static string Run() =>
             Is(new Node()) + " " + Arm(new Node()) + " " + Case(new Node()) + " " +
-            MemberIs(new Holder { Maybe = new Node() }) + " " + MemberArm(new Holder { Maybe = new Node() });
+            MemberIs(new Holder { Maybe = new Node() }) + " " + MemberArm(new Holder { Maybe = new Node() }) + " " +
+            TypedArm(new Holder { Maybe = new Node() }) + " " + And(new Node()) + " " + NotNullArm(new Node());
     }
 }`)
         Assert.Contains("if p is var captured { Sink().Take(captured!!) }", printed)
@@ -129,7 +136,10 @@ namespace Demo
         Assert.Contains("return Sink().Take(c!!)", printed)
         Assert.Contains("if h is { Maybe: var m } { Sink().Take(m!!) }", printed)
         Assert.Contains("case { Maybe: var m }: Sink().Take(m!!)", printed)
-        Assert.Equal("taken taken taken taken taken", CompileAndRun(printed, "P.Run()").Trim())
+        Assert.Contains("case Holder { Maybe: var m }: Sink().Take(m!!)", printed)
+        Assert.Contains("if s is (var c and _) { Sink().Take(c!!) }", printed)
+        Assert.Contains("case not nil and var c: Sink().Take(c!!)", printed)
+        RunsAs(printed, "taken taken taken taken taken taken taken taken")
     }
 
     /// Control: in a nullable-oblivious file, cs2gs widens a parameter that a null test and a null store
@@ -162,7 +172,7 @@ namespace Demo
         Assert.Contains("Items.Add(captured!!)", printed)
         Assert.Contains("case var c: Items.IndexOf(c!!) + 2", printed)
         Assert.Contains("Items.Add(c!!)", printed)
-        Assert.Equal("4", CompileAndRun(printed, "P.Run()").Trim())
+        RunsAs(printed, "4")
     }
 
     shared {
@@ -179,58 +189,11 @@ namespace Demo
             return printed
         }
 
-        // Compiles `printed` with `Console.WriteLine(callExpression)` as its entry statement, runs it, and
-        // returns stdout.
-        private func CompileAndRun(printed string, callExpression string) string {
-            let compiler string? = FindCompiler()
-            Assert.True(compiler != nil, "gsc.dll must be built before running this test.")
-            let workDir = Path.Combine(AppContext.BaseDirectory, "issue-5582-e2e", Guid.NewGuid().ToString("N"))
-            Directory.CreateDirectory(workDir)
-            let gsPath = Path.Combine(workDir, "Snippet.gs")
-            let dllPath = Path.Combine(workDir, "Snippet.dll")
-            File.WriteAllText(
-                gsPath,
-                printed + Environment.NewLine + "System.Console.WriteLine($callExpression)" + Environment.NewLine
-            )
-            let (compileExit, compileOut) = RunDotnet("\"$compiler\" /target:exe /out:\"$dllPath\" \"$gsPath\"")
-            Assert.True(
-                compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
-                "gsc must compile the translated snippet. Output:\n" + compileOut + "\n\nTranslated G#:\n" + printed
-            )
-            let (runExit, stdout) = RunDotnet("\"$dllPath\"")
-            Assert.True(
-                runExit == 0,
-                "The translated snippet must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed
-            )
-            return stdout
-        }
-
-        private func RunDotnet(arguments string)(Exit int32, Output string) {
-            let psi = ProcessStartInfo("dotnet", arguments){
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            }
-            using let process Process? = Process.Start(psi)
-            let output = StringBuilder()
-            output.Append(process!!.StandardOutput.ReadToEnd())
-            output.Append(process!!.StandardError.ReadToEnd())
-            process!!.WaitForExit()
-            return (process!!.ExitCode, output.ToString())
-        }
-
-        private func FindCompiler() string? {
-            var dir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
-            while dir != nil {
-                for config in[]string{"Release", "Debug"} {
-                    let candidate = Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll")
-                    if File.Exists(candidate) {
-                        return candidate
-                    }
-                }
-                dir = dir.Parent
-            }
-            return nil
-        }
+        // Compiles `printed` with gsc, runs `P.Run()` and compares what it prints.
+        private func RunsAs(printed string, expected string) -> LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(P.Run())",
+            expected
+        )
     }
 }

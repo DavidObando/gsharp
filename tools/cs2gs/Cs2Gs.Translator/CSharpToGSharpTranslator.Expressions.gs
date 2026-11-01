@@ -2886,20 +2886,40 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-            if symbol == nil {
+            if symbol == nil ||
+                !(
+                this.state.PatternBindings.ContainsKey(symbol) || this.state.NativePatternVariables.Contains(symbol)
+            ) {
                 return false
             }
-            if this.state.NativePatternVariables.Contains(symbol) {
-                // Issue #5582: a native `var` capture has the G# type of its input.
-                return !(
-                    symbol is ILocalSymbol capture && this.TryGetVarCaptureStaticNonNull(
-                        capture,
-                        out var inputIsNonNull
-                    ) &&
-                        !inputIsNonNull
-                )
+            return this.VarCaptureIsNonNull(expression) ?? true
+        }
+
+        /// Issue #5582: the decision of (cref:TryGetVarCaptureStaticNonNull) for a read of a `var` capture.
+        /// @returns `null` when [`expression`](paramref) does not read a `var` capture that the decision names.
+        /// A binding that a lowering replaces with another expression (`x!!`, `(x as T)!!`) also gives `null`:
+        /// that expression has its own type.
+        private func VarCaptureIsNonNull(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool? {
+            var expression = expression
+            while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                expression = parenthesized.Expression
             }
-            return this.state.PatternBindings.ContainsKey(symbol)
+            let capture = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol
+            if capture == nil ||
+                (
+                this
+                    .state
+                    .PatternBindings
+                    .TryGetValue(capture, out var replacement) &&
+                    !(replacement is IdentifierExpression)
+            ) {
+                return nil
+            }
+            return if this.TryGetVarCaptureStaticNonNull(capture, out var inputIsNonNull) {
+                inputIsNonNull
+            } else {
+                default(bool?)
+            }
         }
 
         private func ForgiveNullableReferenceValue(
@@ -3497,9 +3517,15 @@ partial class CSharpToGSharpTranslator {
             if this.PatternLocalUsesNullableStorage(expression) {
                 return false
             }
-            if this.IsActivePatternBinding(expression) || this.IsGSharpFlowNarrowedLocal(expression) ||
-                this.IsGuardCapturedFieldRead(expression) {
+            // Issue #5582: decide a `var` capture once. The pattern-binding shortcut asks the same decision.
+            let captureIsNonNull = this.VarCaptureIsNonNull(expression)
+            if captureIsNonNull == true ||
+                (captureIsNonNull == nil && this.IsActivePatternBinding(expression)) ||
+                this.IsGSharpFlowNarrowedLocal(expression) || this.IsGuardCapturedFieldRead(expression) {
                 return true
+            }
+            if captureIsNonNull == false {
+                return false
             }
             var unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = expression
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -3675,9 +3701,6 @@ partial class CSharpToGSharpTranslator {
                 if this.ForEachBindingInfersNonNullElement(inferredLocal) {
                     return true
                 }
-                if this.TryGetVarCaptureStaticNonNull(inferredLocal, out var inputIsNonNull) {
-                    return inputIsNonNull
-                }
             }
             let type ITypeSymbol? = switch symbol {
                 case field is IFieldSymbol: field.Type
@@ -3748,7 +3771,8 @@ partial class CSharpToGSharpTranslator {
         /// that input is non-null.
         /// @remarks This is the one decision for `x is var c`, a switch arm `var c =>`, a `case var c:` label
         /// and a property subpattern `{ P: var c }` at any depth. The input of a top-level capture is the
-        /// scrutinee. The input of a subpattern capture is the member that it reads.
+        /// scrutinee. The input of a subpattern capture is the member that it reads. A capture in a conjunction
+        /// has the input of the conjunction, except after a type test, which makes it non-null.
         /// @returns `false` when cs2gs cannot name the input, for example in a positional subpattern
         /// (issue #4576) or a list pattern. The caller then uses its other rules.
         private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
@@ -3762,8 +3786,28 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             var pattern Microsoft.CodeAnalysis.SyntaxNode = designation.Parent!!
-            while pattern.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
-                pattern = parenthesized
+            while true {
+                if pattern.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
+                    pattern = parenthesized
+                    continue
+                }
+                if pattern.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BinaryPatternSyntax conjunction &&
+                    conjunction
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AndPattern) {
+                    // In `A and var c`, G# narrows `c` to a type that `A` tests. A `not nil` or a property
+                    // pattern does not narrow it.
+                    if conjunction.Right == pattern && this.PatternTestsType(conjunction.Left) {
+                        isNonNull = true
+                        return true
+                    }
+                    pattern = conjunction
+                    continue
+                }
+                break
             }
             let input Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch pattern.Parent {
                 case isPattern is IsPatternExpressionSyntax: isPattern.Expression
@@ -3808,6 +3852,26 @@ partial class CSharpToGSharpTranslator {
             }
             isNonNull = this.DeclaredValueIsStaticallyNonNull(member, memberType)
             return true
+        }
+
+        // Whether `pattern` matches only a value of a tested type, which G# then gives to a later `var` capture.
+        private func PatternTestsType(
+            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax
+        ) bool -> switch pattern {
+            case parenthesized is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedPatternSyntax: this.PatternTestsType(parenthesized.Pattern)
+            case conjunction is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryPatternSyntax when conjunction.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.AndPattern
+            ): this.PatternTestsType(conjunction.Left) || this.PatternTestsType(conjunction.Right)
+            case Microsoft.CodeAnalysis.CSharp.Syntax.TypePatternSyntax, DeclarationPatternSyntax: true
+            case recursive is RecursivePatternSyntax: recursive.Type != nil
+            case constant is Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax: this.IsTypeReferencePattern(
+                constant.Expression
+            )
+            default: false
         }
 
         private func ForEachBindingInfersNonNullElement(local ILocalSymbol) bool {
