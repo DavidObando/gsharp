@@ -947,8 +947,14 @@ internal sealed class RegionEffectScanner {
         }
         let bareBefore = current.BareReads.ToArray()
         let callsBefore = current.Calls.Count
+        let testsBefore = current.TypeTests.Count
         current.AbsorbFlags(record, Active())
-        current.TypeTests.RemoveAll((test RegionTypeTest) -> IsDeclared(test.Name))
+        // A nested type test of a name that the enclosing region declares tests no entry-scope receiver.
+        for var i = current.TypeTests.Count - 1; i >= testsBefore; i-- {
+            if IsDeclared(current.TypeTests[i].Name) {
+                current.TypeTests.RemoveAt(i)
+            }
+        }
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
         // call whose receiver the enclosing region declares has a receiver that the entry scope cannot resolve.
         for var i = callsBefore; i < current.Calls.Count; i++ {

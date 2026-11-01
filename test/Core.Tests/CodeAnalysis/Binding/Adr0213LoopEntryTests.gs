@@ -1384,6 +1384,26 @@ func Run(ref text string?, k Kind) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("type-test-survives-a-sibling-nested-loop-that-shadows-the-name (A3)", `package T
+import System
+import System.Linq
+class Holder {
+    var Count Action = Action(func() { })
+}
+func Run(ref text string?, o object, other object) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is Holder { o.Count() }
+        {
+            let o = other
+            while false { }
+        }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
             return rows
         }
     }
