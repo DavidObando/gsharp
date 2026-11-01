@@ -4310,17 +4310,171 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        /// A by-reference parameter or a `ref` local. gsc keeps the narrowing of such a variable across a plain call
+        /// (amendment A3), but not across a node that may write storage no other root names.
+        private func IsByReferenceVariable(symbol ISymbol?) bool {
+            if symbol is IParameterSymbol parameter {
+                return parameter.RefKind != RefKind.None
+            }
+            if symbol is ILocalSymbol local {
+                return local.RefKind != RefKind.None
+            }
+            return false
+        }
+
+        private let staticInitializerOwners Dictionary[INamedTypeSymbol, bool] = Dictionary[INamedTypeSymbol, bool](
+            SymbolEqualityComparer.Default
+        )
+
+        /// ADR-0208 R11 and R15 (#5520), the translator side of the compiler's `StaticMemberAccessRunsUserCode`
+        /// (src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs): a static field, property or event access
+        /// of a type of this compilation that declares a static constructor or a static field whose initializer is
+        /// not a literal runs the type initializer at the first access. gsc counts that node as a call, so it
+        /// removes member-path and by-reference facts there. The one decision for the translator: callers that
+        /// keep a C# flow fact across a node ask it, and keep the `!!` when it says yes. The answer errs towards
+        /// yes (a redundant `!!` is removed by the polish pass; a missing one is GS0158). A constant has no
+        /// initializer to run.
+        private func NodeRunsStaticTypeInitializer(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if node is not MemberAccessExpressionSyntax && node is not IdentifierNameSyntax {
+                return false
+            }
+            let accessed ISymbol? = this.context.GetSymbolInfo(node).Symbol
+            if accessed == nil || !accessed.IsStatic {
+                return false
+            }
+            if accessed is IFieldSymbol{IsConst: true} {
+                return false
+            }
+            if accessed is not IFieldSymbol && accessed is not IPropertySymbol && accessed is not IEventSymbol {
+                return false
+            }
+            let owner = accessed.ContainingType
+            if owner == nil {
+                return false
+            }
+            let definition = owner.OriginalDefinition
+            if !SymbolEqualityComparer.Default.Equals(
+                definition.ContainingAssembly,
+                this.context.Compilation.Assembly
+            ) {
+                return false
+            }
+            var declares = false
+            if this.staticInitializerOwners.TryGetValue(definition, out declares) {
+                return declares
+            }
+            declares = this.TypeDeclaresStaticInitializer(definition)
+            this.staticInitializerOwners[definition] = declares
+            return declares
+        }
+
+        private func TypeDeclaresStaticInitializer(type INamedTypeSymbol) bool {
+            for reference in type.DeclaringSyntaxReferences {
+                if reference.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax declaration {
+                    continue
+                }
+                for member in declaration.Members {
+                    if member is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConstructorDeclarationSyntax constructor &&
+                        this.HasModifier(
+                        constructor.Modifiers,
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                    ) {
+                        return true
+                    }
+                    if member is Microsoft.CodeAnalysis.CSharp.Syntax.FieldDeclarationSyntax field && this.HasModifier(
+                        field.Modifiers,
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword
+                    ) &&
+                        !this
+                        .HasModifier(field.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.ConstKeyword) {
+                        for variable in field.Declaration.Variables {
+                            if variable.Initializer is {} initializer && !this.IsLiteralStaticInitializer(
+                                initializer.Value
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                    if member is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PropertyDeclarationSyntax property &&
+                        this.HasModifier(property.Modifiers, Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword) &&
+                        property.Initializer is {} propertyInitializer &&
+                        !this.IsLiteralStaticInitializer(propertyInitializer.Value) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func HasModifier(modifiers SyntaxTokenList, kind Microsoft.CodeAnalysis.CSharp.SyntaxKind) bool {
+            for modifier in modifiers {
+                if modifier.IsKind(kind) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /// A literal that needs no conversion, with an optional sign: the emitted initializer is a literal token, so
+        /// gsc does not count the static field as running code. The conversion is read on the whole initializer, so a
+        /// signed literal that converts to the field type (`uint Max = +1`, emitted as `uint32(+1)`) counts as code, as
+        /// does anything else. gsc counts `nil` as code when the field type is a value type, so `null` into a function
+        /// pointer (a value type in G#) counts too; `null` into a pointer does not.
+        private func IsLiteralStaticInitializer(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
+            var current = value
+            if current is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PrefixUnaryExpressionSyntax prefix &&
+                (
+                prefix.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnaryMinusExpression) || prefix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnaryPlusExpression
+                )
+            ) {
+                current = prefix.Operand
+            }
+            if current is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal || literal.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
+            ) {
+                return false
+            }
+            let model = this.context.Compilation.GetSemanticModel(value.SyntaxTree)
+            if literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression) {
+                return !model.GetConversion(value).IsUserDefined && model.GetTypeInfo(value)
+                    .ConvertedType is not IFunctionPointerTypeSymbol
+            }
+            let info = model.GetTypeInfo(value)
+            return SymbolEqualityComparer.Default.Equals(info.Type, info.ConvertedType)
+        }
+
         private func ClosureAssignedLocalLosesNarrowing(
             symbol ISymbol?,
             narrowingGuard Microsoft.CodeAnalysis.SyntaxNode,
             use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
-            if !this.IsClosureAssignedVariable(symbol) {
+            let closureAssigned = this.IsClosureAssignedVariable(symbol)
+            if !closureAssigned && !this.IsByReferenceVariable(symbol) {
                 return false
             }
+            // ADR-0208 R11 and R15 (#5520): a closure-assigned variable loses its fact at every node that may run
+            // source code. A by-reference variable that no closure assigns loses it at a static access of a type whose
+            // initializer runs source code, which gsc treats as a call that can write the storage. (gsc also drops it
+            // at a constructor call, which is not mirrored here: #5562.)
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                return this.NodeMayRunEscapedClosure(node)
+                if closureAssigned && this.NodeMayRunEscapedClosure(node) {
+                    return true
+                }
+                return this.NodeRunsStaticTypeInitializer(node)
             }
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
@@ -4344,7 +4498,8 @@ partial class CSharpToGSharpTranslator {
                 enclosing != $scope;
                 enclosing = enclosing!!
                 .Parent {
-                if enclosing is Microsoft
+                if closureAssigned &&
+                    enclosing is Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax

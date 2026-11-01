@@ -1847,7 +1847,10 @@ internal class UserTokenResolver {
             openDef,
             typeArguments
         )
-        if substitutedReturn == nil || substitutedReturn == TypeSymbol.Error {
+        // The tail reads `ClrType` from a local: a read of `TypeSymbol.Error` is a static access (ADR-0208, #5520)
+        // and would end the narrowing of the `out` parameter between the guard and the use.
+        let substituted = substitutedReturn
+        if substituted == nil || substituted == TypeSymbol.Error {
             return false
         }
         // The symbolic-container MemberRef fires for ANY non-empty argument
@@ -1864,10 +1867,7 @@ internal class UserTokenResolver {
         // the historical IL byte-identical.
         return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection) ||
             (
-            substitutedReturn.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(
-                substitutedClr,
-                property.PropertyType
-            )
+            substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(substitutedClr, property.PropertyType)
         )
     }
 
@@ -1922,7 +1922,10 @@ internal class UserTokenResolver {
         // ADR-0193 Phase 2: [NullabilityFunnel] on purpose; see the property
         // variant above.
         substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, openDef, typeArguments)
-        if substitutedReturn == nil || substitutedReturn == TypeSymbol.Error {
+        // The tail reads `ClrType` from a local: a read of `TypeSymbol.Error` is a static access (ADR-0208, #5520)
+        // and would end the narrowing of the `out` parameter between the guard and the use.
+        let substituted = substitutedReturn
+        if substituted == nil || substituted == TypeSymbol.Error {
             return false
         }
         // Issue #3311: also fire for a CONCRETE argument recovered through an
@@ -1930,12 +1933,7 @@ internal class UserTokenResolver {
         // `Dictionary[int32, V]`); see the property variant above for the
         // rationale.
         return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection) ||
-            (
-            substitutedReturn.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(
-                substitutedClr,
-                method.ReturnType
-            )
-        )
+            (substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(substitutedClr, method.ReturnType))
     }
 
     /// Issue #903: when a generic imported (extension) call — e.g. a LINQ
