@@ -1582,7 +1582,13 @@ partial class CSharpToGSharpTranslator {
             // evidence-driven promotions below, this one needs no
             // same-compilation gate — the referenced project's migrated
             // declaration is nullable too, so a nullable value needs no bridge.
-            if ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(targetSymbol) {
+            // Issue #5577: a target seen through a run project's emitted
+            // reference is read from its source declaration, with the query the
+            // null-argument pin rule uses.
+            if ObliviousNullabilityAnalyzer.HasRunAllowNullWriteContract(
+                targetSymbol,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
                 return false
             }
             // Issue #3865: an IMPORTED target with no nullable metadata at all
