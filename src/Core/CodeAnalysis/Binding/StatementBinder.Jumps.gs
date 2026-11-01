@@ -60,10 +60,19 @@ internal partial class StatementBinder {
         if binderCtx.UserLabels.TryGetValue(labelName, out var label) {
             return label
         }
-        label = BoundLabel(labelName)
+        label = CreateUserLabel(labelName)
         binderCtx.UserLabels[labelName] = label
         binderCtx.UnresolvedGotoLabels[labelName] = location
         return label
+    }
+
+    // Issue #5569: creates the label object of a user label name, reusing the one that the first pass of a
+    // retried return value created for the same name.
+    private func CreateUserLabel(labelName string) BoundLabel {
+        if retriedValueUserLabels?.TryGetValue(labelName, out var label) == true {
+            return label
+        }
+        return BoundLabel(labelName)
     }
 
     /// Issue #1884: declares a `goto` label at a `label: statement`
@@ -97,7 +106,7 @@ internal partial class StatementBinder {
         binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState
         binderCtx.UnresolvedGotoLabels.Remove(labelName)
         if !binderCtx.UserLabels.TryGetValue(labelName, out var label) {
-            label = BoundLabel(labelName)
+            label = CreateUserLabel(labelName)
             binderCtx.UserLabels[labelName] = label
         }
         return label
@@ -658,7 +667,8 @@ internal partial class StatementBinder {
     /// when that pass succeeds, and of the natural pass otherwise. The caller passes only values without a
     /// function literal, and a return nested in the value binds in the pass of the value without its own
     /// passes, so each value binds twice and nested values do not multiply the work. Each pass has its own
-    /// scope, so a variable that the value declares is not declared twice.
+    /// scope, so a variable that the value declares is not declared twice. A user label keeps one object in both
+    /// passes, so a `goto` after the value refers to the label of whichever value the lambda binder selects.
     /// @param syntax The return statement.
     /// @param value The return value.
     /// @param targetType The lambda's target return type.
@@ -678,10 +688,19 @@ internal partial class StatementBinder {
         )
         let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
         let afterTarget = CaptureSpeculativeBindState()
+        let targetPassLabels = Dictionary[string, BoundLabel](binderCtx.UserLabels)
         RestoreSpeculativeBindState(beforeValue)
         // Synthetic local names stay unique across both passes.
         this.binderCtx.SyntheticLocalCounter = afterTarget.SyntheticLocalCounter
-        let natural = BindReturnValuePass(deferredReturns, false, () -> bindExpression(value, false))
+        // Each user label keeps one object in both passes, so the kept state and either bound value agree.
+        let outerRetriedLabels = retriedValueUserLabels
+        retriedValueUserLabels = targetPassLabels
+        var natural BoundExpression
+        try {
+            natural = BindReturnValuePass(deferredReturns, false, () -> bindExpression(value, false))
+        } finally {
+            retriedValueUserLabels = outerRetriedLabels
+        }
         let naturalDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
         let naturalCounter = binderCtx.SyntheticLocalCounter
         let naturalFailed = naturalDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError)

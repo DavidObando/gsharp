@@ -716,6 +716,90 @@ class Program {
 `, "OOFF")
     }
 
+    /// Issue #5569: a user label keeps one object in both passes of a retried return value, so a `goto` in the
+    /// value to a later label, a label in the value with a backward `goto` in the value, a `goto` in a nested
+    /// return value and a `goto` that leaves a `try` with a `finally` all reach their labels when the literal keeps
+    /// its natural type. The `object` overloads call the delegate, so the output shows the control flow.
+    @Fact
+    func RetriedReturnValue_KeepsItsGotoTargets() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let forward = `() -> {
+        if flag {
+            return {
+                if flag {
+                    goto M
+                }
+                D()
+            }
+        }
+        M: return B()
+    }`
+        let nested = `() -> {
+        if flag {
+            return {
+                var n = 0
+                N: n++
+                Console.Write(n)
+                if n < 3 {
+                    goto N
+                }
+                if !flag {
+                    return {
+                        if flag {
+                            goto M
+                        }
+                        D()
+                    }
+                }
+                if flag {
+                    goto M
+                }
+                D()
+            }
+        }
+        M: return B()
+    }`
+        let leavesFinally = `() -> {
+        if flag {
+            return {
+                try {
+                    if flag {
+                        goto M
+                    }
+                } finally {
+                    Console.Write("f")
+                }
+                D()
+            }
+        }
+        M: return B()
+    }`
+        let oracleForward = "() => { if (flag) { if (flag) goto M; return new D(); } M: return new B(); }"
+        let oracleNested = "() => { if (flag) { var n = 0; N: n++; Console.Write(n); if (n < 3) goto N; " +
+            "if (!flag) { if (flag) goto M; return new D(); } if (flag) goto M; return new D(); } M: return new B(); }"
+        let oracleLeavesFinally = "() => { if (flag) { try { if (flag) goto M; } finally { Console.Write(\"f\"); } " +
+            "return new D(); } M: return new B(); }"
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n")
+        let oracle = StringBuilder(
+            "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        var flag = true;\n"
+        )
+        let shapes = []string{"Calls.Dg(|, 1)", "Calls.DgIn(|, 1)", "DgCtor(|, 1).Kind", "DgInCtor(|, 1).Kind"}
+        let literals = []string{forward, nested, leavesFinally}
+        let oracleLiterals = []string{oracleForward, oracleNested, oracleLeavesFinally}
+        for var i = 0; i < literals.Length; i++ {
+            for shape in shapes {
+                source.Append("    Console.Write(").Append(shape.Replace("|", literals[i])).Append(")\n")
+                oracle
+                    .Append("        Console.Write(")
+                    .Append(OracleShape(shape).Replace("|", oracleLiterals[i]))
+                    .Append(");\n")
+            }
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "OBOBOBOB" + "123OB123OB123OB123OB" + "fOBfOBfOBfOB")
+    }
+
     /// Issue #5569 control: with no other candidate, a target-typed block return value keeps the target bind and
     /// its diagnostic.
     @Fact
@@ -1395,9 +1479,24 @@ namespace FunctionControl {
         public static string Dm(object o, long x) => "O";
         public static string DmIn(in System.Func<System.IDisposable> f, int x) => "F";
         public static string DmIn(object o, long x) => "O";
+        public static string Dg(System.Func<System.IDisposable> f, int x) => "F";
+        public static string Dg(object o, long x) => Kinds.OfB(o);
+        public static string DgIn(in System.Func<System.IDisposable> f, int x) => "F";
+        public static string DgIn(object o, long x) => Kinds.OfB(o);
+    }
+    public class DgCtor {
+        public string Kind;
+        public DgCtor(System.Func<System.IDisposable> f, int x) { Kind = "F"; }
+        public DgCtor(object o, long x) { Kind = Kinds.OfB(o); }
+    }
+    public class DgInCtor {
+        public string Kind;
+        public DgInCtor(in System.Func<System.IDisposable> f, int x) { Kind = "F"; }
+        public DgInCtor(object o, long x) { Kind = Kinds.OfB(o); }
     }
     public static class Kinds {
         public static string Of(object o) => o is System.Func<long, string> g ? "O" + g(5) : "O:" + o.GetType();
+        public static string OfB(object o) => o is System.Func<B> f ? "O" + f().GetType().Name : "O:" + o.GetType();
     }
     public class B { }
     public class D : B, System.IDisposable { public void Dispose() { } }
