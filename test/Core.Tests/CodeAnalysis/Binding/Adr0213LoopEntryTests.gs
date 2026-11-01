@@ -2088,23 +2088,24 @@ func Main() { }`, "GS0158")
             Add("argument-without-a-path-counts-as-a-conversion (A3)", `package T
 import System
 func Use(s ReadOnlySpan[char]) { }
-func Run(ref text string?, o object) int32 {
+func Run(ref text string?, a string, flag bool) int32 {
     if text == nil { return 0 }
     var n = 0
     while text.Length > 0 && n < 3 {
         n++
-        Use(cast[string](o))
+        Use(if flag { a } else { "x" })
     }
     return n
 }
 func Main() { }`, "GS0158")
             Add("operator-with-an-unresolved-operand-counts-as-a-conversion (A3)", `package T
 import System
-func Run(ref text string?, o object) int32 {
+func Pick[T](x T) T -> x
+func Run(ref text string?, m int32) int32 {
     if text == nil { return 0 }
     var n = 0
     while text.Length > 0 && n < 3 {
-        n = n + cast[int32](o)
+        n = n + Pick(m)
     }
     return n
 }
