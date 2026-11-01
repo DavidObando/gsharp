@@ -978,45 +978,33 @@ internal sealed class RegionEffectScanner {
             }
         }
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
-        // call whose receiver the enclosing region declares has the receiver's origin as its path.
+        // call whose receiver the enclosing region declares has the receiver's origin as its path. An operand that
+        // names a `ref` local of the enclosing region names the local's storage. The nested record stays as it was.
         for var i = callsBefore; i < current.Calls.Count; i++ {
             let call = current.Calls[i]
-            if call.Kind == RegionCallKind.MemberInvocation &&
-                call.ReceiverName != nil &&
-                IsDeclared(call.ReceiverName) {
-                current.Calls[i] = RegionCall(
-                    RegionCallKind.MemberInvocation,
-                    call.CalleeName,
-                    call.ByReferenceNames,
-                    call.ByValueNames,
-                    call.HasUnresolvedOperand,
-                    call.Position,
-                    nil,
-                    OriginOf(call.ReceiverName)
-                )
-            } else if call.Kind == RegionCallKind.MemberInvocation && call.Receiver != nil {
-                current.Calls[i] = RegionCall(
-                    RegionCallKind.MemberInvocation,
-                    call.CalleeName,
-                    call.ByReferenceNames,
-                    call.ByValueNames,
-                    call.HasUnresolvedOperand,
-                    call.Position,
-                    nil,
-                    Rebase(call.Receiver)
-                )
-            } else if call.Kind == RegionCallKind.NamedInvocation &&
-                call.CalleeName != nil &&
-                IsDeclared(call.CalleeName) {
-                current.Calls[i] = RegionCall(
-                    RegionCallKind.ExpressionInvocation,
-                    nil,
-                    call.ByReferenceNames,
-                    call.ByValueNames,
-                    call.HasUnresolvedOperand,
-                    call.Position
-                )
+            var kind = call.Kind
+            var callee = call.CalleeName
+            var receiverName = call.ReceiverName
+            var receiver = call.Receiver
+            if kind == RegionCallKind.MemberInvocation && receiverName != nil && IsDeclared(receiverName) {
+                receiver = OriginOf(receiverName)
+                receiverName = nil
+            } else if kind == RegionCallKind.MemberInvocation && receiver != nil {
+                receiver = Rebase(receiver)
+            } else if kind == RegionCallKind.NamedInvocation && callee != nil && IsDeclared(callee) {
+                kind = RegionCallKind.ExpressionInvocation
+                callee = nil
             }
+            current.Calls[i] = RegionCall(
+                kind,
+                callee,
+                RebaseOperands(call.ByReferenceNames),
+                RebaseOperands(call.ByValueNames),
+                call.HasUnresolvedOperand,
+                call.Position,
+                receiverName,
+                receiver
+            )
         }
         // A name that an enclosing declaration of the region hides is no property read.
         for name in record.BareReads {
@@ -1875,6 +1863,14 @@ internal sealed class RegionEffectScanner {
             }
         }
         return RegionReceiverPath(name, false, nil, nil, ImmutableArray[RegionReceiverStep].Empty)
+    }
+
+    private func RebaseOperands(names List[string]) List[string] {
+        let rebased = List[string](names.Count)
+        for name in names {
+            rebased.Add(OperandName(name))
+        }
+        return rebased
     }
 
     // A path of a nested record whose root the enclosing region declares starts at the root's origin.

@@ -286,8 +286,9 @@ internal partial class StatementBinder {
         switch call.Kind {
             case RegionCallKind.NamedInvocation {
                 let symbol = $scope.TryLookupSymbol(call.CalleeName)
-                // A function value, a parameter of function type, or a name that resolves to nothing.
-                return symbol is VariableSymbol || symbol == nil
+                // A function value, a parameter of function type, a construction (a constructor is no plain call,
+                // ADR-0208 amendment A3), or a name that resolves to nothing.
+                return symbol is VariableSymbol || symbol is TypeSymbol || symbol == nil
             }
             case RegionCallKind.ExpressionInvocation, RegionCallKind.Construction, RegionCallKind.Other {
                 return true
@@ -496,7 +497,7 @@ internal partial class StatementBinder {
         for step in path.Steps {
             let next = List[ReceiverType]()
             for type in types {
-                if !AddStepTypes(type, step, next) {
+                if AddStepTypes(type, step, next) != StepFound {
                     return nil
                 }
             }
@@ -578,29 +579,35 @@ internal partial class StatementBinder {
         return ResolveTestedType(type.DottedName, arity)
     }
 
-    // Adds the types of one step from a receiver type, or returns `false` when the step does not resolve.
-    private func AddStepTypes(type ReceiverType, step RegionReceiverStep, next List[ReceiverType]) bool {
+    private const StepAbsent int32 = 0
+    private const StepFound int32 = 1
+    private const StepUnresolved int32 = 2
+
+    // Adds the types of one step from a receiver type. Returns `StepFound`, `StepAbsent` when the type has no member
+    // that the step names, or `StepUnresolved` when a member that it names has a type that does not resolve.
+    private func AddStepTypes(type ReceiverType, step RegionReceiverStep, next List[ReceiverType]) int32 {
         if type.Clr is {} clr {
             return AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
         }
         let symbol = type.Symbol
+        let elementStep = step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element
         switch symbol {
             case nil {
-                return false
+                return StepUnresolved
             }
             case array is ArrayTypeSymbol {
-                if step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element {
-                    return AddSymbolType(array.ElementType, next)
+                if elementStep {
+                    return Outcome(AddSymbolType(array.ElementType, next))
                 }
             }
             case slice is SliceTypeSymbol {
-                if step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element {
-                    return AddSymbolType(slice.ElementType, next)
+                if elementStep {
+                    return Outcome(AddSymbolType(slice.ElementType, next))
                 }
             }
             case rectangular is RectangularArrayTypeSymbol {
-                if step.Kind == RegionReceiverStepKind.Index || step.Kind == RegionReceiverStepKind.Element {
-                    return AddSymbolType(rectangular.ElementType, next)
+                if elementStep {
+                    return Outcome(AddSymbolType(rectangular.ElementType, next))
                 }
             }
             case tuple is TupleTypeSymbol {
@@ -608,12 +615,12 @@ internal partial class StatementBinder {
                     step.Name,
                     out var element
                 ) {
-                    return AddSymbolType(tuple.ElementTypes[element], next)
+                    return Outcome(AddSymbolType(tuple.ElementTypes[element], next))
                 }
             }
             case declared is StructSymbol {
                 if step.Kind == RegionReceiverStepKind.Element {
-                    return false
+                    return StepUnresolved
                 }
                 var found = false
                 let hierarchy = declared.GetHierarchy()
@@ -622,13 +629,13 @@ internal partial class StatementBinder {
                         if StepSelects(candidate, step) {
                             found = true
                             if !AddSymbolType(MemberType(candidate), next) {
-                                return false
+                                return StepUnresolved
                             }
                         }
                     }
                 }
                 if found {
-                    return true
+                    return StepFound
                 }
                 if hierarchy.Last().ImportedBaseType is {} importedBase {
                     return AddStepTypes(ReceiverType(importedBase, nil), step, next)
@@ -637,7 +644,7 @@ internal partial class StatementBinder {
             }
             case contract is InterfaceSymbol {
                 if step.Kind == RegionReceiverStepKind.Element {
-                    return false
+                    return StepUnresolved
                 }
                 var found = false
                 for level in contract.SelfAndAllBaseInterfaces() {
@@ -646,20 +653,21 @@ internal partial class StatementBinder {
                         if StepSelects(candidate, step) {
                             found = true
                             if !AddSymbolType(MemberType(candidate), next) {
-                                return false
+                                return StepUnresolved
                             }
                         }
                     }
+                    // A base interface without the member is skipped.
                     for clrBase in level.BaseClrInterfaces {
-                        let before = next.Count
-                        if !AddStepTypes(ReceiverType(clrBase, nil), step, next) {
-                            return false
+                        let outcome = AddStepTypes(ReceiverType(clrBase, nil), step, next)
+                        if outcome == StepUnresolved {
+                            return StepUnresolved
                         }
-                        found = found || next.Count > before
+                        found = found || outcome == StepFound
                     }
                 }
                 if found {
-                    return true
+                    return StepFound
                 }
                 return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
@@ -671,9 +679,15 @@ internal partial class StatementBinder {
             default { }
         }
         if symbol?.ClrType is not{} clrType {
-            return false
+            return StepUnresolved
         }
         return AddClrStepTypes(clrType, step, ImmutableArray[TypeSymbol].Empty, nil, next)
+    }
+
+    private func Outcome(resolved bool) int32 -> if resolved {
+        StepFound
+    } else {
+        StepUnresolved
     }
 
     private func InterfaceMembers(contract InterfaceSymbol) List[Symbol] {
@@ -737,7 +751,7 @@ internal partial class StatementBinder {
         arguments ImmutableArray[TypeSymbol],
         definition Type?,
         next List[ReceiverType]
-    ) bool {
+    ) int32 {
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
         BindingFlags.FlattenHierarchy
         let searched = List[Type]()
@@ -749,25 +763,25 @@ internal partial class StatementBinder {
         switch step.Kind {
             case RegionReceiverStepKind.Element {
                 if type.IsArray && type.GetElementType() is {} arrayElement {
-                    return AddClrType(arrayElement, arguments, definition, next)
+                    return Outcome(AddClrType(arrayElement, arguments, definition, next))
                 }
                 for contract in searched {
                     if contract.IsGenericType && contract.GetGenericTypeDefinition()
                         .FullName == "System.Collections.Generic.IEnumerable`1" {
-                        return AddClrType(contract.GetGenericArguments()[0], arguments, definition, next)
+                        return Outcome(AddClrType(contract.GetGenericArguments()[0], arguments, definition, next))
                     }
                 }
                 for contract in type.GetInterfaces() {
                     if contract.IsGenericType && contract.GetGenericTypeDefinition()
                         .FullName == "System.Collections.Generic.IEnumerable`1" {
-                        return AddClrType(contract.GetGenericArguments()[0], arguments, definition, next)
+                        return Outcome(AddClrType(contract.GetGenericArguments()[0], arguments, definition, next))
                     }
                 }
-                return false
+                return StepUnresolved
             }
             case RegionReceiverStepKind.Index {
                 if type.IsArray && type.GetElementType() is {} arrayElement {
-                    return AddClrType(arrayElement, arguments, definition, next)
+                    return Outcome(AddClrType(arrayElement, arguments, definition, next))
                 }
                 var found = false
                 for searchedType in searched {
@@ -775,12 +789,16 @@ internal partial class StatementBinder {
                         if property.GetIndexParameters().Length > 0 {
                             found = true
                             if !AddClrType(property.PropertyType, arguments, definition, next) {
-                                return false
+                                return StepUnresolved
                             }
                         }
                     }
                 }
-                return found
+                return if found {
+                    StepFound
+                } else {
+                    StepAbsent
+                }
             }
             default {
                 var found = false
@@ -799,12 +817,16 @@ internal partial class StatementBinder {
                         if memberType != nil {
                             found = true
                             if !AddClrType(memberType, arguments, definition, next) {
-                                return false
+                                return StepUnresolved
                             }
                         }
                     }
                 }
-                return found
+                return if found {
+                    StepFound
+                } else {
+                    StepAbsent
+                }
             }
         }
     }

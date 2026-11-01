@@ -1558,31 +1558,17 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
 func Main() { }`, "GS0158")
             Add("type-tested-local-call-is-indirect (A3)", `package T
 import System
-import System.Collections.Generic
+import System.Linq
 class Holder {
-    var Cb Action = Action(func() { })
-    var Inner Holder? = nil
-    var Items List[Holder] = List[Holder]()
-    func Do() { }
+    var Count Action = Action(func() { })
 }
-class Child {
-    var Do Action = Action(func() { })
-}
-class Parent {
-    var Child Child = Child()
-    func Do() { }
-}
-class Box[T] {
-    func Do() { }
-}
-func Make() Holder { return Holder() }
-func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict Dictionary[string, Holder], p Parent, o object) int32 {
+func Run(ref text string?, holder Holder) int32 {
     if text == nil { return 0 }
     var n = 0
     while text.Length > 0 && n < 3 {
         n++
         let local object = holder
-        if local is Holder { local.Cb() }
+        if local is Holder { local.Count() }
     }
     return n
 }
@@ -1765,6 +1751,58 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     while text.Length > 0 && n < 3 {
         n++
         if o is Box[int32] { o.Do() }
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("call-result-of-a-type-parameter-type-does-not-resolve (A3)", `package T
+import System
+class Holder {
+    var Cb Action = Action(func() { })
+}
+func Pick[T](x T) T { return x }
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Pick(holder).Cb()
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("nested-call-operands-name-the-storage-of-a-ref-local (A3)", `package T
+import System
+func Clear2(ref x string?, ref y string?) { y = nil }
+func Run(ref a string?, ref b string?) int32 {
+    if a == nil { return 0 }
+    var n = 0
+    while a.Length > 0 && n < 3 {
+        n++
+        let ref c = b
+        var m = 0
+        while m < 1 {
+            m++
+            Clear2(ref b, ref c)
+        }
+    }
+    return n
+}
+func Main() { }`, "GS0158")
+            Add("member-of-a-source-interface-with-an-imported-base-resolves (A3)", `package T
+import System
+class Holder {
+    func Do() { }
+}
+interface IBox : IDisposable {
+    prop Child Holder { get; }
+}
+func Run(ref s string?, box IBox) int32 {
+    if s == nil { return 0 }
+    var n = 0
+    while s.Length > 0 && n < 3 {
+        n++
+        box.Child.Do()
     }
     return n
 }
