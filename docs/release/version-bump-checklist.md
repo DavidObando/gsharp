@@ -109,8 +109,9 @@ ADRs, and `docs/vs-gsharp-compatibility.md` (a dated compatibility record).
 Order matters: publish first, then point the website at the published package.
 
 1. Tag and publish the release: push tag `vM` on the commit whose
-   `build.yml` run printed `M`. The `publish` and
-   `publish-visual-studio-extension` jobs in `build.yml` do the rest. The
+   `build.yml` run printed `M`. The `publish-*` jobs in `build.yml` do the
+   rest, one job per destination (ADR-0218); the GitHub release stays a draft
+   until `publish-finalize` finds the version on every destination. The
    release runbook (`docs/release/final-csharp-release.md`, which lands in a
    separate PR) covers the
    secrets and verification in detail. Confirm every package is on nuget.org

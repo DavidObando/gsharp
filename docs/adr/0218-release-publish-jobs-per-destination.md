@@ -505,6 +505,10 @@ No question remains open.
   package version, and the single-version check ties the SDK version to the six RID packages.
 - `marketplace-version <id> --version V [--kind release|prerelease|any]` exits 0 when the
   version is published with the same flag, 1 when absent, 3 on a flag collision.
+- Step 4 (`nuget-push`): `dotnet nuget push X.nupkg` also pushes an `X.snupkg` beside it, so the
+  `.nupkg` push passes `--no-symbols` and the explicit `.snupkg` push is the only symbol push of a
+  run. A first attempt pushes each symbol package once; only a re-run of `publish-nuget-sdk` pushes
+  a `.snupkg` that may already exist (the unverified symbol-server row).
 
 ### Step 2: the re-run probe
 
