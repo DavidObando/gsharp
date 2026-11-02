@@ -1319,7 +1319,10 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   conversion operator, and a call that the walker cannot check runs one. Among the candidates of a call, one that
   takes every argument by identity is the one that binds; otherwise a candidate that takes an argument through a
   conversion operator can be the better one (`Accept(Payload)` over `Accept(object)`, `Consume(ReadOnlySpan[char])`
-  for `"ab"`), so the call runs one. A string concatenation or an interpolated string has the type `string` here.
+  for `"ab"`), so the call runs one. A `ref` or `out` argument takes only a parameter of its exact type, and a call
+  that names its type arguments is not proved by an identity candidate. A concatenation of string literals or an
+  interpolated string has the type `string`; a concatenation with another operand has it only when the operators
+  of the region are predefined (`token + "x"` can call a user `+`).
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
@@ -1336,7 +1339,9 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   built-in types is predefined, and a value of another type converted to a generic type, a `??`, a deconstruction or a
   multiple assignment can run one; `^n` and a range value construct a `System.Index` or `System.Range` (a
   constructor, which A3 does not exempt), while a range index slices its target and the read classification decides,
-  as on main; a bare static field (not a constant) or static property of a type whose initializer
+  as on main; a read inside a constant pattern (`key is holder.P`) is a read unless the name is a type, a namespace on the way
+  to one, or a constant or an enum member of a type; a member or an element compared with `nil` runs the `==` of an
+  imported value type that takes a reference; a bare static field (not a constant) or static property of a type whose initializer
   runs user code runs it (R11, #5520). The walker records each read, operator and conversion site with paths for its
   operands; a path that does not resolve can run user code. So `Environment.CurrentDirectory`, `dict["a"]` and `let s
   ReadOnlySpan[char] = "ab"` remove the fact, and `list[i]`, `text.Length`, an auto property, a constant, `let d
