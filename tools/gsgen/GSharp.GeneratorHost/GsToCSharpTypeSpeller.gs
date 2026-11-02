@@ -34,64 +34,113 @@ class GsToCSharpTypeSpeller {
     /// type has no faithful C# form.
     /// @param type The bound G# type to spell.
     /// @returns A parseable C# type spelling.
-    func Spell(type TypeSymbol?) string {
+    func Spell(type TypeSymbol?) string -> SpellCore(type, eraseReferenceNullability: false, recordFallback: true)
+
+    private func SpellCore(type TypeSymbol?, eraseReferenceNullability bool, recordFallback bool) string {
         switch type {
             case nil {
-                return Fallback("<null-type>")
+                return if recordFallback {
+                    Fallback("<null-type>")
+                } else {
+                    FallbackType
+                }
+            }
+            case annotated is NullabilityAnnotatedTypeSymbol {
+                return SpellCore(annotated.BaseType, eraseReferenceNullability, recordFallback)
+            }
+            case platform is PlatformTypeSymbol {
+                return SpellCore(platform.UnderlyingType, eraseReferenceNullability, recordFallback)
             }
             case nullable is NullableTypeSymbol {
-                return Spell(nullable.UnderlyingType) + "?"
+                if !eraseReferenceNullability {
+                    return SpellCore(nullable.UnderlyingType, eraseReferenceNullability: false, recordFallback) + "?"
+                }
+                return if NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    "global::System.Nullable<${SpellCore(nullable.UnderlyingType, eraseReferenceNullability: true, recordFallback)}>"
+                } else {
+                    SpellCore(nullable.UnderlyingType, eraseReferenceNullability: true, recordFallback)
+                }
             }
             case tp is TypeParameterSymbol {
                 return tp.Name
             }
             case seq is SequenceTypeSymbol {
-                return "global::System.Collections.Generic.IEnumerable<${Spell(seq.ElementType)}>"
+                return "global::System.Collections.Generic.IEnumerable<${SpellCore(seq.ElementType, eraseReferenceNullability, recordFallback)}>"
             }
             case aseq is AsyncSequenceTypeSymbol {
-                return "global::System.Collections.Generic.IAsyncEnumerable<${Spell(aseq.ElementType)}>"
+                return "global::System.Collections.Generic.IAsyncEnumerable<${SpellCore(aseq.ElementType, eraseReferenceNullability, recordFallback)}>"
             }
             case map_ is MapTypeSymbol {
-                return "global::System.Collections.Generic.Dictionary<${Spell(map_.KeyType)}, ${Spell(map_.ValueType)}>"
+                return "global::System.Collections.Generic.Dictionary<${SpellCore(map_.KeyType, eraseReferenceNullability, recordFallback)}, ${SpellCore(map_.ValueType, eraseReferenceNullability, recordFallback)}>"
             }
             case array is ArrayTypeSymbol {
-                return Spell(array.ElementType) + "[]"
+                return SpellCore(array.ElementType, eraseReferenceNullability, recordFallback) + "[]"
             }
             case slice is SliceTypeSymbol {
                 // ADR-0145 §B: G#-only shapes project onto their documented CLR shape.
-                return "global::System.Span<${Spell(slice.ElementType)}>"
+                return "global::System.Span<${SpellCore(slice.ElementType, eraseReferenceNullability, recordFallback)}>"
             }
             case channel is ChannelTypeSymbol {
-                return "global::System.Threading.Channels.Channel<${Spell(channel.ElementType)}>"
+                return "global::System.Threading.Channels.Channel<${SpellCore(channel.ElementType, eraseReferenceNullability, recordFallback)}>"
             }
             case pointer is PointerTypeSymbol {
-                return Spell(pointer.PointeeType) + "*"
+                return SpellCore(pointer.PointeeType, eraseReferenceNullability, recordFallback) + "*"
             }
             case byRef is ByRefTypeSymbol {
                 // A managed by-ref has no standalone type-position spelling; the
                 // pointee is the closest parseable form for a signature stub.
-                return Spell(byRef.PointeeType)
+                return SpellCore(byRef.PointeeType, eraseReferenceNullability, recordFallback)
             }
             case tuple is TupleTypeSymbol {
-                return "(" + string.Join(", ", tuple.ElementTypes.Select(Spell)) + ")"
+                return "(" + string.Join(
+                    ", ",
+                    tuple.ElementTypes.Select(
+                        (element TypeSymbol) -> SpellCore(element, eraseReferenceNullability, recordFallback)
+                    )
+                ) +
+                    ")"
             }
             case function is FunctionTypeSymbol {
-                return SpellFunction(function)
+                return SpellFunction(function, eraseReferenceNullability, recordFallback)
             }
             case del is DelegateTypeSymbol {
-                return SpellUserType(del.PackageName, del.Name, del.TypeArguments)
+                return SpellUserType(
+                    del.PackageName,
+                    del.Name,
+                    del.TypeArguments,
+                    eraseReferenceNullability,
+                    recordFallback
+                )
             }
             case enumSymbol is EnumSymbol when enumSymbol.ClrType == nil {
-                return SpellUserType(enumSymbol.PackageName, enumSymbol.Name, default(ImmutableArray[TypeSymbol]))
+                return SpellUserType(
+                    enumSymbol.PackageName,
+                    enumSymbol.Name,
+                    default(ImmutableArray[TypeSymbol]),
+                    eraseReferenceNullability,
+                    recordFallback
+                )
             }
             case iface is InterfaceSymbol when iface.ClrType == nil {
-                return SpellUserType(iface.PackageName, iface.Name, iface.TypeArguments)
+                return SpellUserType(
+                    iface.PackageName,
+                    iface.Name,
+                    iface.TypeArguments,
+                    eraseReferenceNullability,
+                    recordFallback
+                )
             }
             case structSymbol is StructSymbol when structSymbol.ClrType == nil {
-                return SpellUserType(structSymbol.PackageName, structSymbol.Name, structSymbol.TypeArguments)
+                return SpellUserType(
+                    structSymbol.PackageName,
+                    structSymbol.Name,
+                    structSymbol.TypeArguments,
+                    eraseReferenceNullability,
+                    recordFallback
+                )
             }
             case imported is ImportedTypeSymbol {
-                return SpellImported(imported)
+                return SpellImported(imported, eraseReferenceNullability, recordFallback)
             }
         }
         // A built-in primitive is a plain TypeSymbol (not a subclass) carrying a
@@ -108,11 +157,22 @@ class GsToCSharpTypeSpeller {
         if type!!.ClrType != nil {
             return SpellClrType(type!!.ClrType, default(ImmutableArray[TypeSymbol]))
         }
-        return Fallback(type!!.Name)
+        return if recordFallback {
+            Fallback(type!!.Name)
+        } else {
+            FallbackType
+        }
     }
 
-    private func SpellFunction(function FunctionTypeSymbol) string {
-        let parameters = function.ParameterTypes.Select(Spell).ToList()
+    private func SpellFunction(
+        function FunctionTypeSymbol,
+        eraseReferenceNullability bool,
+        recordFallback bool
+    ) string {
+        let parameters = function
+            .ParameterTypes
+            .Select((parameter TypeSymbol) -> SpellCore(parameter, eraseReferenceNullability, recordFallback))
+            .ToList()
         let isVoid = function.ReturnType == nil || function.ReturnType == TypeSymbol.Void
         if isVoid {
             return if parameters.Count == 0 {
@@ -121,11 +181,17 @@ class GsToCSharpTypeSpeller {
                 "global::System.Action<${string.Join(", ", parameters)}>"
             }
         }
-        parameters.Add(Spell(function.ReturnType))
+        parameters.Add(SpellCore(function.ReturnType, eraseReferenceNullability, recordFallback))
         return "global::System.Func<${string.Join(", ", parameters)}>"
     }
 
-    private func SpellUserType(packageName string, name string, typeArguments ImmutableArray[TypeSymbol]) string {
+    private func SpellUserType(
+        packageName string,
+        name string,
+        typeArguments ImmutableArray[TypeSymbol],
+        eraseReferenceNullability bool,
+        recordFallback bool
+    ) string {
         let qualified = if string.IsNullOrEmpty(packageName) {
             name
         } else {
@@ -133,12 +199,22 @@ class GsToCSharpTypeSpeller {
         }
         var spelled = "global::" + qualified
         if !typeArguments.IsDefaultOrEmpty {
-            spelled += "<" + string.Join(", ", typeArguments.Select(Spell)) + ">"
+            spelled += "<" + string.Join(
+                ", ",
+                typeArguments.Select(
+                    (argument TypeSymbol) -> SpellCore(argument, eraseReferenceNullability, recordFallback)
+                )
+            ) +
+                ">"
         }
         return spelled
     }
 
-    private func SpellImported(imported ImportedTypeSymbol) string {
+    private func SpellImported(
+        imported ImportedTypeSymbol,
+        eraseReferenceNullability bool,
+        recordFallback bool
+    ) string {
         // Prefer the symbolic type arguments (#313 constructions such as
         // `List[T]`) so the open definition + symbolic args reconstruct the
         // strongly-typed shape rather than the type-erased `<object>` closure.
@@ -146,13 +222,22 @@ class GsToCSharpTypeSpeller {
             let baseName string? = StripGenericArity(
                 imported.OpenDefinition!!.FullName ?? imported.OpenDefinition!!.Name
             )
-            let args = string.Join(", ", imported.TypeArguments.Select(Spell))
+            let args = string.Join(
+                ", ",
+                imported.TypeArguments.Select(
+                    (argument TypeSymbol) -> SpellCore(argument, eraseReferenceNullability, recordFallback)
+                )
+            )
             return "global::$baseName<$args>"
         }
         if imported.ClrType != nil {
             return SpellClrType(imported.ClrType, default(ImmutableArray[TypeSymbol]))
         }
-        return Fallback(imported.Name)
+        return if recordFallback {
+            Fallback(imported.Name)
+        } else {
+            FallbackType
+        }
     }
 
     private func SpellClrType(clrType Type?, unused ImmutableArray[TypeSymbol]) string {
@@ -214,6 +299,18 @@ class GsToCSharpTypeSpeller {
         /// cs2gs's `CSharpTypeMapper.UnsupportedPlaceholderType`, `object`
         /// is the universal upper bound so the stub always re-parses.
         const FallbackType string = "object"
+
+        /// Spells [`type`](paramref) with reference and unconstrained
+        /// nullability annotations erased and value-type `Nullable<T>`
+        /// normalized, so two types that project to the same C# constructor
+        /// parameter signature produce the same string.
+        /// @param type The bound G# type to spell.
+        /// @returns The erased C# type spelling.
+        internal func SpellErased(type TypeSymbol?) string -> GsToCSharpTypeSpeller().SpellCore(
+            type,
+            eraseReferenceNullability: true,
+            recordFallback: false
+        )
 
         // Reverse of cs2gs CSharpTypeMapper.MapPredefinedName, keyed by the CLR type
         // the built-in G# TypeSymbol carries (e.g. TypeSymbol.Int32.ClrType == typeof(int)).

@@ -1198,9 +1198,10 @@ class GsStubRenderer {
                 parameters[0].IsVariadic {
                 return false
             }
-            return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                structSymbol.SubstituteMemberType(parameters[0].Type),
-                SelfType(structSymbol)
+            return string.Equals(
+                GsToCSharpTypeSpeller.SpellErased(structSymbol.SubstituteMemberType(parameters[0].Type)),
+                GsToCSharpTypeSpeller.SpellErased(SelfType(structSymbol)),
+                StringComparison.Ordinal
             )
         }
 
