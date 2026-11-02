@@ -1610,7 +1610,7 @@ internal partial class StatementBinder {
         argumentTypes List[List[TypeSymbol]?],
         kinds List[int32]
     ) bool {
-        let bound = Dictionary[object, TypeSymbol]()
+        let bound = Dictionary[object, object]()
         let builtIn = List[object]()
         var positions = 0
         var unbindable = false
@@ -1626,21 +1626,19 @@ internal partial class StatementBinder {
             } else {
                 default(TypeSymbol?)
             }
-            if bare && TypeParameterKey(stripped) is {} key {
-                if single is {} argument {
-                    if !BindTypeParameter(bound, key, argument) {
-                        return true
-                    }
-                } else if kinds[index] == ArgumentBuiltIn {
-                    builtIn.Add(key)
-                } else {
+            if !bare {
+                if single is not{} argument || !BindCompound(bound, stripped, argument) {
                     unbindable = true
                 }
-            } else if !bare && single is {} argument && !BindCompound(bound, stripped, argument) {
+            } else if TypeParameterKey(stripped) is not{} key {
                 unbindable = true
-            } else if !bare && single == nil {
-                unbindable = true
-            } else if bare {
+            } else if single is {} argument {
+                if !BindTypeParameter(bound, key, argument) {
+                    return true
+                }
+            } else if kinds[index] == ArgumentBuiltIn {
+                builtIn.Add(key)
+            } else {
                 unbindable = true
             }
         }
@@ -1651,7 +1649,7 @@ internal partial class StatementBinder {
             return true
         }
         for key in builtIn {
-            if bound.TryGetValue(key, out var type) && !MetadataTypeKeys.IsBuiltIn(StripNullableValue(type)) {
+            if bound.TryGetValue(key, out var value) && !BindingIsBuiltIn(value) {
                 return true
             }
         }
@@ -1660,7 +1658,7 @@ internal partial class StatementBinder {
 
     // Binds the method type parameters of a compound parameter to the type arguments of an argument of the same
     // generic type. Returns `false` when the walker cannot, or when a type parameter is bound to two types.
-    private func BindCompound(bound Dictionary[object, TypeSymbol], parameter TypeSymbol, argument TypeSymbol) bool {
+    private func BindCompound(bound Dictionary[object, object], parameter TypeSymbol, argument TypeSymbol) bool {
         guard let definition = GenericDefinition(parameter) else {
             return false
         }
@@ -1671,14 +1669,26 @@ internal partial class StatementBinder {
             return false
         }
         let parameterArguments = TypeArgumentsOf(parameter)
-        let argumentArguments = TypeArgumentsOf(argument)
-        if parameterArguments.IsDefaultOrEmpty || parameterArguments.Length != argumentArguments.Length {
+        let values = List[object]()
+        for type in TypeArgumentsOf(argument) {
+            values.Add(type)
+        }
+        if values.Count == 0 && argument.ClrType is {} clr {
+            try {
+                for type in clr.GetGenericArguments() {
+                    values.Add(type)
+                }
+            } catch (ex NotSupportedException) {
+                return false
+            }
+        }
+        if parameterArguments.IsDefaultOrEmpty || parameterArguments.Length != values.Count {
             return false
         }
         for var index = 0; index < parameterArguments.Length; index++ {
             let typeArgument = parameterArguments[index]
             if TypeParameterTakesArgument(typeArgument, false) && TypeParameterKey(typeArgument) is {} key {
-                if !BindTypeParameter(bound, key, argumentArguments[index]) {
+                if !BindTypeParameter(bound, key, values[index]) {
                     return false
                 }
             } else if IsCompoundOfMethodTypeParameters(typeArgument) {
@@ -1688,12 +1698,49 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func BindTypeParameter(bound Dictionary[object, TypeSymbol], key object, type TypeSymbol) bool {
+    // A binding is a type symbol, or the CLR type of an imported type argument.
+    private func BindTypeParameter(bound Dictionary[object, object], key object, value object) bool {
         if bound.TryGetValue(key, out var existing) {
-            return object.Equals(existing, type) || SameClrType(existing, type)
+            return SameBinding(existing, value)
         }
-        bound[key] = type
+        bound[key] = value
         return true
+    }
+
+    private func SameBinding(first object, second object) bool {
+        if object.Equals(first, second) {
+            return true
+        }
+        if first is TypeSymbol firstType && second is TypeSymbol secondType && SameClrType(firstType, secondType) {
+            return true
+        }
+        guard let firstClr = BindingClrType(first) else {
+            return false
+        }
+        guard let secondClr = BindingClrType(second) else {
+            return false
+        }
+        return ClrTypeUtilities.AreSame(firstClr, secondClr)
+    }
+
+    private func BindingClrType(value object) Type? {
+        if value is Type clr {
+            return clr
+        }
+        if value is TypeSymbol type {
+            return StripAllNullability(type)?.ClrType
+        }
+        return nil
+    }
+
+    private func BindingIsBuiltIn(value object) bool {
+        if value is TypeSymbol type {
+            return MetadataTypeKeys.IsBuiltIn(StripNullableValue(type))
+        }
+        if value is Type clr {
+            return clr.IsPrimitive || clr.FullName == "System.String" || clr.FullName == "System.Decimal"
+        }
+        return false
     }
 
     // The identity of a method type parameter: its symbol, or the CLR generic parameter of an imported method.
@@ -1707,6 +1754,7 @@ internal partial class StatementBinder {
     private func TypeArgumentsOf(type TypeSymbol) ImmutableArray[TypeSymbol] {
         return switch type {
             case imported is ImportedTypeSymbol: imported.TypeArguments
+            case constructed is ConstructedMetadataTypeSymbol: constructed.TypeArguments
             case declared is StructSymbol: declared.TypeArguments
             case contract is InterfaceSymbol: contract.TypeArguments
             default: ImmutableArray[TypeSymbol].Empty
