@@ -954,7 +954,20 @@ internal partial class StatementBinder {
             // across all return paths and the trailing block expression, if
             // any), and applies a single conversion pass to each return-
             // statement expression once the return type is known.
-
+            // Issue #5603: that conversion runs outside the narrowing scope, so the backward `goto` check of a
+            // narrowed value runs here. The lambda binder reports it when the inferred result needs the narrowing.
+            if expression != nil && function!!.InferredReturnNarrowings is {} inferredReturnNarrowings {
+                binderCtx.TrackInferredReturnNarrowing(
+                    inferredReturnNarrowings,
+                    expression,
+                    Invariant.Required(
+                        syntax.Expression,
+                        "a return expression is present",
+                        expression: "syntax.Expression"
+                    )
+                        .Location
+                )
+            }
         } else {
             if function!!.Type == TypeSymbol.Void {
                 if expression != nil {

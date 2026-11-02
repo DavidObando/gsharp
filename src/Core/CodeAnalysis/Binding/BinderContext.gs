@@ -308,7 +308,8 @@ internal class BinderContext {
 
     /// Issue #5569: set while a speculative lambda body converts a `return` value to its delegate result. A
     /// backward `goto` narrowing use recorded then belongs to that conversion only, so its diagnostic waits for the
-    /// lambda binder's choice between the delegate and the natural function type.
+    /// lambda binder's choice between the delegate and the natural function type. Issue #5603: also set while a
+    /// `return` value of a lambda body with an inferred result records its narrowing use.
     prop DeferredReturnNarrowingOwner LambdaBinder.DeferredReturnState?
 
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
@@ -890,6 +891,45 @@ internal class BinderContext {
                     }
                 }
             }
+        }
+    }
+
+    /// Issue #5603: records a narrowed `return` value of a lambda body with an inferred result, where the value
+    /// binds. The result type is not known yet, so the use waits in [`owner`](paramref). The lambda binder reports
+    /// it when the inferred result needs the narrowing. A read whose narrowing changes the runtime type is
+    /// recorded at the read (cref:TrackBackwardGotoNarrowingRead), as for a conversion.
+    /// @param owner The narrowing uses of the lambda body.
+    /// @param value The bound `return` value.
+    /// @param location The location of the `return` value.
+    func TrackInferredReturnNarrowing(
+        owner LambdaBinder.DeferredReturnState,
+        value BoundExpression,
+        location TextLocation
+    ) {
+        if !TryGetBackwardGotoNarrowingPath(value, out var path, out var narrowedType) {
+            return
+        }
+        let narrowedPath = Invariant.Required(path, "a narrowed return value has an access path", expression: "path")
+        let narrowedValueType = Invariant.Required(
+            narrowedType,
+            "a narrowed return value has a narrowed type",
+            expression: "narrowedType"
+        )
+        if !narrowedPath.HasMembers && NarrowedReadChangesRuntimeType(narrowedPath.Root.Type, narrowedValueType) {
+            return
+        }
+        let outerOwner = DeferredReturnNarrowingOwner
+        DeferredReturnNarrowingOwner = owner
+        try {
+            TrackBackwardGotoNarrowingUse(
+                narrowedPath,
+                location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                narrowedValueType
+            )
+        } finally {
+            DeferredReturnNarrowingOwner = outerOwner
         }
     }
 

@@ -912,6 +912,137 @@ class Program {
         Check(fixture, source.ToString(), oracle.ToString(), "F<null>F<null>F<null>F<null>")
     }
 
+    /// Issue #5603: a function literal with an inferred result checks a narrowed `return` value against a backward
+    /// `goto` where the value binds, as a literal with a delegate result does. A `goto` that removes the narrowing
+    /// reports GS0155 at the `return` value when the inferred result is `string`, so nil does not reach it. This
+    /// applies to a local literal, a nested literal, a generic and a source delegate argument, an async literal and
+    /// a `goto` to the outer of two nested labels.
+    @Fact
+    func InferredResult_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(InferredResultShapes)
+        for shape in InferredResultShapes {
+            for (body, line, column) in[](Body string, Line int32, Column int32){
+                (InferredResultBody, 12, 24),
+                (InferredResultNestedLabelBody, 13, 28)
+            } {
+                for value in[]string{"s", "(s)"} {
+                    let literal = body.Replace("|", value).Replace("#", "s = nil")
+                    RejectConsumer(
+                        fixture,
+                        InferredResultPrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
+                        "GS0155",
+                        line,
+                        column,
+                        value.Length
+                    )
+                }
+            }
+        }
+    }
+
+    /// Issue #5603 controls: a `goto` that keeps the narrowing, a forward `goto`, and a result that another
+    /// `return` makes `string?` still compile, and run as C# runs them.
+    @Fact
+    func InferredResult_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let oracleBody = "{ string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return s; } n++; goto L; } " +
+            "return \"x\"; }"
+        let oracleNestedLabelBody = "{ string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 1) { M: if (n > 2) " +
+            "{ return s; } n++; goto M; } n++; goto L; } return \"x\"; }"
+        let oracleShapes = []string{
+            "Func<string> f = () => |; Console.Write(Len(f()));",
+            "Func<Func<string>> g = () => () => |; Console.Write(Len(g()()));",
+            "Console.Write(Len(T(() => |)));",
+            "Console.Write(Len(S(() => |)));",
+            "Func<Task<string>> a = async () => |; Console.Write(Len(a().Result));"
+        }
+        Assert.Equal(InferredResultShapes.Length, oracleShapes.Length)
+        let source = StringBuilder(InferredResultPrelude)
+        let oracle = StringBuilder(
+            "using System;\nusing System.Threading.Tasks;\nclass Program {\n" +
+                "    static int Len(string v) => v.Length;\n    static R T<R>(Func<R> f) => f();\n" +
+                "    static string S(Func<string> f) => f();\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        var cases = 0
+        for var index = 0; index < InferredResultShapes.Length; index++ {
+            for (body, oracleCaseBody) in[](Body string, Oracle string){
+                (InferredResultBody, oracleBody),
+                (InferredResultNestedLabelBody, oracleNestedLabelBody)
+            } {
+                let name = "Case" + cases.ToString()
+                cases++
+                source
+                    .Append("func ")
+                    .Append(name)
+                    .Append("() {\n    ")
+                    .Append(
+                    InferredResultShapes[index].Replace("|", body.Replace("|", "s").Replace("#", "Console.Write(\"\")"))
+                )
+                    .Append("\n}\n")
+                oracle
+                    .Append("    static void ")
+                    .Append(name)
+                    .Append("() { ")
+                    .Append(oracleShapes[index].Replace("|", oracleCaseBody))
+                    .Append(" }\n")
+                main.Append("    ").Append(name).Append("()\n")
+                oracleMain.Append("        ").Append(name).Append("();\n")
+            }
+        }
+        source.Append(main.ToString()).Append(`    let forward = (n int32) -> {
+        var s string? = "a"
+        if s != nil {
+            if n > 0 {
+                goto L
+            }
+            s = "bb"
+            L: if n >= 0 {
+                return s
+            }
+        }
+        return "x"
+    }
+    Console.Write(Len(forward(1)))
+    Console.Write(Len(forward(0)))
+    let nullable = () -> {
+        var s string? = "a"
+        var n = 0
+        if s != nil {
+            L: if n > 0 {
+                return s
+            }
+            n++
+            s = nil
+            goto L
+        }
+        return default(string?)
+    }
+    Console.Write(nullable() == nil)
+}
+`)
+        oracle.Append(oracleMain.ToString()).Append(`        Func<int, string> forward = (int n) => {
+            string? s = "a";
+            if (s != null) { if (n > 0) goto L; s = "bb"; L: if (n >= 0) { return s; } }
+            return "x";
+        };
+        Console.Write(Len(forward(1)));
+        Console.Write(Len(forward(0)));
+        Func<string?> nullable = () => {
+            string? s = "a";
+            var n = 0;
+            if (s != null) { L: if (n > 0) { return s; } n++; s = null; goto L; }
+            return default(string?);
+        };
+        Console.Write(nullable() == null);
+    }
+}
+`)
+        Check(fixture, source.ToString(), oracle.ToString(), "1111111111" + "12True")
+    }
+
     /// Issue #5569 (review of 7c9c7101): a loop body that binds again after an inherited narrowing changes
     /// discards the held returns of its first bind. So a call where no overload applies reports the held target
     /// diagnostics of a speculative literal once: the same set as the same loop without the rebind (`s = nil`
@@ -1693,6 +1824,29 @@ class Program {
                 .Where((path string) -> Path.GetDirectoryName(path) == directory)
                 .OrderBy((path string) -> path, StringComparer.Ordinal)
                 .ToArray()
+        }
+
+        // Issue #5603: the prelude has six lines, so a literal that starts on the first line of `Main` starts on line 7.
+        private const InferredResultPrelude string = "import System\nimport System.Threading.Tasks\n" +
+            "func Len(v string) int32 -> v.Length\nfunc T[R](f () -> R) R -> f()\nfunc S(f Func[string]) string -> f()\n"
+
+        // Issue #5603: `|` is the `return` value and `#` is the statement before the backward `goto`.
+        private const InferredResultBody string = "{\n        var s string? = \"a\"\n        var n = 0\n        if s != nil {\n" +
+            "            L: if n > 0 {\n                return |\n            }\n            n++\n            #\n" +
+            "            goto L\n        }\n        return \"x\"\n    }"
+
+        private const InferredResultNestedLabelBody string = "{\n        var s string? = \"a\"\n        var n = 0\n" +
+            "        if s != nil {\n            L: if n > 1 {\n                M: if n > 2 {\n                    return |\n" +
+            "                }\n                n++\n                goto M\n            }\n            n++\n" +
+            "            #\n            goto L\n        }\n        return \"x\"\n    }"
+
+        // Issue #5603: function literals whose result is inferred. `|` is the literal body.
+        private let InferredResultShapes[]string = []string{
+            "let f = () -> |\n    Console.Write(Len(f()))",
+            "let g = () -> () -> |\n    Console.Write(Len(g()()))",
+            "Console.Write(Len(T(() -> |)))",
+            "Console.Write(Len(S(() -> |)))",
+            "let a = async () -> |\n    Console.Write(Len(a().Result))"
         }
 
         private const Contract string = `#nullable enable

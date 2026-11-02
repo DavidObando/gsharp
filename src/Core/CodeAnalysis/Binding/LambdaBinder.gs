@@ -1369,6 +1369,11 @@ internal class LambdaBinder {
         } else {
             default(DeferredReturnState?)
         }
+        placeholder.InferredReturnNarrowings = if placeholder.IsReturnTypeInferred {
+            DeferredReturnState()
+        } else {
+            default(DeferredReturnState?)
+        }
         let outerScope = Scope
         let outerFunction = getCurrentFunction()
         Scope = BoundScope(outerScope)
@@ -1577,6 +1582,9 @@ internal class LambdaBinder {
         // ADR-0076 / issue #716: rewrite the bound body so every return
         // statement's expression is converted to the inferred return type.
         // We deferred the conversion in BindReturnStatement; apply it now.
+        // Issue #5603: the backward `goto` checks of the `return` values ran where they bound, with the narrowings
+        // in scope. Report the uses that the inferred result needs.
+        placeholder.InferredReturnNarrowings?.ReportInferredResultNarrowings(Diagnostics, returnType)
         boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
@@ -2551,7 +2559,8 @@ internal class LambdaBinder {
 
     /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
     /// Each such return statement binds its value again with the natural type, so the body can give either
-    /// function type after one bind of its statements.
+    /// function type after one bind of its statements. Issue #5603: a lambda body with an inferred result uses only
+    /// the held narrowing uses, for its `return` values.
     internal class DeferredReturnState {
         /// Gets or sets a value indicating whether a return value binds its target-typed pass now. A return
         /// nested in it binds with the target type only.
@@ -2669,6 +2678,22 @@ internal class LambdaBinder {
                 builder.AddRange(use.Diagnostics)
             }
             return builder.ToImmutable()
+        }
+
+        /// Issue #5603: reports the held narrowing uses of a lambda body with an inferred result, when that result
+        /// needs the narrowing (cref:ConversionClassifier.ConversionNeedsNarrowedSource). A `return` value then
+        /// does not convert to the result without the narrowing, as at a declared result.
+        /// @param diagnostics The bag that receives the diagnostics.
+        /// @param resultType The inferred result type.
+        internal func ReportInferredResultNarrowings(diagnostics DiagnosticBag, resultType TypeSymbol) {
+            if resultType == TypeSymbol.Error ||
+                resultType == TypeSymbol.Void ||
+                !ConversionClassifier.ConversionNeedsNarrowedSource(resultType) {
+                return
+            }
+            for use in narrowingUses {
+                diagnostics.ReportCannotConvert(use.Access.Location, use.Access.DeclaredType, resultType)
+            }
         }
 
         /// Gets a value indicating whether the natural function type needs a narrowing that a held use reports
