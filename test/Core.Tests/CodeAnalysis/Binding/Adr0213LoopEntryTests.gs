@@ -3316,6 +3316,42 @@ func Run(ref text string?, o object, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@11:16")
+            Add("receiver-alternative-of-a-constrained-type-parameter-counts (A3)", `package T
+import System
+interface IUse {
+    func Use(d DateTimeOffset);
+}
+open class A {
+    func Use(d DateTime) { }
+}
+func Run[U IUse](ref text string?, x U, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if x is A { }
+        x.Use(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@12:16")
+            Add("receiver-alternative-imported-interface-with-a-base-interface-overload-counts (A3)", `package T
+import System
+import System.Collections.Generic
+open class A {
+    func Add(d DateTime) { }
+}
+func Run(ref text string?, x IList[DateTimeOffset], dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if x is A { }
+        x.Add(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
             return rows
         }
     }

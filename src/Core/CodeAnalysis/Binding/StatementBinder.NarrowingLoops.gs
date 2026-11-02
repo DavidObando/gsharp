@@ -1916,12 +1916,17 @@ internal partial class StatementBinder {
             if name == RegionEffectScanner.IndexMemberName {
                 AddIndexParameterLists(receiver, call, effects, lists)
             } else {
-                AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists)
-                if lists.Count == 0 &&
-                    !staticAccess &&
+                // A method of the name that the lists do not show (of a constraint, of a base interface of an
+                // imported interface, or an extension method) is not checked, so the call counts.
+                if !AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists) ||
+                    lists.Count == 0 &&
                     (
-                    HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
-                        .CollectImportedExtensionMethods(name).Count > 0
+                    (ReceiverMemberShape(receiver, name) & MemberIsMethod) != 0 ||
+                        !staticAccess &&
+                        (
+                        HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
+                            .CollectImportedExtensionMethods(name).Count > 0
+                    )
                 ) {
                     return nil
                 }
@@ -2020,13 +2025,25 @@ internal partial class StatementBinder {
         return false
     }
 
+    private func ReceiverMemberShape(receiver ReceiverType, name string) int32 {
+        if receiver.Symbol != nil {
+            return MemberShape(receiver.Symbol, name)
+        }
+        if receiver.Clr is {} clr {
+            return ClrTypeShape(clr, name)
+        }
+        return 0
+    }
+
+    // Adds the parameter lists of the methods of the name on the receiver's type. Returns `false` when the lists
+    // are not complete: an imported interface does not list the methods of its base interfaces.
     private func AddMethodParameterLists(
         receiver ReceiverType,
         name string,
         explicitTypeArguments bool,
         staticAccess bool,
         lists List[List[TypeSymbol]]
-    ) {
+    ) bool {
         var clrType = receiver.Clr
         var symbolic TypeSymbol? = nil
         switch receiver.Symbol {
@@ -2076,9 +2093,16 @@ internal partial class StatementBinder {
             }
         }
         if clrType == nil || ReflectionType(clrType) is not{} reflected {
-            return
+            return true
         }
         try {
+            if reflected.IsInterface {
+                for contract in reflected.GetInterfaces() {
+                    if (ClrMemberShape(contract, name) & MemberIsMethod) != 0 {
+                        return false
+                    }
+                }
+            }
             for member in reflected.GetMember(
                 name,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
@@ -2089,7 +2113,10 @@ internal partial class StatementBinder {
                     lists.Add(ClrParameterTypes(symbolic, method, method.GetParameters()))
                 }
             }
-        } catch (ex NotSupportedException) { }
+        } catch (ex NotSupportedException) {
+            return false
+        }
+        return true
     }
 
     private func ClrParameterTypes(symbolic TypeSymbol?, method MethodBase, parameters[]ParameterInfo) List[
