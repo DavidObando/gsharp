@@ -1026,6 +1026,9 @@ Details per row:
   reach the jump, directly or by falling through, are counted; an arm that only leaves the loop is not (rows a32 and
   a33). A jump in a guard block counts (row a26). An arm whose guard is the literal `false` hides no jump (row a23), and a
   `do { } while false` has no back edge (row a15). The if-expression condition of #5545 shape 8 is not in this change.
+  ADR-0213 slice L1 (#5459) replaces this back-edge pass: a loop binds once after the lower bound of its region, which
+  counts every write of the body at entry. Rows a09, a22, a23 and a32 are rejected there (ADR-0213 R7 (a) and (c)),
+  and row b07 is the L1 form of a09.
 - **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
   bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
   an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were

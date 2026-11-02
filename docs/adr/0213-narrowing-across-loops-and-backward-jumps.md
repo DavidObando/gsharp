@@ -1275,6 +1275,12 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   rejected in a loop. A resolved-member exemption (a plain-name receiver resolved at the entry scope whose member is
   on the R16 list, or a field of a class whose hierarchy cannot hide it) is a later slice; it would accept q5c, q5d
   would stay rejected, and it needs its own rows and mutants.
+- *Switch arms and hidden `continue` (#5629, #5642).* The walker classifies a case or arm test with R19
+  (`PatternTestRunsUserCode`) in a loop as `if x is P` is classified outside one. #5642's back-edge seeds for a
+  `continue` inside a `switch`, `try` or `fixed` are not needed, because the lower bound counts every write of the
+  body at entry. Four of #5642's corpus rows are stricter here: a22, a23 and a32 (a write before a `break`, or under
+  a literal `false` guard; R7 (a)) and a09 (an assignment and a field read count as calls for a mutable global; R7 (c),
+  W4 and W5). Row b07 keeps a global's fact across a `continue` in an `int32` case.
 - *Conversion sites.* A user-defined conversion is a call (W4), and the walker cannot see types, so every place
   where the binder converts a value is a candidate: a declared, assigned, multi-assigned, deconstructed or bound
   (`if let`) value, both operands of `??`, a returned value, and a condition or guard (`if`, the loops, `if let`, `while let`, `guard let`, switch and select
