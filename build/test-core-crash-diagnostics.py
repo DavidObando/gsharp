@@ -464,7 +464,7 @@ class ProvenanceTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(dir=work)
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        self.package = self.root / "packages/gsharp.net.sdk/0.5.212"
+        self.package = self.root / "packages/gsharp.net.sdk/0.5.460-g21e3f30fa3"
         self.compiler = self.file(self.package / "tools/compiler/gsc.dll")
         self.task = self.file(self.package / "tools/task/Gsharp.NET.Sdk.dll")
         (self.package / "build").mkdir()
@@ -491,7 +491,7 @@ class ProvenanceTests(unittest.TestCase):
         (self.root / ".github/workflows/build.yml").write_text("benign metadata fixture")
         (self.root / "global.json").write_text(json.dumps({
             "sdk": {"version": "10.0.300", "rollForward": "latestFeature"},
-            "msbuild-sdks": {"Gsharp.NET.Sdk": "0.5.212"}}))
+            "msbuild-sdks": {"Gsharp.NET.Sdk": "0.5.460-g21e3f30fa3"}}))
         head = "1" * 40
         event = self.root / "event.json"
         event.write_text(json.dumps({"action": "synchronize", "number": 5432, "pull_request": {

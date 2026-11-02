@@ -105,7 +105,7 @@ def provenance(root):
     require(os.environ.get("TEST_PROJECTS") == "test/Core.Tests/Core.Tests.gsproj"
             and os.environ.get("TEST_FILTER") == FILTER, "test-shape")
     policy = json.loads(read(root / "global.json", 16384))
-    require(policy["msbuild-sdks"]["Gsharp.NET.Sdk"] == "0.5.212"
+    require(policy["msbuild-sdks"]["Gsharp.NET.Sdk"] == "0.5.460-g21e3f30fa3"
             and policy["sdk"] == {"version": "10.0.300", "rollForward": "latestFeature"},
             "sdk-policy")
     git = subprocess.run(
@@ -163,7 +163,7 @@ def provenance(root):
 
     named = {key: declared(value) for key, value in named.items()}
     for key in ("COMPILER", "TASK"):
-        require(named[key].is_relative_to(roots[1] / "gsharp.net.sdk/0.5.212"),
+        require(named[key].is_relative_to(roots[1] / "gsharp.net.sdk/0.5.460-g21e3f30fa3"),
                 "compiler-selection")
     tools = [(declared(path), digest) for path, digest in tools]
     tool_images = [
@@ -193,7 +193,7 @@ def provenance(root):
         "pull_request_base": base, "run_id": run_id, "run_attempt": 1,
         "test_project": "test/Core.Tests/Core.Tests.gsproj", "test_filter": FILTER,
         "configuration": "Release",
-        "sdk_package": "Gsharp.NET.Sdk/0.5.212",
+        "sdk_package": "Gsharp.NET.Sdk/0.5.460-g21e3f30fa3",
         "global_json_sha256": hashlib.sha256(read(root / "global.json", 16384)).hexdigest(),
         "workflow_sha256": hashlib.sha256(read(root / ".github/workflows/build.yml")).hexdigest(),
         "input_stamp_sha256": hashlib.sha256(stamp_bytes).hexdigest(),
