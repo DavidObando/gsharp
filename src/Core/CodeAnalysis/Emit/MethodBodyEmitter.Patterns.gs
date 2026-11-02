@@ -186,13 +186,15 @@ internal partial class MethodBodyEmitter {
         valueType TypeSymbol,
         failLabel LabelHandle
     ) {
+        // ADR-0208 (#5593): the narrowing effect collector reads the same classification.
+        let test = BoundConstantPattern.ClassifyTest(valueType, cp.Value)
         // Special-case `nil`: compare against null reference.
-        if cp.Value is BoundLiteralExpression lit && lit.Value == nil {
+        if test == ConstantPatternTestKind.NullCheck {
             loadValue()
             this.il.Branch(ILOpCode.Brtrue, failLabel)
             return
         }
-        if IsStringOrNullableStringEmit(valueType) {
+        if test == ConstantPatternTestKind.StringEquals {
             loadValue()
             this.EmitExpression(cp.Value)
             this.il.Call(this.outer.wellKnown.GetStringEqualsReference())
@@ -202,26 +204,21 @@ internal partial class MethodBodyEmitter {
         // Issue #421 (P2-3): `decimal` is a struct; per ECMA-335 §III.4
         // `ceq` is undefined on struct operands. Route through
         // `decimal.op_Equality` to produce verifiable IL.
-        if valueType == TypeSymbol.Decimal {
+        if test == ConstantPatternTestKind.DecimalEquals {
             loadValue()
             this.EmitExpression(cp.Value)
             this.TryEmitDecimalBinary(BoundBinaryOperatorKind.Equals)
             this.il.Branch(ILOpCode.Brfalse, failLabel)
             return
         }
-        let isObject = valueType.ClrType?.IsSameAs(typeof(object)) == true
         let isValueNullable = valueType is NullableTypeSymbol nullable && ReflectionMetadataEmitter.IsValueTypeNullable(
             nullable
         )
-        if isObject || isValueNullable {
+        if test == ConstantPatternTestKind.BoxedFloatEquals || test == ConstantPatternTestKind.ObjectEquals {
             // PatternBinder adds at most one conversion to the discriminant type.
             // Strip only that carrier; inner conversions determine the runtime value type.
-            let patternValue = if cp.Value is BoundConversionExpression conversion && conversion.Type == valueType {
-                conversion.Expression
-            } else {
-                cp.Value
-            }
-            if patternValue.Type == TypeSymbol.Float32 || patternValue.Type == TypeSymbol.Float64 {
+            let patternValue = BoundConstantPattern.UnwrapInputConversion(valueType, cp.Value)
+            if test == ConstantPatternTestKind.BoxedFloatEquals {
                 loadValue()
                 if isValueNullable {
                     this.il.OpCode(ILOpCode.Box)
