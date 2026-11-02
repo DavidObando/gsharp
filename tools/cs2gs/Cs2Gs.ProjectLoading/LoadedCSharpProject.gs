@@ -38,6 +38,8 @@ class LoadedCSharpProject {
     /// Avalonia's XAML name generator) can materialize their output.
     /// @param projectPath The loaded project file path, or `null` for in-memory inputs.
     /// @param isTestProject Whether evaluated MSBuild properties identify a test project.
+    /// @param evaluatedProjectReferencePaths The MSBuild-evaluated transitive compile `ProjectReference`
+    /// paths for this project, or `null` when not captured.
     init(
         compilation CSharpCompilation,
         documents IReadOnlyList[LoadedDocument],
@@ -48,7 +50,8 @@ class LoadedCSharpProject {
         analyzerReferencePaths IReadOnlyList[string]? = nil,
         additionalFiles IReadOnlyList[string]? = nil,
         projectPath string? = nil,
-        isTestProject bool = false
+        isTestProject bool = false,
+        evaluatedProjectReferencePaths IReadOnlyList[string]? = nil
     ) {
         this.Compilation = compilation
         this.Documents = documents
@@ -60,6 +63,7 @@ class LoadedCSharpProject {
         this.AdditionalFiles = additionalFiles ?? ImmutableArray[string].Empty
         this.ProjectPath = projectPath
         this.IsTestProject = isTestProject
+        this.EvaluatedProjectReferencePaths = evaluatedProjectReferencePaths
     }
 
     /// Gets the bound C# compilation.
@@ -125,6 +129,32 @@ class LoadedCSharpProject {
     prop IsTestProject bool {
         get;
     }
+
+    /// Gets the MSBuild-evaluated transitive compile `ProjectReference` paths
+    /// for this project, or `null` when not captured.
+    prop EvaluatedProjectReferencePaths IReadOnlyList[string]? {
+        get;
+    }
+
+    /// Returns a copy of this loaded project with [`evaluatedProjectReferencePaths`](paramref)
+    /// attached.
+    /// @param evaluatedProjectReferencePaths The MSBuild-evaluated transitive compile `ProjectReference` paths.
+    /// @returns A copy of this project carrying the evaluated reference paths.
+    func WithEvaluatedProjectReferencePaths(
+        evaluatedProjectReferencePaths IReadOnlyList[string]?
+    ) LoadedCSharpProject -> LoadedCSharpProject(
+        this.Compilation,
+        this.Documents,
+        this.LoadDiagnostics,
+        this.ProjectDirectory,
+        this.RootNamespace,
+        this.ResxFiles,
+        this.AnalyzerReferencePaths,
+        this.AdditionalFiles,
+        this.ProjectPath,
+        this.IsTestProject,
+        evaluatedProjectReferencePaths
+    )
 
     /// Gets the subset of (cref:LoadDiagnostics) with
     /// (cref:DiagnosticSeverity.Error) severity — a non-empty list means

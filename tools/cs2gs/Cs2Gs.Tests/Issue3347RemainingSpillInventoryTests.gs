@@ -57,14 +57,16 @@ class Issue3347RemainingSpillInventoryTests {
             Assert.Equal(0, committedUsings)
             return
         }
-        let project = await CSharpProjectLoader.LoadProjectAsync(Path.Combine(repoRoot, "src", "Core", "Core.csproj"))
+        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
+            Path.Combine(repoRoot, "src", "Core", "Core.csproj")
+        )
         Assert.True(
             project.BoundWithoutErrors,
             "Core should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
         )
         // Issue #4656: zero documents would count zero of everything and pass.
         Assert.NotEmpty(project.Documents)
-        let translator = CSharpToGSharpTranslator(preservePartialParts: true)
+        let migrated = await SelfMigratedCompilerSource.LoadAsync(repoRoot, "src/Core", preservePartialParts: true)
         var castCount = 0
         var deconstructionCount = 0
         var spillCount = 0
@@ -72,8 +74,7 @@ class Issue3347RemainingSpillInventoryTests {
         var sourceAssertedAsConversions = 0
         var translatedAssertedAsConversions = 0
         for document in project.Documents {
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+            let printed = migrated[Path.GetFileNameWithoutExtension(document.FilePath)].Text
             castCount += CountOccurrences(printed, "__cast")
             deconstructionCount += CountOccurrences(printed, "__decon")
             // Issue #3469: author comments now flow into the emitted G#,
@@ -102,20 +103,16 @@ class Issue3347RemainingSpillInventoryTests {
             Assert.Equal(0, committedSpills)
             return
         }
-        let project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Translator", "Cs2Gs.Translator.csproj")
-        )
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Translator should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
+        let migrated = await SelfMigratedCompilerSource.LoadAsync(
+            repoRoot,
+            "tools/cs2gs/Cs2Gs.Translator",
+            preservePartialParts: true
         )
         // Issue #4656: zero documents would count zero spills and pass.
-        Assert.NotEmpty(project.Documents)
-        let translator = CSharpToGSharpTranslator(preservePartialParts: true)
+        Assert.NotEmpty(migrated)
         var spillCount = 0
-        for document in project.Documents {
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        for file in migrated.Values {
+            let printed = file.Text
             // Issue #3469: author comments now flow into the emitted G#,
             // and Translator-source comments mention the very patterns this
             // inventory counts — count code lines only.

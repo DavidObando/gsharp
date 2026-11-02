@@ -5,7 +5,11 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.Tests
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
@@ -3279,53 +3283,41 @@ stderr:
             }
         }
 
+        private let CachedCsLibraries ConcurrentDictionary[(AssemblyName string, Source string), []uint8] =
+        ConcurrentDictionary[(AssemblyName string, Source string), []uint8]()
+
+        private let CachedTrustedPlatformAssemblies Lazy[[]string] = Lazy[[]string](BuildTrustedPlatformAssemblies)
+
         private func BuildCsLibrary(workDir string, source string, assemblyName string) string {
-            let csDir = Path.Combine(workDir, "csref")
-            Directory.CreateDirectory(csDir)
-            File.WriteAllText(Path.Combine(csDir, "Lib.cs"), source)
-            File.WriteAllText(Path.Combine(csDir, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Library</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <LangVersion>latest</LangVersion>
-    <NoWarn>1591;SA1649;SA1518;SA1516;SA1122;SA1201</NoWarn>
-    <RunAnalyzers>false</RunAnalyzers>
-    <AssemblyName>` + "$assemblyName" + `</AssemblyName>
-    <RootNamespace>` + "$assemblyName" + `</RootNamespace>
-  </PropertyGroup>
-</Project>`))
-            RunDotnet(csDir, "restore")
-            let outDir = Path.Combine(csDir, "out")
-            RunDotnet(csDir, "build", "-c", "Release", "--nologo", "--no-restore", "-o", outDir)
+            let bytes = CachedCsLibraries.GetOrAdd(
+                (assemblyName, source),
+                (key(AssemblyName string, Source string)) -> CompileCsLibraryBytes(key.Source, key.AssemblyName)
+            )
+            let outDir = Path.Combine(workDir, "csref", "out")
+            Directory.CreateDirectory(outDir)
             let dll = Path.Combine(outDir, assemblyName + ".dll")
-            Assert.True(File.Exists(dll), "sibling assembly not found at $dll")
+            File.WriteAllBytes(dll, bytes)
             return dll
         }
 
-        private func RunDotnet(workingDir string, args ...string) {
-            let psi = ProcessStartInfo("dotnet"){
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = workingDir
-            }
-            for arg in args {
-                psi.ArgumentList.Add(arg)
-            }
-            using let proc = Process.Start(psi) ??
-                throw InvalidOperationException("failed to start dotnet ${string.Join(" ", args)}")
-            let stdout = proc.StandardOutput.ReadToEnd()
-            let stderr = proc.StandardError.ReadToEnd()
-            Assert.True(proc.WaitForExit(120_000), "dotnet ${args[0]} timed out")
-            Assert.True(
-                proc.ExitCode == 0,
-                (`dotnet ` + "${string.Join(" ", args)}" + ` failed (` + "${proc.ExitCode}" + `)
-stdout:
-` + "$stdout" + `
-stderr:
-` + "$stderr")
+        private func CompileCsLibraryBytes(source string, assemblyName string)[]uint8 {
+            let parseOptions = CSharpParseOptions(LanguageVersion.Latest)
+            let tree = CSharpSyntaxTree.ParseText(source, parseOptions)
+            let compilation = CSharpCompilation.Create(
+                assemblyName,
+                []SyntaxTree{tree},
+                CSharpFixture.HostReferences,
+                CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    optimizationLevel: OptimizationLevel.Release,
+                    nullableContextOptions: NullableContextOptions.Enable,
+                    deterministic: true
+                )
             )
+            using let peStream = MemoryStream()
+            let emitResult = compilation.Emit(peStream)
+            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+            return peStream.ToArray()
         }
 
         private func CreateWorkDir(prefix string) string {
@@ -3336,16 +3328,20 @@ stderr:
             return path
         }
 
-        private func TrustedPlatformAssemblies() sequence[string] {
+        private func TrustedPlatformAssemblies() IReadOnlyList[string] -> CachedTrustedPlatformAssemblies.Value
+
+        private func BuildTrustedPlatformAssemblies()[]string {
             let tpa string? = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string
             if string.IsNullOrEmpty(tpa) {
-                yield break
+                return Array.Empty[string]()
             }
+            let result = List[string]()
             for path in tpa.Split(Path.PathSeparator) {
                 if !string.IsNullOrWhiteSpace(path) && File.Exists(path) {
-                    yield path
+                    result.Add(path)
                 }
             }
+            return result.ToArray()
         }
 
         private func TryDelete(path string) {

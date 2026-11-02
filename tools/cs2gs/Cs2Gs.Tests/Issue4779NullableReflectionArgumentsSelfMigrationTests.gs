@@ -33,7 +33,7 @@ class Issue4779NullableReflectionArgumentsSelfMigrationTests {
     @Fact
     async func ActualClassifierTestUnit_CompilesAndRunsDefensiveContracts() {
         let root = GsharpTestProjectRunner.FindRepoRoot()!!
-        let project = await CSharpProjectLoader.LoadProjectAsync(
+        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
             Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj")
         )
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
@@ -124,7 +124,7 @@ public class LocalFunctionHoistTranslationTests
                 GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(helperUnit, helperContext))
             )
             File.WriteAllText(Path.ChangeExtension(helperPath, ".cs"), helperSource)
-            let pipeline = await CSharpProjectLoader.LoadProjectAsync(
+            let pipeline = await SelfMigratedCompilerSource.LoadProjectAsync(
                 Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Pipeline", "Cs2Gs.Pipeline.csproj")
             )
             Assert.True(pipeline.BoundWithoutErrors, string.Join(Environment.NewLine, pipeline.ErrorDiagnostics))

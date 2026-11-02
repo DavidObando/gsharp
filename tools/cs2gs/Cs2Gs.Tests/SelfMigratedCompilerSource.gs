@@ -61,6 +61,42 @@ internal shared class SelfMigratedCompilerSource {
         text.Where((character char) -> !char.IsWhiteSpace(character))
     )
 
+    /// Loads a C# project under the default fixture root, reusing the cached
+    /// bound project across tests when [`projectPath`](paramref) lies under
+    /// (cref:TestFixtureSource.Root).
+    /// @param projectPath The `.csproj` path.
+    /// @returns The loaded C# project.
+    internal func LoadProjectAsync(projectPath string) Task[LoadedCSharpProject] -> LoadProjectAsync(
+        projectPath,
+        IsDefaultRootPath(Path.GetFullPath(projectPath)),
+        (fullPath string) -> CSharpProjectLoader.LoadProjectAsync(fullPath)
+    )
+
+    internal async func LoadProjectAsync(
+        projectPath string,
+        isDefaultRoot bool,
+        loadProject Func[string, Task[LoadedCSharpProject]]
+    ) LoadedCSharpProject {
+        let fullPath = Path.GetFullPath(projectPath)
+        if isDefaultRoot && CachedProjects.TryGetValue(fullPath, out var cached) {
+            return cached
+        }
+        let loaded = await loadProject(fullPath)
+        if loaded.BoundWithoutErrors && isDefaultRoot {
+            CachedProjects.TryAdd(fullPath, loaded)
+        }
+        return loaded
+    }
+
+    private func IsDefaultRootPath(fullPath string) bool {
+        let root = Path.GetFullPath(TestFixtureSource.Root).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar
+        ) +
+            Path.DirectorySeparatorChar
+        return fullPath.StartsWith(root, StringComparison.Ordinal)
+    }
+
     /// Loads the G# text of the named files of one project.
     /// @param projectDirectory The project directory relative to the repository, e.g.
     /// `tools/cs2gs/Cs2Gs.Translator`.
