@@ -491,6 +491,41 @@ class Plain {
         "Protected(Base);Public()",
         "Protected(Target);Public()"
     )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }",
+        "open partial data class Target[T] { protected init(other Target[T?]) {} }",
+        "App.Target`1",
+        "Protected(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }",
+        "open partial data class Target[T] { public init(other Target[int32?]) {} }",
+        "App.Target`1",
+        "Protected(Base);Public()",
+        "Protected(Target);Public();Public(Target)"
+    )
+    @InlineData(
+        "interface I {}\nopen class Base { public init() {} public init(value I) {} }",
+        "open partial data class Target : Base, I {}",
+        "App.Target",
+        "Protected(Base);Public();Public(I)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base { public init() {} private init(other Base) {} }",
+        "open partial data class Target : Base {}",
+        "App.Target",
+        "Private(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base { public init(n int32) {} private init(other Base) {} }",
+        "open partial data class Target(N int32) : Base(N) {}",
+        "App.Target",
+        "Private(Base);Public(Int32)",
+        "Protected(Target);Public(Int32)"
+    )
     func ClassFallbackCopyConstructor_DoesNotDuplicateExplicitCopyConstructorAcrossPartialDeclarations(
         firstPart string,
         secondPart string,
