@@ -984,11 +984,15 @@ Details per row:
   accessor call (R14, R16, R17), which is #5617. A `switch` case or arm runs its test before its guard and its body or result, so the test's effects apply first,
   as a condition's do (R18): `StatementBinder.ApplySwitchArmTestEffects` gives the collector the `is` test of the
   arm's pattern on the evaluated value, so a constant pattern, a list pattern and a property pattern of a case are
-  classified as in `if x is P` (#5629, rows a01 to a05 and a10). Each case's body also sees the tests of the cases
-  before it, and a `default` that is not last sees the tests of the cases after it, which run before it (row a03).
+  classified as in `if x is P` (#5629, rows a01 to a05 and a10). Only the pattern's syntax is the test, so a call in
+  the guard or body is not part of it (rows a11 and a12). Each case's pattern and body see the tests of the cases
+  before it. A `default` that is not last runs after the tests of the cases after it: those patterns bind in
+  dispatch order before its body, and their effects apply to its body only and are put back afterwards with the R18
+  journal (rows a03, a13, a14, a16 and a17), unless the default falls through to the next case, whose body then
+  runs on that path too (row a18).
   A loop's back edge includes a `switch`, `try` or `fixed` statement with a `continue` inside it: the control-flow
   graph keeps such a statement as one statement, so the jump adds no edge, and its block and the blocks before it
-  now reach the back edge (rows a06 to a09). The if-expression condition of #5545 shape 8 is not in this change.
+  now reach the back edge (rows a06 to a09). A `do { } while false` has no back edge (row a15). The if-expression condition of #5545 shape 8 is not in this change.
 - **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
   bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
   an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
