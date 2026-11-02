@@ -1473,35 +1473,9 @@ internal partial class ExpressionBinder {
         location TextLocation,
         captureValue((NarrowedBranchValue) -> void)?
     ) {
-        if captureValue == nil || !binderCtx.TryGetBackwardGotoNarrowingPath(
-            value,
-            out var path,
-            out var narrowedType
-        ) {
-            return
+        if captureValue is {} sink && binderCtx.TryCaptureNarrowedRead(value, location, out var read) {
+            sink(read!!)
         }
-        let sink = Invariant.Required(captureValue, "a branch value capture has a receiver", expression: "captureValue")
-        let narrowedPath = Invariant.Required(path, "a narrowed branch value has an access path", expression: "path")
-        let narrowedValueType = Invariant.Required(
-            narrowedType,
-            "a narrowed branch value has a narrowed type",
-            expression: "narrowedType"
-        )
-        if !narrowedPath.HasMembers && BinderContext.NarrowedReadChangesRuntimeType(
-            narrowedPath.Root.Type,
-            narrowedValueType
-        ) {
-            return
-        }
-        sink(
-            NarrowedBranchValue(
-                value,
-                location,
-                narrowedPath,
-                narrowedValueType,
-                binderCtx.CaptureBackwardGotoNarrowingUse(narrowedPath)
-            )
-        )
     }
 
     // Issue #5613: records the use of a captured narrowed read whose value keeps its narrowed type.

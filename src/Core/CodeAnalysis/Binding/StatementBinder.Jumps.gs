@@ -134,6 +134,7 @@ internal partial class StatementBinder {
         this.binderCtx.AssignmentNarrowingGeneration = 0
         binderCtx.PendingGotoNarrowingSnapshots.Clear()
         binderCtx.BackwardGotoNarrowingStates.Clear()
+        binderCtx.ClearCapturedNarrowedReads()
         boundFinallyBlocks.Clear()
         finallyEntryExternalCallableAliases.Clear()
         finallyFlowSummaries.Clear()

@@ -1376,7 +1376,8 @@ func Main() {
     /// inferred type argument of a source or imported generic function, a plain parameter, a variadic element) and
     /// the trailing value of a block without a target. A `goto` that removes the narrowing reports GS0155 at the
     /// read, as `let t = s` does. A typed `let` and an assignment decide the block's read for their non-null type.
-    /// This applies in a function literal with an inferred result too.
+    /// A later argument that assigns the variable does not hide the read of an earlier argument. This applies in a
+    /// function literal with an inferred result too.
     @Fact
     func NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1498,6 +1499,92 @@ func Main() {
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
         Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrue1111211")
+    }
+
+    /// Issue #5635 (review of d3333218): an imported generic slot whose type argument inference takes from a narrowed
+    /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on a
+    /// `[]string?`, the `T?` parameter of `IsNil`) does not need the narrowing, and a slot that another argument
+    /// widens (`Pick(holder.Pet, Animal())`) reads the declared member. Each runs as C# runs it.
+    @Fact
+    func NoConversionValue_AtAnInferredImportedSlot_TakesTheSlotType() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+import System.Linq
+import FunctionControl
+open class Animal {
+    open func Name() string -> "animal"
+}
+class Dog : Animal {
+    override func Name() string -> "dog"
+}
+class Cat : Animal {
+    override func Name() string -> "cat"
+}
+class Holder {
+    let Pet Animal
+    init(pet Animal) {
+        Pet = pet
+    }
+}
+func Strings() {
+    var s string? = "a"
+    var n = 0
+    let xs = []string?{"x"}
+    if s != nil {
+        L: if n > 0 {
+            Console.Write(xs.Append(s).Last() == nil)
+            Console.Write(Calls.IsNil(s))
+            return
+        }
+        n++
+        s = nil
+        goto L
+    }
+}
+func Pets() {
+    var holder = Holder(Dog())
+    var n = 0
+    if holder.Pet is Dog {
+        L: if n > 0 {
+            Console.Write(Calls.Pick(holder.Pet, Animal()).Name())
+            return
+        }
+        n++
+        holder = Holder(Cat())
+        goto L
+    }
+}
+func Main() {
+    Strings()
+    Pets()
+}
+`
+        let oracle = `using System;
+using System.Linq;
+using FunctionControl;
+class Animal { public virtual string Name() => "animal"; }
+class Dog : Animal { public override string Name() => "dog"; }
+class Cat : Animal { public override string Name() => "cat"; }
+class Holder { public readonly Animal Pet; public Holder(Animal pet) { Pet = pet; } }
+class Program {
+    static void Strings() {
+        string? s = "a";
+        var n = 0;
+        var xs = new string?[] { "x" };
+        if (s != null) { L: if (n > 0) { Console.Write(xs.Append(s).Last() == null); Console.Write(Calls.IsNil(s)); return; } n++; s = null; goto L; }
+    }
+    static void Pets() {
+        var holder = new Holder(new Dog());
+        var n = 0;
+        if (holder.Pet is Dog) { L: if (n > 0) { Console.Write(Calls.Pick(holder.Pet, new Animal()).Name()); return; } n++; holder = new Holder(new Cat()); goto L; }
+    }
+    static void Main() {
+        Strings();
+        Pets();
+    }
+}
+`
+        Check(fixture, source, oracle, "TrueTruecat")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2478,9 +2565,11 @@ class Program {
             "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                ({ @s }) }"
         }
 
-        // Issue #5635: `Id` infers its type argument, `F` has a `string` parameter and `V` a variadic one.
+        // Issue #5635: `Id` infers its type argument, `F` has a `string` parameter and `V` a variadic one. `F2` and
+        // `Box.M` take a second argument that can assign the first.
         private let NoConversionPrelude string = BranchValuePrelude +
-            "func Id[T](x T) T -> x\nfunc F(x string) int32 -> x.Length\nfunc V(xs ...string) int32 -> xs.Length\n"
+            "func Id[T](x T) T -> x\nfunc F(x string) int32 -> x.Length\nfunc V(xs ...string) int32 -> xs.Length\n" +
+            "func F2(x string, y int32) int32 -> x.Length\nclass Box {\n    func M(x string, y int32) int32 -> x.Length\n}\n"
 
         // Issue #5635: statements that give the narrowed read at `@` to a slot with no conversion.
         private let NoConversionForms[]string = []string{
@@ -2495,6 +2584,8 @@ class Program {
             "let t = ({\n                n = n + 0\n                @s\n            })",
             "let t = ({\n                n = n + 0\n                @s\n            }).Length",
             "let t string = ({\n                n = n + 0\n                @s\n            })",
+            "let u = F2(@s, ({\n                s = nil\n                0\n            }))",
+            "let u = Box().M(@s, ({\n                s = nil\n                0\n            }))",
             "var w = \"x\"\n            w = ({\n                n = n + 0\n                @s\n            })"
         }
 
@@ -2553,6 +2644,8 @@ namespace FunctionControl {
         public static string NsIn(in System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
         public static string NsIn(object o, long x) => "O";
         public static string Pz(System.Func<string> f, int x) => "F" + f();
+        public static T Pick<T>(T a, T b) => a;
+        public static bool IsNil<T>(T? value) where T : class => value == null;
         public static string Po(System.Func<object> f, int x) => "F" + f();
         public static string Po(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
         public static string Pz(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();

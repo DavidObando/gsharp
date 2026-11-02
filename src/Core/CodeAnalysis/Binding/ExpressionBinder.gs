@@ -431,6 +431,9 @@ internal partial class ExpressionBinder {
         // re-binds and duplicated diagnostics.
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
+            // Issue #5635: a consumer can decide a narrowed read after later values bind, so the read keeps the
+            // backward `goto` facts where it binds.
+            binderCtx.CaptureNarrowedRead(result, syntax.Location)
         }
         return result
     }

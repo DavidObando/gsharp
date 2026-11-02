@@ -377,7 +377,18 @@ internal class ConversionClassifier {
         expression BoundExpression,
         target TypeSymbol?
     ) BoundExpression {
-        if !binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
+        // Issue #5635: a read captured where it binds keeps those facts, so a value that binds between the read and
+        // this decision (such as a later argument) does not change them.
+        var capture BackwardGotoNarrowingCapture? = nil
+        var path AccessPath? = nil
+        var narrowedType TypeSymbol? = nil
+        let captured = binderCtx.TryGetCapturedNarrowedRead(expression, out var read)
+        if captured {
+            let capturedRead = read!!
+            path = capturedRead.Path
+            narrowedType = capturedRead.NarrowedType
+            capture = capturedRead.Use
+        } else if !binderCtx.TryGetBackwardGotoNarrowingPath(expression, out path, out narrowedType) {
             return expression
         }
         let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
@@ -400,13 +411,29 @@ internal class ConversionClassifier {
             narrowedSourceType,
             target
         ) {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                narrowedPath,
-                diagnosticLocation,
-                string.Empty,
-                BackwardGotoNarrowingUseKind.Conversion,
-                target
-            )
+            if !captured {
+                binderCtx.TrackBackwardGotoNarrowingUse(
+                    narrowedPath,
+                    diagnosticLocation,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    target
+                )
+            } else if capture is {} use {
+                // The use belongs to the conversion that runs now, as an uncaptured read's use does.
+                binderCtx.RecordBackwardGotoNarrowingUse(
+                    BackwardGotoNarrowingCapture(
+                        use.Path,
+                        use.NarrowedType,
+                        use.Labels,
+                        binderCtx.DeferredReturnNarrowingOwner
+                    ),
+                    diagnosticLocation,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    target
+                )
+            }
         }
         return expression
     }
@@ -1209,41 +1236,53 @@ internal class ConversionClassifier {
             } else {
                 parameterMapping[i]
             }
-            let argument = arguments[i]
+            var argument = arguments[i]
+            // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
+            // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
+            // type arguments, as `let t = s` is. The imported slot itself takes nil, so its conversion does not decide
+            // the read. A slot that the signature declares nullable (`T?`) takes the declared value. The declared
+            // read replaces the narrowed read when the slot takes it.
+            if paramIndex < parameters.Length &&
+                call?.TypeArgumentList == nil &&
+                method is {IsGenericMethod: true} genericMethod &&
+                !parameters[paramIndex]
+                .ParameterType
+                .IsByRef &&
+                (
+                if genericMethod.IsGenericMethodDefinition {
+                    genericMethod
+                } else {
+                    genericMethod.GetGenericMethodDefinition()
+                }
+            ).GetParameters()[paramIndex] is {} openParameter &&
+                openParameter
+                .ParameterType
+                .IsGenericMethodParameter &&
+                !(ClrNullability.GetParameterTypeSymbol(openParameter) is NullableTypeSymbol) {
+                let sourceIndex = i - receiverArgCount
+                argument = DecideNarrowedConversion(
+                    if !parameterArgumentLocations.IsDefault &&
+                        paramIndex < parameterArgumentLocations.Length &&
+                        parameterArgumentLocations[paramIndex] is {} inferredLocation {
+                        inferredLocation
+                    } else if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
+                        call.Arguments[sourceIndex].Location
+                    } else {
+                        argument.Syntax?.Location ?? call?.Location ?? default(TextLocation)
+                    },
+                    argument,
+                    TrySubstituteParameterTypeFromMethodTypeArgs(
+                        method,
+                        paramIndex,
+                        symbolicMethodTypeArgs,
+                        allowConcreteSymbolic: true
+                    ) ??
+                        argument.Type
+                )
+            }
             var rebound = argument
             if paramIndex < parameters.Length {
                 let parameterType = parameters[paramIndex].ParameterType
-                // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
-                // slot takes the narrowed type of a narrowed read. The read is decided for that type, as `let t = s`
-                // is. The imported slot itself takes nil, so its conversion does not decide the read.
-                if call?.TypeArgumentList == nil &&
-                    method is {IsGenericMethod: true} genericMethod &&
-                    !parameterType.IsByRef &&
-                    (
-                    if genericMethod.IsGenericMethodDefinition {
-                        genericMethod
-                    } else {
-                        genericMethod.GetGenericMethodDefinition()
-                    }
-                )
-                    .GetParameters()[paramIndex]
-                    .ParameterType
-                    .IsGenericMethodParameter {
-                    let sourceIndex = i - receiverArgCount
-                    let _ = DecideNarrowedConversion(
-                        if !parameterArgumentLocations.IsDefault &&
-                            paramIndex < parameterArgumentLocations.Length &&
-                            parameterArgumentLocations[paramIndex] is {} inferredLocation {
-                            inferredLocation
-                        } else if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
-                            call.Arguments[sourceIndex].Location
-                        } else {
-                            argument.Syntax?.Location ?? call?.Location ?? default(TextLocation)
-                        },
-                        argument,
-                        argument.Type
-                    )
-                }
                 // Issue #1391: an untyped `default` literal (bound as a
                 // BoundDefaultExpression with the Error sentinel type) survives
                 // overload resolution against an imported method via the
@@ -1817,7 +1856,7 @@ internal class ConversionClassifier {
                     }
                 }
             }
-            if rebound != argument && builder == nil {
+            if rebound != arguments[i] && builder == nil {
                 builder = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
                 for var j = 0; j < i; j++ {
                     builder.Add(arguments[j])
@@ -2929,27 +2968,25 @@ internal class ConversionClassifier {
             } else {
                 default(TypeSymbol?)
             }
-            if parameterType != nil && binderCtx.TryGetBackwardGotoNarrowingPath(
-                arguments[i],
-                out var path,
-                out var narrowedType
-            ) &&
+            // Issue #5635: the argument keeps the backward `goto` facts where it binds (a later argument can assign
+            // the variable), as every other conversion of a captured read does (cref:DecideNarrowedConversion).
+            if parameterType != nil &&
                 (
-                Invariant.Required(path, "a narrowed constrained-call argument has an access path", expression: "path")
-                    .HasMembers ||
-                    !BinderContext
-                    .NarrowedReadChangesRuntimeType(
-                    path!!.Root.Type,
-                    Invariant.Required(
-                        narrowedType,
-                        "a narrowed constrained-call argument has a narrowed type",
-                        expression: "narrowedType"
-                    )
+                binderCtx.TryGetCapturedNarrowedRead(arguments[i], out var read) || binderCtx.TryCaptureNarrowedRead(
+                    arguments[i],
+                    location,
+                    out read
                 )
             ) &&
-                ConstrainedArgumentNeedsNarrowedSource(path!!, narrowedType!!, parameterType) {
-                binderCtx.TrackBackwardGotoNarrowingUse(
-                    path!!,
+                ConstrainedArgumentNeedsNarrowedSource(read!!.Path, read!!.NarrowedType, parameterType) &&
+                read!!.Use is {} use {
+                binderCtx.RecordBackwardGotoNarrowingUse(
+                    BackwardGotoNarrowingCapture(
+                        use.Path,
+                        use.NarrowedType,
+                        use.Labels,
+                        binderCtx.DeferredReturnNarrowingOwner
+                    ),
                     location,
                     string.Empty,
                     BackwardGotoNarrowingUseKind.Conversion,
