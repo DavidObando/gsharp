@@ -1458,6 +1458,16 @@ internal partial class StatementBinder {
             }
             if ArgumentFits(argumentType, parameter, explicitTypeArguments) {
                 result = Math.Min(result, CandidateFree)
+            } else if !explicitTypeArguments && IsCompoundOfMethodTypeParameters(stripped) {
+                let compound = CompoundParameterClass(argumentType, stripped)
+                if compound == CandidateUser {
+                    return CandidateUser
+                }
+                if compound == CandidateNotApplicable {
+                    notApplicable = true
+                } else {
+                    result = Math.Min(result, compound)
+                }
             } else if conversions.HasUserDefinedImplicitConversion(argumentType, stripped) {
                 return CandidateUser
             } else if explicitTypeArguments && TypeParameterTakesArgument(stripped, false) {
@@ -1528,10 +1538,84 @@ internal partial class StatementBinder {
         if parameter is TypeParameterSymbol typeParameter {
             return typeParameter.IsMethodTypeParameter
         }
+        // Only a bare type parameter is fixed by its argument; a compound one (`List[T]`) can still need a conversion.
         if parameter.ClrType is {} clr && clr.ContainsGenericParameters {
-            return HasOnlyMethodTypeParameters(clr)
+            return clr.IsGenericParameter && clr.IsGenericMethodParameter
+        }
+        return false
+    }
+
+    // A parameter type that is constructed from method type parameters without being one (`List[T]`, `[]T`).
+    private func IsCompoundOfMethodTypeParameters(parameter TypeSymbol) bool {
+        if parameter is TypeParameterSymbol {
+            return false
+        }
+        if parameter.ClrType is {} clr && clr.ContainsGenericParameters {
+            return !clr.IsGenericParameter && HasOnlyMethodTypeParameters(clr)
         }
         return TypeSymbol.ContainsTypeParameter(parameter)
+    }
+
+    // The generic type definition of a constructed type, or `nil`.
+    private func GenericDefinition(type TypeSymbol) Type? {
+        if type is ImportedTypeSymbol imported && imported.OpenDefinition is {} definition {
+            return definition
+        }
+        if type.ClrType is {} clr && clr.IsGenericType {
+            try {
+                return clr.GetGenericTypeDefinition()
+            } catch (ex NotSupportedException) {
+                return nil
+            }
+        }
+        return nil
+    }
+
+    // Whether an argument reaches a compound parameter of method type parameters (`List[T]`) without a conversion:
+    // its type, a base or an interface has the parameter's generic definition. Otherwise it reaches it through an
+    // implicit operator of its imported type to that definition, or not at all.
+    private func CompoundParameterClass(argument TypeSymbol, parameter TypeSymbol) int32 {
+        guard let definition = GenericDefinition(parameter) else {
+            return CandidateUser
+        }
+        if GenericDefinition(argument) is {} argumentDefinition && ClrTypeUtilities.AreSame(
+            argumentDefinition,
+            definition
+        ) {
+            return CandidateFree
+        }
+        if argument.ClrType is not{} argumentClr || ReflectionType(argumentClr) is not{} reflected {
+            return CandidateUser
+        }
+        try {
+            let related = List[Type]()
+            related.Add(reflected)
+            related.AddRange(reflected.GetInterfaces())
+            var current = reflected.BaseType
+            while current != nil {
+                related.Add(current)
+                current = current.BaseType
+            }
+            for candidate in related {
+                if candidate.IsGenericType && ClrTypeUtilities.AreSame(
+                    candidate.GetGenericTypeDefinition(),
+                    definition
+                ) {
+                    return CandidateFree
+                }
+            }
+            for method in reflected.GetMethods(BindingFlags.Public | BindingFlags.Static) {
+                if method.Name == "op_Implicit" && method.ReturnType.IsGenericType && ClrTypeUtilities.AreSame(
+                    method.ReturnType.GetGenericTypeDefinition(),
+                    definition
+                ) {
+                    return CandidateUser
+                }
+            }
+            return CandidateNotApplicable
+        } catch (ex NotSupportedException) {
+            return CandidateUser
+        }
     }
 
     private func HasOnlyMethodTypeParameters(type Type) bool {

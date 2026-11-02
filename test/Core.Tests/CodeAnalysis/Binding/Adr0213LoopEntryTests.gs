@@ -123,6 +123,41 @@ func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPat
         Assert.Equal("GS0158@6:16", string.Join(" ", errors))
     }
 
+    @Fact
+    func CompoundGenericParameterOfAnImportedConversion_IsAConversion() {
+        // `Use(payload, 1)` infers `T = int32` from the second argument and converts `Payload` to `List[int32]` with
+        // an imported operator, which can write the storage that a `ref` parameter aliases.
+        using let fixture = CSharpFixture(`namespace Adr0213CompoundGeneric;
+public sealed class Payload {
+    public static System.Action? OnConvert;
+    public static implicit operator System.Collections.Generic.List<int>(Payload p) {
+        OnConvert?.Invoke();
+        return new System.Collections.Generic.List<int>();
+    }
+}
+public static class Sink {
+    public static void Use<T>(System.Collections.Generic.List<T> xs, T item) { }
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import Adr0213CompoundGeneric
+func Run(ref text string?, payload Payload) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Sink.Use(payload, 1)
+    }
+    return n
+}
+func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@6:16", string.Join(" ", errors))
+    }
+
     shared {
         func Rows() IEnumerable[[]object] {
             let rows = List[[]object]()
@@ -2572,6 +2607,56 @@ func Run(ref text string?, o object, c Color) int32 {
         n++
         if o is System.String { n++ }
         if c is Color.Red { n++ }
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("conditional-arms-meet-through-a-conversion (A3)", `package T
+import System
+import System.Collections.Generic
+class Payload { var N int32 = 0 }
+func operator implicit(p Payload) List[int32] { return List[int32]() }
+func Use[T](xs List[T], item T) { }
+
+func Run(ref text string?, flag bool, dt DateTime, dto DateTimeOffset, payload Payload, ys List[int32], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let merged = flag ? dt : dto
+    }
+    return n
+}
+func Main() { }`, "GS0158@11:16")
+            Add("if-expression-arms-meet-through-a-conversion (A3)", `package T
+import System
+import System.Collections.Generic
+class Payload { var N int32 = 0 }
+func operator implicit(p Payload) List[int32] { return List[int32]() }
+func Use[T](xs List[T], item T) { }
+
+func Run(ref text string?, flag bool, dt DateTime, dto DateTimeOffset, payload Payload, ys List[int32], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let merged = if flag { dt } else { dto }
+    }
+    return n
+}
+func Main() { }`, "GS0158@11:16")
+            Add("arms-of-one-type-and-inferred-compound-parameters-keep-a-by-reference-fact (A3)", `package T
+import System
+import System.Collections.Generic
+func Use[T](xs List[T], item T) { }
+func Run(ref text string?, flag bool, dto DateTimeOffset, ys List[int32], n0 int32) int32 {
+    if text == nil { return 0 }
+    var n = n0
+    while text.Length > 0 && n < 3 {
+        n++
+        let same = flag ? dto : dto
+        let numbers = flag ? n : 2
+        Use(ys, 1)
     }
     return n
 }

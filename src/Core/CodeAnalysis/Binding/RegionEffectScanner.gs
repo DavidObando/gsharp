@@ -316,6 +316,7 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.ConditionalExpression {
                 let conditional = cast[ConditionalExpressionSyntax](node)
+                RecordMergeConversions(node)
                 VisitCondition(conditional.Condition)
                 Visit(conditional.WhenTrue)
                 Visit(conditional.WhenFalse)
@@ -357,6 +358,7 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.IfExpression {
                 let ifExpression = cast[IfExpressionSyntax](node)
+                RecordMergeConversions(node)
                 VisitIf(
                     ifExpression.Initializer,
                     ifExpression.Condition,
@@ -497,6 +499,7 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.SwitchExpression {
                 let switchExpression = cast[SwitchExpressionSyntax](node)
+                RecordMergeConversions(node)
                 Visit(switchExpression.Expression)
                 for arm in switchExpression.Arms {
                     RecordTypeTests(switchExpression.Expression, arm.Value)
@@ -1998,6 +2001,66 @@ internal sealed class RegionEffectScanner {
     // that holds the literal (a declaration, an assignment, an argument or a read) is already a call (rule W4).
     private func RecordElementConversion(element ExpressionSyntax, target RegionReceiverPath?) {
         RecordConversion(element, target)
+    }
+
+    // The arms of a conditional, `if` or switch expression meet in one type, so each arm is converted to the type of
+    // each other arm that has a path (`flag ? dt : dto` converts `DateTime` to `DateTimeOffset`). Two operator or
+    // literal arms meet in a predefined way; an arm without a path that is neither is a target that the walker
+    // cannot type. A nested arm of the same kind is merged with the others.
+    private func RecordMergeConversions(node SyntaxNode) {
+        if !Active() || node.Parent?.Kind == node.Kind {
+            return
+        }
+        let arms = List[ExpressionSyntax]()
+        CollectArms(node, arms)
+        for source in arms {
+            for target in arms {
+                if object.ReferenceEquals(source, target) {
+                    continue
+                }
+                let inner = UnwrapParentheses(target)
+                if inner == nil || IsNilLiteral(inner) || IsOperatorForm(inner) || inner is LiteralExpressionSyntax {
+                    continue
+                }
+                RecordConversion(source, BuildPath(target))
+            }
+        }
+    }
+
+    private func CollectArms(node SyntaxNode?, arms List[ExpressionSyntax]) {
+        switch node {
+            case conditional is ConditionalExpressionSyntax {
+                AddArm(conditional.WhenTrue, arms)
+                AddArm(conditional.WhenFalse, arms)
+            }
+            case ifExpression is IfExpressionSyntax {
+                AddArm(ifExpression.ThenBlock, arms)
+                AddArm(ifExpression.ElseExpression, arms)
+            }
+            case switchExpression is SwitchExpressionSyntax {
+                for arm in switchExpression.Arms {
+                    AddArm(arm.Result, arms)
+                }
+            }
+            default { }
+        }
+    }
+
+    private func AddArm(arm ExpressionSyntax?, arms List[ExpressionSyntax]) {
+        var value = UnwrapParentheses(arm)
+        while value is BlockExpressionSyntax block {
+            value = UnwrapParentheses(block.Expression)
+        }
+        switch value {
+            case nil { }
+            case ConditionalExpressionSyntax, IfExpressionSyntax, SwitchExpressionSyntax {
+                CollectArms(value, arms)
+            }
+            case ThrowExpressionSyntax { }
+            default {
+                arms.Add(value!!)
+            }
+        }
     }
 
     // A length or a dimension of an allocation, converted to `int32`.
