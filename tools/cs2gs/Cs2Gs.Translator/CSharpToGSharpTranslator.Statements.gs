@@ -3550,8 +3550,10 @@ partial class CSharpToGSharpTranslator {
 
         /// Issue #5595: the declaration whose declared type holds the slot of an array
         /// element store, and the number of array levels from that type to the slot.
-        /// The walk goes through parentheses, nested array accesses (`grid[0][1]`) and
-        /// `var` locals that G# infers from their initializer (`var row = grid[0]`).
+        /// The walk goes through parentheses, nested array accesses (`grid[0][1]`),
+        /// slices (`grid[1..]`), `var` locals that G# infers from their initializer
+        /// (`var row = grid[0]`), and loop variables that G# infers from an array
+        /// (`foreach (var row in grid)`).
         /// @param target The array element store target.
         /// @returns The field, property, method, parameter, indexer or explicitly typed
         /// local, or a nil root when the storage is not a declaration (a cast, a
@@ -3563,14 +3565,24 @@ partial class CSharpToGSharpTranslator {
                 receiver = Unparenthesize(receiver)
                 let symbol ISymbol? = this.context.GetSymbolInfo(receiver).Symbol
                 if receiver is ElementAccessExpressionSyntax inner && symbol == nil {
+                    // A `System.Range` access is a slice of the same array type.
+                    if !this.IsRangeElementAccess(inner) {
+                        depth++
+                    }
                     receiver = inner.Expression
-                    depth++
                     continue
                 }
                 if symbol is ILocalSymbol local {
                     let initializer ExpressionSyntax? = this.InferredLocalInitializer(local)
                     if initializer != nil {
                         receiver = initializer
+                        continue
+                    }
+                    // A loop variable without a type clause is an element of its array.
+                    let collection ExpressionSyntax? = this.InferredForEachArray(local)
+                    if collection != nil {
+                        receiver = collection
+                        depth++
                         continue
                     }
                     return if this.LocalDeclarationHasTypeClause(local) {
@@ -3598,9 +3610,50 @@ partial class CSharpToGSharpTranslator {
                     Type: {IsVar: false}
                 } ||
                     this.InferredLocalDeclarationIsNullable(local)
-                case forEach is ForEachStatementSyntax: !forEach.Type.IsVar
+                case forEach is ForEachStatementSyntax: this.ForEachHasTypeClause(forEach)
                 default: false
             }
+        }
+
+        // The loop emitter states the loop variable's type only for a non-identity
+        // element conversion (#3935); otherwise G# infers it from the sequence.
+        private func ForEachHasTypeClause(forEach ForEachStatementSyntax) bool -> !forEach
+            .Type
+            .IsVar &&
+            !this
+            .context
+            .SemanticModel
+            .GetForEachStatementInfo(forEach)
+            .ElementConversion
+            .IsIdentity
+
+        // The array that a loop variable without a type clause iterates.
+        private func InferredForEachArray(local ILocalSymbol) ExpressionSyntax? {
+            return if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is ForEachStatementSyntax forEach &&
+                !this.ForEachHasTypeClause(forEach) &&
+                this
+                .context
+                .GetTypeInfo(forEach.Expression)
+                .Type is IArrayTypeSymbol {
+                forEach.Expression
+            } else {
+                nil
+            }
+        }
+
+        private func IsRangeElementAccess(access ElementAccessExpressionSyntax) bool {
+            let rangeType ITypeSymbol? = this.context.Compilation.GetTypeByMetadataName("System.Range")
+            return rangeType != nil &&
+                access
+                .ArgumentList
+                .Arguments
+                .Count == 1 &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(this.context.GetTypeInfo(access.ArgumentList.Arguments[0].Expression).Type, rangeType)
         }
 
         // The initializer of a `var` local whose emitted declaration has no type
