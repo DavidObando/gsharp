@@ -6443,12 +6443,12 @@ partial class CSharpToGSharpTranslator {
                         ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
                         return this.IsNullablePromotedValue(initializer)
                     }
-                    return (
-                        symbol is IFieldSymbol ||
-                            symbol is IPropertySymbol ||
-                            symbol is ILocalSymbol ||
-                            symbol is IParameterSymbol
-                    ) &&
+                    // Issue #5561: a local that a deconstruction or an `out` argument declares holds
+                    // the widened declaration it receives.
+                    if symbol is ILocalSymbol deconstructedLocal {
+                        return this.IsTranslatorWidenedDeclaration(deconstructedLocal)
+                    }
+                    return (symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IParameterSymbol) &&
                         this.ShouldPromoteToNullableReference(symbol)
                 }
                 default {

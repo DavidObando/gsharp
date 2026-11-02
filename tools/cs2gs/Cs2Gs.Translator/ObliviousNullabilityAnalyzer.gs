@@ -2387,19 +2387,147 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    // Issue #5574: the source record whose synthesized `Deconstruct` `method`
+    /// Issue #5508/#5561: the declaration whose value a deconstruction target receives.
+    /// @param target A target of a deconstruction or a deconstructing `foreach`: the designation of a
+    /// local that it declares (`var (a, b) = e`, `(T a, U b) = e`), or an existing variable, field or
+    /// property that it assigns (`(a, b) = e`).
+    /// @param model The semantic model of the target's tree.
+    /// @param compilations The compilations of the run, which identify a record's synthesized
+    /// `Deconstruct` seen through another project's emitted reference; null when there are none.
+    /// @returns The `Deconstruct` out parameter at the target's position or, for a record's synthesized
+    /// `Deconstruct`, the positional property that the emitted G# record deconstructs. A tuple
+    /// deconstruction has no such declaration and gives null.
+    func DeconstructedElementDeclaration(
+        target SyntaxNode,
+        model SemanticModel,
+        compilations IReadOnlyList[CSharpCompilation]? = nil
+    ) ISymbol? {
+        if !TryResolveDeconstructionElement(target, model, out var element, out var index) ||
+            element.Method is not IMethodSymbol deconstruct {
+            return nil
+        }
+        // An unreduced extension `Deconstruct(this T value, out …)` starts its outputs at ordinal 1.
+        let ordinal = if deconstruct.IsExtensionMethod && deconstruct.ReducedFrom == nil {
+            index + 1
+        } else {
+            index
+        }
+        if ordinal >= deconstruct.Parameters.Length {
+            return nil
+        }
+        let parameter = deconstruct.Parameters[ordinal]
+        if SynthesizedDeconstructRecord(deconstruct, compilations) is {} record {
+            return record.GetMembers(parameter.Name).OfType[IPropertySymbol]().FirstOrDefault() ?? parameter
+        }
+        return parameter.OriginalDefinition
+    }
+
+    /// Issue #5561: the user-defined conversion that a deconstruction applies to the element before it
+    /// stores the result into [`target`](paramref) (`(box, i) = entry` with `implicit operator Box(Node)`).
+    /// @param target A deconstruction target, as for `DeconstructedElementDeclaration`.
+    /// @param model The semantic model of the target's tree.
+    /// @returns The conversion operator, or null for any other conversion.
+    func DeconstructedElementConversionOperator(target SyntaxNode, model SemanticModel) IMethodSymbol? {
+        if !TryResolveDeconstructionElement(target, model, out var element, out var index) {
+            return nil
+        }
+        let conversion = element.Nested[index].Conversion
+        return if conversion != nil && conversion.Value.IsUserDefined {
+            conversion.Value.MethodSymbol
+        } else {
+            default(IMethodSymbol?)
+        }
+    }
+
+    // Issue #5561: climbs from a deconstruction target to its root and walks the
+    // root's `DeconstructionInfo` back down. `element` is the level whose
+    // `Deconstruct` produces the target's value and `index` the target's
+    // position in it.
+    private func TryResolveDeconstructionElement(
+        target SyntaxNode,
+        model SemanticModel,
+        out element DeconstructionInfo,
+        out index int32
+    ) bool {
+        element = default(DeconstructionInfo)
+        index = -1
+        let indexes = List[int32]()
+        var current SyntaxNode = target
+        var climbing = true
+        while climbing {
+            switch current.Parent {
+                case nested is ParenthesizedVariableDesignationSyntax when current is VariableDesignationSyntax variable {
+                    indexes.Insert(0, nested.Variables.IndexOf(variable))
+                    current = nested
+                }
+                case declaration is DeclarationExpressionSyntax {
+                    current = declaration
+                }
+                case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
+                    indexes.Insert(0, tuple.Arguments.IndexOf(argument))
+                    current = tuple
+                }
+                default {
+                    climbing = false
+                }
+            }
+        }
+        var info DeconstructionInfo
+        if current.Parent is AssignmentExpressionSyntax assignment && assignment.Left == current {
+            info = model.GetDeconstructionInfo(assignment)
+        } else if current.Parent is ForEachVariableStatementSyntax forEach && forEach.Variable == current {
+            info = model.GetDeconstructionInfo(forEach)
+        } else {
+            return false
+        }
+        for var level = 0; level < indexes.Count; level++ {
+            let position = indexes[level]
+            if position < 0 || position >= info.Nested.Length {
+                return false
+            }
+            if level == indexes.Count - 1 {
+                element = info
+                index = position
+                return true
+            }
+            info = info.Nested[position]
+        }
+        return false
+    }
+
+    // Issue #5574/#5561: the record whose synthesized `Deconstruct` `method`
     // is, or null. Seen through a run project's emitted reference the method is
-    // not marked implicitly declared, so it is matched through the record's
-    // source declaration.
-    private func SynthesizedDeconstructRecord(method IMethodSymbol, run NullArgumentRun) INamedTypeSymbol? {
-        let record = method.ContainingType.OriginalDefinition
+    // not marked implicitly declared. With the run's `compilations` (the
+    // translator's widening queries), it is matched through the record's source
+    // declaration in that project (`RunSourceDeclarations`, #5577), which is the
+    // record returned: its positional
+    // properties carry the producer's widening. Without them (the taint of one
+    // compilation, whose edges are keyed on what its own reads bind), it is the
+    // compiler-generated method, and the metadata record is returned.
+    private func SynthesizedDeconstructRecord(
+        method IMethodSymbol,
+        compilations IReadOnlyList[CSharpCompilation]?
+    ) INamedTypeSymbol? {
+        if method.ContainingType is not{IsRecord: true} record {
+            return nil
+        }
         if method.IsImplicitlyDeclared {
             return record
         }
-        if method.DeclaringSyntaxReferences.Length != 0 || !record.IsRecord {
+        if method.DeclaringSyntaxReferences.Length != 0 {
             return nil
         }
-        for source in SourceDeclarationsInRun(record, run.Members) {
+        if compilations == nil {
+            return if method.GetAttributes().Any(
+                (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
+                "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
+            ) {
+                record
+            } else {
+                default(INamedTypeSymbol?)
+            }
+        }
+        for source in RunSourceDeclarations(record.OriginalDefinition, compilations) {
             if source is INamedTypeSymbol sourceRecord && sourceRecord.GetMembers(method.Name).Any(
                 (member ISymbol) -> member is IMethodSymbol{IsImplicitlyDeclared: true} synthesized &&
                     synthesized
@@ -2408,11 +2536,87 @@ internal shared class ObliviousNullabilityAnalyzer {
                     .Parameters
                     .Length
             ) {
-                return sourceRecord.OriginalDefinition
+                return sourceRecord
             }
         }
         return nil
     }
+
+    // Issue #5561: a deconstruction through a `Deconstruct` method stores each
+    // element into its target, as `target = element` does. The local, field,
+    // property or parameter that it declares or assigns therefore gets the same
+    // flow from the element's declaration, or from a user-defined conversion's
+    // result. Tuple elements flow through `CollectDeconstructionFlow` instead,
+    // so they have no element declaration here.
+    private func CollectDeconstructedElementEdges(
+        target SyntaxNode,
+        model SemanticModel,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)]
+    ) {
+        switch target {
+            case tuple is TupleExpressionSyntax {
+                for argument in tuple.Arguments {
+                    CollectDeconstructedElementEdges(argument.Expression, model, tainted, edges)
+                }
+            }
+            case declaration is DeclarationExpressionSyntax {
+                CollectDeconstructedElementEdges(declaration.Designation, model, tainted, edges)
+            }
+            case parenthesized is ParenthesizedVariableDesignationSyntax {
+                for variable in parenthesized.Variables {
+                    CollectDeconstructedElementEdges(variable, model, tainted, edges)
+                }
+            }
+            case single is SingleVariableDesignationSyntax {
+                AddDeconstructedElementEdge(model.GetDeclaredSymbol(single), single, model, tainted, edges)
+            }
+            case expression is ExpressionSyntax {
+                AddDeconstructedElementEdge(ResolveAssignable(expression, model), expression, model, tainted, edges)
+            }
+        }
+    }
+
+    private func AddDeconstructedElementEdge(
+        receiver ISymbol?,
+        target SyntaxNode,
+        model SemanticModel,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)]
+    ) {
+        if !IsValueDeclarationSymbol(receiver) || !IsEligibleScalarTarget(receiver) {
+            return
+        }
+        if DeconstructedElementConversionOperator(target, model) is {} conversion {
+            CollectConversionResultFlow(Canonical(receiver), conversion, tainted, edges)
+        } else if DeconstructedElementDeclaration(target, model) is {} element {
+            edges.Add((Canonical(receiver)!!, Canonical(element)!!))
+        }
+    }
+
+    // A user-defined conversion stores its result: a declared-nullable result
+    // taints the target, and the operator's return taint flows into it.
+    private func CollectConversionResultFlow(
+        target ISymbol?,
+        conversion IMethodSymbol,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol?, Source ISymbol?)]
+    ) {
+        if IsDeclaredNullablePosition(conversion.ReturnType) {
+            tainted.Add(target!!)
+        }
+        edges.Add((target, Canonical(conversion)))
+    }
+
+    // Issue #5574: the source record whose synthesized `Deconstruct` `method`
+    // is, or null, matched across the run's compilations.
+    private func SynthesizedDeconstructRecord(
+        method IMethodSymbol,
+        run NullArgumentRun
+    ) INamedTypeSymbol? -> SynthesizedDeconstructRecord(
+        method,
+        run.Members.Select((graph NullArgumentGraph) -> graph.Owner).OfType[CSharpCompilation]().ToList()
+    )?.OriginalDefinition
 
     private func AddNullArgumentRead(
         reads Dictionary[string, List[(Safe bool, Slot string?)]],
@@ -4245,6 +4449,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                     // records a transitive edge so a nullable source propagates.
                     CollectScalarValueFlow(assignTarget, assign.Right, model, tainted, edges, scalarTupleEdges)
                 }
+                if assign.Left is TupleExpressionSyntax or DeclarationExpressionSyntax {
+                    CollectDeconstructedElementEdges(assign.Left, model, tainted, edges)
+                }
+            }
+            case loop is ForEachVariableStatementSyntax {
+                CollectDeconstructedElementEdges(loop.Variable, model, tainted, edges)
             }
             case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil {
                 if model.GetDeclaredSymbol(declarator) is ISymbol declared && IsValueDeclarationSymbol(declared) {
@@ -6890,10 +7100,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, $scope)
             }
             if conversion.OperatorMethod != nil && !IsNonNullableValueType(conversion.Type) {
-                if IsDeclaredNullablePosition(conversion.OperatorMethod!!.ReturnType) {
-                    tainted.Add(target!!)
-                }
-                edges.Add((target, Canonical(conversion.OperatorMethod)))
+                CollectConversionResultFlow(target, conversion.OperatorMethod!!, tainted, edges)
             }
         } else if value?.Syntax is ExpressionSyntax expression {
             CollectScalarValueFlow(
