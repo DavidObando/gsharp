@@ -1465,60 +1465,25 @@ internal partial class StatementBinder {
         return !anyAlternative
     }
 
-    // A candidate that takes every argument by identity is better than one that needs a conversion operator.
-    // Otherwise a candidate that needs one can be the better one (a conversion to `Payload` beats one to `object`),
-    // and a call that no candidate takes is not checked.
+    // The walker does not model accessibility, the binder's lookup precedence (source methods before imported base
+    // methods), the storage type of a typed `out var`, or which candidate is better, so it does not prove which
+    // candidate binds. A call counts when any candidate takes it through a conversion operator, and when none takes
+    // it at all; a candidate that takes it by identity or without an operator proves nothing about the others.
     private func CandidatesRunUserConversion(
         candidates List[List[TypeSymbol]],
         argumentTypes List[List[TypeSymbol]?],
         kinds List[int32],
         explicitTypeArguments bool
     ) bool {
-        // A call with named type arguments selects by generic arity, which the lists do not show.
-        if !explicitTypeArguments {
-            for parameters in candidates {
-                if CandidateIsExact(parameters, argumentTypes, kinds) {
-                    return false
-                }
-            }
-        }
         var free = false
         for parameters in candidates {
             let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, explicitTypeArguments)
             if candidate == CandidateUser {
                 return true
             }
-            free = free || candidate == CandidateFree
+            free = free || candidate >= CandidateFree
         }
         return !free
-    }
-
-    // Whether a candidate takes every argument of a known type by identity (the quick test before the classification).
-    private func CandidateIsExact(
-        parameters List[TypeSymbol],
-        argumentTypes List[List[TypeSymbol]?],
-        kinds List[int32]
-    ) bool {
-        for var index = 0; index < parameters.Count; index++ {
-            // An `in` argument also matches a parameter that is not `in`, so it proves no candidate by identity.
-            if !PassingModeMatches(parameters[index], kinds[index]) || kinds[index] == ArgumentReadOnlyReference {
-                return false
-            }
-            if kinds[index] == ArgumentSkipped || kinds[index] == ArgumentInlineDeclaration {
-                continue
-            }
-            if (kinds[index] != ArgumentTyped && kinds[index] != ArgumentByReference) ||
-                argumentTypes[index] is not{} types {
-                return false
-            }
-            let stripped = ReferencedType(parameters[index])
-            for argumentType in types {
-                if !object.Equals(argumentType, stripped) && !SameClrType(argumentType, stripped) {
-                    return false
-                }
-            }
-        }
-        return true
     }
 
     // How a candidate takes the arguments: not at all, through a conversion operator, without one, or by identity.
@@ -1533,6 +1498,9 @@ internal partial class StatementBinder {
         kinds List[int32],
         explicitTypeArguments bool
     ) int32 {
+        if !explicitTypeArguments && SharesInferredTypeParameter(parameters, argumentTypes, kinds) {
+            return CandidateUser
+        }
         var result = CandidateExact
         for var index = 0; index < parameters.Count; index++ {
             let kind = kinds[index]
@@ -1590,6 +1558,36 @@ internal partial class StatementBinder {
             result = Math.Min(result, argument)
         }
         return result
+    }
+
+    // Whether method type parameters appear in more than one parameter whose arguments do not all have the same known
+    // type. Such a type parameter is inferred from those arguments together, so one argument can fix it and another
+    // reach it through a conversion operator (`Use[T](a T, b T)` with a `DateTimeOffset` and a `DateTime`).
+    private func SharesInferredTypeParameter(
+        parameters List[TypeSymbol],
+        argumentTypes List[List[TypeSymbol]?],
+        kinds List[int32]
+    ) bool {
+        var shared TypeSymbol? = nil
+        var count = 0
+        var differ = false
+        for var index = 0; index < parameters.Count; index++ {
+            let stripped = StripReferenceNullability(parameters[index]) ?? parameters[index]
+            if !TypeParameterTakesArgument(stripped, false) && !IsCompoundOfMethodTypeParameters(stripped) {
+                continue
+            }
+            count++
+            if kinds[index] != ArgumentTyped || argumentTypes[index] is not{} types || types.Count != 1 {
+                differ = true
+            } else if shared is {} first {
+                if !object.Equals(first, types[0]) && !SameClrType(first, types[0]) {
+                    differ = true
+                }
+            } else {
+                shared = types[0]
+            }
+        }
+        return count > 1 && differ
     }
 
     // A `ref` or `out` argument (an inline declaration included) takes only a `ref` or `out` parameter, and any other

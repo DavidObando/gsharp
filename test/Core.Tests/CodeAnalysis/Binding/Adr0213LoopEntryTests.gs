@@ -3333,6 +3333,55 @@ func Run(ref text string?, x IList[DateTimeOffset], dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@10:16")
+            Add("typed-out-declaration-proves-no-candidate (A3)", `package T
+import System
+import System.Globalization
+class S {
+    func Use(out r string, d DateTime) { r = "" }
+    func Use(out r int32, d DateTimeOffset) { r = 0 }
+}
+func Run(ref text string?, s S, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        s.Use(out var v int32, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@11:16")
+            Add("shared-method-type-parameter-is-inferred-jointly (A3)", `package T
+import System
+import System.Globalization
+class S {
+    func Use[T](a T, b T) { }
+}
+func Run(ref text string?, s S, dto DateTimeOffset, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        s.Use(dto, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("source-method-before-an-imported-base-exact-overload (A3)", `package T
+import System
+import System.Globalization
+class D : GregorianCalendar {
+    func AddDays(time DateTimeOffset, days int32) DateTime { return DateTime.Now }
+}
+func Run(ref text string?, d D, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        d.AddDays(dt, 1)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
             return rows
         }
     }
