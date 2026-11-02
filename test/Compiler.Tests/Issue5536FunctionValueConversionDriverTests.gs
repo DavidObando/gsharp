@@ -1503,8 +1503,9 @@ func Main() {
 
     /// Issue #5635 (review of d3333218): an imported generic slot whose type argument inference takes from a narrowed
     /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on a
-    /// `[]string?`, the `T?` parameter of `IsNil`) does not need the narrowing, and a slot that another argument
-    /// widens (`Pick(holder.Pet, Animal())`) reads the declared member. Each runs as C# runs it.
+    /// `[]string?`, the `T?` parameter of `IsNil`, a `params T[]` element that another argument makes `string?`) does
+    /// not need the narrowing, and a slot that another argument widens (`Pick(holder.Pet, Animal())`) reads the
+    /// declared member. Each runs as C# runs it.
     @Fact
     func NoConversionValue_AtAnInferredImportedSlot_TakesTheSlotType() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1526,6 +1527,7 @@ class Holder {
         Pet = pet
     }
 }
+func U() string? -> nil
 func Strings() {
     var s string? = "a"
     var n = 0
@@ -1534,6 +1536,7 @@ func Strings() {
         L: if n > 0 {
             Console.Write(xs.Append(s).Last() == nil)
             Console.Write(Calls.IsNil(s))
+            Console.Write(Calls.First(s, U()) == nil)
             return
         }
         n++
@@ -1567,11 +1570,12 @@ class Dog : Animal { public override string Name() => "dog"; }
 class Cat : Animal { public override string Name() => "cat"; }
 class Holder { public readonly Animal Pet; public Holder(Animal pet) { Pet = pet; } }
 class Program {
+    static string? U() => null;
     static void Strings() {
         string? s = "a";
         var n = 0;
         var xs = new string?[] { "x" };
-        if (s != null) { L: if (n > 0) { Console.Write(xs.Append(s).Last() == null); Console.Write(Calls.IsNil(s)); return; } n++; s = null; goto L; }
+        if (s != null) { L: if (n > 0) { Console.Write(xs.Append(s).Last() == null); Console.Write(Calls.IsNil(s)); Console.Write(Calls.First(s, U()) == null); return; } n++; s = null; goto L; }
     }
     static void Pets() {
         var holder = new Holder(new Dog());
@@ -1584,7 +1588,7 @@ class Program {
     }
 }
 `
-        Check(fixture, source, oracle, "TrueTruecat")
+        Check(fixture, source, oracle, "TrueTrueTruecat")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2583,6 +2587,7 @@ class Program {
             "let u = V(\"x\", @s)",
             "let u = Task.FromResult(@s)",
             "let u = Calls.IdentityDefault(@s)",
+            "let u = Calls.First(@s)",
             "let t = ({\n                n = n + 0\n                @s\n            })",
             "let t = ({\n                n = n + 0\n                @s\n            }).Length",
             "let t string = ({\n                n = n + 0\n                @s\n            })",
@@ -2649,6 +2654,7 @@ namespace FunctionControl {
         public static T Pick<T>(T a, T b) => a;
         public static bool IsNil<T>(T? value) where T : class => value == null;
         public static T IdentityDefault<T>(T value = default!) => value;
+        public static T First<T>(params T[] xs) => xs[0];
         public static string Po(System.Func<object> f, int x) => "F" + f();
         public static string Po(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
         public static string Pz(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();

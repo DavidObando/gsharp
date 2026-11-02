@@ -181,8 +181,13 @@ internal partial class OverloadResolver {
         if ClrOverloadResolution.IsMethodGroupArgument(arg) {
             return conversions.BindConversion(location, arg, elementTypeSymbol)
         }
-        if arg.Type == nil || arg.Type == TypeSymbol.Error || arg.Type == elementTypeSymbol {
+        if arg.Type == nil || arg.Type == TypeSymbol.Error {
             return arg
+        }
+        // Issue #5635: an element that goes into the array with no conversion keeps the backward `goto` check of a
+        // narrowed read, as a variadic element does (cref:CoerceVariadicElement).
+        if arg.Type == elementTypeSymbol {
+            return conversions.DecideNarrowedConversion(location, arg, elementTypeSymbol)
         }
         let conversion = Conversion.Classify(arg.Type, elementTypeSymbol)
         if conversions.TryRejectClrPlatformContainerArgument(
