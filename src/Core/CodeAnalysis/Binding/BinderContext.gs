@@ -1016,6 +1016,17 @@ internal class BinderContext {
             narrowedType = variableNarrowed
             return true
         }
+        // Issue #5603: the compiler-generated unwrap of a narrowed optional value reads its stored value through the
+        // narrowing. An explicit `!!` is a run-time check, so it is not a narrowed read.
+        if expression is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
+            if unwrap.Operand is BoundVariableExpression unwrappedVariable {
+                let variablePath = AccessPath.ForVariable(unwrappedVariable.Variable)
+                path = variablePath
+                narrowedType = NarrowedVariables.Query(variablePath)
+                return narrowedType != nil
+            }
+            return TryGetBackwardGotoNarrowingPath(unwrap.Operand, out path, out narrowedType)
+        }
         // A write to an out parameter or a call drops the narrowing of the others (ADR-0208 R12), so
         // the loop reads a local copy.
         let found = SmartCastStability.TryGetStableMemberPath(expression, out path, out _)

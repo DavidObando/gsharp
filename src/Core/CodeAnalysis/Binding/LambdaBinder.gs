@@ -1369,7 +1369,7 @@ internal class LambdaBinder {
         } else {
             default(DeferredReturnState?)
         }
-        placeholder.InferredReturnNarrowings = if placeholder.IsReturnTypeInferred {
+        placeholder.InferredReturnNarrowings = if placeholder.IsReturnTypeInferred || defersReturnConversion {
             DeferredReturnState()
         } else {
             default(DeferredReturnState?)
@@ -1526,11 +1526,18 @@ internal class LambdaBinder {
             } else {
                 TypeSymbol.Error
             }
-            // The natural type is not used when its result also needs a narrowing that a held use reports.
+            // The natural type is not used when its result also needs a narrowing that a held use reports. Issue
+            // #5603: the uses of the natural values count too, because a target conversion can read a declared value
+            // and record no use.
             if naturalReturnType != TypeSymbol.Error && !Diagnostics.Skip(startMark).Any(
                 (diagnostic Diagnostic) -> diagnostic.IsError
             ) &&
-                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
+                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) && !Invariant.Required(
+                placeholder.InferredReturnNarrowings,
+                "a deferred return conversion has natural narrowing uses",
+                expression: "placeholder.InferredReturnNarrowings"
+            )
+                .NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
                 acceptsNaturalType!!(
                 FunctionTypeSymbol.Get(
                     parameterTypes.ToImmutable(),
@@ -1584,7 +1591,9 @@ internal class LambdaBinder {
         // We deferred the conversion in BindReturnStatement; apply it now.
         // Issue #5603: the backward `goto` checks of the `return` values ran where they bound, with the narrowings
         // in scope. Report the uses that the inferred result needs.
-        placeholder.InferredReturnNarrowings?.ReportInferredResultNarrowings(Diagnostics, returnType)
+        if placeholder.IsReturnTypeInferred {
+            placeholder.InferredReturnNarrowings?.ReportInferredResultNarrowings(Diagnostics, returnType)
+        }
         boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
@@ -2559,8 +2568,8 @@ internal class LambdaBinder {
 
     /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
     /// Each such return statement binds its value again with the natural type, so the body can give either
-    /// function type after one bind of its statements. Issue #5603: a lambda body with an inferred result uses only
-    /// the held narrowing uses, for its `return` values.
+    /// function type after one bind of its statements. Issue #5603: a lambda body whose result type the lambda binder
+    /// chooses after the body also uses one only for the held narrowing uses of its `return` values.
     internal class DeferredReturnState {
         /// Gets or sets a value indicating whether a return value binds its target-typed pass now. A return
         /// nested in it binds with the target type only.
@@ -3176,7 +3185,12 @@ internal class LambdaBinder {
             // Issue #5603: the conversion runs outside the narrowing scope, so the stable member path of a narrowed
             // read comes from the read itself. The read takes its declared value when the result does not need the
             // narrowing, as an eager conversion does.
-            if SmartCastStability.TryGetStableMemberPath(operand, out var path, out _) &&
+            let storedRead = if operand is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
+                unwrap.Operand
+            } else {
+                operand
+            }
+            if SmartCastStability.TryGetStableMemberPath(storedRead, out var path, out _) &&
                 ConversionClassifier
                 .TryRecoverDeclaredMemberRead(operand, path!!, operand.Type, returnType, out var declaredRead) {
                 operand = declaredRead!!

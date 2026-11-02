@@ -1137,6 +1137,114 @@ func Main() {
         )
     }
 
+    /// Issue #5603 (review of 9910e997): a stable `box.Value` declared `int32?` and narrowed by a nil guard is read
+    /// through a compiler-generated unwrap. The backward `goto` check recognizes the unwrap (an explicit `!!` stays
+    /// a run-time check). An `int32` result, inferred or declared, reports GS0155 at the value when the `goto`
+    /// replaces `box` with `Box(nil)`, so the unwrap does not throw at run time.
+    @Fact
+    func InferredResult_OfANarrowedOptionalMember_ChecksTheUnwrap() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        for head in[]string{"let f = () -> {", "let f = func() int32 {"} {
+            RejectConsumer(
+                fixture,
+                OptionalMemberSource(head, "0", "box = Box(nil)", "Console.Write(f())"),
+                "GS0155",
+                line: 14,
+                column: 24,
+                length: "box.Value".Length
+            )
+        }
+    }
+
+    /// Issue #5603 (review of 9910e997): an `int32?` result, inferred or declared, takes the stored value of
+    /// `box.Value` without the unwrap, as C# does, so the replaced `Box(nil)` returns nil. A `goto` that keeps the
+    /// narrowing returns the value.
+    @Fact
+    func InferredResult_OfANarrowedOptionalMember_ReadsTheStoredValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = OptionalMemberSource(
+            "let f = () -> {",
+            "default(int32?)",
+            "box = Box(nil)",
+            "Console.Write(f() == nil)\n    Console.Write(Declared() == nil)\n    Console.Write(Kept())"
+        )
+            .Replace(
+            "func Main() {",
+            "func Declared() int32? {\n" +
+                OptionalMemberBody("default(int32?)", "box = Box(nil)") +
+                "\n}\n" +
+                "func Kept() int32 {\n    let f = () -> {\n" +
+                OptionalMemberBody("0", "n = n + 0") +
+                "\n    }\n    return f()\n}\nfunc Main() {"
+        )
+        let oracleBody = "{ var box = new Box(1); var n = 0; if (box.Value != null) { L: if (n > 0) { return box.Value; } " +
+            "n++; # goto L; } return ~; }"
+        let oracle = "using System;\nclass Box { public readonly int? Value; public Box(int? value) { Value = value; } }\n" +
+            "class Program {\n    static int? Declared() " +
+            oracleBody
+            .Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
+            "\n    static int Kept() { Func<int> f = () => " +
+            oracleBody
+            .Replace("#", "n = n + 0;")
+            .Replace("box.Value; }", "box.Value.Value; }")
+            .Replace("~", "0") +
+            "; return f(); }\n    static void Main() {\n        Func<int?> f = () => " +
+            oracleBody
+            .Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
+            ";\n        Console.Write(f() == null);\n        Console.Write(Declared() == null);\n" +
+            "        Console.Write(Kept());\n    }\n}\n"
+        Check(fixture, source, oracle, "TrueTrue1")
+    }
+
+    /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
+    /// uses of its original `return` values, which the lambda body records where they bind, whatever target
+    /// conversion runs. With `Po(Func<object>, int)` and `Po(object, long)`, the target `object` reads the declared
+    /// `Pet` and takes the nullable `return`, so the delegate is selected and returns the replacement `int32`, as in
+    /// C#.
+    @Fact
+    func SpeculativeLiteral_WiderTargetOfANarrowedMember_KeepsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+import FunctionControl
+class Box {
+    let Pet object
+    init(pet object) {
+        Pet = pet
+    }
+}
+func Main() {
+    Console.Write(Calls.Po(() -> {
+        var holder = Box("s")
+        var n = 0
+        if holder.Pet is string {
+            L: if n > 0 {
+                return holder.Pet
+            }
+            n++
+            holder = Box(1)
+            goto L
+        }
+        return default(string?)
+    }, 1))
+}
+`
+        let oracle = `using System;
+using FunctionControl;
+class Box { public readonly object Pet; public Box(object pet) { Pet = pet; } }
+class Program {
+    static void Main() {
+        Console.Write(Calls.Po(() => {
+            var holder = new Box("s");
+            var n = 0;
+            if (holder.Pet is string) { L: if (n > 0) { return holder.Pet; } n++; holder = new Box(1); goto L; }
+            return default(string?);
+        }, 1));
+    }
+}
+`
+        Check(fixture, source, oracle, "F1")
+    }
+
     /// Issue #5569 (review of 7c9c7101): a loop body that binds again after an inherited narrowing changes
     /// discards the held returns of its first bind. So a call where no overload applies reports the held target
     /// diagnostics of a speculative literal once: the same set as the same loop without the rebind (`s = nil`
@@ -1920,6 +2028,28 @@ class Program {
                 .ToArray()
         }
 
+        // Issue #5603 (review of 9910e997): the source has the `return` value on line 14 from column 24.
+        private func OptionalMemberBody(other string, beforeGoto string) string -> "        var box = Box(1)\n" +
+            "        var n = 0\n        if box.Value != nil {\n            L: if n > 0 {\n                return box.Value\n" +
+            "            }\n            n++\n            " +
+            beforeGoto +
+            "\n            goto L\n        }\n        return " +
+            other
+
+        private func OptionalMemberSource(
+            head string,
+            other string,
+            beforeGoto string,
+            use string
+        ) string -> "import System\n" +
+            "class Box {\n    let Value int32?\n    init(value int32?) {\n        Value = value\n    }\n}\nfunc Main() {\n    " +
+            head +
+            "\n" +
+            OptionalMemberBody(other, beforeGoto) +
+            "\n    }\n    " +
+            use +
+            "\n}\n"
+
         // Issue #5603 (review of e920ba13): a function literal or function head, and the other `return` value that
         // sets its result type.
         private let MemberResultCases[](Head string, Other string) = [](Head string, Other string){
@@ -2019,6 +2149,8 @@ namespace FunctionControl {
         public static string NsIn(in System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
         public static string NsIn(object o, long x) => "O";
         public static string Pz(System.Func<string> f, int x) => "F" + f();
+        public static string Po(System.Func<object> f, int x) => "F" + f();
+        public static string Po(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
         public static string Pz(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
         public static string Pa(System.Func<long> f, int x) => "F";
         public static string Pa(params object[] xs) => "P" + Kinds.OfS(xs[0]);

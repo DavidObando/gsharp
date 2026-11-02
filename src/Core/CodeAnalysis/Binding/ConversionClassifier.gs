@@ -3718,7 +3718,7 @@ internal class ConversionClassifier {
         /// (issue #5569) use this one decision. A nullability narrowing reads the declared value, which a nullable or
         /// platform target takes. A type test or an optional value narrowing casts or unwraps the value. The declared
         /// read (cref:TryRecoverDeclaredMemberRead) replaces it when the declared type converts to the target with no
-        /// change of representation.
+        /// change of representation, or, for an optional value, when the target takes nil.
         /// @param declaredType The declared type of the read.
         /// @param narrowedType The narrowed type of the read.
         /// @param target The conversion target.
@@ -3729,6 +3729,11 @@ internal class ConversionClassifier {
             }
             if !BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType) {
                 return !(target is NullableTypeSymbol) && !(target is PlatformTypeSymbol)
+            }
+            // An optional value whose read unwraps it: the stored value converts to a target that takes nil.
+            if declaredType is NullableTypeSymbol optional &&
+                (NullableLifting.IsValueTypeNullable(optional) || NullableLifting.IsUserValueTypeNullable(optional)) {
+                return !(target is NullableTypeSymbol) || !Conversion.Classify(declaredType, target).IsImplicit
             }
             return declaredType is NullableTypeSymbol ||
                 declaredType is PlatformTypeSymbol ||
@@ -3770,6 +3775,7 @@ internal class ConversionClassifier {
                 return false
             }
             declaredRead = switch expression {
+                case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap: unwrap.Operand
                 case field is BoundFieldAccessExpression: cast[BoundExpression](
                     BoundFieldAccessExpression(
                         field.Syntax,
