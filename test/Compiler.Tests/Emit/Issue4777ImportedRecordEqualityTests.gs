@@ -889,6 +889,15 @@ public func Check() bool {
             File.WriteAllBytes(path, mutated)
         }
 
+        private let HostMetadataReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[
+            IReadOnlyList[MetadataReference]
+        ](
+            () -> ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .ToArray()
+        )
+
         private func CompileNative(directory string, name string, source string, references ...string) string {
             let sourcePath = Path.Combine(directory, name + ".cs")
             let imagePath = Path.Combine(directory, name + ".dll")
@@ -913,6 +922,13 @@ public func Check() bool {
                     )
                 )
             )
+            let metadataReferences IEnumerable[MetadataReference] = if references.Length == 0 {
+                HostMetadataReferences.Value
+            } else {
+                HostMetadataReferences.Value.Concat(
+                    references.Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                )
+            }
             let compilation = CSharpCompilation.Create(
                 name,
                 []Microsoft
@@ -923,7 +939,7 @@ public func Check() bool {
                         path: sourcePath
                     )
                 },
-                referencePaths.Select((path string) -> MetadataReference.CreateFromFile(path)),
+                metadataReferences,
                 CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     nullableContextOptions: NullableContextOptions.Enable,

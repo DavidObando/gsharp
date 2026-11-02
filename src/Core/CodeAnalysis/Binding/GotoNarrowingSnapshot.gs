@@ -173,6 +173,36 @@ internal data class BackwardGotoNarrowingAccess(
     prop Variable VariableSymbol -> Path.Root
 }
 
+/// Issue #5613: the backward `goto` facts of a narrowed read, captured where the read binds. A use that is
+/// recorded later (cref:BinderContext.RecordBackwardGotoNarrowingUse) then has the narrowing frame, proof and
+/// assignment state of the read, not the state at the time of the record.
+/// @param Path The access path of the read.
+/// @param NarrowedType The narrowed type that the frame of the read gives.
+/// @param Labels The labels whose backward `goto` check applies to the read, in state order.
+/// @param Owner The lambda body state that holds the use, or `nil`.
+internal data class BackwardGotoNarrowingCapture(
+    Path AccessPath,
+    NarrowedType TypeSymbol,
+    Labels ImmutableArray[string],
+    Owner LambdaBinder.DeferredReturnState?
+) : IEquatable[BackwardGotoNarrowingCapture] { }
+
+/// Issue #5613: a narrowed read that is the value of a branch (the branch value, or the trailing value of a branch
+/// block), with its backward `goto` facts captured where it binds. The common type of the branches decides later
+/// whether the conversion needs the narrowing.
+/// @param Value The narrowed read.
+/// @param Location The location of the read.
+/// @param Path The access path of the read.
+/// @param NarrowedType The narrowed type of the read.
+/// @param Use The captured backward `goto` facts, or `nil` when no frame holds the narrowing.
+internal data class NarrowedBranchValue(
+    Value BoundExpression,
+    Location TextLocation,
+    Path AccessPath,
+    NarrowedType TypeSymbol,
+    Use BackwardGotoNarrowingCapture?
+) : IEquatable[NarrowedBranchValue] { }
+
 internal class BackwardGotoNarrowingEdge {
     init(sourceSnapshot GotoNarrowingSnapshot, accesses IEnumerable[BackwardGotoNarrowingAccess]) {
         SourceSnapshot = sourceSnapshot

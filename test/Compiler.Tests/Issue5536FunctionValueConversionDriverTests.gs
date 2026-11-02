@@ -1196,6 +1196,180 @@ func Main() {
         Check(fixture, source, oracle, "TrueTrue1")
     }
 
+    /// Issue #5613: a narrowed read in a branch of a conditional, `if`, `if let` or `switch` value, in the right
+    /// operand of `??`, or in the trailing value of a branch block, converts to the common type with the backward
+    /// `goto` check. A `goto` that removes the narrowing reports GS0155 at the read, as `let t = s` does. This
+    /// applies to an inferred local, to a nested branch, to the `return` value of a function literal with an
+    /// inferred result, and to a member read that a type test or a nil guard narrows. The check uses the narrowing
+    /// state where the read binds, so an assignment in the other branch or a `goto` into the branch does not hide it.
+    @Fact
+    func BranchValue_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(BranchValueForms)
+        for form in BranchValueForms {
+            RejectMarked(
+                fixture,
+                BranchValuePrelude + "func Main() {\n" + BranchValueBody.Replace("|", "let t = " + form).Replace(
+                    "#",
+                    "s = nil"
+                ) +
+                    "\n}\n",
+                "s"
+            )
+            let literal = InferredResultBody.Replace("|", form).Replace("#", "s = nil")
+            RejectMarked(
+                fixture,
+                BranchValuePrelude + "func Main() {\n    " + InferredResultShapes[0].Replace("|", literal) + "\n}\n",
+                "s"
+            )
+        }
+        Assert.NotEmpty(InferredResultShapes)
+        for shape in InferredResultShapes.Skip(1) {
+            let literal = InferredResultBody.Replace("|", BranchValueForms[0]).Replace("#", "s = nil")
+            RejectMarked(
+                fixture,
+                BranchValuePrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
+                "s"
+            )
+        }
+        RejectMarked(fixture, BranchValuePrelude + BranchValueJumpIntoBranch, "s")
+        RejectMarked(
+            fixture,
+            MemberResultSource("let f = () -> {", "Dog()", "holder = Holder(Cat())").Replace(
+                "return holder.Pet",
+                "return n > 1 ? Dog() : @holder.Pet"
+            ),
+            "holder.Pet"
+        )
+        // A target-typed branch converts the block value to `Animal` before the common type, so the narrowed read stays
+        // and its cast needs the narrowing.
+        RejectMarked(
+            fixture,
+            MemberResultSource("let f = func() Animal {", "Animal()", "holder = Holder(Cat())").Replace(
+                "return holder.Pet",
+                "return n > 1 ? Animal() : checked({ @holder.Pet })"
+            ),
+            "holder.Pet"
+        )
+        RejectMarked(
+            fixture,
+            OptionalMemberSource("let f = () -> {", "0", "box = Box(nil)", "Console.Write(f())").Replace(
+                "return box.Value",
+                "return n > 1 ? 0 : @box.Value"
+            ),
+            "box.Value"
+        )
+    }
+
+    /// Issue #5613 controls: a branch whose common type is `string?` takes the declared value, so the `goto` that
+    /// removes the narrowing gives nil. A `goto` that keeps the narrowing gives a `string`. A branch that proves its
+    /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. A block value
+    /// that is not a branch keeps its behavior (`let t string? = ({ …; s })`, #5635). Each runs as C# runs it.
+    @Fact
+    func BranchValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let cases[](Form string, Oracle string, BeforeGoto string, Use string, OracleUse string) = [](
+            Form string,
+            Oracle string,
+            BeforeGoto string,
+            Use string,
+            OracleUse string
+        ){
+            ("n > 1 ? U() : s", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("if n > 1 { U() } else { s }", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("n > 1 ? default(string?) : s", "n > 1 ? default(string?) : s", "s = nil", "t == nil", "t == null"),
+            (
+                "switch n { case 5: U() default: s }",
+                "n switch { 5 => U(), _ => s }",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            (
+                "n > 1 ? U() : ({\n                n = n + 0\n                s\n            })",
+                "n > 1 ? U() : s",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            ("if n > 1 { U() } else { ({ s }) }", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("n > 1 ? U() : checked({ s })", "n > 1 ? U() : checked(s)", "s = nil", "t == nil", "t == null"),
+            (
+                "string? = ({\n                n = n + 0\n                s\n            })",
+                "(string?)s",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            (
+                "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
+                "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
+                "n = n + 0",
+                "Len(t)",
+                "Len(t)"
+            ),
+            (
+                "if n > 1 { \"t\" } else { n = n + 0\n                s }",
+                "n > 1 ? \"t\" : s",
+                "n = n + 0",
+                "Len(t)",
+                "Len(t)"
+            ),
+            (
+                "switch n { case 5: \"t\" default: s }",
+                "n switch { 5 => \"t\", _ => s }",
+                "n = n + 0",
+                "Len(t)",
+                "Len(t)"
+            ),
+            ("U() ?? s", "U() ?? s", "n = n + 0", "Len(t)", "Len(t)"),
+            ("s != nil ? s : \"x\"", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)"),
+            ("if s != nil { s } else { \"x\" }", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)"),
+            (
+                "if let q = U() && s != nil { s } else { \"x\" }",
+                "U() is {} q && s != null ? s : \"x\"",
+                "s = nil",
+                "Len(t)",
+                "Len(t)"
+            )
+        }
+        let source = StringBuilder(BranchValuePrelude)
+        let oracle = StringBuilder(
+            "using System;\nclass Program {\n    static int Len(string v) => v.Length;\n" +
+                "    static string? U() => null;\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        for var index = 0; index < cases.Length; index++ {
+            let (form, oracleForm, beforeGoto, use, oracleUse) = cases[index]
+            let name = "Case" + index.ToString()
+            source
+                .Append("func ")
+                .Append(name)
+                .Append("() {\n")
+                .Append(
+                BranchValueBody.Replace("|", "let t" + Declare(form) + "\n            Console.Write(" + use + ")")
+                    .Replace("#", beforeGoto)
+            )
+                .Append("\n}\n")
+            oracle
+                .Append("    static void ")
+                .Append(name)
+                .Append("() { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { var t = ")
+                .Append(oracleForm)
+                .Append("; Console.Write(")
+                .Append(oracleUse)
+                .Append("); return; } n++; ")
+                .Append(beforeGoto.Replace("nil", "null"))
+                .Append("; goto L; } }\n")
+            main.Append("    ").Append(name).Append("()\n")
+            oracleMain.Append("        ").Append(name).Append("();\n")
+        }
+        source.Append(main.ToString()).Append("}\n")
+        oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111111")
+    }
+
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
     /// uses of its original `return` values, which the lambda body records where they bind, whatever target
     /// conversion runs. With `Po(Func<object>, int)` and `Po(object, long)`, the target `object` reads the declared
@@ -1884,6 +2058,28 @@ class Program {
         }
     }
 
+    // Issue #5613: gives the declaration of `t` for a form, which can start with a declared type (`string? = …`).
+    private func Declare(form string) string -> if form.StartsWith("string? = ", StringComparison.Ordinal) {
+        " " + form
+    } else {
+        " = " + form
+    }
+
+    // Issue #5613: compiles a consumer that must fail with GS0155 only, at the value after the `@` marker.
+    private func RejectMarked(fixture CSharpFixture, marked string, value string) {
+        let index = marked.IndexOf("@" + value, StringComparison.Ordinal)
+        Assert.True(index >= 0, marked)
+        let prefix = marked.Substring(0, index)
+        RejectConsumer(
+            fixture,
+            marked.Remove(index, 1),
+            "GS0155",
+            prefix.Count((c char) -> c == '\n') + 1,
+            index - prefix.LastIndexOf('\n'),
+            value.Length
+        )
+    }
+
     private func Check(fixture CSharpFixture, source string, oracle string, expected string) {
         Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
         output.WriteLine("Contract source:\n" + Contract)
@@ -2116,6 +2312,40 @@ class Program {
             "Console.Write(Len(T(() -> |)))",
             "Console.Write(Len(S(() -> |)))",
             "let a = async () -> |\n    Console.Write(Len(a().Result))"
+        }
+
+        // Issue #5613: `U` gives a `string?`, so a branch with it has the common type `string?`.
+        private let BranchValuePrelude string = InferredResultPrelude + "func U() string? -> nil\n"
+
+        // Issue #5613: `|` is the statement that uses `s` and `#` is the statement before the backward `goto`.
+        private const BranchValueBody string = "    var s string? = \"a\"\n    var n = 0\n    if s != nil {\n" +
+            "        L: if n > 0 {\n            |\n            return\n        }\n        n++\n        #\n" +
+            "        goto L\n    }"
+
+        // Issue #5613: a backward `goto` into a branch whose condition narrows `s`, after `s = nil`.
+        private const BranchValueJumpIntoBranch string = "func Main() {\n    var s string? = \"a\"\n    var n = 0\n" +
+            "    let t = if s != nil {\n        M: n++\n        @s\n    } else {\n        \"x\"\n    }\n" +
+            "    Console.Write(t == nil)\n    if n < 2 {\n        s = nil\n        goto M\n    }\n}\n"
+
+        // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch. A form assigns
+        // `s` in the other branch, after the read binds. The last forms yield the read from a block: in parentheses,
+        // as the right operand of `??`, as the trailing value of a branch block, and in `checked`.
+        private let BranchValueForms[]string = []string{
+            "n > 1 ? \"t\" : @s",
+            "n > 1 ? \"t\" : (n > 2 ? \"u\" : @s)",
+            "if n > 1 { \"t\" } else { @s }",
+            "if n > 1 { \"t\" } else if n > 2 { \"u\" } else { n = n + 1\n                @s }",
+            "if let q = U() { q } else { @s }",
+            "if let q = U() { @s } else { \"x\" }",
+            "switch n { case 5: \"t\" default: @s }",
+            "U() ?? @s",
+            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                @s }",
+            "if n > 1 { @s } else { s = nil\n                \"x\" }",
+            "n > 1 ? \"t\" : ({\n                n = n + 0\n                @s\n            })",
+            "U() ?? {\n                n = n + 0\n                @s\n            }",
+            "if n > 1 { \"t\" } else { ({ @s }) }",
+            "n > 1 ? \"t\" : checked({ @s })",
+            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                ({ @s }) }"
         }
 
         private const Contract string = `#nullable enable

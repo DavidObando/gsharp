@@ -100,23 +100,13 @@ internal shared class DeclaredProjectItems {
             .ToList()
     }
 
-    internal async func EvaluateCompileProjectReferencePathsAsync(
+    internal func EvaluateCompileProjectReferencePathsAsync(
         projectPath string,
         cancellationToken CancellationToken = default(CancellationToken)
-    ) IReadOnlyList[string] {
-        let loaded = await CSharpProjectLoader.LoadProjectWithReferencesAsync(projectPath, cancellationToken)
-            .ConfigureAwait(false)
-        // Issue #4612: a project without a path maps to the empty string the
-        // next filter already drops; a null lambda result would throw in the
-        // migrated G#.
-        return loaded
-            .Skip(1)
-            .Select((project LoadedCSharpProject) -> project.ProjectPath ?? string.Empty)
-            .Where((path string) -> !string.IsNullOrEmpty(path))
-            .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList()
-    }
+    ) Task[IReadOnlyList[string]] -> CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
+        projectPath,
+        cancellationToken
+    )
 
     /// Collects the absolute project paths that any of the given projects
     /// declares a compile `ProjectReference` to (issue #3645). A

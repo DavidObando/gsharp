@@ -52,6 +52,8 @@ internal partial class ExpressionBinder {
     private let binderCtx BinderContext
     private let memberLookup MemberLookup
     private let conversions ConversionClassifier
+    // Issue #5613: the capture of the block value that BindBranchValue binds next (TakeBlockValueCapture).
+    private var pendingBlockValueCapture((NarrowedBranchValue) -> void)? = nil
     private let overloads OverloadResolver
     private let patterns PatternBinder
     private let lambdas LambdaBinder
@@ -68,6 +70,18 @@ internal partial class ExpressionBinder {
     private let bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression
     private let bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
     private let bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
+    private let bindSwitchArmHeader(
+        PatternSyntax,
+        ExpressionSyntax?,
+        BoundExpression,
+        bool
+    ) -> StatementBinder.SwitchArmHeader
+    private let reapplySwitchArmHeaderEffects(
+        PatternSyntax,
+        ExpressionSyntax?,
+        StatementBinder.SwitchArmHeader
+    ) -> HashSet[VariableSymbol]?
+    private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -108,7 +122,12 @@ internal partial class ExpressionBinder {
         bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
         bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression,
         bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression,
-        bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
+        bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
+        bindSwitchArmHeader(PatternSyntax, ExpressionSyntax?, BoundExpression, bool) -> StatementBinder.SwitchArmHeader,
+        reapplySwitchArmHeaderEffects(PatternSyntax, ExpressionSyntax?, StatementBinder.SwitchArmHeader) -> HashSet[
+            VariableSymbol
+        ]?,
+        bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -131,6 +150,9 @@ internal partial class ExpressionBinder {
         this.bindRichAnonymousObject = bindRichAnonymousObject
         this.bindStructuralAdaptation = bindStructuralAdaptation
         this.bindNativeProtocolProbe = bindNativeProtocolProbe
+        this.bindSwitchArmHeader = bindSwitchArmHeader
+        this.reapplySwitchArmHeaderEffects = reapplySwitchArmHeaderEffects
+        this.bindAfterLaterArmTests = bindAfterLaterArmTests
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -298,7 +320,13 @@ internal partial class ExpressionBinder {
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
         if syntax is BlockExpressionSyntax blockExpression {
-            return BindBlockExpressionValue(blockExpression, canBeVoid: false, targetType, preserveEmptyBlock: true)
+            return BindBlockExpressionValue(
+                blockExpression,
+                canBeVoid: false,
+                targetType,
+                preserveEmptyBlock: true,
+                captureValue: TakeBlockValueCapture()
+            )
         }
         // Issue #1112: a switch-expression honors the target type (C#-style
         // target-typing) — bind it with the target so the result type can be
@@ -584,7 +612,8 @@ internal partial class ExpressionBinder {
                 return BindBlockExpressionValue(
                     cast[BlockExpressionSyntax](syntax),
                     canBeVoid,
-                    preserveEmptyBlock: true
+                    preserveEmptyBlock: true,
+                    captureValue: TakeBlockValueCapture()
                 )
             }
             case SyntaxKind.ThrowExpression {

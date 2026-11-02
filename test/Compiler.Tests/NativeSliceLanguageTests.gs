@@ -509,15 +509,20 @@ True
         ) string -> CompileCSharpCore(source, name, reference, extra)
 
         private func CompileCSharpCore(source string, name string, reference string?, extra ...string) string {
-            let paths = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")))
-                .Split(Path.PathSeparator)
-                .Concat([]string{typeof(Slice[_]).Assembly.Location})
-                .Concat(extra)
-                .Distinct(StringComparer.Ordinal)
+            let baseReferences = BaseCSharpReferences.Value
+            let metadataReferences IEnumerable[MetadataReference] = if extra.Length == 0 {
+                baseReferences
+            } else {
+                baseReferences.Concat(
+                    extra.Distinct(StringComparer.Ordinal).Select(
+                        (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
+                    )
+                )
+            }
             let compilation = CSharpCompilation.Create(
                 name,
                 []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(source)},
-                paths.Select((path string) -> MetadataReference.CreateFromFile(path)),
+                metadataReferences,
                 CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     nullableContextOptions: NullableContextOptions.Enable
@@ -538,6 +543,21 @@ True
                 Assert.True(result.Success, string.Join("\n", result.Diagnostics))
             }
             return path
+        }
+
+        shared {
+            private let BaseCSharpReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[
+                IReadOnlyList[MetadataReference]
+            ](BuildBaseCSharpReferences)
+
+            private func BuildBaseCSharpReferences() IReadOnlyList[MetadataReference] -> (
+                cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
+            )
+                .Split(Path.PathSeparator)
+                .Concat([]string{typeof(Slice[_]).Assembly.Location})
+                .Distinct(StringComparer.Ordinal)
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .ToArray()
         }
 
         func Run(assembly string) string {

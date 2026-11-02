@@ -25,21 +25,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> Packing Gsharp.NET.Sdk into .nugs/"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
-mkdir -p .nugs
-cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    echo "==> Packing Gsharp.NET.Sdk into .nugs/"
+    dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
+    mkdir -p .nugs
+    cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+fi
 
 NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 
-# Force NuGet to re-extract the (same-versioned) SDK so target edits take effect.
-rm -rf "${HOME:-$PWD}/.nuget/packages/gsharp.net.sdk/$VER" || true
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    # Force NuGet to re-extract the (same-versioned) SDK so target edits take effect.
+    rm -rf "${HOME:-$PWD}/.nuget/packages/gsharp.net.sdk/$VER" || true
+fi
 
 echo "==> Building cs2gs and gsc (Release)"
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj -c Release --nologo -v:q
-dotnet build src/Compiler/Compiler.gsproj -c Release --nologo -v:q
+if [[ ! -f out/bin/Release/Compiler/gsc.dll ]]; then
+    dotnet build src/Compiler/Compiler.gsproj -c Release --nologo -v:q
+fi
 
 WORK_DIR="${E2E_WORK_ROOT:-$(mktemp -d)}"
 mkdir -p "$WORK_DIR"

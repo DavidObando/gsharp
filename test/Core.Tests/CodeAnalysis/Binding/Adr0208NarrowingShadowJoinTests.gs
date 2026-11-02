@@ -436,8 +436,9 @@ func Run() int32 {
     return s.Length
 }`)
         Assert.Equal([]string{"10|s|nil|string|R4"}, Rows(lines, "J"))
-        // The reads: the guard argument `ref s`, and the read after the switch.
-        Assert.Equal([]string{"12|s|string?|string|nullability", "14|s|string?|string|nullability"}, Rows(lines, "R"))
+        // The guard binds before the default arm, in dispatch order (#5629), so its argument `ref s` reads the entry
+        // proof in both passes; the read after the switch still differs.
+        Assert.Equal([]string{"14|s|string?|string|nullability"}, Rows(lines, "R"))
     }
 
     @Fact

@@ -9,10 +9,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> Packing Gsharp.NET.Sdk into .nugs/"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
-mkdir -p .nugs
-cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    echo "==> Packing Gsharp.NET.Sdk into .nugs/"
+    dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
+    mkdir -p .nugs
+    cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+fi
 
 NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
@@ -62,8 +64,8 @@ public sealed class CallReporter : GSharpDiagnosticAnalyzer
     }
 }
 EOF
-dotnet build "$WORK/analyzer/SampleAnalyzer.csproj" --nologo -v:q
-ANALYZER_DLL=$(find "$WORK/analyzer" "$ROOT/out/bin" -name SampleAnalyzer.dll -path "*Debug*" -not -path "*/ref/*" -not -path "*/refint/*" 2>/dev/null | grep "/bin/" | head -1)
+dotnet build "$WORK/analyzer/SampleAnalyzer.csproj" -c Release --nologo -v:q
+ANALYZER_DLL=$(find "$WORK/analyzer" "$ROOT/out/bin" -name SampleAnalyzer.dll -path "*Release*" -not -path "*/ref/*" -not -path "*/refint/*" 2>/dev/null | grep "/bin/" | head -1)
 if [[ -z "$ANALYZER_DLL" ]]; then
     echo "FAIL: SampleAnalyzer.dll not found after build."
     exit 1
@@ -110,8 +112,10 @@ func Main() {
 }
 EOF
 
-# Force NuGet to re-extract the (same-versioned) SDK so target edits take effect.
-rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    # Force NuGet to re-extract the (same-versioned) SDK so target edits take effect.
+    rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+fi
 
 echo "==> dotnet build (expecting TESTGSA01 warnings)"
 BUILD_LOG="$WORK/build.log"
