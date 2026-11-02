@@ -23,21 +23,6 @@ internal partial class ExpressionBinder {
         targetType: nil
     )
 
-    // Binds an arm's pattern in the current (arm) scope and applies its test's effects to the narrowing facts, as the
-    // statement form does (ADR-0208 R19, #5629).
-    private func BindSwitchArmPattern(armSyntax SwitchExpressionArmSyntax, switchType TypeSymbol) BoundPattern {
-        let pattern = patterns.BindPattern(
-            Invariant.Required(
-                armSyntax.Value,
-                "a non-default switch arm has a pattern value",
-                expression: "armSyntax.Value"
-            ),
-            switchType
-        )
-        applySwitchArmTestEffects(armSyntax, switchType, pattern)
-        return pattern
-    }
-
     /// @param canBeVoid Issue #4966 §2 (ADR-0202): the switch is in a position
     /// whose value is discarded (an expression statement, a void arrow body, a
     /// lambda body). When an arm is then void, the whole switch is the void
@@ -99,22 +84,37 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
+                let laterTests = List[(Syntax SyntaxNode, Pattern BoundPattern)]()
                 for var later = armIndex + 1; later < syntax.Arms.Length; later++ {
                     let laterSyntax = syntax.Arms[later]
                     if laterSyntax.IsDefault {
                         continue
                     }
+                    let laterValue = Invariant.Required(
+                        laterSyntax.Value,
+                        "a non-default switch arm has a pattern value",
+                        expression: "laterSyntax.Value"
+                    )
                     $scope = BoundScope($scope)
-                    let laterPattern = BindSwitchArmPattern(laterSyntax, switchType)
+                    let laterPattern = patterns.BindPattern(laterValue, switchType)
                     earlyPatterns[later] = laterPattern
                     earlyScopes[later] = $scope
                     $scope = $scope.Pop()
+                    laterTests.Add((laterValue, laterPattern))
                 }
-                let result = if targetType == nil {
-                    BindExpression(armSyntax.Result, canBeVoid)
-                } else {
-                    BindExpression(armSyntax.Result, targetType)
-                }
+                let result = cast[BoundExpression](
+                    bindAfterLaterArmTests(
+                        laterTests,
+                        switchType,
+                        func () BoundNode {
+                            return if targetType == nil {
+                                BindExpression(armSyntax.Result, canBeVoid)
+                            } else {
+                                BindExpression(armSyntax.Result, targetType)
+                            }
+                        }
+                    )
+                )
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
             }
@@ -128,8 +128,11 @@ internal partial class ExpressionBinder {
                 early
             } else {
                 $scope = BoundScope($scope)
-                BindSwitchArmPattern(armSyntax, switchType)
+                patterns.BindPattern(patternSyntax, switchType)
             }
+            // ADR-0208 R18 and R19 (#5629): the arm's test runs after the tests before it and before its guard and
+            // result, as the statement form's does.
+            applySwitchArmTestEffects(patternSyntax, switchType, pattern!!)
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so it never contributes to exhaustiveness — in
             // particular a guarded discard `case _ when …` does NOT act as a

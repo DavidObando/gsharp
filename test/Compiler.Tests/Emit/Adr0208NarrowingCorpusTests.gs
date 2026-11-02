@@ -123,6 +123,11 @@ open class Adr0208NarrowingCorpusTests {
                 "a08_5629_loop_write_before_continue_in_a_try",
                 "a09_5629_loop_continue_in_an_int_case_keeps_the_fact_R19",
                 "a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14",
+                "a11_5629_case_body_call_is_not_part_of_the_test_R18",
+                "a12_5629_arm_result_call_is_not_part_of_the_test_R18",
+                "a13_5629_tests_after_a_default_do_not_reach_earlier_cases_R19",
+                "a14_5629_tests_after_a_default_do_not_reach_earlier_arms_R19",
+                "a15_5629_continue_in_do_while_false_is_no_back_edge",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7441,6 +7446,111 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@22:38", "reject", "", "R14"}
+            yield[]object{"a11_5629_case_body_call_is_not_part_of_the_test_R18", `import System
+
+class Pet {
+    var Value int32 = 1
+}
+class B {
+    let Pet Pet? = Pet{}
+}
+func Run(n int32) int32 {
+    let b = B{}
+    if b.Pet == nil { return 0 }
+    switch n {
+        case 1 { Console.WriteLine(b.Pet.Value) }
+        default { }
+    }
+    return 1
+}
+Console.WriteLine(Run(1))`, "", "run", "1|1", "R18"}
+            yield[]object{"a12_5629_arm_result_call_is_not_part_of_the_test_R18", `import System
+
+class B {
+    let Pet Pet? = Pet{}
+}
+class Pet {
+    var Value int32 = 1
+}
+func Use(v int32) int32 -> v
+func Run(n int32) int32 {
+    let b = B{}
+    if b.Pet == nil { return 0 }
+    return switch n {
+        case 1: Use(b.Pet.Value)
+        default: 0
+    }
+}
+Console.WriteLine(Run(1))`, "", "run", "1", "R18"}
+            yield[]object{"a13_5629_tests_after_a_default_do_not_reach_earlier_cases_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { }
+        case nil { return x.Value }
+        case 1 { }
+    }
+    return 2
+}
+Console.WriteLine(Run(nil))`, "", "run", "1", "R19"}
+            yield[]object{"a14_5629_tests_after_a_default_do_not_reach_earlier_arms_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    return switch o {
+        default: 2
+        case nil: x.Value
+        case 1: 3
+    }
+}
+Console.WriteLine(Run(nil))`, "", "run", "1", "R19"}
+            yield[]object{"a15_5629_continue_in_do_while_false_is_no_back_edge", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    do {
+        Console.WriteLine(t.Length)
+        switch k {
+            case 1 {
+                t = nil
+                continue
+            }
+            default { }
+        }
+    } while false
+    return 1
+}
+Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {

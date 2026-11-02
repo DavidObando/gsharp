@@ -530,7 +530,12 @@ partial class Binder {
             bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
             BindNativeProtocolConversion(location, source, target, testOnly: true),
             applySwitchArmTestEffects: (syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) ->
-            Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern)
+            Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern),
+            bindAfterLaterArmTests: (
+                tests List[(Syntax SyntaxNode, Pattern BoundPattern)],
+                inputType TypeSymbol,
+                bind() -> BoundNode
+            ) -> Statements.BindAfterLaterArmTests(tests, inputType, bind)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

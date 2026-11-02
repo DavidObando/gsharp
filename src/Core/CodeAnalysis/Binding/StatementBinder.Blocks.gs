@@ -17,21 +17,6 @@ import System.Reflection
 import System.Threading
 
 internal partial class StatementBinder {
-    // Binds a case's pattern in the current (arm) scope and applies its test's effects to the narrowing facts
-    // (ADR-0208 R19, #5629).
-    private func BindSwitchCasePattern(caseSyntax SwitchCaseSyntax, discriminant BoundExpression) BoundPattern {
-        let pattern = patterns.BindPattern(
-            Invariant.Required(
-                caseSyntax.Value,
-                "a non-default switch case has a pattern value",
-                expression: "caseSyntax.Value"
-            ),
-            discriminant.Type
-        )
-        ApplySwitchArmTestEffects(caseSyntax, discriminant.Type, pattern)
-        return pattern
-    }
-
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
         let discriminant = bindExpression(syntax.Expression, false)
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
@@ -117,18 +102,33 @@ internal partial class StatementBinder {
                         Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Keyword.Location)
                     }
                     hasDefault = true
+                    let laterTests = List[(Syntax SyntaxNode, Pattern BoundPattern)]()
                     for var later = caseIndex + 1; later < syntax.Cases.Length; later++ {
                         let laterSyntax = syntax.Cases[later]
                         if laterSyntax.IsDefault {
                             continue
                         }
+                        let laterValue = Invariant.Required(
+                            laterSyntax.Value,
+                            "a non-default switch case has a pattern value",
+                            expression: "laterSyntax.Value"
+                        )
                         $scope = BoundScope($scope)
-                        let laterPattern = BindSwitchCasePattern(laterSyntax, discriminant)
+                        let laterPattern = patterns.BindPattern(laterValue, switchType)
                         earlyPatterns[later] = laterPattern
                         earlyScopes[later] = $scope
                         $scope = $scope.Pop()
+                        laterTests.Add((laterValue, laterPattern))
                     }
-                    var defaultBody = BindBlockStatement(caseSyntax.Body)
+                    var defaultBody = cast[BoundStatement](
+                        BindAfterLaterArmTests(
+                            laterTests,
+                            switchType,
+                            func () BoundNode {
+                                return BindBlockStatement(caseSyntax.Body)
+                            }
+                        )
+                    )
                     ShadowAddBranch(shadowFlow, nil, defaultBody, true)
                     shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
@@ -161,8 +161,11 @@ internal partial class StatementBinder {
                     early
                 } else {
                     $scope = BoundScope($scope)
-                    BindSwitchCasePattern(caseSyntax, discriminant)
+                    patterns.BindPattern(caseValue, switchType)
                 }
+                // ADR-0208 R18 and R19 (#5629): the case's test runs after the tests before it and before its guard
+                // and body.
+                ApplySwitchArmTestEffects(caseValue, switchType, pattern)
                 // Issue #3501 A3: a fallthrough INTO this arm skips its pattern
                 // test — pattern bindings and guards would run unassigned/
                 // unevaluated, so such targets are rejected. Pattern-declared

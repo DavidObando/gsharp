@@ -805,7 +805,17 @@ internal partial class StatementBinder {
         let continueTargets = HashSet[BoundLabel]()
         continueTargets.Add(continueLabel)
         var hiddenContinue = false
-        for block in graph.Blocks {
+        // A `continue` reaches only the condition of `do { } while false`, which ends the loop.
+        let conditionIsFalse = backEdgeCondition is BoundLiteralExpression literalCondition &&
+            literalCondition.Value is bool conditionValue &&
+            !conditionValue
+        for block in(
+            if conditionIsFalse {
+                List[ControlFlowGraph.BasicBlock]()
+            } else {
+                graph.Blocks
+            }
+        ) {
             for statement in block.Statements {
                 if statement is BoundPatternSwitchStatement or BoundTryStatement or BoundFixedStatement {
                     let finder = JumpToLabelsFinder(continueTargets)
@@ -2011,6 +2021,27 @@ internal partial class StatementBinder {
             syntax,
             BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern)
         )
+    }
+
+    /// #5629: a `default` that is not the last arm runs after the tests of the arms after it, so their effects apply
+    /// to its body only. The facts that they remove are put back afterwards (as R18 does for an else-branch), and each
+    /// of those arms applies its own test where it is dispatched.
+    internal func BindAfterLaterArmTests(
+        tests List[(Syntax SyntaxNode, Pattern BoundPattern)],
+        inputType TypeSymbol,
+        bind() -> BoundNode
+    ) BoundNode {
+        if tests.Count == 0 {
+            return bind()
+        }
+        let outer = BeginThenBranchConditionKills()
+        let entry = binderCtx.Narrowing
+        for test in tests {
+            ApplySwitchArmTestEffects(test.Syntax, inputType, test.Pattern)
+        }
+        let bound = bind()
+        RestoreThenBranchConditionKills(outer, entry)
+        return bound
     }
 
     private func EnsureClosureAssignedNames(anchor SyntaxNode) -> binderCtx.EnsureClosureAssignedNames(
