@@ -707,6 +707,28 @@ public static class Use
             }, []string{"Implicit", "12", "Explicit", "12", "Collection", "12", "Listed", "12", "Throws", "-1"})
     }
 
+    /// Review of #5571: an object initializer's `[key] = value` and a conditional
+    /// `table?[key]` bind the indexer through the construction and the conditional
+    /// receiver, so an unchanged dictionary keeps the key's `!!` and a promoted
+    /// construction takes a nil value.
+    @Fact
+    func An_Initializer_Or_Conditional_Indexer_Is_Bound_By_Its_Receiver() {
+        this.Check("Review21", `using System.Collections.Generic;
+using ObLib;
+
+public class Bag<T> { private T item; public T this[int i] { get { return item; } set { item = value; } } }
+public static class Use
+{
+    public static int Init(string p) { string[] lines; lines = Node.Lines(p); var table = new Dictionary<string, int> { [lines[0]] = 1 }; return table["ab"]; }
+    public static int Cond(string p) { string[] lines; lines = Node.Lines(p); Dictionary<string, int>? table = new Dictionary<string, int> { ["ab"] = 5 }; return table?[lines[0]] ?? -1; }
+    public static int PromotedInit(string p) { string[] lines; lines = Node.Holes(p); var bag = new Bag<string> { [0] = lines[1] }; return bag[0] == null ? 1 : 0; }
+}`, []string{
+                "Dictionary[string, int32]{ [lines[0]!!] = 1 }",
+                "return table?[lines[0]!!] ?? -1",
+                "Bag[string?]{ [0] = lines[1] }"
+            }, []string{"Init", "1", "Cond", "5", "PromotedInit", "1"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {

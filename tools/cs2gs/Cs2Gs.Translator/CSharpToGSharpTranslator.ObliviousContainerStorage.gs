@@ -723,14 +723,7 @@ partial class CSharpToGSharpTranslator {
         // read or write, or a field or property read or write. An extension call, a
         // static member and a `this` or `base` receiver bind nothing.
         private func ReceiverBoundMember(access ExpressionSyntax?) ISymbol? {
-            let receiver ExpressionSyntax? = switch access {
-                case invocation is InvocationExpressionSyntax: (
-                    invocation.Expression as MemberAccessExpressionSyntax
-                )?.Expression
-                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
-                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
-                default: default(ExpressionSyntax?)
-            }
+            let receiver ExpressionSyntax? = MemberReceiver(access)
             if receiver == nil || receiver is ThisExpressionSyntax || receiver is BaseExpressionSyntax {
                 return nil
             }
@@ -891,10 +884,27 @@ partial class CSharpToGSharpTranslator {
                 .GetSymbolInfo(invocation)
                 .Symbol is IMethodSymbol method {
                 bindings = this.ObliviousMemberTypeArguments(invocation, method, model, flow)
-            } else if (call is ElementAccessExpressionSyntax || call is MemberAccessExpressionSyntax) &&
-                this.ReceiverBoundMember(call) is {} member {
+            } else if call is ImplicitElementAccessSyntax &&
+                MemberReceiver(call) is BaseObjectCreationExpressionSyntax initialized &&
+                this.ReceiverBoundMember(call) is {} initializedMember &&
+                this
+                .context
+                .GetTypeInfo(initialized)
+                .Type is INamedTypeSymbol initializedType {
+                // An indexer write in an object initializer (`new D { [key] = value }`)
+                // binds the indexer's type parameters to the positions that the
+                // construction states.
+                bindings = TypeParameterMap()
+                Unify(
+                    initializedMember.ContainingType.OriginalDefinition,
+                    initializedType,
+                    this.EffectiveCreationPositions(initialized, initializedType),
+                    bindings
+                )
+            } else if !(call is InvocationExpressionSyntax) && this.ReceiverBoundMember(call) is {} member {
                 // An indexer, field or property binds its type's parameters to the
-                // receiver's positions, as a method call does.
+                // receiver's positions, as a method call does; `table?[key]` binds them
+                // to the conditional receiver's.
                 bindings = this.ObliviousMemberTypeArguments(call, member, model, flow)
             } else if call is BaseObjectCreationExpressionSyntax creation &&
                 this
@@ -1178,18 +1188,7 @@ partial class CSharpToGSharpTranslator {
             flow ObliviousContainerFlow
         ) Dictionary[ITypeParameterSymbol, ObliviousPositionSet] {
             let bindings = TypeParameterMap()
-            let receiver ExpressionSyntax? = switch value {
-                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
-                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
-                case invocation is InvocationExpressionSyntax: (
-                    if invocation.Expression is MemberAccessExpressionSyntax target {
-                        target.Expression
-                    } else {
-                        default(ExpressionSyntax?)
-                    }
-                )
-                default: default(ExpressionSyntax?)
-            }
+            let receiver ExpressionSyntax? = MemberReceiver(value)
             // An extension call reads its receiver as its first argument.
             let reduced = symbol is IMethodSymbol method && method.ReducedFrom != nil
             if receiver != nil &&
@@ -2101,6 +2100,63 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 return writes
+            }
+
+            // The receiver of a member access, an element access or a call through one:
+            // the expression before `.` or `[`, the receiver of a conditional access for
+            // `?.member` and `?[index]`, and the construction for an object initializer's
+            // `[index] = value`.
+            private func MemberReceiver(access ExpressionSyntax?) ExpressionSyntax? {
+                switch access {
+                    case invocation is InvocationExpressionSyntax {
+                        return switch invocation.Expression {
+                            case target is MemberAccessExpressionSyntax: target.Expression
+                            case binding is MemberBindingExpressionSyntax: ConditionalReceiver(binding)
+                            default: default(ExpressionSyntax?)
+                        }
+                    }
+                    case elementAccess is ElementAccessExpressionSyntax {
+                        return elementAccess.Expression
+                    }
+                    case memberAccess is MemberAccessExpressionSyntax {
+                        return memberAccess.Expression
+                    }
+                    case elementBinding is ElementBindingExpressionSyntax {
+                        return ConditionalReceiver(elementBinding)
+                    }
+                    case memberBinding is MemberBindingExpressionSyntax {
+                        return ConditionalReceiver(memberBinding)
+                    }
+                    case implicitAccess is ImplicitElementAccessSyntax {
+                        return if implicitAccess.Parent is AssignmentExpressionSyntax{
+                            Parent: InitializerExpressionSyntax{Parent: BaseObjectCreationExpressionSyntax creation}
+                        } {
+                            creation
+                        } else {
+                            default(ExpressionSyntax?)
+                        }
+                    }
+                    default {
+                        return nil
+                    }
+                }
+            }
+
+            // The receiver that a `?.` or `?[` binding reads: the expression of the
+            // nearest conditional access whose bound part holds the binding.
+            private func ConditionalReceiver(binding ExpressionSyntax) ExpressionSyntax? {
+                var node SyntaxNode? = binding.Parent
+                while node != nil {
+                    if node is ConditionalAccessExpressionSyntax conditional &&
+                        conditional
+                        .WhenNotNull
+                        .Span
+                        .Contains(binding.Span) {
+                        return conditional.Expression
+                    }
+                    node = node.Parent
+                }
+                return nil
             }
 
             // Issue #5541: an array literal (explicit, implicit or a bare array
