@@ -4717,6 +4717,17 @@ partial class CSharpToGSharpTranslator {
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
             }
+            // ADR-0208 R18 (6) and R19 (#5593): the guard's own constant pattern can call the `Equals` of the
+            // tested value, which can run a closure that clears it, so gsc does not narrow on that test.
+            if closureAssigned &&
+                narrowingGuard is IsPatternExpressionSyntax guardTest &&
+                guardTest
+                .Pattern
+                .DescendantNodesAndSelf(OutsideNestedFunctions)
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax]()
+                .Any(this.ConstantPatternMayCallEquals) {
+                return true
+            }
             if $scope.DescendantNodes(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart >= narrowingGuard
                     .Span
@@ -4790,6 +4801,44 @@ partial class CSharpToGSharpTranslator {
             return !this.IsKnownCallFreeNode(node)
         }
 
+        private func ConstantPatternMayCallEquals(
+            pattern Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax
+        ) bool {
+            if this.context.SemanticModel.GetOperation(pattern) is not IConstantPatternOperation operation {
+                return true
+            }
+            let constant = operation.Value.ConstantValue
+            if constant.HasValue && constant.Value == nil {
+                return false
+            }
+            let input = operation.InputType
+            if input.SpecialType == SpecialType.System_Object {
+                return true
+            }
+            if input is not INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}
+            } nullable {
+                return false
+            }
+            let underlying = nullable.TypeArguments[0]
+            return underlying.TypeKind != TypeKind.Enum &&
+                underlying.SpecialType is not(
+                SpecialType.System_Boolean or
+                    SpecialType.System_Char or
+                    SpecialType.System_SByte or
+                    SpecialType.System_Byte or
+                    SpecialType.System_Int16 or
+                    SpecialType.System_UInt16 or
+                    SpecialType.System_Int32 or
+                    SpecialType.System_UInt32 or
+                    SpecialType.System_Int64 or
+                    SpecialType.System_UInt64 or
+                    SpecialType.System_Decimal or
+                    SpecialType.System_Single or
+                    SpecialType.System_Double
+            )
+        }
+
         private func IsKnownCallFreeNode(node Microsoft.CodeAnalysis.SyntaxNode) bool {
             // A contextual user-defined conversion (`int n = token;`) runs source code at any expression.
             if node is Microsoft
@@ -4803,6 +4852,12 @@ partial class CSharpToGSharpTranslator {
                 .GetConversion(anyExpression)
                 .IsUserDefined {
                 return false
+            }
+            // ADR-0208 R19 (#5593): gsc emits a constant pattern on an `object` input, or on a nullable value input
+            // whose underlying type is not a primitive, an enum or `decimal`, as `object.Equals`, which runs the input's
+            // `Equals`.
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax constantPattern {
+                return !this.ConstantPatternMayCallEquals(constantPattern)
             }
             // The callee part of a call and its argument list run nothing themselves: the
             // invocation node does, once its arguments are evaluated.
@@ -4836,11 +4891,6 @@ partial class CSharpToGSharpTranslator {
                 .CSharp
                 .Syntax
                 .IsPatternExpressionSyntax ||
-                node is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ConstantPatternSyntax ||
                 node is Microsoft
                 .CodeAnalysis
                 .CSharp
