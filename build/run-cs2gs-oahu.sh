@@ -21,6 +21,7 @@ case "$work_root" in
     ;;
 esac
 
+rm -rf "$work_root"
 mkdir -p "$work_root"
 work_root=$(cd "$work_root" && pwd -P)
 source_dir="$work_root/source"
@@ -28,34 +29,30 @@ migrated_dir="$work_root/migrated"
 runs_dir="$work_root/runs"
 smoke_dir="$work_root/smoke"
 log_file="$work_root/migrate.log"
-rm -rf "$migrated_dir" "$runs_dir" "$smoke_dir" "$log_file" "$work_root/stats.json"
 
-if [[ "$ref" == "$pinned_commit" && -f "$source_dir/.cs2gs-verified" && "$(cat "$source_dir/.cs2gs-verified")" == "$pinned_commit" ]]; then
-  actual_commit=$(git -C "$source_dir" rev-parse HEAD)
-  echo "Oahu gate '$label': reusing verified C# source cache at $actual_commit"
-  dotnet restore "$source_dir/Oahu.sln"
+git init --quiet "$source_dir"
+git -C "$source_dir" remote add origin "$repository"
+git -C "$source_dir" fetch --quiet origin "$ref"
+git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+actual_commit=$(git -C "$source_dir" rev-parse HEAD)
+
+# Keep MSBuild from importing Directory.Build.* files above the isolated clone
+# when OAHU_GATE_ROOT is placed under this repository.
+[[ -e "$source_dir/Directory.Build.props" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.props"
+[[ -e "$source_dir/Directory.Build.targets" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.targets"
+
+if [[ "$ref" == "$pinned_commit" && "$actual_commit" != "$pinned_commit" ]]; then
+  echo "Expected pinned Oahu commit $pinned_commit, got $actual_commit." >&2
+  exit 1
+fi
+
+echo "Oahu gate '$label': $actual_commit"
+
+dotnet restore "$source_dir/Oahu.sln"
+dotnet build "$source_dir/Oahu.sln" --configuration Release --no-restore
+if [[ -n "${CS2GS_VERIFIED_STAMP:-}" && -f "$CS2GS_VERIFIED_STAMP" && "$(cat "$CS2GS_VERIFIED_STAMP")" == "$actual_commit" ]]; then
+  echo "Oahu C# baseline tests already verified for $actual_commit; skipping C# test rerun."
 else
-  rm -rf "$source_dir"
-  git init --quiet "$source_dir"
-  git -C "$source_dir" remote add origin "$repository"
-  git -C "$source_dir" fetch --quiet origin "$ref"
-  git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
-  actual_commit=$(git -C "$source_dir" rev-parse HEAD)
-
-  # Keep MSBuild from importing Directory.Build.* files above the isolated clone
-  # when OAHU_GATE_ROOT is placed under this repository.
-  [[ -e "$source_dir/Directory.Build.props" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.props"
-  [[ -e "$source_dir/Directory.Build.targets" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.targets"
-
-  if [[ "$ref" == "$pinned_commit" && "$actual_commit" != "$pinned_commit" ]]; then
-    echo "Expected pinned Oahu commit $pinned_commit, got $actual_commit." >&2
-    exit 1
-  fi
-
-  echo "Oahu gate '$label': $actual_commit"
-
-  dotnet restore "$source_dir/Oahu.sln"
-  dotnet build "$source_dir/Oahu.sln" --configuration Release --no-restore
   dotnet test "$source_dir/tests/Oahu.Cli.Tests/Oahu.Cli.Tests.csproj" \
     --configuration Release --no-build
   dotnet test "$source_dir/tests/Oahu.Foundation.Tests/Oahu.Foundation.Tests.csproj" \
@@ -63,7 +60,10 @@ else
   dotnet test "$source_dir/tests/Oahu.Cli.E2E.Tests/Oahu.Cli.E2E.Tests.csproj" \
     --configuration Release --no-build
   dotnet "$source_dir/src/Oahu.App/bin/Release/net10.0/Oahu.dll" --smoke-test
-  printf '%s\n' "$actual_commit" > "$source_dir/.cs2gs-verified"
+  if [[ -n "${CS2GS_VERIFIED_STAMP:-}" ]]; then
+    mkdir -p "$(dirname "$CS2GS_VERIFIED_STAMP")"
+    printf '%s\n' "$actual_commit" > "$CS2GS_VERIFIED_STAMP"
+  fi
 fi
 
 # cs2gs rejects C# #if/#elif (CS2GS-CONDITIONAL-COMPILATION): G# has no

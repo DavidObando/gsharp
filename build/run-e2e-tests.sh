@@ -9,6 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 E2E_DIR="$ROOT/e2etests"
 
 # Collect test scripts (sorted for deterministic ordering).

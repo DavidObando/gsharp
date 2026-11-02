@@ -21,13 +21,29 @@ case "$work_root" in
     ;;
 esac
 
+rm -rf "$work_root"
 mkdir -p "$work_root"
 work_root=$(cd "$work_root" && pwd -P)
 source_dir="$work_root/source"
 migrated_dir="$work_root/migrated"
 runs_dir="$work_root/runs"
 log_file="$work_root/migrate.log"
-rm -rf "$migrated_dir" "$runs_dir" "$log_file" "$work_root/stats.json" "$work_root/nuget-packages"
+
+git init --quiet "$source_dir"
+git -C "$source_dir" remote add origin "$repository"
+git -C "$source_dir" fetch --quiet origin "$ref"
+git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+actual_commit=$(git -C "$source_dir" rev-parse HEAD)
+
+# Keep MSBuild from importing Directory.Build.* files above the isolated clone
+# when CODE_EXPLODER_GATE_ROOT is placed under this repository.
+[[ -e "$source_dir/Directory.Build.props" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.props"
+[[ -e "$source_dir/Directory.Build.targets" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.targets"
+
+if [[ "$ref" == "$pinned_commit" && "$actual_commit" != "$pinned_commit" ]]; then
+  echo "Expected pinned code-exploder commit $pinned_commit, got $actual_commit." >&2
+  exit 1
+fi
 
 export NUGET_PACKAGES="$work_root/nuget-packages"
 # The pinned Testcontainers dependency currently carries a test-only SSH.NET
@@ -35,35 +51,19 @@ export NUGET_PACKAGES="$work_root/nuget-packages"
 # production dependency auditing remains enabled in both repositories' own CI.
 export NuGetAudit=false
 
-if [[ "$ref" == "$pinned_commit" && -f "$source_dir/.cs2gs-verified" && "$(cat "$source_dir/.cs2gs-verified")" == "$pinned_commit" ]]; then
-  actual_commit=$(git -C "$source_dir" rev-parse HEAD)
-  echo "code-exploder gate '$label': reusing verified C# source cache at $actual_commit"
-  dotnet restore "$source_dir/codeexploder.slnx"
+echo "code-exploder gate '$label': $actual_commit"
+
+dotnet restore "$source_dir/codeexploder.slnx"
+dotnet build "$source_dir/codeexploder.slnx" --configuration Release --no-restore
+if [[ -n "${CS2GS_VERIFIED_STAMP:-}" && -f "$CS2GS_VERIFIED_STAMP" && "$(cat "$CS2GS_VERIFIED_STAMP")" == "$actual_commit" ]]; then
+  echo "code-exploder C# baseline tests already verified for $actual_commit; skipping C# test rerun."
 else
-  rm -rf "$source_dir"
-  git init --quiet "$source_dir"
-  git -C "$source_dir" remote add origin "$repository"
-  git -C "$source_dir" fetch --quiet origin "$ref"
-  git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
-  actual_commit=$(git -C "$source_dir" rev-parse HEAD)
-
-  # Keep MSBuild from importing Directory.Build.* files above the isolated clone
-  # when CODE_EXPLODER_GATE_ROOT is placed under this repository.
-  [[ -e "$source_dir/Directory.Build.props" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.props"
-  [[ -e "$source_dir/Directory.Build.targets" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.targets"
-
-  if [[ "$ref" == "$pinned_commit" && "$actual_commit" != "$pinned_commit" ]]; then
-    echo "Expected pinned code-exploder commit $pinned_commit, got $actual_commit." >&2
-    exit 1
-  fi
-
-  echo "code-exploder gate '$label': $actual_commit"
-
-  dotnet restore "$source_dir/codeexploder.slnx"
-  dotnet build "$source_dir/codeexploder.slnx" --configuration Release --no-restore
   dotnet test "$source_dir/codeexploder.slnx" \
     --configuration Release --no-build --no-restore
-  printf '%s\n' "$actual_commit" > "$source_dir/.cs2gs-verified"
+  if [[ -n "${CS2GS_VERIFIED_STAMP:-}" ]]; then
+    mkdir -p "$(dirname "$CS2GS_VERIFIED_STAMP")"
+    printf '%s\n' "$actual_commit" > "$CS2GS_VERIFIED_STAMP"
+  fi
 fi
 
 set +e
