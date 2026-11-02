@@ -1196,6 +1196,13 @@ internal partial class ExpressionBinder {
         if syntax.Expression == nil {
             return BindValuelessBlockExpression(syntax, canBeVoid)
         }
+        // Issue #5613: a block value whose consumer does not decide its narrowed trailing value (no capture and no
+        // target) gives that value its own type, as `let t = s` does, so the use is recorded where it binds.
+        let capture = if captureValue == nil && targetType == nil {
+            (read NarrowedBranchValue) -> RecordNarrowedValueAtItsType(read)
+        } else {
+            captureValue
+        }
         // If there are no prefix statements, just bind the expression directly.
         if syntax.Statements.IsDefaultOrEmpty {
             let expression = if targetType == nil {
@@ -1203,7 +1210,7 @@ internal partial class ExpressionBinder {
             } else {
                 BindExpression(syntax.Expression!!, targetType)
             }
-            CaptureBranchValue(expression, syntax.Expression!!.Location, captureValue)
+            CaptureBranchValue(expression, syntax.Expression!!.Location, capture)
             return if preserveEmptyBlock && !(expression is BoundErrorExpression) {
                 cast[BoundExpression](BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression))
             } else {
@@ -1220,7 +1227,7 @@ internal partial class ExpressionBinder {
             ),
             canBeVoid,
             targetType,
-            captureValue
+            capture
         )
         if IsDeferredBranchyArgumentPlaceholder(boundExpression, out _) {
             return BoundErrorExpression(syntax)
@@ -1428,8 +1435,13 @@ internal partial class ExpressionBinder {
     ) BoundExpression -> BindWithNarrowing(
         narrowing,
         () -> {
-            // A block value captures its trailing value in the narrowing of its statements.
-            pendingBlockValueCapture = if syntax is BlockExpressionSyntax {
+            // A block value, also in parentheses, captures its trailing value in the narrowing of its statements.
+            var valueSyntax = syntax
+            while valueSyntax is ParenthesizedExpressionSyntax parenthesized {
+                valueSyntax = parenthesized.Expression
+            }
+            let isBlock = valueSyntax is BlockExpressionSyntax
+            pendingBlockValueCapture = if isBlock {
                 captureValue
             } else {
                 default(((NarrowedBranchValue) -> void)?)
@@ -1440,7 +1452,7 @@ internal partial class ExpressionBinder {
                 } else {
                     BindExpression(syntax, targetType)
                 }
-                if !(syntax is BlockExpressionSyntax) {
+                if !isBlock {
                     CaptureBranchValue(value, syntax.Location, captureValue)
                 }
                 return value
@@ -1538,6 +1550,19 @@ internal partial class ExpressionBinder {
             )
         }
         return branch
+    }
+
+    // Issue #5613: records the use of a captured narrowed read whose value keeps its narrowed type.
+    private func RecordNarrowedValueAtItsType(read NarrowedBranchValue) {
+        if read.Use is {} use {
+            binderCtx.RecordBackwardGotoNarrowingUse(
+                use,
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                read.NarrowedType
+            )
+        }
     }
 
     // Issue #5613: replaces the narrowed read that a branch value yields (the value, or a block's trailing value).
@@ -1649,6 +1674,7 @@ internal partial class ExpressionBinder {
         // `x is T t && t.Length > 0` binds `t.Length` with `t` in scope, and
         // `!(x is T t) || t.Length > 0` likewise through the negation.
         var boundRight BoundExpression
+        var coalesceRightRead NarrowedBranchValue? = nil
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
             let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
@@ -1669,12 +1695,21 @@ internal partial class ExpressionBinder {
                 }
             )
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
-        } else if coalesceTargetType != nil &&
-            syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
-            IsTargetDependentExpressionSyntax(syntax.Right) {
-            boundRight = BindExpression(syntax.Right, coalesceTargetType)
+        } else if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+            // Issue #5613: the right operand is a branch of the result, so its narrowed read is captured where it
+            // binds and decided for the result type.
+            boundRight = BindBranchValue(
+                syntax.Right,
+                nil,
+                if coalesceTargetType != nil && IsTargetDependentExpressionSyntax(syntax.Right) {
+                    coalesceTargetType
+                } else {
+                    default(TypeSymbol?)
+                },
+                (read NarrowedBranchValue) -> {
+                    coalesceRightRead = read
+                }
+            )
         } else {
             boundRight = BindExpression(syntax.Right)
         }
@@ -1982,11 +2017,15 @@ internal partial class ExpressionBinder {
             // the contextual target that makes the right group a value.
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
         } else if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
-            (boundRight.Type != boundOperator.Type || conversions.IsNarrowedRead(boundRight)) &&
+            (boundRight.Type != boundOperator.Type || coalesceRightRead != nil) &&
             boundRight.Type != TypeSymbol
             .Never {
-            // Issue #5613: a narrowed right operand converts to the result type with the backward `goto` check.
-            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            // Issue #5613: a narrowed right operand is decided for the result type as a conditional branch is.
+            boundRight = if coalesceRightRead != nil {
+                ConvertConditionalBranch(syntax.Right.Location, boundRight, boundOperator.Type, coalesceRightRead)
+            } else {
+                conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            }
         }
         // Issue #3317 / ADR-0159: with sound empty-instance zero values, a nil
         // comparison whose non-nil operand's STATIC type is a bare (non-`?`)

@@ -1276,6 +1276,13 @@ func Main() {
                 "t == null"
             ),
             (
+                "n > 1 ? U() : ({\n                n = n + 0\n                s\n            })",
+                "n > 1 ? U() : s",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            (
                 "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
                 "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
                 "n = n + 0",
@@ -1343,7 +1350,7 @@ func Main() {
         }
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrue1111111")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrue1111111")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2296,8 +2303,9 @@ class Program {
             "    let t = if s != nil {\n        M: n++\n        @s\n    } else {\n        \"x\"\n    }\n" +
             "    Console.Write(t == nil)\n    if n < 2 {\n        s = nil\n        goto M\n    }\n}\n"
 
-        // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch. The last form
-        // assigns `s` in the other branch, after the read binds.
+        // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch. A form assigns
+        // `s` in the other branch, after the read binds. The last forms yield the read from a block: in parentheses,
+        // as the right operand of `??`, and as the whole value.
         private let BranchValueForms[]string = []string{
             "n > 1 ? \"t\" : @s",
             "n > 1 ? \"t\" : (n > 2 ? \"u\" : @s)",
@@ -2308,7 +2316,10 @@ class Program {
             "switch n { case 5: \"t\" default: @s }",
             "U() ?? @s",
             "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                @s }",
-            "if n > 1 { @s } else { s = nil\n                \"x\" }"
+            "if n > 1 { @s } else { s = nil\n                \"x\" }",
+            "n > 1 ? \"t\" : ({\n                n = n + 0\n                @s\n            })",
+            "U() ?? {\n                n = n + 0\n                @s\n            }",
+            "({\n                n = n + 0\n                @s\n            })"
         }
 
         private const Contract string = `#nullable enable
