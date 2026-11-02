@@ -68,12 +68,17 @@ internal partial class ExpressionBinder {
     private let bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression
     private let bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
     private let bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
-    private let applySwitchArmTestEffects(SyntaxNode, TypeSymbol, BoundPattern) -> void
-    private let switchArmPatternNarrowing(SyntaxNode, BoundExpression, BoundPattern) -> Dictionary[
-        AccessPath,
-        TypeSymbol
-    ]?
-    private let applySwitchGuardEffects(SyntaxNode, BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> void
+    private let bindSwitchArmHeader(
+        PatternSyntax,
+        ExpressionSyntax?,
+        BoundExpression,
+        bool
+    ) -> StatementBinder.SwitchArmHeader
+    private let reapplySwitchArmHeaderEffects(
+        PatternSyntax,
+        ExpressionSyntax?,
+        StatementBinder.SwitchArmHeader
+    ) -> HashSet[VariableSymbol]?
     private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
@@ -116,9 +121,10 @@ internal partial class ExpressionBinder {
         bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression,
         bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression,
         bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
-        applySwitchArmTestEffects(SyntaxNode, TypeSymbol, BoundPattern) -> void,
-        switchArmPatternNarrowing(SyntaxNode, BoundExpression, BoundPattern) -> Dictionary[AccessPath, TypeSymbol]?,
-        applySwitchGuardEffects(SyntaxNode, BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> void,
+        bindSwitchArmHeader(PatternSyntax, ExpressionSyntax?, BoundExpression, bool) -> StatementBinder.SwitchArmHeader,
+        reapplySwitchArmHeaderEffects(PatternSyntax, ExpressionSyntax?, StatementBinder.SwitchArmHeader) -> HashSet[
+            VariableSymbol
+        ]?,
         bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
@@ -142,9 +148,8 @@ internal partial class ExpressionBinder {
         this.bindRichAnonymousObject = bindRichAnonymousObject
         this.bindStructuralAdaptation = bindStructuralAdaptation
         this.bindNativeProtocolProbe = bindNativeProtocolProbe
-        this.applySwitchArmTestEffects = applySwitchArmTestEffects
-        this.switchArmPatternNarrowing = switchArmPatternNarrowing
-        this.applySwitchGuardEffects = applySwitchGuardEffects
+        this.bindSwitchArmHeader = bindSwitchArmHeader
+        this.reapplySwitchArmHeaderEffects = reapplySwitchArmHeaderEffects
         this.bindAfterLaterArmTests = bindAfterLaterArmTests
     }
 

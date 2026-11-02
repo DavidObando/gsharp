@@ -23,30 +23,6 @@ internal partial class ExpressionBinder {
         targetType: nil
     )
 
-    // #5629: binds an arm's header in the current (arm) scope, in dispatch order: the pattern (after the headers
-    // before it), its test's effects, the narrowing it proves, and the guard with its effects (as the statement form).
-    private func BindSwitchArmHeader(armSyntax SwitchExpressionArmSyntax, discriminant BoundExpression)(
-        Pattern BoundPattern,
-        Frame Dictionary[AccessPath, TypeSymbol]?,
-        Guard BoundExpression?
-    ) {
-        let patternSyntax = Invariant.Required(
-            armSyntax.Value,
-            "a non-default switch arm has a pattern value",
-            expression: "armSyntax.Value"
-        )
-        let pattern = patterns.BindPattern(patternSyntax, discriminant.Type)
-        applySwitchArmTestEffects(patternSyntax, discriminant.Type, pattern)
-        let frame = switchArmPatternNarrowing(patternSyntax, discriminant, pattern)
-        var boundGuard BoundExpression? = nil
-        if armSyntax.Guard is {} guardSyntax {
-            let bound = BindGuardExpression(guardSyntax, frame)
-            applySwitchGuardEffects(guardSyntax, bound, frame)
-            boundGuard = bound
-        }
-        return (pattern, frame, boundGuard)
-    }
-
     /// @param canBeVoid Issue #4966 §2 (ADR-0202): the switch is in a position
     /// whose value is discarded (an expression statement, a void arrow body, a
     /// lambda body). When an arm is then void, the whole switch is the void
@@ -98,10 +74,10 @@ internal partial class ExpressionBinder {
         ]()
         // #5629: the patterns of the arms after a `default` that is not last bind before its result, which is evaluated
         // only after their tests fail; each arm reuses its pattern and scope.
-        let earlyPatterns = [syntax.Arms.Length]BoundPattern?
-        let earlyFrames = [syntax.Arms.Length]Dictionary[AccessPath, TypeSymbol]?
-        let earlyGuards = [syntax.Arms.Length]BoundExpression?
+        let earlyHeaders = [syntax.Arms.Length]StatementBinder.SwitchArmHeader?
         let earlyScopes = [syntax.Arms.Length]BoundScope?
+        // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
+        var discriminantStale = false
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
@@ -126,11 +102,20 @@ internal partial class ExpressionBinder {
                                     if laterSyntax.IsDefault {
                                         continue
                                     }
+                                    let laterValue = Invariant.Required(
+                                        laterSyntax.Value,
+                                        "a non-default switch arm has a pattern value",
+                                        expression: "laterSyntax.Value"
+                                    )
                                     $scope = BoundScope($scope)
-                                    let laterHeader = BindSwitchArmHeader(laterSyntax, discriminant)
-                                    earlyPatterns[later] = laterHeader.Pattern
-                                    earlyFrames[later] = laterHeader.Frame
-                                    earlyGuards[later] = laterHeader.Guard
+                                    let laterHeader = bindSwitchArmHeader(
+                                        laterValue,
+                                        laterSyntax.Guard,
+                                        discriminant,
+                                        discriminantStale
+                                    )
+                                    discriminantStale = discriminantStale || laterHeader.MayRemoveDiscriminantFact
+                                    earlyHeaders[later] = laterHeader
                                     earlyScopes[later] = $scope
                                     $scope = $scope.Pop()
                                 }
@@ -157,24 +142,18 @@ internal partial class ExpressionBinder {
             // ADR-0208 R18 and R19 (#5629): the arm's header (its test and guard) runs after the headers before it and
             // before its result, as the statement form's does. A header bound before a `default` applies its effects
             // again here.
-            var frame Dictionary[AccessPath, TypeSymbol]? = nil
-            var guard_ BoundExpression? = nil
-            if earlyPatterns[armIndex] is {} early {
+            let header = if earlyHeaders[armIndex] is {} early {
                 $scope = earlyScopes[armIndex]!!
-                applySwitchArmTestEffects(patternSyntax, switchType, early)
-                if armSyntax.Guard is {} earlyGuardSyntax && earlyGuards[armIndex] is {} earlyGuard {
-                    applySwitchGuardEffects(earlyGuardSyntax, earlyGuard, earlyFrames[armIndex])
-                }
-                pattern = early
-                frame = earlyFrames[armIndex]
-                guard_ = earlyGuards[armIndex]
+                reapplySwitchArmHeaderEffects(patternSyntax, armSyntax.Guard, early)
+                early
             } else {
                 $scope = BoundScope($scope)
-                let header = BindSwitchArmHeader(armSyntax, discriminant)
-                pattern = header.Pattern
-                frame = header.Frame
-                guard_ = header.Guard
+                bindSwitchArmHeader(patternSyntax, armSyntax.Guard, discriminant, discriminantStale)
             }
+            discriminantStale = discriminantStale || header.MayRemoveDiscriminantFact
+            pattern = header.Pattern
+            let frame = header.Frame
+            let guard_ = header.Guard
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so it never contributes to exhaustiveness — in
             // particular a guarded discard `case _ when …` does NOT act as a

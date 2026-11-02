@@ -138,6 +138,11 @@ open class Adr0208NarrowingCorpusTests {
                 "a23_5629_continue_under_a_false_guard_is_no_back_edge",
                 "a24_5629_guard_effects_reach_the_pattern_proof_of_the_case_body_R18",
                 "a25_5629_guard_effects_reach_the_pattern_proof_of_the_arm_result_R18",
+                "a26_5629_continue_in_a_guard_block_reaches_the_back_edge",
+                "a27_5629_earlier_guard_effects_make_a_later_case_proof_stale_R18",
+                "a28_5629_earlier_guard_effects_make_a_later_arm_proof_stale_R18",
+                "a29_5629_alias_replaced_in_a_guard_is_not_external_for_later_cases",
+                "a30_5629_alias_replaced_in_a_guard_is_not_external_for_later_arms",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7791,6 +7796,99 @@ func Run(o object) int32 {
     }
 }
 Console.WriteLine(Run(1))`, "GS0158@10:37", "reject", "", "R18"}
+            yield[]object{"a26_5629_continue_in_a_guard_block_reaches_the_back_edge", `import System
+
+func Run(s string?, k int32, again bool) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var n = 0
+    while n < 3 {
+        n++
+        Console.WriteLine(t.Length)
+        switch k {
+            case 1 when ({
+                t = nil
+                if again { continue }
+                false
+            }) { }
+            default { }
+        }
+        break
+    }
+    return n
+}
+Console.WriteLine(Run("a", 1, true))`, "GS0158@9:29", "reject", "", ""}
+            yield[]object{"a27_5629_earlier_guard_effects_make_a_later_case_proof_stale_R18", `import System
+
+func Run() int32 {
+    var x object? = "ab"
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    switch x {
+        case _ when clear() { return 0 }
+        case string { return x.Length }
+        default { return 0 }
+    }
+}
+Console.WriteLine(Run())`, "GS0158@11:32", "reject", "", "R18"}
+            yield[]object{"a28_5629_earlier_guard_effects_make_a_later_arm_proof_stale_R18", `import System
+
+func Run() int32 {
+    var x object? = "ab"
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    return switch x {
+        case _ when clear(): 0
+        case string: x.Length
+        default: 0
+    }
+}
+Console.WriteLine(Run())`, "GS0158@11:24", "reject", "", "R18"}
+            yield[]object{"a29_5629_alias_replaced_in_a_guard_is_not_external_for_later_cases", `import System
+
+func Run(action () -> bool, k int32) int32 {
+    var a = action
+    var x string? = "ab"
+    if x == nil { return 0 }
+    switch k {
+        case 1 when ({
+            a = func() bool {
+                x = nil
+                return false
+            }
+            false
+        }) { }
+        case 1 when a() { }
+        case 1 { return x.Length }
+        default { }
+    }
+    return 0
+}
+Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@16:27", "reject", "", ""}
+            yield[]object{"a30_5629_alias_replaced_in_a_guard_is_not_external_for_later_arms", `import System
+
+func Run(action () -> bool, k int32) int32 {
+    var a = action
+    var x string? = "ab"
+    if x == nil { return 0 }
+    return switch k {
+        case 1 when ({
+            a = func() bool {
+                x = nil
+                return false
+            }
+            false
+        }): 0
+        case 1 when a(): 0
+        case 1: x.Length
+        default: 0
+    }
+}
+Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@16:19", "reject", "", ""}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {

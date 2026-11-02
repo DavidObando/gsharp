@@ -529,15 +529,17 @@ partial class Binder {
             bindStructuralAdaptation: BindStructuralAdaptation,
             bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
             BindNativeProtocolConversion(location, source, target, testOnly: true),
-            applySwitchArmTestEffects: (syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) ->
-            Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern),
-            switchArmPatternNarrowing: (syntax SyntaxNode, discriminant BoundExpression, pattern BoundPattern) ->
-            Statements.SwitchArmPatternNarrowing(syntax, discriminant, pattern),
-            applySwitchGuardEffects: (
-                syntax SyntaxNode,
-                boundGuard BoundExpression,
-                frame Dictionary[AccessPath, TypeSymbol]?
-            ) -> Statements.ApplySwitchGuardEffects(syntax, boundGuard, frame),
+            bindSwitchArmHeader: (
+                valueSyntax PatternSyntax,
+                guardSyntax ExpressionSyntax?,
+                discriminant BoundExpression,
+                discriminantStale bool
+            ) -> Statements.BindSwitchArmHeader(valueSyntax, guardSyntax, discriminant, discriminantStale),
+            reapplySwitchArmHeaderEffects: (
+                valueSyntax PatternSyntax,
+                guardSyntax ExpressionSyntax?,
+                header StatementBinder.SwitchArmHeader
+            ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
             Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
         )
