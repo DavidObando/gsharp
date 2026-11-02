@@ -350,6 +350,15 @@ internal sealed class RegionEffectScanner {
                 Visit(blockExpression.Expression)
                 Pop()
             }
+            case SyntaxKind.WithExpression {
+                // A `with` copies its receiver and sets each listed member: a member write through a setter that can
+                // run user code (rule W4), as a member assignment is.
+                if Active() {
+                    current.ContainsMemberWrite = true
+                    current.ContainsCall = true
+                }
+                VisitChildren(node)
+            }
             case SyntaxKind.ListPattern {
                 // A list pattern reads the length and the elements of its subject (rule W5). Its elements test
                 // elements, which have no path.
@@ -2443,6 +2452,9 @@ internal sealed class RegionEffectScanner {
                     form = RegionArgumentForm.InlineDeclaration
                 } else if byReference.Expression != nil {
                     path = BuildPath(byReference.Expression)
+                    if byReference.RefKindModifier.Text == "in" {
+                        form = RegionArgumentForm.ReadOnlyReference
+                    }
                 }
             }
             argumentForms.Add(form)
@@ -2708,6 +2720,12 @@ internal sealed class RegionEffectScanner {
         }
         let unwrapped = UnwrapParentheses(value)
         let isNull = unwrapped is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.NilKeyword
+        // A name that the region declares is a value, whatever type of that name the entry scope has.
+        let tested = if candidate?.TypeName is {} typeName && IsDeclared(FirstSegment(typeName)) {
+            default(RegionTypeTest?)
+        } else {
+            candidate
+        }
         current.PatternTests.Add(
             RegionPatternTest(
                 patternSubject,
@@ -2717,9 +2735,18 @@ internal sealed class RegionEffectScanner {
                     BuildPath(unwrapped)
                 },
                 isNull,
-                candidate
+                tested
             )
         )
+    }
+
+    private func FirstSegment(name string) string {
+        let dot = name.IndexOf('.')
+        return if dot < 0 {
+            name
+        } else {
+            name.Substring(0, dot)
+        }
     }
 
     // The type patterns that test the subject itself, through parentheses, `not`, `and` and `or`.

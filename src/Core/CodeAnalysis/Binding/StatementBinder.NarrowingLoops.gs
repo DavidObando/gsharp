@@ -335,6 +335,7 @@ internal partial class StatementBinder {
         effects.ContainsMemberRead ||
         resolved.RunsUserOperator ||
         resolved.RunsUserCodeOnWrite ||
+        resolved.PatternTestsCallEquals ||
         resolved.ReadsProperty
 
     private func CallIsIndirect(call RegionCall, effects RegionEffects) bool {
@@ -562,7 +563,22 @@ internal partial class StatementBinder {
             if ResolveTypeClause(path.RootType) is not{} declared {
                 return nil
             }
-            types.Add(ReceiverType(declared, nil))
+            // A conversion site keeps the `?` of a nullable value type (`let local DateTime? = dt`).
+            let nullable = if keepNullableValueTypes && path.RootType?.QuestionToken != nil {
+                NullableTypeSymbol.Get(declared)
+            } else {
+                default(NullableTypeSymbol?)
+            }
+            types.Add(
+                ReceiverType(
+                    if nullable != nil && NullableLifting.IsValueTypeNullable(nullable) {
+                        nullable
+                    } else {
+                        declared
+                    },
+                    nil
+                )
+            )
         } else if path.RootLiteralType != nil {
             if Type.GetType(path.RootLiteralType) is not{} literal {
                 return nil
@@ -673,9 +689,10 @@ internal partial class StatementBinder {
         let symbol = $scope.TryLookupSymbol(root)
         if symbol is VariableSymbol variable {
             let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
-            // A narrowed variable keeps its declared type without `?`; the narrowed type stands for the value.
+            // A narrowing that survives the region stands for the value, and the declared type loses its `?`. One that
+            // the region can remove (a write, or a writer that the walker does not see) leaves the declared type.
             let keep = keepNullableValueTypes
-            keepNullableValueTypes = keep && narrowed == nil
+            keepNullableValueTypes = keep && (narrowed == nil || !NarrowingSurvivesRegion(variable, effects))
             let declaredAdded = AddSymbolType(variable.Type, types)
             keepNullableValueTypes = keep
             if !declaredAdded {
@@ -701,6 +718,15 @@ internal partial class StatementBinder {
             return true
         }
         return false
+    }
+
+    private func NarrowingSurvivesRegion(variable VariableSymbol, effects RegionEffects) bool {
+        for write in effects.Writes {
+            if write.Name == variable.Name {
+                return false
+            }
+        }
+        return !MayBeMutatedByUnknownWrite(true, false, AccessPath.ForVariable(variable))
     }
 
     // Adds a type symbol without its nullability. A type parameter that a member returns is substituted by the
@@ -1245,7 +1271,7 @@ internal partial class StatementBinder {
                     return true
                 }
                 for target in targets {
-                    if !MetadataTypeKeys.IsBuiltIn(target) {
+                    if !MetadataTypeKeys.IsBuiltIn(StripNullableValue(target)) {
                         return true
                     }
                 }
@@ -1264,7 +1290,10 @@ internal partial class StatementBinder {
                 for target in targets {
                     // Between built-in types the conversion is predefined (numeric, boxing or identity).
                     if object.Equals(source, target) ||
-                        (MetadataTypeKeys.IsBuiltIn(source) && MetadataTypeKeys.IsBuiltIn(target)) {
+                        (
+                        MetadataTypeKeys.IsBuiltIn(StripNullableValue(source)) &&
+                            MetadataTypeKeys.IsBuiltIn(StripNullableValue(target))
+                    ) {
                         continue
                     }
                     if ConversionOperatorReaches(source, target) {
@@ -1320,6 +1349,7 @@ internal partial class StatementBinder {
     private const ArgumentByReference int32 = 4
     private const ArgumentFunction int32 = 5
     private const ArgumentInlineDeclaration int32 = 6
+    private const ArgumentReadOnlyReference int32 = 7
 
     private func CallArgumentsRunUserConversion(
         call RegionCall,
@@ -1343,15 +1373,21 @@ internal partial class StatementBinder {
             if form == RegionArgumentForm.Named {
                 return true
             }
-            if form == RegionArgumentForm.ByReference {
-                // A `ref` or `out` argument binds a parameter of its exact type.
+            if form == RegionArgumentForm.ByReference || form == RegionArgumentForm.ReadOnlyReference {
+                // A `ref`, `out` or `in` argument binds a parameter of its exact type.
                 let types = if call.Arguments[index] is {} path {
                     ConversionTypes(path, effects)
                 } else {
                     default(List[TypeSymbol]?)
                 }
                 argumentTypes.Add(types)
-                kinds.Add(ArgumentByReference)
+                kinds.Add(
+                    if form == RegionArgumentForm.ReadOnlyReference {
+                        ArgumentReadOnlyReference
+                    } else {
+                        ArgumentByReference
+                    }
+                )
             } else if form == RegionArgumentForm.FunctionLiteral {
                 // A function literal converts to a delegate without an operator, but it does not show which
                 // candidate's delegate type it fits, so it proves no candidate by identity.
@@ -1424,7 +1460,8 @@ internal partial class StatementBinder {
         kinds List[int32]
     ) bool {
         for var index = 0; index < parameters.Count; index++ {
-            if !PassingModeMatches(parameters[index], kinds[index]) {
+            // An `in` argument also matches a parameter that is not `in`, so it proves no candidate by identity.
+            if !PassingModeMatches(parameters[index], kinds[index]) || kinds[index] == ArgumentReadOnlyReference {
                 return false
             }
             if kinds[index] == ArgumentSkipped || kinds[index] == ArgumentInlineDeclaration {
@@ -1480,6 +1517,15 @@ internal partial class StatementBinder {
                 } else {
                     CandidateNotApplicable
                 }
+            } else if kind == ArgumentReadOnlyReference {
+                // The parameter takes the `in` argument without a conversion, or not at all.
+                argument = if argumentTypes[index] is not{} referenced {
+                    CandidateFree
+                } else if CandidateIsExactReference(referenced, ReferencedType(parameter)) {
+                    CandidateFree
+                } else {
+                    CandidateNotApplicable
+                }
             } else if kind == ArgumentNil {
                 argument = if AcceptsNilWithoutOperator(parameter) {
                     CandidateFree
@@ -1505,7 +1551,8 @@ internal partial class StatementBinder {
     }
 
     // A `ref` or `out` argument (an inline declaration included) takes only a `ref` or `out` parameter, and any other
-    // argument only a parameter that is not one (an `in` parameter is listed by value).
+    // argument only a parameter that is not one. An `in` parameter is listed by value, so an `in` argument and a value
+    // both take it.
     private func PassingModeMatches(parameter TypeSymbol, kind int32) bool -> (parameter is ByRefTypeSymbol) ==
         (kind == ArgumentByReference || kind == ArgumentInlineDeclaration)
 
@@ -2117,7 +2164,10 @@ internal partial class StatementBinder {
     // decision says so for a type that the walker resolves for the subject and the value. A name that is a type
     // tests the type (`o is Kind`); a subject that does not resolve can call it.
     private func PatternTestRunsUserCode(test RegionPatternTest, effects RegionEffects) bool {
-        if test.Candidate is {} candidate && TestedType(candidate, out _) != nil {
+        // A switch case resolves a value before a type, so a name that is a variable of the entry scope is a value.
+        if test.Candidate is {} candidate &&
+            !(candidate.TypeName is {} typeName && $scope.TryLookupSymbol(FirstNameSegment(typeName)) is VariableSymbol) &&
+            TestedType(candidate, out _) != nil {
             return false
         }
         if test.Subject is not{} subject || ConversionTypes(subject, effects) is not{} inputs || inputs.Count == 0 {
@@ -2142,6 +2192,15 @@ internal partial class StatementBinder {
             }
         }
         return false
+    }
+
+    private func FirstNameSegment(name string) string {
+        let dot = name.IndexOf('.')
+        return if dot < 0 {
+            name
+        } else {
+            name.Substring(0, dot)
+        }
     }
 
     private func PatternTestOfTypesRunsUserCode(input TypeSymbol, valueIsNull bool, valueType TypeSymbol?) bool ->

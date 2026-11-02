@@ -3150,6 +3150,74 @@ func Run(ref text string?, values []int32) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("with-update-runs-a-setter (W4)", `package T
+import System
+data class D(Name string) {
+    prop Extra int32 {
+        get { return 0 }
+        set { Hook.Run() }
+    }
+}
+class Hook {
+    shared {
+        var Run () -> void = func() { }
+    }
+}
+func Loop(ref text string?, d D) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let c = d with { Extra = 1 }
+    }
+    return n
+}
+func Main() { }`, "GS0158@17:16")
+            Add("typed-nullable-local-keeps-its-question-mark (A3)", `package T
+import System
+func Use(d DateTime) { }
+func Use(d DateTimeOffset?) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let local DateTime? = dt
+        Use(local)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("narrowing-that-the-loop-removes-leaves-the-nullable-argument (A3, stricter)", `package T
+import System
+func Use(d DateTime) { }
+func Use(d DateTimeOffset?) { }
+func Run(ref text string?, dt DateTime?) int32 {
+    if text == nil { return 0 }
+    var d = dt
+    if d == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(d)
+        d = nil
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("in-argument-takes-an-in-parameter (A3)", `package T
+import System
+func Read(in v int32) { }
+func Run(ref text string?, x int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Read(in x)
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

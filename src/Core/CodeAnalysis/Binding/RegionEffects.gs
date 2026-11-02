@@ -360,6 +360,8 @@ internal enum RegionArgumentForm {
     InlineDeclaration,
     /// A range index (`t[a..b]`), which the binder slices; the read classification decides whether that runs code.
     Range,
+    /// An `in` argument, which takes an `in` parameter (listed by value) of its exact type.
+    ReadOnlyReference,
 }
 
 /// One call site found by the scanner.
