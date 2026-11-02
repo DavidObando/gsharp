@@ -120,11 +120,11 @@ internal partial class OverloadResolver {
             let tps = classType.TypeParameters
             let defParams = classType.PrimaryConstructorParameters
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
-            if syntax.TypeArgumentList != nil {
-                let explicitArgs = syntax.TypeArgumentList.Arguments
+            if syntax.TypeArgumentList is {} typeArgumentList {
+                let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != tps.Length {
                     Diagnostics.ReportWrongTypeArgumentCount(
-                        syntax.TypeArgumentList.Location,
+                        typeArgumentList.Location,
                         classType.Name,
                         tps.Length,
                         explicitArgs.Count
@@ -1514,11 +1514,11 @@ internal partial class OverloadResolver {
         }
         let tps = classType.TypeParameters
         var substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
-        if syntax.TypeArgumentList != nil {
-            let explicitArgs = syntax.TypeArgumentList.Arguments
+        if syntax.TypeArgumentList is {} typeArgumentList {
+            let explicitArgs = typeArgumentList.Arguments
             if explicitArgs.Count != tps.Length {
                 Diagnostics.ReportWrongTypeArgumentCount(
-                    syntax.TypeArgumentList.Location,
+                    typeArgumentList.Location,
                     classType.Name,
                     tps.Length,
                     explicitArgs.Count

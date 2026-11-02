@@ -341,6 +341,52 @@ open class Adr0208NarrowingCorpusTests {
                 "v25_5520_literal_under_an_extension_unary_operator",
                 "v26_5520_int32_min_value_literal_keeps_the_fact",
                 "v27_5520_negated_char_literal_keeps_the_fact",
+                "w01_5534_call_in_a_condition_kills_in_the_then_branch_R18",
+                "w02_5534_imported_getter_in_a_condition_kills_in_the_then_branch_R18",
+                "w03_5534_source_getter_in_a_condition_kills_in_the_then_branch_R18",
+                "w04_5534_getter_in_a_condition_kills_in_the_else_branch_R18",
+                "w05_5534_plain_condition_keeps_the_fact_R18",
+                "w06_5534_call_in_a_condition_with_an_initializer_R18",
+                "w07_5534_stable_getter_in_a_condition_keeps_the_fact_R18",
+                "w08_5534_member_path_stays_rejected_R18",
+                "w09_5534_test_after_the_call_still_narrows_the_branch_R18",
+                "w10_5534_assignment_in_a_condition_kills_in_the_branch_R18",
+                "w11_5534_type_test_after_the_call_narrows_the_branch_R18",
+                "w12_5534_type_test_after_the_call_with_an_initializer_R18",
+                "w13_5534_callable_alias_assigned_after_its_call_R18",
+                "w14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18",
+                "w15_5534_closure_created_in_a_condition_keeps_a_member_path_R18",
+                "w16_5534_closure_created_in_a_statement_keeps_a_member_path_R18",
+                "w17_5534_type_test_after_the_call_narrows_a_member_path_R18",
+                "w18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18",
+                "w19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18",
+                "w20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18",
+                "w21_5534_condition_in_the_then_branch_with_an_initializer_R18",
+                "w22_5534_condition_in_a_braced_then_branch_does_not_reach_the_else_branch_R18",
+                "w23_5534_property_pattern_after_the_call_narrows_the_branch_R18",
+                "w24_5534_property_pattern_after_the_call_with_an_initializer_R18",
+                "w25_5534_type_test_whose_getter_removes_the_fact_is_not_restored_R18",
+                "w26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18",
+                "w27_5534_type_test_whose_getter_removes_a_guarded_fact_narrows_nothing_R18",
+                "w28_5534_type_test_whose_getter_removes_the_value_narrows_nothing_R18",
+                "w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18",
+                "w30_5534_constant_pattern_whose_call_removes_the_value_narrows_nothing_R18",
+                "w31_5534_condition_in_the_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
+                "w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18",
+                "w33_5534_alias_assigned_after_a_test_keeps_the_test_R18",
+                "w34_5534_if_let_guard_fact_does_not_hide_the_outer_fact_for_the_else_branch_R18",
+                "w35_5534_alias_assigned_before_a_test_reaches_the_test_R18",
+                "w36_5534_static_read_of_a_type_with_a_call_initializer_in_a_condition_kills_R18",
+                "w37_5534_static_read_of_a_literal_only_type_in_a_condition_keeps_the_fact_R18",
+                "w38_5534_imported_indexer_in_a_condition_follows_the_stable_list_R18",
+                "w39_5534_initializer_effect_is_not_restored_for_the_else_branch_R18",
+                "w40_5534_initializer_effect_applies_before_the_branches_R18",
+                "w41_5534_if_let_header_effect_is_not_restored_for_the_else_branch_R18",
+                "w42_5534_if_let_guard_reads_aliases_at_each_test_R18",
+                "w43_5534_pattern_check_in_the_first_statement_knows_the_closures_R18",
+                "w44_5534_alias_gained_earlier_in_an_and_chain_reaches_the_test_R18",
+                "w45_5534_if_let_header_is_read_from_its_entry_aliases_R18",
+                "w46_5534_alias_gained_under_an_or_does_not_reach_the_test_R18",
                 "x01_5215_getter_in_condition_kills_the_member_path_R14",
                 "x02_5215_stable_read_in_condition_keeps_the_member_path_R14"
             },
@@ -1484,7 +1530,7 @@ func Run() int32 {
     }
     return 0
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14", "nre", "", "#5249, header effects before the branches (slice 4): GS0158 after"}
+func Main() { Console.WriteLine(Run()) }`, "GS0612@9:14 GS0158@10:18", "reject", "", "R18 (#5534, #5249): header effects before the branches; threw NullReferenceException before"}
             yield[]object{"h7_getter_in_exiting_branch_kills_member_path", `open class Animal { var Name string = "a" }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box {
@@ -4941,6 +4987,2095 @@ func Run() int32 {
     return x.Value + first
 }
 Console.WriteLine(Run())`, "", "run", "2", "R17"}
+            yield[]object{"w01_5534_call_in_a_condition_kills_in_the_then_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@40:18", "reject", "", "R18"}
+            yield[]object{"w02_5534_imported_getter_in_a_condition_kills_in_the_then_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    if lazy.Value > 0 {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@42:18", "reject", "", "R18"}
+            yield[]object{"w03_5534_source_getter_in_a_condition_kills_in_the_then_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let g = G()
+    g.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if g.P > 0 {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@40:18", "reject", "", "R18"}
+            yield[]object{"w04_5534_getter_in_a_condition_kills_in_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let lazy = Lazy[int32](() -> {
+        x = nil
+        return 1
+    })
+    if x == nil { return 0 }
+    if lazy.Value > 5 {
+        return 3
+    } else {
+        return x.Value
+    }
+}
+Console.WriteLine(Run())`, "GS0158@44:18", "reject", "", "R18"}
+            yield[]object{"w05_5534_plain_condition_keeps_the_fact_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if flag {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(true))`, "", "run", "1", "R18"}
+            yield[]object{"w06_5534_call_in_a_condition_with_an_initializer_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if var n = 1; Check(h) {
+        return x.Value + n
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@40:18", "reject", "", "R18"}
+            yield[]object{"w07_5534_stable_getter_in_a_condition_keeps_the_fact_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(s string) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if s.Length > 0 {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run("ab"))`, "", "run", "1", "R18"}
+            yield[]object{"w08_5534_member_path_stays_rejected_R18", `import System
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Wipe(b) {
+        return b.Pet.Name
+    }
+    return "z"
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@35:22", "reject", "", "R18"}
+            yield[]object{"w09_5534_test_after_the_call_still_narrows_the_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if Check(h) && x != nil {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "2", "R18"}
+            yield[]object{"w10_5534_assignment_in_a_condition_kills_in_the_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    if (x = nil) == nil {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@38:18", "reject", "", "R18"}
+            yield[]object{"w11_5534_type_test_after_the_call_narrows_the_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && x is C {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "2", "R18"}
+            yield[]object{"w12_5534_type_test_after_the_call_with_an_initializer_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if var n = 1; Check(h) && x is C {
+        return x.Value + n
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "2", "R18"}
+            yield[]object{"w13_5534_callable_alias_assigned_after_its_call_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> bool) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    if x == nil { return 0 }
+    if action() && (action = callback) is {} a {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> true))`, "", "run", "1", "R18"}
+            yield[]object{"w14_5534_callable_alias_assigned_after_its_call_with_an_initializer_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> bool) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    if x == nil { return 0 }
+    if var n = 1; action() && (action = callback) is {} a {
+        return x.Value + n
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> true))`, "", "run", "2", "R18"}
+            yield[]object{"w15_5534_closure_created_in_a_condition_keeps_a_member_path_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class Crate {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Crate) string {
+    var action () -> void = func() { }
+    if b.Pet == nil { return "" }
+    if (action = func() { Console.WriteLine("hello") }) is {} a {
+        return b.Pet.Name
+    }
+    return "z"
+}
+Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
+            yield[]object{"w16_5534_closure_created_in_a_statement_keeps_a_member_path_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class Crate {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Crate) string {
+    var action () -> void = func() { }
+    if b.Pet == nil { return "" }
+    action = func() { Console.WriteLine("hello") }
+    return b.Pet.Name
+}
+Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
+            yield[]object{"w17_5534_type_test_after_the_call_narrows_a_member_path_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class Crate {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Crate) string {
+    if b.Pet == nil { return "" }
+    if Wipe(Box(nil)) && b.Pet is Animal {
+        return b.Pet.Name
+    }
+    return "z"
+}
+Console.WriteLine(Run(Crate(Animal())))`, "", "run", "a", "R18"}
+            yield[]object{"w18_5534_subtype_fact_is_not_restored_by_a_stale_type_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet {}
+class Dog : Pet {}
+class Cat : Pet { func Meow() int32 { return 7 } }
+func Run() int32 {
+    var x Pet? = Dog()
+    let h = Holder{}
+    h.Callback = func() { x = Cat() }
+    if x !is Dog { return 0 }
+    if Check(h) && x is Cat {
+        return x.Meow()
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0159@43:18", "reject", "", "R18"}
+            yield[]object{"w19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x int32? = 5
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && x is int32 {
+        return x
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0156@40:16", "reject", "", "R18"}
+            yield[]object{"w20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if flag if Check(h) { } else { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run(false))`, "", "run", "1", "R18"}
+            yield[]object{"w21_5534_condition_in_the_then_branch_with_an_initializer_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if var n = 0; flag if Check(h) { } else { } else { return x.Value + n }
+    return 2
+}
+Console.WriteLine(Run(false))`, "", "run", "1", "R18"}
+            yield[]object{"w22_5534_condition_in_a_braced_then_branch_does_not_reach_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if flag {
+        if Check(h) { } else { }
+    } else {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(false))`, "", "run", "1", "R18"}
+            yield[]object{"w23_5534_property_pattern_after_the_call_narrows_the_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && x is {} {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(true))`, "", "run", "2", "R18"}
+            yield[]object{"w24_5534_property_pattern_after_the_call_with_an_initializer_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if var n = 0; Check(h) && x is {} {
+        return x.Value + n
+    }
+    return 2
+}
+Console.WriteLine(Run(true))`, "", "run", "2", "R18"}
+            yield[]object{"w25_5534_type_test_whose_getter_removes_the_fact_is_not_restored_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class D {
+    var Clear () -> void = func() { }
+    var Value int32 = 1
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = D{}
+    var x D? = d
+    d.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if x is D { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@50:18", "reject", "", "R18"}
+            yield[]object{"w26_5534_property_pattern_whose_getter_removes_the_fact_is_not_restored_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+class D {
+    var Clear () -> void = func() { }
+    var Value int32 = 1
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = D{}
+    var x D? = d
+    let h = Holder{}
+    d.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && x is { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@51:18", "reject", "", "R18"}
+            yield[]object{"w27_5534_type_test_whose_getter_removes_a_guarded_fact_narrows_nothing_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    var x Pet? = d
+    d.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@50:18", "reject", "", "R18"}
+            yield[]object{"w28_5534_type_test_whose_getter_removes_the_value_narrows_nothing_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    var x Pet? = d
+    d.Clear = func() { x = nil }
+    if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@49:18", "reject", "", "R18"}
+            yield[]object{"w29_5534_getter_in_a_pattern_keeps_a_local_it_cannot_assign_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    let x Pet? = d
+    if x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w30_5534_constant_pattern_whose_call_removes_the_value_narrows_nothing_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Read(h Holder) string {
+    h.Callback()
+    return "abc"
+}
+func Run() int32 {
+    var x string? = "abc"
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if x is Read(h) {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@44:18", "reject", "", "R18"}
+            yield[]object{"w31_5534_condition_in_the_then_branch_of_if_let_does_not_reach_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let maybe C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe if Check(h) { } else { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w32_5534_condition_in_a_braced_then_branch_of_if_let_does_not_reach_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let maybe C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe {
+        if Check(h) { } else { }
+    } else {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w33_5534_alias_assigned_after_a_test_keeps_the_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && (x is action()) && (action = func() string { return "" }) is {} a {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> "abc"))`, "", "run", "2", "R18"}
+            yield[]object{"w34_5534_if_let_guard_fact_does_not_hide_the_outer_fact_for_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet { }
+func Run() int32 {
+    var x Pet? = Dog{}
+    let maybe C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe && (x is Dog) if Check(h) { } else { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R18"}
+            yield[]object{"w35_5534_alias_assigned_before_a_test_reaches_the_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if (action = func() string {
+        x = nil
+        return "abc"
+    }) is {} a && (x is action()) {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> "abc"))`, "GS0158@44:18", "reject", "", "R18"}
+            yield[]object{"w36_5534_static_read_of_a_type_with_a_call_initializer_in_a_condition_kills_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+class Lit {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Trigger.Count > 0 { return b.Pet.Name }
+    return "z"
+}
+Console.WriteLine(Run(Box(Animal())))`, "GS0158@24:41", "reject", "", "R18"}
+            yield[]object{"w37_5534_static_read_of_a_literal_only_type_in_a_condition_keeps_the_fact_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Touch() int32 { return 5 }
+class Trigger {
+    shared {
+        var Count int32 = Touch()
+    }
+}
+class Lit {
+    shared {
+        var Count int32 = 5
+    }
+}
+func Run(b Box) string {
+    if b.Pet == nil { return "" }
+    if Lit.Count > 0 { return b.Pet.Name }
+    return "z"
+}
+Console.WriteLine(Run(Box(Animal())))`, "", "run", "a", "R18"}
+            yield[]object{"w38_5534_imported_indexer_in_a_condition_follows_the_stable_list_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    let d = Dictionary[string, int32]{}
+    d["a"] = 1
+    let l = List[int32]{1}
+    if x == nil { return 0 }
+    if l[0] > 0 {
+        let v = x.Value
+    }
+    if d["a"] > 0 {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@46:18", "reject", "", "R18"}
+            yield[]object{"w39_5534_initializer_effect_is_not_restored_for_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Clear(h Holder) int32 {
+    h.Callback()
+    return 1
+}
+func Get(h Holder) C? {
+    h.Callback()
+    return nil
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if var n = Clear(h); flag {
+        if Check(h) { } else { }
+    } else {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(false))`, "GS0158@50:18", "reject", "", "R18"}
+            yield[]object{"w40_5534_initializer_effect_applies_before_the_branches_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Clear(h Holder) int32 {
+    h.Callback()
+    return 1
+}
+func Get(h Holder) C? {
+    h.Callback()
+    return nil
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if var n = Clear(h); flag { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run(false))`, "GS0158@47:51", "reject", "", "R18"}
+            yield[]object{"w41_5534_if_let_header_effect_is_not_restored_for_the_else_branch_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Clear(h Holder) int32 {
+    h.Callback()
+    return 1
+}
+func Get(h Holder) C? {
+    h.Callback()
+    return nil
+}
+func Run(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = Get(h) {
+        if Check(h) { } else { }
+    } else {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(false))`, "GS0158@50:18", "reject", "", "R18"}
+            yield[]object{"w42_5534_if_let_guard_reads_aliases_at_each_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    let maybe C? = C{}
+    let unused = func() { x = nil }
+    if let v = maybe && (x is action()) && (action = func() string { return "" }) is {} a {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> "abc"))`, "", "run", "3", "R18"}
+            yield[]object{"w43_5534_pattern_check_in_the_first_statement_knows_the_closures_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+open class Pet { var Value int32 = 1 }
+class Dog : Pet {
+    prop P int32 {
+        get {
+            Console.Write("")
+            return 1
+        }
+    }
+}
+func Run(p Pet?) int32 {
+    if var x Pet? = p; x is Dog { P: 1 } {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(Dog{}))`, "", "run", "1", "R18"}
+            yield[]object{"w44_5534_alias_gained_earlier_in_an_and_chain_reaches_the_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = func() string { return "z" }
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if Check(h) && (action = callback) is {} a && (x is action()) {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(() -> "abc"))`, "", "run", "2", "R18"}
+            yield[]object{"w45_5534_if_let_header_is_read_from_its_entry_aliases_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(callback () -> bool) int32 {
+    var x C? = C{}
+    var action = callback
+    let maybe C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    if let v = maybe && action() && ((action = callback) is {} a) if Check(h) { } else { } else { return x.Value }
+    return 2
+}
+Console.WriteLine(Run(() -> true))`, "", "run", "2", "R18"}
+            yield[]object{"w46_5534_alias_gained_under_an_or_does_not_reach_the_test_R18", `import System
+import System.Collections.Generic
+import System.Text
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class Animal { var Name string = "a" }
+class Box {
+    var Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Wipe(b Box) bool {
+    b.Pet = nil
+    return true
+}
+class G {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run(flag bool, callback () -> string) int32 {
+    var x string? = "abc"
+    var action = func() string {
+        x = nil
+        return "abc"
+    }
+    if x == nil { return 0 }
+    if (flag || (action = callback) is {} a) && (x is action()) {
+        return x.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(true, () -> "abc"))`, "GS0158@42:18", "reject", "", "R18"}
             yield[]object{"x01_5215_getter_in_condition_kills_the_member_path_R14", `class Animal {
     var Name string = "a"
     prop Tag string {
