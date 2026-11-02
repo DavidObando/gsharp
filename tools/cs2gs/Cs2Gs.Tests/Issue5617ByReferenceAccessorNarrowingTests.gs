@@ -317,6 +317,71 @@ namespace Lib
         Assert.Contains("return s.Length + n + 1", printed)
     }
 
+    /// A `with` expression writes the members of the copy, which gsc counts as a member write (R12), for a positional
+    /// property and for an `init` property.
+    @Fact
+    func RefParameter_ReadAfterARecordWithExpression_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public sealed record Rec(int X)
+{
+    public int Y { get; init; }
+}
+public class Demo
+{
+    public static int Positional(ref string? s, Rec r)
+    {
+        if (s == null) return 0;
+        var r2 = r with { X = 2 };
+        return s.Length + r2.X;
+    }
+    public static int Init(ref string? s, Rec r)
+    {
+        if (s == null) return 0;
+        var r2 = r with { Y = 3 };
+        return s.Length + r2.Y;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Positional(ref text, new Rec(1)) + "," + Init(ref text, new Rec(1));
+    }
+}`)
+        Assert.Contains("return s!!.Length + r2.X", printed)
+        Assert.Contains("return s!!.Length + r2.Y", printed)
+    }
+
+    /// The address of a member names storage that a write through the pointer can change, so gsc counts it as a
+    /// write (R12). The address of a local keeps the fact.
+    @Fact
+    func RefParameter_ReadAfterTheAddressOfAMember_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public struct Pt { public int X; }
+public class Demo
+{
+    public static unsafe int Member(ref string? s, int seed)
+    {
+        var pt = new Pt { X = seed };
+        if (s == null) return 0;
+        int* p = &pt.X;
+        return s.Length + *p;
+    }
+    public static unsafe int Local(ref string? s, int seed)
+    {
+        var n = seed;
+        if (s == null) return 0;
+        int* q = &n;
+        return s.Length + *q + 1;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Member(ref text, 4) + "," + Local(ref text, 4);
+    }
+}`)
+        Assert.Contains("return s!!.Length + *p", printed)
+        Assert.Contains("return s.Length + *q + 1", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.
@@ -398,6 +463,7 @@ public class Demo
                 CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
                     NullableContextOptions.Enable
                 )
+                    .WithAllowUnsafe(true)
             )
             using let peStream = MemoryStream()
             let emitted = compilation.Emit(peStream)

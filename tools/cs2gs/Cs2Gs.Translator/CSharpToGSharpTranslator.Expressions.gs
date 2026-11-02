@@ -4467,24 +4467,18 @@ partial class CSharpToGSharpTranslator {
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
                     // A member initializer is part of the construction (#5562): a field keeps the fact, and a
-                    // property follows the accessor rule on the exact type.
+                    // property follows the accessor rule on the exact type. A `with` initializer writes the copy, which
+                    // gsc counts as a member write.
                     if assignment.Parent is Microsoft
                         .CodeAnalysis
                         .CSharp
                         .Syntax
                         .InitializerExpressionSyntax initializer &&
-                        (
                         initializer.Parent is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .BaseObjectCreationExpressionSyntax ||
-                            initializer.Parent is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .WithExpressionSyntax
-                    ) {
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BaseObjectCreationExpressionSyntax {
                         return switch this.context.GetSymbolInfo(assignment.Left).Symbol {
                             case _ is IFieldSymbol: false
                             case property is IPropertySymbol: !this.IsSourceSymbol(property) ||
@@ -4518,6 +4512,15 @@ partial class CSharpToGSharpTranslator {
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
                 ) {
                     return this.WritesThroughStorage(argument.Expression, isArgument: true)
+                }
+                case addressOf is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PrefixUnaryExpressionSyntax when addressOf
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) {
+                    // The address of a member or an element names storage that a later write can change.
+                    return this.WritesThroughStorage(addressOf.Operand, isArgument: true)
                 }
                 case reference is Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax {
                     // A writable `ref` alias of a member or an element names storage that a later write can change.
