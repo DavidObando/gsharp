@@ -136,6 +136,21 @@ W
         }
     }
 
+    @Fact
+    async func SelfMigratedSource_DefaultRoot_ReusesCachedProjectAndFileAcrossCalls() {
+        let first = await SelfMigratedCompilerSource.LoadAsync(
+            "tools/cs2gs/Cs2Gs.Translator",
+            preservePartialParts: true,
+            "CSharpTypeMapper"
+        )
+        let second = await SelfMigratedCompilerSource.LoadAsync(
+            "tools/cs2gs/Cs2Gs.Translator",
+            preservePartialParts: true,
+            "CSharpTypeMapper"
+        )
+        Assert.Same(first["CSharpTypeMapper"], second["CSharpTypeMapper"])
+    }
+
     shared {
         func ManifestEntries() IEnumerable[[]object] -> FrozenCompilerSnapshots.Manifest.Select(
             (entry(Snapshot string, Live string, Region bool)) -> []object{entry.Snapshot, entry.Live, entry.Region}

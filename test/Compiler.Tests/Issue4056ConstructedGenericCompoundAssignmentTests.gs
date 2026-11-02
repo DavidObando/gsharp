@@ -388,7 +388,15 @@ Console.WriteLine(Registry[string].Note)`, []string{"n?"}}
             return shapes.ToArray()
         }
 
+        private let CompiledLibraryBytes Lazy[[]uint8] = Lazy[[]uint8](BuildLibraryBytes)
+
         private func CompileCSharpLibrary(tempDir string) string {
+            let libPath = Path.Combine(tempDir, "HelperLib4056.dll")
+            File.WriteAllBytes(libPath, CompiledLibraryBytes.Value)
+            return libPath
+        }
+
+        private func BuildLibraryBytes()[]uint8 {
             let references = TrustedPlatformAssemblies().Select(
                 (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
             )
@@ -401,8 +409,8 @@ Console.WriteLine(Registry[string].Note)`, []string{"n?"}}
                     NullableContextOptions.Enable
                 )
             )
-            let libPath = Path.Combine(tempDir, "HelperLib4056.dll")
-            let result = compilation.Emit(libPath)
+            using let stream = MemoryStream()
+            let result = compilation.Emit(stream)
             Assert.True(
                 result.Success,
                 "the C# library must compile:\n" + string.Join(
@@ -410,7 +418,7 @@ Console.WriteLine(Registry[string].Note)`, []string{"n?"}}
                     result.Diagnostics.Where((d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
                 )
             )
-            return libPath
+            return stream.ToArray()
         }
 
         private func Compile(dir string, fileName string, source string, outPath string, extra ...string) string {
