@@ -23,6 +23,7 @@ import Xunit
 /// for a conjunction, `o is Node and var c` emits a redundant `c!!`.
 /// Without the emitted-type check, the by-ref rows do not bind; with it only on the capture's own input, the
 /// composed by-ref row does not bind.
+/// Without `DeclaredSlotAcceptsNil`, the nullable-return row emits `return c!!` and throws.
 /// The deconstruction row throws `NullReferenceException` when #5598's bridge also asserts a store into a
 /// local with no recorded storage, or records an explicit `Node?` local as non-null.
 open class Issue5582VarCaptureBridgeTests {
@@ -245,6 +246,32 @@ namespace Demo
         Assert.Contains("is var c { c!!.Count }", printed)
         Assert.Contains("return d!!.Count", printed)
         RunsAs(printed, "1 1 1 1 1")
+    }
+
+    /// A nil-accepting declared slot takes the nil as C# does: a capture, a direct call and a local of a
+    /// dropped by-ref suppression returned from a method declared `Dictionary?` are not asserted, so a null
+    /// `cache` returns null in each form, as C# does.
+    @Fact
+    func ADroppedByRefSuppressionIntoANullableReturn_ReturnsTheNull() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        static Dictionary<string, int>? IsReturn() { if (Volatile.Read(ref cache!) is var c) return c; return null; }
+        static Dictionary<string, int>? ArmReturn() => Volatile.Read(ref cache!) switch { var c => c };
+        static Dictionary<string, int>? DirectReturn() => Volatile.Read(ref cache!);
+        static Dictionary<string, int>? LocalReturn() { var d = Volatile.Read(ref cache!); return d; }
+        public static string Run() =>
+            (IsReturn() == null) + " " + (ArmReturn() == null) + " " + (DirectReturn() == null) + " " + (LocalReturn() == null);
+    }
+}`)
+        Assert.DoesNotContain("!!", printed)
+        RunsAs(printed, "True True True True")
     }
 
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a

@@ -2887,10 +2887,45 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             if !this.IsPureForwardingPromotedTarget(targetSymbol) && !this.IsActivePatternBinding(value) &&
-                !this.LambdaResultFeedsNullableObservedInvocation(value) && this.ReceiverNeedsNullForgiveness(value) {
+                !this.LambdaResultFeedsNullableObservedInvocation(value) && !this.DeclaredSlotAcceptsNil(
+                targetType,
+                targetSymbol,
+                value
+            ) &&
+                this
+                .ReceiverNeedsNullForgiveness(value) {
                 return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
             }
             return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol)
+        }
+
+        // Issue #5582: a value written into a slot that the C# declares `T?` keeps the nil, as C# stores or
+        // returns it: the return of a declared method, a field, a property, or a parameter. A slot whose type
+        // G# infers from the value (a lambda result, an inferred generic parameter, a local) keeps the
+        // assertion that fixes its type. A slot that cs2gs widens keeps the #2202 assertion of a guarded read.
+        // A dereference is asserted by the receiver bridge, not here.
+        private func DeclaredSlotAcceptsNil(
+            targetType ITypeSymbol?,
+            targetSymbol ISymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let declared = switch targetSymbol {
+                case method is IMethodSymbol: method.MethodKind != MethodKind.AnonymousFunction
+                case parameter is IParameterSymbol: !IsInferredGenericParameterTarget(parameter, value) &&
+                    !this.SinkInfersTypeFromValue(parameter, value)
+                case _ is IFieldSymbol or _ is IPropertySymbol: true
+                default: false
+            }
+            return declared &&
+                (
+                targetType?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    targetType
+                    ?.OriginalDefinition
+                    ?.SpecialType == SpecialType.System_Nullable_T
+            )
         }
 
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
