@@ -52,6 +52,8 @@ internal partial class ExpressionBinder {
     private let binderCtx BinderContext
     private let memberLookup MemberLookup
     private let conversions ConversionClassifier
+    // Issue #5613: the capture of the block value that BindBranchValue binds next (TakeBlockValueCapture).
+    private var pendingBlockValueCapture((NarrowedBranchValue) -> void)? = nil
     private let overloads OverloadResolver
     private let patterns PatternBinder
     private let lambdas LambdaBinder
@@ -298,7 +300,13 @@ internal partial class ExpressionBinder {
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
         if syntax is BlockExpressionSyntax blockExpression {
-            return BindBlockExpressionValue(blockExpression, canBeVoid: false, targetType, preserveEmptyBlock: true)
+            return BindBlockExpressionValue(
+                blockExpression,
+                canBeVoid: false,
+                targetType,
+                preserveEmptyBlock: true,
+                captureValue: TakeBlockValueCapture()
+            )
         }
         // Issue #1112: a switch-expression honors the target type (C#-style
         // target-typing) — bind it with the target so the result type can be
@@ -584,7 +592,8 @@ internal partial class ExpressionBinder {
                 return BindBlockExpressionValue(
                     cast[BlockExpressionSyntax](syntax),
                     canBeVoid,
-                    preserveEmptyBlock: true
+                    preserveEmptyBlock: true,
+                    captureValue: TakeBlockValueCapture()
                 )
             }
             case SyntaxKind.ThrowExpression {

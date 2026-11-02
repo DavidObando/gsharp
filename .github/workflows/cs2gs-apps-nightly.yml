@@ -143,9 +143,17 @@ jobs:
       - name: Build cs2gs (Release)
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
+      - name: Restore verified C# test stamp for ${{ matrix.app }}
+        id: csharp-verified-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/gsharp-cs2gs-verified/${{ matrix.app }}
+          key: cs2gs-app-verified-${{ matrix.app }}-${{ runner.os }}-${{ hashFiles(format('tools/cs2gs/external/{0}.json', matrix.app)) }}
+
       - name: Migrate and validate ${{ matrix.app }}
         env:
           APP: ${{ matrix.app }}
+          CS2GS_VERIFIED_STAMP: ${{ runner.temp }}/gsharp-cs2gs-verified/${{ matrix.app }}/verified.txt
           # Every leg writes under the one directory the upload step collects.
           OAHU_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/oahu
           CODE_EXPLODER_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder
@@ -158,6 +166,9 @@ jobs:
           esac
           "$cmd" 2>&1 | tee "$RUNNER_TEMP/leg.log"
           code=${PIPESTATUS[0]}
+          if [[ -f "$CS2GS_VERIFIED_STAMP" ]]; then
+            echo "verified=true" >> "$GITHUB_OUTPUT"
+          fi
           # The leg script leaves stats.json in its gate root (#4856); the
           # result is red without it, below its floor, or on a non-zero exit.
           python3 build/cs2gs-apps-leg.py result --app "$APP" --exit-code "$code" \
@@ -166,6 +177,14 @@ jobs:
             --out "$RUNNER_TEMP/results/result-$APP.json"
           # The gate job reports the failure; do not fail this leg twice.
           exit 0
+        id: migrate-app
+
+      - name: Save verified C# test stamp for ${{ matrix.app }}
+        if: steps.csharp-verified-cache.outputs.cache-hit != 'true' && steps.migrate-app.outputs.verified == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/gsharp-cs2gs-verified/${{ matrix.app }}
+          key: cs2gs-app-verified-${{ matrix.app }}-${{ runner.os }}-${{ hashFiles(format('tools/cs2gs/external/{0}.json', matrix.app)) }}
 
       # Only result-<app>.json goes into the artifact the gate job downloads;
       # the reports go into a separate one, so the gate job does not pull them.

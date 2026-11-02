@@ -55,8 +55,16 @@ echo "code-exploder gate '$label': $actual_commit"
 
 dotnet restore "$source_dir/codeexploder.slnx"
 dotnet build "$source_dir/codeexploder.slnx" --configuration Release --no-restore
-dotnet test "$source_dir/codeexploder.slnx" \
-  --configuration Release --no-build --no-restore
+if [[ -n "${CS2GS_VERIFIED_STAMP:-}" && -f "$CS2GS_VERIFIED_STAMP" && "$(cat "$CS2GS_VERIFIED_STAMP")" == "$actual_commit" ]]; then
+  echo "code-exploder C# baseline tests already verified for $actual_commit; skipping C# test rerun."
+else
+  dotnet test "$source_dir/codeexploder.slnx" \
+    --configuration Release --no-build --no-restore
+  if [[ -n "${CS2GS_VERIFIED_STAMP:-}" ]]; then
+    mkdir -p "$(dirname "$CS2GS_VERIFIED_STAMP")"
+    printf '%s\n' "$actual_commit" > "$CS2GS_VERIFIED_STAMP"
+  fi
+fi
 
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
