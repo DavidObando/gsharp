@@ -1837,7 +1837,7 @@ public static class Obj {
 }`)
         let project = CSharpProjectLoader.LoadInMemory(
             [](string, source string){("Snippet.cs", source)},
-            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(fixture)).ToArray()
+            CachedFixtureReferences.Value
         )
         let compilation = project.Compilation.WithOptions(
             project
@@ -3993,8 +3993,7 @@ public sealed class Consumer { public Outer<string?>.Rows<object?> Value; }`)}, 
     private func AssertSplitProjectsVerifyAndRun(sources[]string, fixture string, reverseOrder bool)[]string {
         Directory.CreateDirectory(Path.Combine(this.fixtureDirectory, "csharp"))
         let projects = [sources.Length]LoadedCSharpProject
-        let sourceReferences = []PortableExecutableReference{MetadataReference.CreateFromFile(fixture)}
-            .Cast[MetadataReference]().ToList()
+        let sourceReferences = []MetadataReference{CachedFixtureReference.Value}.ToList()
         for var i = 0; i < sources.Length; i++ {
             let name = "Sibling" + i.ToString() + Guid.NewGuid().ToString("N")
             projects[i] = CSharpProjectLoader.LoadInMemory(
@@ -4266,9 +4265,26 @@ public static class Obj {
 
     private func EmitFixture() string {
         Directory.CreateDirectory(this.fixtureDirectory)
-        let assemblyName = "Issue4719Fixture" + Guid.NewGuid().ToString("N")
-        let path = Path.Combine(this.fixtureDirectory, assemblyName + ".dll")
-        let fixture = CSharpProjectLoader.LoadInMemory([](string, string){("Fixture.cs", `namespace Issue4719Fixture {
+        let path = Path.Combine(this.fixtureDirectory, "Issue4719Fixture.dll")
+        if !File.Exists(path) {
+            File.WriteAllBytes(path, CachedFixtureBytes.Value)
+        }
+        return path
+    }
+
+    shared {
+        private let CachedFixtureBytes Lazy[[]uint8] = Lazy[[]uint8](CompileFixtureBytes)
+
+        private let CachedFixtureReference Lazy[MetadataReference] = Lazy[MetadataReference](
+            () -> cast[MetadataReference](MetadataReference.CreateFromImage(CachedFixtureBytes.Value))
+        )
+
+        private let CachedFixtureReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[
+            IReadOnlyList[MetadataReference]
+        ](() -> CSharpProjectLoader.RuntimeReferences().Append(CachedFixtureReference.Value).ToArray())
+
+        private func CompileFixtureBytes()[]uint8 {
+            let fixture = CSharpProjectLoader.LoadInMemory([](string, string){("Fixture.cs", `namespace Issue4719Fixture {
     public sealed class Box {
         public static explicit operator Box(string text) => new Box();
         public static implicit operator Box(int? value) { Probe.Calls++; return new Box(); }
@@ -4502,13 +4518,17 @@ public static class Obj {
         public static int? Number(bool present) { Calls++; return present ? 7 : null; }
     }
 }`)})
-        Assert.True(fixture.BoundWithoutErrors, string.Join(Environment.NewLine, fixture.ErrorDiagnostics))
-        let emitted = fixture.Compilation.WithAssemblyName(assemblyName).Emit(path)
-        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
-        return path
-    }
+            Assert.True(fixture.BoundWithoutErrors, string.Join(Environment.NewLine, fixture.ErrorDiagnostics))
+            using let stream = MemoryStream()
+            let emitted = fixture
+                .Compilation
+                .WithAssemblyName("Issue4719Fixture")
+                .WithOptions(fixture.Compilation.Options.WithDeterministic(true))
+                .Emit(stream)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            return stream.ToArray()
+        }
 
-    shared {
         private func AssertAnnotations(input ITypeSymbol?, output ITypeSymbol?) {
             Assert.Equal(input!!.NullableAnnotation, output!!.NullableAnnotation)
             Assert.Equal(input!!.SpecialType, output!!.SpecialType)
@@ -4598,7 +4618,9 @@ public static class Obj {
             let project = CSharpProjectLoader.LoadInMemory(
                 [](string, source string){("Snippet.cs", source)},
                 if fixture == nil {
-                    default([]?MetadataReference)
+                    default(IReadOnlyList[MetadataReference]?)
+                } else if Path.GetFileName(fixture) == "Issue4719Fixture.dll" {
+                    CachedFixtureReferences.Value
                 } else {
                     CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(fixture)).ToArray()
                 }

@@ -296,15 +296,25 @@ internal class ConversionClassifier {
     /// classification.
     /// @param callParameter The target parameter when binding a call
     /// argument; supplies the call-specific GS0154 diagnostic contract.
+    /// @param trackNarrowing When `false`, the caller has decided the
+    /// backward `goto` check of a narrowed read (issue #5613).
     /// @returns The shaped bound expression.
     func BindConversion(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         type TypeSymbol?,
         allowExplicit bool = false,
-        callParameter ParameterSymbol? = nil
+        callParameter ParameterSymbol? = nil,
+        trackNarrowing bool = true
     ) BoundExpression {
-        let result = BindConversionCore(diagnosticLocation, expression, type, allowExplicit, callParameter)
+        let result = BindConversionCore(
+            diagnosticLocation,
+            expression,
+            type,
+            allowExplicit,
+            callParameter,
+            trackNarrowing
+        )
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
@@ -318,12 +328,65 @@ internal class ConversionClassifier {
         return result
     }
 
+    /// Issue #5613: decides the backward `goto` check of a captured narrowed read that [`value`](paramref) yields
+    /// (the value, or the trailing value of a block) for [`target`](paramref), with the decision of every other
+    /// conversion (cref:ConversionNeedsNarrowedSource). The declared read replaces the narrowed read when the target
+    /// takes it (cref:TryRecoverDeclaredMemberRead). Otherwise a target that needs the narrowing, or a read that stays
+    /// and casts or unwraps, records the use from the capture, which has the narrowing state where the read binds.
+    /// @param value The bound value.
+    /// @param read The captured narrowed read that the value yields.
+    /// @param target The conversion target.
+    /// @returns The value, with the declared read when it replaces the narrowed read.
+    func ResolveNarrowedValue(value BoundExpression, read NarrowedBranchValue, target TypeSymbol) BoundExpression {
+        if TryRecoverDeclaredMemberRead(read.Value, read.Path, read.NarrowedType, target, out var declaredRead) &&
+            ReplaceNarrowedLeaf(value, read.Value, declaredRead!!) is {} recovered {
+            return recovered
+        }
+        // The narrowed read stays in the value, so a read that casts or unwraps needs the narrowing whatever the
+        // target is, as a constrained-call argument does. Then the cast or unwrap to the narrowed type is the use.
+        if read.Use is {} use && ConstrainedArgumentNeedsNarrowedSource(read.Path, read.NarrowedType, target) {
+            binderCtx.RecordBackwardGotoNarrowingUse(
+                use,
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                if ConversionNeedsNarrowedSource(
+                    MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
+                    read.NarrowedType,
+                    target
+                ) {
+                    target
+                } else {
+                    read.NarrowedType
+                }
+            )
+        }
+        return value
+    }
+
+    // Issue #5613: replaces the narrowed read that a value yields (the value, or a block's trailing value).
+    private func ReplaceNarrowedLeaf(
+        value BoundExpression,
+        leaf BoundExpression,
+        replacement BoundExpression
+    ) BoundExpression? {
+        if object.ReferenceEquals(value, leaf) {
+            return replacement
+        }
+        if value is BoundBlockExpression block &&
+            ReplaceNarrowedLeaf(block.Expression, leaf, replacement) is {} trailing {
+            return BoundBlockExpression(block.Syntax, block.Statements, trailing)
+        }
+        return nil
+    }
+
     private func BindConversionCore(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         type TypeSymbol?,
         allowExplicit bool,
-        callParameter ParameterSymbol?
+        callParameter ParameterSymbol?,
+        trackNarrowing bool
     ) BoundExpression {
         var expression = expression
         if type != nil && NativeProtocolOperations.GetProtocol(type) != nil &&
@@ -331,8 +394,9 @@ internal class ConversionClassifier {
             expression.Type != TypeSymbol.Error {
             return bindNativeProtocolConversion(diagnosticLocation, expression, type)
         }
-        // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result.
-        if binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
+        // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
+        // a branch value converts to the common type without it, because the branch decided it where the read binds.
+        if trackNarrowing && binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
             let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
             let narrowedSourceType = Invariant.Required(
                 narrowedType,
@@ -3741,7 +3805,8 @@ internal class ConversionClassifier {
         }
 
         // Issue #5603: a constrained-call argument keeps its narrowed read, so a read that casts or unwraps needs the
-        // narrowing even when its declared type converts to the parameter.
+        // narrowing even when its declared type converts to the parameter. Issue #5613: so does a branch value whose
+        // narrowed read could not be replaced.
         private func ConstrainedArgumentNeedsNarrowedSource(
             path AccessPath,
             narrowedType TypeSymbol,

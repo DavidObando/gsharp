@@ -182,8 +182,24 @@ W
                 loader,
                 "Second"
             )
+            let all = await SelfMigratedCompilerSource.LoadAsync(
+                root,
+                "tools/cs2gs/Demo",
+                preservePartialParts: true,
+                isDefaultRoot: true,
+                loader
+            )
+            let directProject = await SelfMigratedCompilerSource.LoadProjectAsync(
+                Path.Combine(project, "Demo.csproj"),
+                isDefaultRoot: true,
+                loader
+            )
             Assert.Equal(1, loads)
             Assert.Same(first["First"], firstRepeat["First"])
+            Assert.Same(first["First"], all["First"])
+            Assert.Same(second["Second"], all["Second"])
+            Assert.Equal([]string{"First", "Second"}, all.Keys.ToArray())
+            Assert.Equal(2, directProject.Documents.Count)
             Assert.Contains("First", first["First"].Text, StringComparison.Ordinal)
             Assert.Contains("Second", second["Second"].Text, StringComparison.Ordinal)
         } finally {

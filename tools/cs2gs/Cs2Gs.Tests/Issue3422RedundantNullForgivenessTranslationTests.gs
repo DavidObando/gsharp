@@ -41,19 +41,13 @@ class Issue3422RedundantNullForgivenessTranslationTests {
             Assert.InRange(committedParenthesized, 0, 9)
             return
         }
-        let project = await CSharpProjectLoader.LoadProjectAsync(Path.Combine(repoRoot, "src", "Core", "Core.csproj"))
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Core should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
-        )
+        let migrated = await SelfMigratedCompilerSource.LoadAsync(repoRoot, "src/Core", preservePartialParts: true)
         // Issue #4656: zero documents would count zero of everything and pass.
-        Assert.NotEmpty(project.Documents)
-        let translator = CSharpToGSharpTranslator(preservePartialParts: true)
+        Assert.NotEmpty(migrated)
         var doubledAssertions = 0
         var assertedParenthesizedReceivers = 0
-        for document in project.Documents {
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        for file in migrated.Values {
+            let printed = file.Text
             // Issue #3469: author comments now flow into the emitted G#,
             // and Core-source comments mention the very patterns this
             // inventory counts — count code lines only.
