@@ -1320,7 +1320,7 @@ internal partial class StatementBinder {
     // a conversion operator (the same or a built-in type, a reference conversion, a type parameter that the call
     // infers, or `nil` for a reference or nullable type) is taken to be the one that binds. A call that the walker
     // cannot check counts (coordinator decision 2026-11-01): a callee without such a candidate (an extension method,
-    // an expanded or optional argument), a named argument, an argument without a path, an operator argument when an
+    // an expanded or optional argument), a named argument, a typed `out var`, an argument without a path, an operator argument when an
     // operator of the region can return another type, or a range that does not slice a built-in sequence.
     private func ArgumentsRunUserConversion(effects RegionEffects) bool {
         let operatorResultsKnown = !OperatorsRunUserCode(effects, false)
@@ -1378,7 +1378,7 @@ internal partial class StatementBinder {
         let kinds = List[int32]()
         for var index = 0; index < call.Arguments.Count; index++ {
             let form = call.ArgumentForms[index]
-            if form == RegionArgumentForm.Named {
+            if form == RegionArgumentForm.Named || form == RegionArgumentForm.TypedInlineDeclaration {
                 return true
             }
             if form == RegionArgumentForm.ByReference || form == RegionArgumentForm.ReadOnlyReference {
@@ -1443,7 +1443,8 @@ internal partial class StatementBinder {
         // binds through an expanded or optional argument, which is not checked, so it counts. An alternative without
         // a method of the name is not the type the call binds on unless an extension method can bind it, which is
         // not checked either. A call that no alternative takes counts.
-        guard let groups = ParameterListGroups(call, name, effects) else {
+        let unproven = HashSet[List[TypeSymbol]]()
+        guard let groups = ParameterListGroups(call, name, effects, unproven) else {
             return true
         }
         var anyAlternative = false
@@ -1458,32 +1459,70 @@ internal partial class StatementBinder {
                 }
             }
             anyAlternative = true
-            if CandidatesRunUserConversion(candidates, argumentTypes, kinds, call.HasTypeArguments) {
+            if CandidatesRunUserConversion(candidates, argumentTypes, kinds, call.HasTypeArguments, unproven) {
                 return true
             }
         }
         return !anyAlternative
     }
 
-    // The walker does not model accessibility, the binder's lookup precedence (source methods before imported base
-    // methods), the storage type of a typed `out var`, or which candidate is better, so it does not prove which
-    // candidate binds. A call counts when any candidate takes it through a conversion operator, and when none takes
-    // it at all; a candidate that takes it by identity or without an operator proves nothing about the others.
+    // A candidate that takes every argument by identity is better than one that needs a conversion operator, when
+    // lookup finds it (`unproven` holds the candidates that the binder may not select: a private or explicit-interface
+    // method, or an imported base method that a source method of the name hides). Otherwise a candidate that needs one
+    // can be the better one (a conversion to `Payload` beats one to `object`), and a call that no candidate takes is
+    // not checked.
     private func CandidatesRunUserConversion(
         candidates List[List[TypeSymbol]],
         argumentTypes List[List[TypeSymbol]?],
         kinds List[int32],
-        explicitTypeArguments bool
+        explicitTypeArguments bool,
+        unproven HashSet[List[TypeSymbol]]
     ) bool {
+        // A call with named type arguments selects by generic arity, which the lists do not show.
+        if !explicitTypeArguments {
+            for parameters in candidates {
+                if !unproven.Contains(parameters) && CandidateIsExact(parameters, argumentTypes, kinds) {
+                    return false
+                }
+            }
+        }
         var free = false
         for parameters in candidates {
             let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, explicitTypeArguments)
             if candidate == CandidateUser {
                 return true
             }
-            free = free || candidate >= CandidateFree
+            free = free || candidate == CandidateFree
         }
         return !free
+    }
+
+    // Whether a candidate takes every argument of a known type by identity (the quick test before the classification).
+    private func CandidateIsExact(
+        parameters List[TypeSymbol],
+        argumentTypes List[List[TypeSymbol]?],
+        kinds List[int32]
+    ) bool {
+        for var index = 0; index < parameters.Count; index++ {
+            // An `in` argument also matches a parameter that is not `in`, so it proves no candidate by identity.
+            if !PassingModeMatches(parameters[index], kinds[index]) || kinds[index] == ArgumentReadOnlyReference {
+                return false
+            }
+            if kinds[index] == ArgumentSkipped || kinds[index] == ArgumentInlineDeclaration {
+                continue
+            }
+            if (kinds[index] != ArgumentTyped && kinds[index] != ArgumentByReference) ||
+                argumentTypes[index] is not{} types {
+                return false
+            }
+            let stripped = ReferencedType(parameters[index])
+            for argumentType in types {
+                if !object.Equals(argumentType, stripped) && !SameClrType(argumentType, stripped) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     // How a candidate takes the arguments: not at all, through a conversion operator, without one, or by identity.
@@ -1560,34 +1599,118 @@ internal partial class StatementBinder {
         return result
     }
 
-    // Whether method type parameters appear in more than one parameter whose arguments do not all have the same known
-    // type. Such a type parameter is inferred from those arguments together, so one argument can fix it and another
-    // reach it through a conversion operator (`Use[T](a T, b T)` with a `DateTimeOffset` and a `DateTime`).
+    // Whether the method type parameters that more than one parameter names may be inferred so that an argument
+    // reaches its parameter through a conversion operator (`Use[T](a T, b T)` with a `DateTimeOffset` and a
+    // `DateTime`). Each position binds the type parameters it names: a bare one the argument's type, a compound one
+    // (`List[T]`) the type arguments of an argument of the same generic type. A type parameter bound to two types, or
+    // named where the walker cannot bind it, counts. A built-in literal or operator value fits a type parameter that
+    // binds to a built-in type, or to nothing else.
     private func SharesInferredTypeParameter(
         parameters List[TypeSymbol],
         argumentTypes List[List[TypeSymbol]?],
         kinds List[int32]
     ) bool {
-        var shared TypeSymbol? = nil
-        var count = 0
-        var differ = false
+        let bound = Dictionary[object, TypeSymbol]()
+        let builtIn = List[object]()
+        var positions = 0
+        var unbindable = false
         for var index = 0; index < parameters.Count; index++ {
             let stripped = StripReferenceNullability(parameters[index]) ?? parameters[index]
-            if !TypeParameterTakesArgument(stripped, false) && !IsCompoundOfMethodTypeParameters(stripped) {
+            let bare = TypeParameterTakesArgument(stripped, false)
+            if !bare && !IsCompoundOfMethodTypeParameters(stripped) {
                 continue
             }
-            count++
-            if kinds[index] != ArgumentTyped || argumentTypes[index] is not{} types || types.Count != 1 {
-                differ = true
-            } else if shared is {} first {
-                if !object.Equals(first, types[0]) && !SameClrType(first, types[0]) {
-                    differ = true
-                }
+            positions++
+            let single = if kinds[index] == ArgumentTyped && argumentTypes[index] is {} types && types.Count == 1 {
+                types[0]
             } else {
-                shared = types[0]
+                default(TypeSymbol?)
+            }
+            if bare && TypeParameterKey(stripped) is {} key {
+                if single is {} argument {
+                    if !BindTypeParameter(bound, key, argument) {
+                        return true
+                    }
+                } else if kinds[index] == ArgumentBuiltIn {
+                    builtIn.Add(key)
+                } else {
+                    unbindable = true
+                }
+            } else if !bare && single is {} argument && !BindCompound(bound, stripped, argument) {
+                unbindable = true
+            } else if !bare && single == nil {
+                unbindable = true
+            } else if bare {
+                unbindable = true
             }
         }
-        return count > 1 && differ
+        if positions < 2 {
+            return false
+        }
+        if unbindable {
+            return true
+        }
+        for key in builtIn {
+            if bound.TryGetValue(key, out var type) && !MetadataTypeKeys.IsBuiltIn(StripNullableValue(type)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Binds the method type parameters of a compound parameter to the type arguments of an argument of the same
+    // generic type. Returns `false` when the walker cannot, or when a type parameter is bound to two types.
+    private func BindCompound(bound Dictionary[object, TypeSymbol], parameter TypeSymbol, argument TypeSymbol) bool {
+        guard let definition = GenericDefinition(parameter) else {
+            return false
+        }
+        guard let argumentDefinition = GenericDefinition(argument) else {
+            return false
+        }
+        if !ClrTypeUtilities.AreSame(argumentDefinition, definition) {
+            return false
+        }
+        let parameterArguments = TypeArgumentsOf(parameter)
+        let argumentArguments = TypeArgumentsOf(argument)
+        if parameterArguments.IsDefaultOrEmpty || parameterArguments.Length != argumentArguments.Length {
+            return false
+        }
+        for var index = 0; index < parameterArguments.Length; index++ {
+            let typeArgument = parameterArguments[index]
+            if TypeParameterTakesArgument(typeArgument, false) && TypeParameterKey(typeArgument) is {} key {
+                if !BindTypeParameter(bound, key, argumentArguments[index]) {
+                    return false
+                }
+            } else if IsCompoundOfMethodTypeParameters(typeArgument) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func BindTypeParameter(bound Dictionary[object, TypeSymbol], key object, type TypeSymbol) bool {
+        if bound.TryGetValue(key, out var existing) {
+            return object.Equals(existing, type) || SameClrType(existing, type)
+        }
+        bound[key] = type
+        return true
+    }
+
+    // The identity of a method type parameter: its symbol, or the CLR generic parameter of an imported method.
+    private func TypeParameterKey(type TypeSymbol) object? {
+        if type is TypeParameterSymbol typeParameter {
+            return typeParameter
+        }
+        return type.ClrType
+    }
+
+    private func TypeArgumentsOf(type TypeSymbol) ImmutableArray[TypeSymbol] {
+        return switch type {
+            case imported is ImportedTypeSymbol: imported.TypeArguments
+            case declared is StructSymbol: declared.TypeArguments
+            case contract is InterfaceSymbol: contract.TypeArguments
+            default: ImmutableArray[TypeSymbol].Empty
+        }
     }
 
     // A `ref` or `out` argument (an inline declaration included) takes only a `ref` or `out` parameter, and any other
@@ -1878,9 +2001,12 @@ internal partial class StatementBinder {
 
     // The parameter lists of the candidates, one group for each alternative type of the receiver, or `nil` when an
     // alternative without a method of the name can bind the call through an extension method.
-    private func ParameterListGroups(call RegionCall, name string, effects RegionEffects) List[
-        List[List[TypeSymbol]]
-    ]? {
+    private func ParameterListGroups(
+        call RegionCall,
+        name string,
+        effects RegionEffects,
+        unproven HashSet[List[TypeSymbol]]
+    ) List[List[List[TypeSymbol]]]? {
         let groups = List[List[List[TypeSymbol]]]()
         var receivers List[ReceiverType]? = nil
         if call.Kind == RegionCallKind.NamedInvocation {
@@ -1916,7 +2042,7 @@ internal partial class StatementBinder {
             } else {
                 // A method of the name that the lists do not show (of a base interface of an imported interface, or
                 // an extension method) is not checked, so the call counts.
-                if !AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists) ||
+                if !AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists, unproven) ||
                     lists.Count == 0 &&
                     !staticAccess &&
                     (
@@ -2027,10 +2153,12 @@ internal partial class StatementBinder {
         name string,
         explicitTypeArguments bool,
         staticAccess bool,
-        lists List[List[TypeSymbol]]
+        lists List[List[TypeSymbol]],
+        unproven HashSet[List[TypeSymbol]]
     ) bool {
         var clrType = receiver.Clr
         var symbolic TypeSymbol? = nil
+        var sourceHides = false
         switch receiver.Symbol {
             case declared is StructSymbol {
                 for level in declared.GetHierarchy() {
@@ -2046,12 +2174,19 @@ internal partial class StatementBinder {
                                 )
                             }
                             lists.Add(types)
+                            if function.Accessibility == Accessibility.Private ||
+                                function.ExplicitInterfaceMember != nil ||
+                                function.ExplicitInterfaceClauseTarget != nil {
+                                unproven.Add(types)
+                            }
                         }
                     }
                 }
                 let importedBase = declared.GetHierarchy().Last().ImportedBaseType
                 clrType = importedBase?.ClrType
                 symbolic = importedBase
+                // The binder looks up a source method of the name before the imported base's methods.
+                sourceHides = lists.Count > 0
             }
             case contract is InterfaceSymbol {
                 for level in contract.SelfAndAllBaseInterfaces() {
@@ -2095,7 +2230,11 @@ internal partial class StatementBinder {
                 if member is MethodInfo method &&
                     method.IsStatic == staticAccess &&
                     (explicitTypeArguments || ClrTypeParametersInferable(method)) {
-                    lists.Add(ClrParameterTypes(symbolic, method, method.GetParameters()))
+                    let types = ClrParameterTypes(symbolic, method, method.GetParameters())
+                    lists.Add(types)
+                    if sourceHides {
+                        unproven.Add(types)
+                    }
                 }
             }
         } catch (ex NotSupportedException) {

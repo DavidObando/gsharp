@@ -3382,6 +3382,25 @@ func Run(ref text string?, d D, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@10:16")
+            Add("explicit-interface-method-is-not-the-binding-candidate (A3)", `package T
+import System
+interface IUse {
+    func Use(d DateTime);
+}
+class D : IUse {
+    func (IUse) Use(d DateTime) { }
+    func Use(d DateTimeOffset) { }
+}
+func Run(ref text string?, d D, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        d.Use(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@13:16")
             return rows
         }
     }
