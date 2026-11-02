@@ -173,7 +173,7 @@ class ReportModel {
             }
             let stageOrder = CanonicalStageOrder()
             let apps = List[AppReport]()
-            let artifacts = List[(AppId string, Artifact TriageArtifact?)]()
+            let artifacts = List[(AppId string, Artifact TriageArtifact)]()
             var missingArtifactCount = 0
             for app in run.Apps.OrderBy((a AppResult) -> a.AppId, StringComparer.Ordinal) {
                 apps.Add(BuildAppReport(app, stageOrder))
@@ -271,7 +271,7 @@ class ReportModel {
             }
         }
 
-        private func GroupGaps(artifacts List[(AppId string, Artifact TriageArtifact?)]) List[GapReport] {
+        private func GroupGaps(artifacts List[(AppId string, Artifact TriageArtifact)]) List[GapReport] {
             let gaps = List[GapReport]()
             for group in artifacts.GroupBy(
                 (a(AppId string, Artifact TriageArtifact)) -> a.Artifact.Fingerprint,
