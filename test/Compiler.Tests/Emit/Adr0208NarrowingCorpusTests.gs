@@ -113,6 +113,42 @@ open class Adr0208NarrowingCorpusTests {
         Assert.Equal(names.Length, names.Distinct().Count())
         Assert.Equal(
             []string{
+                "a01_5629_switch_case_equals_removes_the_fact_in_its_body_R19",
+                "a02_5629_switch_expression_arm_equals_removes_the_fact_R19",
+                "a03_5629_default_before_a_case_sees_the_case_test_R19",
+                "a04_5629_earlier_case_test_reaches_a_later_case_body_R19",
+                "a05_5629_int_constant_case_on_int32_keeps_the_fact_R19",
+                "a06_5629_loop_continue_in_a_case_after_a_user_equals_R19",
+                "a07_5629_loop_write_before_continue_in_a_case",
+                "a08_5629_loop_write_before_continue_in_a_try",
+                "a09_5629_loop_continue_in_an_int_case_keeps_the_fact_R19",
+                "a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14",
+                "a11_5629_case_body_call_is_not_part_of_the_test_R18",
+                "a12_5629_arm_result_call_is_not_part_of_the_test_R18",
+                "a13_5629_tests_after_a_default_do_not_reach_earlier_cases_R19",
+                "a14_5629_tests_after_a_default_do_not_reach_earlier_arms_R19",
+                "a15_5629_continue_in_do_while_false_is_no_back_edge",
+                "a16_5629_case_value_after_a_default_sees_the_tests_before_it_R19",
+                "a17_5629_arm_value_after_a_default_sees_the_tests_before_it_R19",
+                "a18_5629_default_fallthrough_carries_the_later_tests_R19",
+                "a19_5629_guard_effects_reach_a_later_case_value_R18",
+                "a20_5629_guard_effects_reach_a_later_arm_value_R18",
+                "a21_5629_case_test_that_clears_the_discriminant_narrows_nothing_R18",
+                "a22_5629_statements_after_a_hidden_continue_are_not_on_the_back_edge",
+                "a23_5629_continue_under_a_false_guard_is_no_back_edge",
+                "a24_5629_guard_effects_reach_the_pattern_proof_of_the_case_body_R18",
+                "a25_5629_guard_effects_reach_the_pattern_proof_of_the_arm_result_R18",
+                "a26_5629_continue_in_a_guard_block_reaches_the_back_edge",
+                "a27_5629_earlier_guard_effects_make_a_later_case_proof_stale_R18",
+                "a28_5629_earlier_guard_effects_make_a_later_arm_proof_stale_R18",
+                "a29_5629_alias_replaced_in_a_guard_is_not_external_for_later_cases",
+                "a30_5629_alias_replaced_in_a_guard_is_not_external_for_later_arms",
+                "a31_5629_alias_replaced_in_a_pattern_is_not_external_for_later_cases",
+                "a32_5629_an_arm_that_leaves_the_loop_adds_nothing_to_a_hidden_back_edge",
+                "a33_5629_an_arm_that_falls_through_to_a_hidden_continue_is_on_the_back_edge",
+                "a34_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_case",
+                "a35_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_arm",
+                "a36_5629_a_guard_block_before_a_default_reaches_the_cases_after_it",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7154,6 +7190,824 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "", "run", "a", "R14"}
+            yield[]object{"a01_5629_switch_case_equals_removes_the_fact_in_its_body_R19", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    switch o { case 1 { return g.Value } default { } }
+    return 0
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@23:34", "reject", "", "R19"}
+            yield[]object{"a02_5629_switch_expression_arm_equals_removes_the_fact_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    return switch o {
+        case 1: x.Value
+        default: 2
+    }
+}
+Console.WriteLine(Run())`, "GS0158@21:19", "reject", "", "R19"}
+            yield[]object{"a03_5629_default_before_a_case_sees_the_case_test_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { return x.Value }
+        case 1 { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@21:28", "reject", "", "R19"}
+            yield[]object{"a04_5629_earlier_case_test_reaches_a_later_case_body_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        case 2 { }
+        case 1 { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:27", "reject", "", "R19"}
+            yield[]object{"a05_5629_int_constant_case_on_int32_keeps_the_fact_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    let n int32 = 1
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch n {
+        case 1 { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R19"}
+            yield[]object{"a06_5629_loop_continue_in_a_case_after_a_user_equals_R19", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch o { case 1 { continue } default { } }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", "R19"}
+            yield[]object{"a07_5629_loop_write_before_continue_in_a_case", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch k { case 1 { g = nil
+            continue } default { } }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", ""}
+            yield[]object{"a08_5629_loop_write_before_continue_in_a_try", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        try {
+            g = nil
+            continue
+        } catch (e Exception) { }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", ""}
+            yield[]object{"a09_5629_loop_continue_in_an_int_case_keeps_the_fact_R19", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch k { case 1 { continue } default { } }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "", "run", "2", "R19"}
+            yield[]object{"a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Dog {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    let o object = d
+    var x C? = C{}
+    d.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        case Dog { P: 1 } { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:38", "reject", "", "R14"}
+            yield[]object{"a11_5629_case_body_call_is_not_part_of_the_test_R18", `import System
+
+class Pet {
+    var Value int32 = 1
+}
+class B {
+    let Pet Pet? = Pet{}
+}
+func Run(n int32) int32 {
+    let b = B{}
+    if b.Pet == nil { return 0 }
+    switch n {
+        case 1 { Console.WriteLine(b.Pet.Value) }
+        default { }
+    }
+    return 1
+}
+Console.WriteLine(Run(1))`, "", "run", "1|1", "R18"}
+            yield[]object{"a12_5629_arm_result_call_is_not_part_of_the_test_R18", `import System
+
+class B {
+    let Pet Pet? = Pet{}
+}
+class Pet {
+    var Value int32 = 1
+}
+func Use(v int32) int32 -> v
+func Run(n int32) int32 {
+    let b = B{}
+    if b.Pet == nil { return 0 }
+    return switch n {
+        case 1: Use(b.Pet.Value)
+        default: 0
+    }
+}
+Console.WriteLine(Run(1))`, "", "run", "1", "R18"}
+            yield[]object{"a13_5629_tests_after_a_default_do_not_reach_earlier_cases_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { }
+        case nil { return x.Value }
+        case 1 { }
+    }
+    return 2
+}
+Console.WriteLine(Run(nil))`, "", "run", "1", "R19"}
+            yield[]object{"a14_5629_tests_after_a_default_do_not_reach_earlier_arms_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    return switch o {
+        default: 2
+        case nil: x.Value
+        case 1: 3
+    }
+}
+Console.WriteLine(Run(nil))`, "", "run", "1", "R19"}
+            yield[]object{"a15_5629_continue_in_do_while_false_is_no_back_edge", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    do {
+        Console.WriteLine(t.Length)
+        switch k {
+            case 1 {
+                t = nil
+                continue
+            }
+            default { }
+        }
+    } while false
+    return 1
+}
+Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
+            yield[]object{"a16_5629_case_value_after_a_default_sees_the_tests_before_it_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { }
+        case 1 { }
+        case x.Value { return 3 }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@23:16", "reject", "", "R19"}
+            yield[]object{"a17_5629_arm_value_after_a_default_sees_the_tests_before_it_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    return switch o {
+        default: 2
+        case 1: 3
+        case x.Value: 4
+    }
+}
+Console.WriteLine(Run())`, "GS0158@23:16", "reject", "", "R19"}
+            yield[]object{"a18_5629_default_fallthrough_carries_the_later_tests_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { fallthrough }
+        case nil { return x.Value }
+        case 1 { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:29", "reject", "", "R19"}
+            yield[]object{"a19_5629_guard_effects_reach_a_later_case_value_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(k int32) int32 {
+    var x C? = C{}
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    if x == nil { return 0 }
+    switch k {
+        default { }
+        case 1 when clear() { }
+        case x.Value { return 3 }
+    }
+    return 2
+}
+Console.WriteLine(Run(1))`, "GS0158@16:16", "reject", "", "R18"}
+            yield[]object{"a20_5629_guard_effects_reach_a_later_arm_value_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(k int32) int32 {
+    var x C? = C{}
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    if x == nil { return 0 }
+    return switch k {
+        default: 2
+        case 1 when clear(): 4
+        case x.Value: 3
+    }
+}
+Console.WriteLine(Run(1))`, "GS0158@16:16", "reject", "", "R18"}
+            yield[]object{"a21_5629_case_test_that_clears_the_discriminant_narrows_nothing_R18", `import System
+
+open class Pet {
+    var Value int32 = 1
+}
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    var x Pet? = d
+    d.Clear = func() { x = nil }
+    switch x {
+        case Dog { P: 1 } { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@20:38", "reject", "", "R18"}
+            yield[]object{"a22_5629_statements_after_a_hidden_continue_are_not_on_the_back_edge", `import System
+
+func Run(s string?, start int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var k = start
+    while true {
+        Console.WriteLine(t.Length)
+        k++
+        switch k {
+            case 1 { continue }
+            default { }
+        }
+        t = nil
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 0))`, "", "run", "1|1|1", ""}
+            yield[]object{"a23_5629_continue_under_a_false_guard_is_no_back_edge", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    while true {
+        let n = t.Length
+        Console.WriteLine(n)
+        switch k {
+            case 1 when false {
+                t = nil
+                continue
+            }
+            default { }
+        }
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
+            yield[]object{"a24_5629_guard_effects_reach_the_pattern_proof_of_the_case_body_R18", `import System
+
+func Run(o object) int32 {
+    var x string? = "ab"
+    let clear = func() bool {
+        x = nil
+        return true
+    }
+    switch x {
+        case string when clear() { return x.Length }
+        default { }
+    }
+    return 0
+}
+Console.WriteLine(Run(1))`, "GS0158@10:45", "reject", "", "R18"}
+            yield[]object{"a25_5629_guard_effects_reach_the_pattern_proof_of_the_arm_result_R18", `import System
+
+func Run(o object) int32 {
+    var x string? = "ab"
+    let clear = func() bool {
+        x = nil
+        return true
+    }
+    return switch x {
+        case string when clear(): x.Length
+        default: 0
+    }
+}
+Console.WriteLine(Run(1))`, "GS0158@10:37", "reject", "", "R18"}
+            yield[]object{"a26_5629_continue_in_a_guard_block_reaches_the_back_edge", `import System
+
+func Run(s string?, k int32, again bool) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var n = 0
+    while n < 3 {
+        n++
+        Console.WriteLine(t.Length)
+        switch k {
+            case 1 when ({
+                t = nil
+                if again { continue }
+                false
+            }) { }
+            default { }
+        }
+        break
+    }
+    return n
+}
+Console.WriteLine(Run("a", 1, true))`, "GS0158@9:29", "reject", "", ""}
+            yield[]object{"a27_5629_earlier_guard_effects_make_a_later_case_proof_stale_R18", `import System
+
+func Run() int32 {
+    var x object? = "ab"
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    switch x {
+        case _ when clear() { return 0 }
+        case string { return x.Length }
+        default { return 0 }
+    }
+}
+Console.WriteLine(Run())`, "GS0158@11:32", "reject", "", "R18"}
+            yield[]object{"a28_5629_earlier_guard_effects_make_a_later_arm_proof_stale_R18", `import System
+
+func Run() int32 {
+    var x object? = "ab"
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    return switch x {
+        case _ when clear(): 0
+        case string: x.Length
+        default: 0
+    }
+}
+Console.WriteLine(Run())`, "GS0158@11:24", "reject", "", "R18"}
+            yield[]object{"a29_5629_alias_replaced_in_a_guard_is_not_external_for_later_cases", `import System
+
+func Run(action () -> bool, k int32) int32 {
+    var a = action
+    var x string? = "ab"
+    if x == nil { return 0 }
+    switch k {
+        case 1 when ({
+            a = func() bool {
+                x = nil
+                return false
+            }
+            false
+        }) { }
+        case 1 when a() { }
+        case 1 { return x.Length }
+        default { }
+    }
+    return 0
+}
+Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@16:27", "reject", "", ""}
+            yield[]object{"a30_5629_alias_replaced_in_a_guard_is_not_external_for_later_arms", `import System
+
+func Run(action () -> bool, k int32) int32 {
+    var a = action
+    var x string? = "ab"
+    if x == nil { return 0 }
+    return switch k {
+        case 1 when ({
+            a = func() bool {
+                x = nil
+                return false
+            }
+            false
+        }): 0
+        case 1 when a(): 0
+        case 1: x.Length
+        default: 0
+    }
+}
+Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@16:19", "reject", "", ""}
+            yield[]object{"a31_5629_alias_replaced_in_a_pattern_is_not_external_for_later_cases", `import System
+
+func Run(action () -> bool, k int32) int32 {
+    var a = action
+    var x string? = "ab"
+    if x == nil { return 0 }
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    switch k {
+        case 0 + ({
+            a = clear
+            2
+        }) { }
+        case 1 {
+            a()
+            return x.Length
+        }
+        default { }
+    }
+    return 0
+}
+Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@18:22", "reject", "", ""}
+            yield[]object{"a32_5629_an_arm_that_leaves_the_loop_adds_nothing_to_a_hidden_back_edge", `import System
+
+func Run(s string?, start int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var k = start
+    while true {
+        Console.WriteLine(t.Length)
+        k++
+        switch k {
+            case 1 { continue }
+            default {
+                t = nil
+            }
+        }
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 0))`, "", "run", "1|1|1", ""}
+            yield[]object{"a33_5629_an_arm_that_falls_through_to_a_hidden_continue_is_on_the_back_edge", `import System
+
+func Run(s string?, start int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var k = start
+    while true {
+        Console.WriteLine(t.Length)
+        k++
+        switch k {
+            case 1 {
+                t = nil
+                fallthrough
+            }
+            case 2 { continue }
+            default { }
+        }
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 0))`, "GS0158@8:29", "reject", "", ""}
+            yield[]object{"a34_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_case", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    switch k {
+        default { }
+        case 0 { return t.Length }
+        case 1 when ({
+            t = nil
+            false
+        }) { }
+    }
+    return 0
+}
+Console.WriteLine(Run("ab", 0))`, "", "run", "2", ""}
+            yield[]object{"a35_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_arm", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    return switch k {
+        default: 0
+        case 0: t.Length
+        case 1 when ({
+            t = nil
+            false
+        }): 0
+    }
+}
+Console.WriteLine(Run("ab", 0))`, "", "run", "2", ""}
+            yield[]object{"a36_5629_a_guard_block_before_a_default_reaches_the_cases_after_it", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    switch k {
+        default { }
+        case 1 when ({
+            t = nil
+            false
+        }) { }
+        case 1 { return t.Length }
+    }
+    return 0
+}
+Console.WriteLine(Run("ab", 1))`, "GS0158@12:27", "reject", "", ""}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {
