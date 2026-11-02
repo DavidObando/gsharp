@@ -3448,6 +3448,7 @@ internal partial class ExpressionBinder {
             }
             if elementRead is {} read {
                 be = conversions.ResolveNarrowedValue(be, read, be.Type)
+                binderCtx.CaptureNarrowedRead(be, read)
             }
             bound.Add(be)
             elementTypes.Add(be.Type)

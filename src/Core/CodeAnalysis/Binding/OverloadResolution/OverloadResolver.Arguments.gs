@@ -83,7 +83,11 @@ internal partial class OverloadResolver {
                     methodTypeArguments: symbolicMethodTypeArgs
                 )
                 if TypeSymbol.RequiresSymbolicProjection(symbolicElementType) {
-                    elementTypeSymbol = symbolicElementType
+                    elementTypeSymbol = if elementTypeSymbol.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                        NullabilityImportRule.ApplyOpenSlot(symbolicElementType, ClrNullabilityState.Annotated)
+                    } else {
+                        symbolicElementType
+                    }
                 }
             }
         }

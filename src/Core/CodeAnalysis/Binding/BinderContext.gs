@@ -924,6 +924,16 @@ internal class BinderContext {
         }
     }
 
+    /// Issue #5635: keeps the captured narrowed read [`read`](paramref) for [`value`](paramref). A conversion of an
+    /// enclosing tuple literal then decides the read for the target element type.
+    /// @param value The bound value.
+    /// @param read The captured narrowed read that the value yields.
+    func CaptureNarrowedRead(value BoundExpression, read NarrowedBranchValue) {
+        if BackwardGotoNarrowingStates.Count > 0 {
+            narrowedReadCaptures[value] = (read, NarrowingFunctionFrame)
+        }
+    }
+
     /// Issue #5635: gets the narrowed read that (cref:CaptureNarrowedRead) captured for [`value`](paramref) in the
     /// function body that is bound now.
     /// @param value The bound value.

@@ -1413,7 +1413,7 @@ internal partial class ExpressionBinder {
         if object.ReferenceEquals(value.Type, commonType) {
             return value
         }
-        return conversions.BindConversion(location, value, commonType, trackNarrowing: false)
+        return conversions.BindConversion(location, value, commonType, trackNarrowing: narrowedRead == nil)
     }
 
     /// Issue #5613: binds the value of a branch in its narrowing frame. A narrowed read that the value yields (the

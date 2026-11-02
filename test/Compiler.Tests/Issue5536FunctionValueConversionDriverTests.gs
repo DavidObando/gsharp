@@ -1404,9 +1404,9 @@ func Main() {
         }
     }
 
-    /// Issue #5635 controls: a block value that converts to a nullable declared type, assignment target or inferred
-    /// result, and an explicit nullable type argument, take the declared value, so the `goto` that removes the
-    /// narrowing gives nil. A `goto` that keeps the narrowing gives a `string` in each form of
+    /// Issue #5635 controls: a block value or tuple literal that converts to a nullable target takes the declared
+    /// value, and so does an explicit nullable type argument. The `goto` that removes the narrowing then gives nil.
+    /// A `goto` that keeps the narrowing gives a `string` in each form of
     /// (cref:NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto). Each runs as C# runs it.
     @Fact
     func NoConversionValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
@@ -1425,6 +1425,21 @@ func Main() {
             (
                 "let t string? = checked({ s })\n            Console.Write(t == nil)",
                 "string? t = s; Console.Write(t == null);",
+                "s = nil"
+            ),
+            (
+                "let t (string?, int32) = (s, 1)\n            Console.Write(t.Item1 == nil)",
+                "(string?, int) t = (s, 1); Console.Write(t.Item1 == null);",
+                "s = nil"
+            ),
+            (
+                "let t ((string?, int32), int32) = ((s, 1), 2)\n            Console.Write(t.Item1.Item1 == nil)",
+                "((string?, int), int) t = ((s, 1), 2); Console.Write(t.Item1.Item1 == null);",
+                "s = nil"
+            ),
+            (
+                "let t (string?, int32) = (({ s }), 1)\n            Console.Write(t.Item1 == nil)",
+                "(string?, int) t = (s, 1); Console.Write(t.Item1 == null);",
                 "s = nil"
             ),
             ("Console.Write(Id[string?](s) == nil)", "Console.Write(Id<string?>(s) == null);", "s = nil"),
@@ -1498,14 +1513,13 @@ func Main() {
         }
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrue1111211")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111211")
     }
 
     /// Issue #5635 (review of d3333218): an imported generic slot whose type argument inference takes from a narrowed
-    /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on a
-    /// `[]string?`, the `T?` parameter of `IsNil`, a `params T[]` element that another argument makes `string?`) does
-    /// not need the narrowing, and a slot that another argument widens (`Pick(holder.Pet, Animal())`) reads the
-    /// declared member. Each runs as C# runs it.
+    /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on `[]string?`,
+    /// `IsNil`, `IsNilParams` over a source class, `First` with `U()`) does not need the narrowing. A slot that
+    /// another argument widens (`Pick(holder.Pet, Animal())`) reads the declared member. Each runs as C# runs it.
     @Fact
     func NoConversionValue_AtAnInferredImportedSlot_TakesTheSlotType() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1546,14 +1560,17 @@ func Strings() {
 }
 func Pets() {
     var holder = Holder(Dog())
+    var dog Dog? = Dog()
     var n = 0
-    if holder.Pet is Dog {
+    if holder.Pet is Dog && dog != nil {
         L: if n > 0 {
             Console.Write(Calls.Pick(holder.Pet, Animal()).Name())
+            Console.Write(Calls.IsNilParams(dog))
             return
         }
         n++
         holder = Holder(Cat())
+        dog = nil
         goto L
     }
 }
@@ -1579,8 +1596,9 @@ class Program {
     }
     static void Pets() {
         var holder = new Holder(new Dog());
+        Dog? dog = new Dog();
         var n = 0;
-        if (holder.Pet is Dog) { L: if (n > 0) { Console.Write(Calls.Pick(holder.Pet, new Animal()).Name()); return; } n++; holder = new Holder(new Cat()); goto L; }
+        if (holder.Pet is Dog && dog != null) { L: if (n > 0) { Console.Write(Calls.Pick(holder.Pet, new Animal()).Name()); Console.Write(Calls.IsNilParams(dog)); return; } n++; holder = new Holder(new Cat()); dog = null; goto L; }
     }
     static void Main() {
         Strings();
@@ -1588,7 +1606,7 @@ class Program {
     }
 }
 `
-        Check(fixture, source, oracle, "TrueTrueTruecat")
+        Check(fixture, source, oracle, "TrueTrueTruecatTrue")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2582,6 +2600,7 @@ class Program {
             "let (a, b) = (@s, 1)",
             "let t = ((@s, 1), 2)",
             "let t = (({ @s }), 1)",
+            "let t (string, int64) = (@s, 1)",
             "let u = Id(@s)",
             "let u = F(@s)",
             "let u = V(\"x\", @s)",
@@ -2653,6 +2672,7 @@ namespace FunctionControl {
         public static string Pz(System.Func<string> f, int x) => "F" + f();
         public static T Pick<T>(T a, T b) => a;
         public static bool IsNil<T>(T? value) where T : class => value == null;
+        public static bool IsNilParams<T>(params T?[] xs) where T : class => xs[0] == null;
         public static T IdentityDefault<T>(T value = default!) => value;
         public static T First<T>(params T[] xs) => xs[0];
         public static string Po(System.Func<object> f, int x) => "F" + f();
