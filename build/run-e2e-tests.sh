@@ -9,6 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 E2E_DIR="$ROOT/e2etests"
 
 # Collect test scripts (sorted for deterministic ordering).
@@ -39,6 +40,18 @@ echo "========================================"
 echo " GSharp End-to-End Test Suite"
 echo " ${#SCRIPTS[@]} test(s) discovered"
 echo "========================================"
+echo ""
+
+echo "==> Packing Gsharp.NET.Sdk into .nugs/ once for the E2E suite"
+dotnet build "$ROOT/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" -c Release -graph --nologo -v:q
+mkdir -p "$ROOT/.nugs"
+cp "$ROOT"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg "$ROOT/.nugs/"
+SDK_NUPKG=$(ls -t "$ROOT"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
+SDK_VER="${SDK_NUPKG##*Gsharp.NET.Sdk.}"
+SDK_VER="${SDK_VER%.nupkg}"
+rm -rf "${HOME:-$PWD}/.nuget/packages/gsharp.net.sdk/$SDK_VER" || true
+export GSHARP_E2E_SDK_PACKED=1
+export GSHARP_R2R_NUPKG_DIR="$ROOT/out/bin/Release/nupkgs"
 echo ""
 
 PASSED=0

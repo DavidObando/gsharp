@@ -43,20 +43,14 @@ class Issue3956NamedTupleGenericArgumentIdentityTests {
     @InlineData(true, true)
     func ImportedSymbolicValueTuple_IdentityPreservesContractsAndStorage(referenceAssembly bool, platform bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let references = ReferenceResolver
-            .HostTrustedPlatformAssemblyPaths()
-            .Where(
-            (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
-        )
-            .OrderBy((path string) -> path, StringComparer.Ordinal)
-            .ToArray()
+        let references = TupleDriverReferences()
         Assert.NotEmpty(references)
         let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
         let contractReference = Path.Combine(fixture.Directory, "TupleAssessment.ref.dll")
         let producer = CSharpCompilation.Create(
             "TupleAssessment",
             []SyntaxTree{CSharpSyntaxTree.ParseText(TupleProducer)},
-            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            TupleDriverMetadataReferences.Value,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
         )
         {
@@ -247,7 +241,7 @@ return view
         let producer = CSharpCompilation.Create(
             "TupleAssessment",
             []SyntaxTree{CSharpSyntaxTree.ParseText(TupleProducer)},
-            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            TupleDriverMetadataReferences.Value,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
         )
         {
@@ -406,7 +400,7 @@ return view
         let producer = CSharpCompilation.Create(
             "TupleRestAssessment",
             []SyntaxTree{CSharpSyntaxTree.ParseText(TupleRestProducer)},
-            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            TupleDriverMetadataReferences.Value,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
         )
         {
@@ -798,13 +792,26 @@ public static class ArgumentMaker<U> {
             return errors
         }
 
-        private func TupleDriverReferences()[]string -> ReferenceResolver
-            .HostTrustedPlatformAssemblyPaths()
-            .Where(
-            (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
+        private let CachedTupleDriverReferences Lazy[[]string] = Lazy[[]string](
+            () -> ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Where(
+                (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
+            )
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .ToArray()
         )
-            .OrderBy((path string) -> path, StringComparer.Ordinal)
-            .ToArray()
+
+        private let TupleDriverMetadataReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[
+            IReadOnlyList[MetadataReference]
+        ](
+            () -> CachedTupleDriverReferences
+                .Value
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .ToArray()
+        )
+
+        private func TupleDriverReferences()[]string -> CachedTupleDriverReferences.Value
 
         private func VerifyTupleDriver(image string, contract string, references[]string) {
             let arguments = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}

@@ -50,13 +50,21 @@ echo "Oahu gate '$label': $actual_commit"
 
 dotnet restore "$source_dir/Oahu.sln"
 dotnet build "$source_dir/Oahu.sln" --configuration Release --no-restore
-dotnet test "$source_dir/tests/Oahu.Cli.Tests/Oahu.Cli.Tests.csproj" \
-  --configuration Release --no-build
-dotnet test "$source_dir/tests/Oahu.Foundation.Tests/Oahu.Foundation.Tests.csproj" \
-  --configuration Release --no-build
-dotnet test "$source_dir/tests/Oahu.Cli.E2E.Tests/Oahu.Cli.E2E.Tests.csproj" \
-  --configuration Release --no-build
-dotnet "$source_dir/src/Oahu.App/bin/Release/net10.0/Oahu.dll" --smoke-test
+if [[ -n "${CS2GS_VERIFIED_STAMP:-}" && -f "$CS2GS_VERIFIED_STAMP" && "$(cat "$CS2GS_VERIFIED_STAMP")" == "$actual_commit" ]]; then
+  echo "Oahu C# baseline tests already verified for $actual_commit; skipping C# test rerun."
+else
+  dotnet test "$source_dir/tests/Oahu.Cli.Tests/Oahu.Cli.Tests.csproj" \
+    --configuration Release --no-build
+  dotnet test "$source_dir/tests/Oahu.Foundation.Tests/Oahu.Foundation.Tests.csproj" \
+    --configuration Release --no-build
+  dotnet test "$source_dir/tests/Oahu.Cli.E2E.Tests/Oahu.Cli.E2E.Tests.csproj" \
+    --configuration Release --no-build
+  dotnet "$source_dir/src/Oahu.App/bin/Release/net10.0/Oahu.dll" --smoke-test
+  if [[ -n "${CS2GS_VERIFIED_STAMP:-}" ]]; then
+    mkdir -p "$(dirname "$CS2GS_VERIFIED_STAMP")"
+    printf '%s\n' "$actual_commit" > "$CS2GS_VERIFIED_STAMP"
+  fi
+fi
 
 # cs2gs rejects C# #if/#elif (CS2GS-CONDITIONAL-COMPILATION): G# has no
 # conditional compilation, and translating one arm silently drops the other.

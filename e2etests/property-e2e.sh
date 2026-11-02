@@ -8,10 +8,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> Packing Gsharp.NET.Sdk into .nugs/"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
-mkdir -p .nugs
-cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    echo "==> Packing Gsharp.NET.Sdk into .nugs/"
+    dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release --nologo -v:q
+    mkdir -p .nugs
+    cp out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg .nugs/
+fi
 
 NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
@@ -26,7 +28,9 @@ cat > samples/PropertyRef/global.json <<EOF
 }
 EOF
 
-rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+fi
 
 SAMPLE="samples/PropertyRef"
 

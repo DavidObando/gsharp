@@ -55,6 +55,12 @@ SHARDED_PROJECTS = {
             "GSharp.Compiler.Tests.Emit.Issue23",
             "GSharp.Compiler.Tests.Emit.Issue24",
         ],
+        "issue3": ["GSharp.Compiler.Tests.Emit.Issue3"],
+        "issue4-remainder": ["GSharp.Compiler.Tests.Emit.Issue4"],
+        "issue47-49": [
+            "GSharp.Compiler.Tests.Emit.Issue47",
+            "GSharp.Compiler.Tests.Emit.Issue49",
+        ],
         "issue5": ["GSharp.Compiler.Tests.Emit.Issue5"],
         "issue6": ["GSharp.Compiler.Tests.Emit.Issue6"],
         "issue7-9": [
@@ -64,6 +70,11 @@ SHARDED_PROJECTS = {
         # Everything else under Emit — the old `compiler-remainder` was 14m,
         # over half of it here.
         "emit-remainder": ["GSharp.Compiler.Tests.Emit."],
+        "top-issue3-4": [
+            "GSharp.Compiler.Tests.Issue3",
+            "GSharp.Compiler.Tests.Issue4",
+        ],
+        "top-issue5": ["GSharp.Compiler.Tests.Issue5"],
         "remainder": [],
     },
     "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.gsproj": {

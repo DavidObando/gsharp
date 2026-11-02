@@ -8,8 +8,10 @@ mkdir -p "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 export TMPDIR="$SCRATCH" TEMP="$SCRATCH" TMP="$SCRATCH"
 
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj \
-    --configuration Release --no-restore -graph -nr:false --nologo -v:q
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj \
+        --configuration Release --no-restore -graph -nr:false --nologo -v:q
+fi
 GSHARP_SOURCELINK_SDK_PACKAGE="$(ls -t "$ROOT"/out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)"
 export GSHARP_SOURCELINK_SDK_PACKAGE
 python3 e2etests/sourcelink-e2e.py

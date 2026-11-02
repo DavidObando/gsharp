@@ -828,6 +828,20 @@ internal class BinderContext {
         targetType TypeSymbol? = nil,
         requiredType TypeSymbol? = nil
     ) {
+        if BackwardGotoNarrowingStates.Count == 0 {
+            return
+        }
+        if CaptureBackwardGotoNarrowingUse(path) is {} capture {
+            RecordBackwardGotoNarrowingUse(capture, location, memberName, kind, targetType, requiredType)
+        }
+    }
+
+    /// Issue #5613: captures the backward `goto` facts of a read of [`path`](paramref) where the read binds: the
+    /// labels whose target state has the same narrowing frame, proof and assignment state. A use that is decided
+    /// later is recorded from the capture (cref:RecordBackwardGotoNarrowingUse).
+    /// @param path The access path of the read.
+    /// @returns The capture, or `nil` when no frame narrows the path.
+    func CaptureBackwardGotoNarrowingUse(path AccessPath) BackwardGotoNarrowingCapture? {
         var frameIndex = -1
         for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
             if NarrowedVariables[i].ContainsKey(path) {
@@ -836,21 +850,10 @@ internal class BinderContext {
             }
         }
         if frameIndex < 0 {
-            return
+            return nil
         }
         let variable = path.Root
-        let narrowedType = NarrowedVariables[frameIndex][path]
-        let operationRequiredType = requiredType ?? narrowedType
-        let access = BackwardGotoNarrowingAccess(
-            path,
-            location,
-            memberName,
-            kind,
-            operationRequiredType,
-            MemberLookup.GetDeclaredAccessPathType(path, narrowedType),
-            targetType,
-            DeferredReturnNarrowingOwner
-        )
+        let labels = ImmutableArray.CreateBuilder[string](BackwardGotoNarrowingStates.Count)
         for entry in BackwardGotoNarrowingStates {
             let state = entry.Value
             if !state
@@ -876,6 +879,47 @@ internal class BinderContext {
                         assignmentGeneration > targetAssignmentGeneration
                 )
             ) {
+                continue
+            }
+            labels.Add(entry.Key)
+        }
+        return BackwardGotoNarrowingCapture(
+            path,
+            NarrowedVariables[frameIndex][path],
+            labels.ToImmutable(),
+            DeferredReturnNarrowingOwner
+        )
+    }
+
+    /// Issue #5613: records a narrowing-dependent use of a captured read (cref:CaptureBackwardGotoNarrowingUse) in
+    /// the backward `goto` state of each label of the capture.
+    /// @param capture The facts of the read where it binds.
+    /// @param location The location of the use.
+    /// @param memberName The member name for a member or function use.
+    /// @param kind The kind of the use.
+    /// @param targetType The conversion target, or `nil`.
+    /// @param requiredType The type that the use requires, or `nil` for the narrowed type.
+    func RecordBackwardGotoNarrowingUse(
+        capture BackwardGotoNarrowingCapture,
+        location TextLocation,
+        memberName string,
+        kind BackwardGotoNarrowingUseKind,
+        targetType TypeSymbol? = nil,
+        requiredType TypeSymbol? = nil
+    ) {
+        let path = capture.Path
+        let access = BackwardGotoNarrowingAccess(
+            path,
+            location,
+            memberName,
+            kind,
+            requiredType ?? capture.NarrowedType,
+            MemberLookup.GetDeclaredAccessPathType(path, capture.NarrowedType),
+            targetType,
+            capture.Owner
+        )
+        for label in capture.Labels {
+            if !BackwardGotoNarrowingStates.TryGetValue(label, out var state) {
                 continue
             }
             state.Accesses.Add(access)

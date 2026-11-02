@@ -12,7 +12,9 @@ WORKDIR="$(mktemp -d -t gsharp-templates-e2e.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 echo "==> Packing Gsharp.NET.Sdk and Gsharp.Templates"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj   -c Release --nologo -v:q
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj   -c Release --nologo -v:q
+fi
 dotnet build src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj -c Release --nologo -v:q
 
 SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
@@ -23,9 +25,11 @@ echo "    SDK package:       $SDK_NUPKG"
 echo "    Templates package: $TPL_NUPKG"
 echo "    Version:           $VER"
 
-# Force the NuGet cache to pull our freshly-packed SDK rather than an older
-# locally-cached copy with the same version.
-rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    # Force the NuGet cache to pull our freshly-packed SDK rather than an older
+    # locally-cached copy with the same version.
+    rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+fi
 
 echo "==> Reinstalling Gsharp.Templates"
 dotnet new uninstall Gsharp.Templates >/dev/null 2>&1 || true
