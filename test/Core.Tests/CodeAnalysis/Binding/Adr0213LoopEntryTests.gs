@@ -2712,8 +2712,9 @@ class Node {
     var V int32 = 0
     var Next Node? = nil
 }
-func Run(start Node) int32 {
-    var access Node = start
+func Run(start Node?) int32 {
+    var access = start
+    if access == nil { return 0 }
     var total = 0
     var steps = 0
     while steps < 3 {
