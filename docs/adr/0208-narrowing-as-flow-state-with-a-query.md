@@ -985,14 +985,18 @@ Details per row:
   as a condition's do (R18): `StatementBinder.ApplySwitchArmTestEffects` gives the collector the `is` test of the
   arm's pattern on the evaluated value, so a constant pattern, a list pattern and a property pattern of a case are
   classified as in `if x is P` (#5629, rows a01 to a05 and a10). Only the pattern's syntax is the test, so a call in
-  the guard or body is not part of it (rows a11 and a12). Each case's pattern and body see the tests of the cases
-  before it. A `default` that is not last runs after the tests of the cases after it: those patterns bind in
+  the guard or body is not part of it (rows a11 and a12). A case's guard runs after its test and before its body
+  and the later cases, so its effects apply as a condition's do (rows a19 and a20), and a test whose own effects can
+  remove the tested fact proves no narrowing of the discriminant, as for `if x is P` (row a21). Each case's pattern
+  and body see the headers (test and guard) of the cases before it. A `default` that is not last runs after the tests of the cases after it: those patterns bind in
   dispatch order before its body, and their effects apply to its body only and are put back afterwards with the R18
   journal (rows a03, a13, a14, a16 and a17), unless the default falls through to the next case, whose body then
   runs on that path too (row a18).
   A loop's back edge includes a `switch`, `try` or `fixed` statement with a `continue` inside it: the control-flow
   graph keeps such a statement as one statement, so the jump adds no edge, and its block and the blocks before it
-  now reach the back edge (rows a06 to a09). A `do { } while false` has no back edge (row a15). The if-expression condition of #5545 shape 8 is not in this change.
+  now reach the back edge (rows a06 to a09): the statements of that block up to the statement, not those after it,
+  which the jump skips (row a22). An arm whose guard is the literal `false` hides no jump (row a23), and a
+  `do { } while false` has no back edge (row a15). The if-expression condition of #5545 shape 8 is not in this change.
 - **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
   bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
   an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
