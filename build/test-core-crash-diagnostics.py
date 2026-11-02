@@ -535,6 +535,29 @@ class ProvenanceTests(unittest.TestCase):
         self.assertNotIn(CANARY, json.dumps(metadata))
         self.assertNotIn(str(self.root), json.dumps(metadata))
 
+    def use_compiler(self, compiler):
+        records = self.stamp.read_text().splitlines()
+        records = [f"COMPILER:{compiler}" if record.startswith("COMPILER:") else
+                   f"{compiler}|{hashlib.sha256(compiler.read_bytes()).hexdigest()}"
+                   if record.startswith(str(self.compiler) + "|") else record
+                   for record in records]
+        self.stamp.write_text("\n".join(records))
+
+    def test_ready_to_run_compiler_of_the_pinned_rid_package_is_accepted(self):
+        compiler = self.file(self.root / "packages/gsharp.net.sdk.compiler.linux-x64/"
+                             "0.5.460-g21e3f30fa3/tools/net10.0/linux-x64/gsc.dll")
+        self.use_compiler(compiler)
+        metadata = self.helper.provenance(self.root)
+        self.assertEqual([row["name"] for row in metadata["tool_images"]
+                          if row["role"] == "compiler"], ["gsc.dll"])
+
+    def test_ready_to_run_compiler_of_another_version_is_rejected(self):
+        compiler = self.file(self.root / "packages/gsharp.net.sdk.compiler.linux-x64/"
+                             "0.5.212/tools/net10.0/linux-x64/gsc.dll")
+        self.use_compiler(compiler)
+        with self.assertRaisesRegex(self.helper.DiagnosticError, "^compiler-selection$"):
+            self.helper.provenance(self.root)
+
     def test_stamp_hash_mismatch_stops_prepare_before_private_test_output(self):
         self.compiler.write_bytes(b"Changed benign metadata.")
         with self.assertRaisesRegex(self.helper.DiagnosticError, "tool-input-changed"):

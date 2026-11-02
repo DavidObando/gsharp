@@ -17,6 +17,7 @@ PRIVATE = Path("out/5393-ci/private")
 PUBLIC = Path("TestResults/5393")
 OWNER = b"gsharp-core-crash-5393-v1\n"
 MAX_INPUT = 16 * 1024 * 1024
+COMPILER_RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64")
 MAX_TOTAL_INPUT = 64 * 1024 * 1024
 MAX_FILES = 256
 MAX_CASES = 20000
@@ -162,9 +163,12 @@ def provenance(root):
         return physical
 
     named = {key: declared(value) for key, value in named.items()}
-    for key in ("COMPILER", "TASK"):
-        require(named[key].is_relative_to(roots[1] / "gsharp.net.sdk/0.5.460-g21e3f30fa3"),
-                "compiler-selection")
+    sdk = roots[1] / "gsharp.net.sdk/0.5.460-g21e3f30fa3"
+    # ADR-0207: the SDK selects the ReadyToRun compiler from its RID package on a known host.
+    compilers = [sdk, *(roots[1] / f"gsharp.net.sdk.compiler.{rid}/0.5.460-g21e3f30fa3"
+                        for rid in COMPILER_RIDS)]
+    require(any(named["COMPILER"].is_relative_to(base) for base in compilers)
+            and named["TASK"].is_relative_to(sdk), "compiler-selection")
     tools = [(declared(path), digest) for path, digest in tools]
     tool_images = [
         image(declared(path), "compiler" if path == named["COMPILER"] else
