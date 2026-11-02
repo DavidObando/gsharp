@@ -3482,7 +3482,7 @@ partial class CSharpToGSharpTranslator {
         // element-access target (`(arr[0], i) = entry`) has no right-hand side per
         // element, so its store bridge asks this with the target alone.
         private func ElementAccessStoreRequiresNonNullReference(target ExpressionSyntax) bool {
-            if !(target is ElementAccessExpressionSyntax) || this.IsNullableArrayElementAccess(target) ||
+            if !(target is ElementAccessExpressionSyntax) || this.ElementStoreSlotAcceptsNil(target) ||
                 // Issue #5537: the element of oblivious container storage is `T?`.
             this.StoreTargetIsObliviousContainerElement(target) {
                 return false
@@ -3499,14 +3499,47 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
-            // Issue #3865: gsc imports the value of an oblivious indexer from a
-            // prebuilt library as a platform type, which takes a nullable value.
-            if this.IsImportedObliviousNullableTarget(leftSymbol) {
-                return false
-            }
             // An `[AllowNull]` indexer, also one that another project of the run
             // emits (#4356), is promoted, so it takes a nullable value.
             return leftSymbol is not IPropertySymbol indexer || !this.ShouldPromoteToNullableReference(indexer)
+        }
+
+        // Issues #4500, #4525 and #5595: whether the slot that an element-access
+        // store target writes accepts nil: an array element that cs2gs emits `T?`,
+        // or a slot that a prebuilt oblivious library declares. No bridge asserts a
+        // value stored there, in a plain assignment or in a deconstruction.
+        private func ElementStoreSlotAcceptsNil(target ExpressionSyntax?) bool {
+            if this.IsNullableArrayElementAccess(target) {
+                return true
+            }
+            if target is not ElementAccessExpressionSyntax access {
+                return false
+            }
+            return this.ElementStoreSlotIsImportedOblivious(
+                access,
+                this.GetProjectedAssignmentTarget(access, this.context.GetSymbolInfo(access).Symbol)
+            )
+        }
+
+        // Issue #3865: gsc imports the value of an oblivious indexer, and the
+        // element of an oblivious array, that a prebuilt library declares as a
+        // platform type, which takes a nullable value. An array element has no
+        // symbol: its contract is the element position of the receiver's
+        // declaration, read before type-argument substitution, so a `T[]` whose
+        // `T` the consumer substitutes keeps that type argument's contract.
+        private func ElementStoreSlotIsImportedOblivious(target ElementAccessExpressionSyntax, slot ISymbol?) bool {
+            if slot != nil {
+                return this.IsImportedObliviousNullableTarget(slot)
+            }
+            let receiver ISymbol? = this.context.GetSymbolInfo(target.Expression).Symbol
+            let declared ITypeSymbol? = switch receiver?.OriginalDefinition {
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                case method is IMethodSymbol: method.ReturnType
+                default: default(ITypeSymbol?)
+            }
+            return declared is IArrayTypeSymbol array && this.TargetContractIsFrozenInMetadata(receiver) &&
+                ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(array.ElementType)
         }
 
         // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
@@ -4449,7 +4482,8 @@ partial class CSharpToGSharpTranslator {
             // Issues #4500 and #4525: a write into an element of an array
             // cs2gs emits as `T?` accepts nil, so none of the null-forgiveness
             // bridges below may assert the value. The coercions above still apply.
-            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && this.IsNullableArrayElementAccess(
+            // Issue #5595: the same holds for a slot of a prebuilt oblivious library.
+            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && this.ElementStoreSlotAcceptsNil(
                 assignment.Left
             ) {
                 return value

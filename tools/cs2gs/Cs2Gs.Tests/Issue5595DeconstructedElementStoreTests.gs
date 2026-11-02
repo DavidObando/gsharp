@@ -29,14 +29,16 @@ import Xunit
 /// | `(list[0], i) = entry` into `List<Node>` | `list[0] = listValue`, GS0155 | `list[0] = listValue!!`, as `list[0] = entry.Item!!` |
 /// | a `Node?[]`, `List<Node?>` or a widened array local | no `!!` | unchanged: the element accepts null |
 /// | another project's `[AllowNull]` indexer | no `!!` | unchanged: the indexer is promoted (#4356), so the slot is `T?` |
-/// | an oblivious indexer of a prebuilt library outside the run | plain `h[0] = entry.Item!!` | no `!!` in either form: gsc imports the slot as a platform type (#3865) |
+/// | an oblivious indexer or array element of a prebuilt library outside the run | plain `h[0] = entry.Item!!` | no `!!` in either form: gsc imports the slot as a platform type (#3865) |
+/// | that library's `T[] Items` of a `Box<Node>`, or an annotated `Node[]` | plain `box.Items[0] = entry.Item!!` | bridged in both forms: the slot is non-null |
 /// @remarks Mutation witnesses (ADR-0154): the first two tests fail on 21e3f30fa (GS0155) and when the
 /// element arm of `BridgeDeconstructedElementStore` keeps the unbridged store. The nullable-element
 /// test throws `NullReferenceException` when that arm asks `TargetWillRemainNonNullableReference`
 /// instead of the element store query, and when the query does not ask `IsNullableArrayElementAccess`.
 /// The `[AllowNull]` test throws when the query does not ask whether the indexer is promoted. The
-/// imported oblivious indexer test throws when the query does not ask
-/// `IsImportedObliviousNullableTarget`.
+/// imported oblivious element test throws when `ElementStoreSlotAcceptsNil` does not ask
+/// `ElementStoreSlotIsImportedOblivious`, or when that query does not read an array receiver, and
+/// fails binding (GS0155) when it exempts a substituted `T[]` element or an annotated array element.
 open class Issue5595DeconstructedElementStoreTests {
     /// A widened element stored into a `Node[]` element is bridged, as `arr[0] = entry.Item` is.
     @Fact
@@ -206,11 +208,13 @@ namespace Demo.App
         Assert.DoesNotContain("entry.Item!!", appPrinted)
     }
 
-    /// An indexer of a prebuilt nullable-oblivious library outside the run is imported with a platform
-    /// type value, which accepts null, so neither the deconstruction store nor the plain store asserts
-    /// the element, as for an imported oblivious property (#3865), and the null that C# stores is stored.
+    /// An indexer or an array element of a prebuilt nullable-oblivious library outside the run is
+    /// imported with a platform type, which accepts null, so neither the deconstruction store nor the
+    /// plain store asserts the element, as for an imported oblivious property (#3865), and the null that
+    /// C# stores is stored. The element of that library's `T[]`, substituted with `Node`, and of an
+    /// annotated `Node[]` stays non-null and keeps its bridge.
     @Fact
-    func StoreThroughAnImportedObliviousIndexer_IsNotBridged() {
+    func StoreIntoAnImportedObliviousElement_IsNotBridged() {
         let library = Compile("Ext", `
 namespace Ext
 {
@@ -220,7 +224,12 @@ namespace Ext
         private Node stored;
         public Node this[int index] { get { return stored; } set { stored = value; } }
         public bool IsEmpty => stored == null;
+        public Node[] Nodes = new Node[1];
     }
+    public class Box<T> { public T[] Items = new T[1]; }
+#nullable enable
+    public class Strict { public Node[] Nodes = new Node[] { new Node() }; }
+#nullable restore
 }`, nil)
         let app = Compile("App", `
 namespace Demo.App
@@ -242,14 +251,72 @@ namespace Demo.App
             h[0] = entry.Item;
             return h.IsEmpty.ToString();
         }
-        public static string Run() => Store(Empty()) + " " + Plain(Empty());
+        public static string StoreArray(Entry entry)
+        {
+            var h = new Ext.Holder();
+            int i;
+            (h.Nodes[0], i) = entry;
+            object o = h.Nodes[0];
+            return (o == null) + ":" + i;
+        }
+        public static string PlainArray(Entry entry)
+        {
+            var h = new Ext.Holder();
+            h.Nodes[0] = entry.Item;
+            object o = h.Nodes[0];
+            return (o == null).ToString();
+        }
+        public static string StoreGeneric(Entry entry)
+        {
+            var box = new Ext.Box<Ext.Node>();
+            int i;
+            (box.Items[0], i) = entry;
+            object o = box.Items[0];
+            return (o == null) + ":" + i;
+        }
+        public static string PlainGeneric(Entry entry)
+        {
+            var box = new Ext.Box<Ext.Node>();
+            box.Items[0] = entry.Item;
+            object o = box.Items[0];
+            return (o == null).ToString();
+        }
+        public static string StoreStrict(Entry entry)
+        {
+            var strict = new Ext.Strict();
+            int i;
+            (strict.Nodes[0], i) = entry;
+            object o = strict.Nodes[0];
+            return (o == null) + ":" + i;
+        }
+        public static string PlainStrict(Entry entry)
+        {
+            var strict = new Ext.Strict();
+            strict.Nodes[0] = entry.Item;
+            object o = strict.Nodes[0];
+            return (o == null).ToString();
+        }
+        public static string Run()
+        {
+            var entry = new Entry(new Ext.Node(), 2);
+            return Store(Empty()) + " " + Plain(Empty()) + " " + StoreArray(Empty()) + " " + PlainArray(Empty()) +
+                " " + StoreGeneric(entry) + " " + PlainGeneric(entry) + " " + StoreStrict(entry) + " " +
+                PlainStrict(entry);
+        }
     }
 }`, Emit(library))
         let appPrinted = Translate(app, []CSharpCompilation{app})
-        Assert.Equal("True:0 True", CompileAndRun([]string{appPrinted}, "Demo.App.Use.Run()", library).Trim())
+        Assert.Equal(
+            "True:0 True True:0 True False:2 False False:2 False",
+            CompileAndRun([]string{appPrinted}, "Demo.App.Use.Run()", library).Trim()
+        )
         Assert.Contains("Item Node?", appPrinted)
-        Assert.DoesNotContain("Value!!", appPrinted)
-        Assert.DoesNotContain("entry.Item!!", appPrinted)
+        Assert.DoesNotContain("hValue!!", appPrinted)
+        Assert.Contains("= boxValue!!\n", appPrinted)
+        Assert.Contains("box.Items!![0] = entry.Item!!\n", appPrinted)
+        Assert.Contains("= strictValue!!\n", appPrinted)
+        Assert.Contains("strict.Nodes[0] = entry.Item!!\n", appPrinted)
+        Assert.Equal(3, appPrinted.Split("entry.Item!!").Length)
     }
 
     private func Translate(source string) string {
