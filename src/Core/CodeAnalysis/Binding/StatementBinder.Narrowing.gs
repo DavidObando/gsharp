@@ -2387,7 +2387,9 @@ internal partial class StatementBinder {
             ) {
                 MayMutateReferenceStorage = true
             }
-            if node is BoundPropertyAccessExpression && node.Property.IsAutoProperty == false {
+            // ADR-0208 R14 (#5215, #5599): a source accessor with user code is a call.
+            let sourcePropertyRunsUserCode = StatementBinder.SourcePropertyAccessRunsUserCode(node)
+            if sourcePropertyRunsUserCode && node is BoundPropertyAccessExpression {
                 MayMutateMemberPaths = true
             }
             // ADR-0208 R16 and R17 (#5231, #5532): an imported accessor that is not on the stable list is a call,
@@ -2407,18 +2409,10 @@ internal partial class StatementBinder {
                 node is BoundStructLiteralExpression literal &&
                     (
                     StatementBinder.ConstructionRunsUserCode(literal.StructType) || literal.Initializers.Any(
-                        (initializer BoundFieldInitializer) -> initializer.Property != nil &&
-                            !initializer
-                            .Property
-                            .IsAutoProperty
+                        (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
+                            StatementBinder.SourcePropertyRunsUserCode(property, receiverType: nil)
                     )
                 )
-            )
-            let sourcePropertyRunsUserCode = (
-                node is BoundPropertyAccessExpression and
-                    {Property: {IsAutoProperty: false}} or
-                    BoundPropertyAssignmentExpression and
-                    {Property: {IsAutoProperty: false}}
             )
             // ADR-0208 R11 (#5170): any call, property getter or constructor
             // with user code may assign a mutable global. A static member access runs the type initializer (#5504).
@@ -2733,7 +2727,7 @@ internal partial class StatementBinder {
         protected open override func VisitPropertyPattern(node BoundPropertyPattern) {
             for field in node.Fields {
                 // A computed property of a pattern runs its getter.
-                if field.Property is {} property && !property.IsAutoProperty {
+                if field.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(property, node.Type) {
                     MarkMayMutateGlobalRoots()
                 }
                 // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
@@ -5353,6 +5347,58 @@ internal partial class StatementBinder {
                 return true
             }
             return atStaticMemberAccess && definition.DeclaresNonLiteralSharedFieldInitializer
+        }
+
+        /// ADR-0208 R14 (#5215, #5599): the one predicate for a source property accessor. It is true when
+        /// [`node`](paramref) reads or writes a source property (cref:SourcePropertyRunsUserCode) whose accessor can
+        /// run user code. The collector reads this, and so do the loop and `finally` summaries.
+        internal func SourcePropertyAccessRunsUserCode(node BoundExpression) bool -> switch node {
+            case read is BoundPropertyAccessExpression: SourcePropertyRunsUserCode(
+                read.Property,
+                read.Receiver?.Type,
+                read.InterfaceType != nil
+            )
+            case write is BoundPropertyAssignmentExpression: SourcePropertyRunsUserCode(
+                write.Property,
+                write.Receiver?.Type,
+                write.InterfaceType != nil,
+                isWrite: true
+            )
+            default: false
+        }
+
+        /// ADR-0208 R14 (#5215, #5599): whether an accessor of the source [`property`](paramref) can run user code
+        /// when it is called on a receiver of static type [`receiverType`](paramref) (`null` for a static property
+        /// or for the initializer of a construction, whose type is exact). A computed accessor runs user code. An
+        /// auto accessor runs none unless the call can dispatch to an override: the property is `open` or an
+        /// `override` (a property override is itself overridable, #3223), or it is reached through an interface, and
+        /// the receiver type can have a subclass. A value type, and a class that is neither `open` nor `sealed`
+        /// (`TypeAttributes.Sealed` in `TypeDefEmitter`), cannot. A `base.` access is a call node of its own. A
+        /// write ([`isWrite`](paramref)) of an auto property without a setter, which only a constructor can make,
+        /// stores the backing field and calls no accessor.
+        internal func SourcePropertyRunsUserCode(
+            property PropertySymbol,
+            receiverType TypeSymbol?,
+            throughInterface bool = false,
+            isWrite bool = false
+        ) bool {
+            if !property.IsAutoProperty || throughInterface {
+                return true
+            }
+            if (isWrite && !property.HasSetter) ||
+                property.IsStatic ||
+                receiverType == nil ||
+                !(property.IsVirtual || property.IsOverride) {
+                return false
+            }
+            var type = PlatformTypeSymbol.StripTopLevel(receiverType)
+            if type is NullableTypeSymbol nullable {
+                type = nullable.UnderlyingType
+            }
+            return !(
+                type is StructSymbol structType &&
+                    (!structType.IsClass || (!structType.IsOpen && !structType.IsSealedHierarchy))
+            )
         }
 
         /// ADR-0208 R14 and R16 (#5231): whether [`node`](paramref) reads an imported (CLR) property whose getter
