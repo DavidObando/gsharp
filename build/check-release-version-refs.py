@@ -189,11 +189,15 @@ ALLOWED: tuple[Allowed, ...] = (
     Allowed("samples/HotReload/global.json", frozenset({"0.3.356"}),
             "placeholder: e2etests/hot-reload-e2e.sh rewrites it to the locally built "
             "SDK and restores it on exit"),
-    Allowed("global.json", frozenset({"0.5.212"}),
+    Allowed("global.json", frozenset({"0.5.460-g21e3f30fa3"}),
             "the bootstrap pin: the repository's G# source is compiled by a published SDK "
             "(CONTRIBUTING.md, N-1 rule), independently of the website's release"),
-    Allowed("test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj", frozenset({"0.5.212"}),
+    Allowed("test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj", frozenset({"0.5.460-g21e3f30fa3"}),
             "the analyzer-testing package is restored at the bootstrap pin of global.json"),
+    Allowed("build/core-crash-diagnostics.py", frozenset({"0.5.460-g21e3f30fa3"}),
+            "the #5393 crash-diagnostic provenance check requires the bootstrap pin of global.json"),
+    Allowed("build/test-core-crash-diagnostics.py", frozenset({"0.5.460-g21e3f30fa3"}),
+            "the provenance check's test fixtures use the bootstrap pin of global.json"),
     Allowed("tools/cs2gs/Cs2Gs.Tests/*", frozenset(),
             "synthetic versions in cs2gs project-transformer test data"),
     Allowed("build/test-selfhost-pack-stage1.py", frozenset(),
