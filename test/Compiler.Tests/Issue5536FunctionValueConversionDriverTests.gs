@@ -1241,6 +1241,16 @@ func Main() {
             ),
             "holder.Pet"
         )
+        // A target-typed branch converts the block value to `Animal` before the common type, so the narrowed read stays
+        // and its cast needs the narrowing.
+        RejectMarked(
+            fixture,
+            MemberResultSource("let f = func() Animal {", "Animal()", "holder = Holder(Cat())").Replace(
+                "return holder.Pet",
+                "return n > 1 ? Animal() : checked({ @holder.Pet })"
+            ),
+            "holder.Pet"
+        )
         RejectMarked(
             fixture,
             OptionalMemberSource("let f = () -> {", "0", "box = Box(nil)", "Console.Write(f())").Replace(

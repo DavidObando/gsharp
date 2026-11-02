@@ -331,8 +331,8 @@ internal class ConversionClassifier {
     /// Issue #5613: decides the backward `goto` check of a captured narrowed read that [`value`](paramref) yields
     /// (the value, or the trailing value of a block) for [`target`](paramref), with the decision of every other
     /// conversion (cref:ConversionNeedsNarrowedSource). The declared read replaces the narrowed read when the target
-    /// takes it (cref:TryRecoverDeclaredMemberRead). Otherwise a target that needs the narrowing records the use from
-    /// the capture, which has the narrowing state where the read binds.
+    /// takes it (cref:TryRecoverDeclaredMemberRead). Otherwise a target that needs the narrowing, or a read that stays
+    /// and casts or unwraps, records the use from the capture, which has the narrowing state where the read binds.
     /// @param value The bound value.
     /// @param read The captured narrowed read that the value yields.
     /// @param target The conversion target.
@@ -342,18 +342,23 @@ internal class ConversionClassifier {
             ReplaceNarrowedLeaf(value, read.Value, declaredRead!!) is {} recovered {
             return recovered
         }
-        if read.Use is {} use &&
-            ConversionNeedsNarrowedSource(
-            MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
-            read.NarrowedType,
-            target
-        ) {
+        // The narrowed read stays in the value, so a read that casts or unwraps needs the narrowing whatever the
+        // target is, as a constrained-call argument does. Then the cast or unwrap to the narrowed type is the use.
+        if read.Use is {} use && ConstrainedArgumentNeedsNarrowedSource(read.Path, read.NarrowedType, target) {
             binderCtx.RecordBackwardGotoNarrowingUse(
                 use,
                 read.Location,
                 string.Empty,
                 BackwardGotoNarrowingUseKind.Conversion,
-                target
+                if ConversionNeedsNarrowedSource(
+                    MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
+                    read.NarrowedType,
+                    target
+                ) {
+                    target
+                } else {
+                    read.NarrowedType
+                }
             )
         }
         return value
@@ -3800,7 +3805,8 @@ internal class ConversionClassifier {
         }
 
         // Issue #5603: a constrained-call argument keeps its narrowed read, so a read that casts or unwraps needs the
-        // narrowing even when its declared type converts to the parameter.
+        // narrowing even when its declared type converts to the parameter. Issue #5613: so does a branch value whose
+        // narrowed read could not be replaced.
         private func ConstrainedArgumentNeedsNarrowedSource(
             path AccessPath,
             narrowedType TypeSymbol,
