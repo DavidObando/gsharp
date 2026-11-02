@@ -549,6 +549,37 @@ namespace Demo
         RunsAs(printed, "taken taken")
     }
 
+    /// A call's result follows only the inputs that supply a type parameter its declared result mentions. A
+    /// value that is `T?` only in G# passed to another parameter (`Second(Volatile.Read(ref cache!), node)`,
+    /// `Name<T>(T)` returning `Node`) does not make the result `T?`, so an `is var` capture passes a null
+    /// `Node` on.
+    @Fact
+    func AVarCaptureOfAResultThatDoesNotFollowTheInput_PassesTheNullOn() {
+        let printed = Translate(`
+#nullable enable
+using System.Threading;
+namespace Demo
+{
+    public class Node { }
+    public class Holder { public Holder(Node child) { Child = child; } public Node Child { get; } }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public static class P
+    {
+        private static Node? cache;
+        static T Id<T>(T x) => x;
+        static U Second<T, U>(T first, U second) => second;
+        static Node Name<T>(T x) => new Holder(null!).Child;
+        static string PairIs() =>
+            Id(Second(Volatile.Read(ref cache!), new Holder(null!).Child)) is var c ? new Sink().Take(c) : "none";
+        static string NameIs() => Name(Volatile.Read(ref cache!)) is var d ? new Sink().Take(d) : "none";
+        public static string Run() => PairIs() + " " + NameIs();
+    }
+}`)
+        Assert.Contains("is var c { Sink().Take(c) }", printed)
+        Assert.Contains("is var d { Sink().Take(d) }", printed)
+        RunsAs(printed, "taken taken")
+    }
+
     /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
     /// value translates without asking each inner call again at each level, and the capture needs no `!!`.
     /// Translation only: gsc binds such a nest in exponential time (#5652).

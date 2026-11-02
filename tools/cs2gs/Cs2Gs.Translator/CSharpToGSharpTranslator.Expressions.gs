@@ -4057,27 +4057,81 @@ partial class CSharpToGSharpTranslator {
                         this.FlowsValueNilableOnlyInEmittedGSharp(element.Expression)
                 }
                 case invocation is InvocationExpressionSyntax {
-                    // A generic result follows its arguments; a result typed by the receiver's type arguments
-                    // (`box.Get()`, `awaiter.GetResult()`) follows the receiver.
-                    if this.InvocationInfersItsResultType(invocation) && this.AnyFlowsValueNilableOnlyInEmittedGSharp(
-                        invocation.ArgumentList.Arguments.Select((argument ArgumentSyntax) -> argument.Expression)
-                    ) {
-                        return true
-                    }
-                    return invocation.Expression is MemberAccessExpressionSyntax callee &&
-                        this
-                        .context
-                        .GetSymbolInfo(invocation)
-                        .Symbol is IMethodSymbol method &&
-                        this.TypeMentionsAnyTypeParameter(
-                        (method.ReducedFrom ?? method).OriginalDefinition.ReturnType
-                    ) &&
-                        this.FlowsValueNilableOnlyInEmittedGSharp(callee.Expression)
+                    return this.InvocationResultFlowsValueNilableOnlyInEmittedGSharp(invocation)
                 }
                 default {
                     return false
                 }
             }
+        }
+
+        // A call's result follows only the inputs that supply a type parameter its declared result mentions:
+        // an argument whose parameter type mentions such a method type parameter, the receiver of a reduced
+        // extension whose `this` parameter does, and the receiver when the result mentions a type parameter of
+        // the containing type (`box.Get()`, `awaiter.GetResult()`).
+        private func InvocationResultFlowsValueNilableOnlyInEmittedGSharp(invocation InvocationExpressionSyntax) bool {
+            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method {
+                return false
+            }
+            let definition = (method.ReducedFrom ?? method).OriginalDefinition
+            let resultType = definition.ReturnType
+            let receiver Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if invocation.Expression is MemberAccessExpressionSyntax callee {
+                callee.Expression
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if receiver != nil &&
+                definition
+                .ContainingType
+                .TypeParameters
+                .Any((parameter ITypeParameterSymbol) -> this.TypeMentionsTypeParameter(resultType, parameter)) &&
+                this.FlowsValueNilableOnlyInEmittedGSharp(receiver) {
+                return true
+            }
+            if !method.IsGenericMethod || !this.InvocationInfersItsResultType(invocation) {
+                return false
+            }
+            let supplied = definition
+                .TypeParameters
+                .Where((parameter ITypeParameterSymbol) -> this.TypeMentionsTypeParameter(resultType, parameter))
+                .ToList()
+            let SuppliesResult = func (declared ITypeSymbol) bool {
+                return supplied.Any(
+                    (parameter ITypeParameterSymbol) -> this.TypeMentionsTypeParameter(declared, parameter)
+                )
+            }
+            if method.ReducedFrom != nil &&
+                definition
+                .Parameters
+                .Length > 0 &&
+                SuppliesResult(definition.Parameters[0].Type) &&
+                this.FlowsValueNilableOnlyInEmittedGSharp(receiver) {
+                return true
+            }
+            let offset = if method.ReducedFrom != nil {
+                1
+            } else {
+                0
+            }
+            for argument in invocation.ArgumentList.Arguments {
+                let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
+                if parameter == nil {
+                    continue
+                }
+                let ordinal = parameter.Ordinal + offset
+                if ordinal < definition
+                    .Parameters
+                    .Length &&
+                    SuppliesResult(definition.Parameters[ordinal].Type) &&
+                    this.FlowsValueNilableOnlyInEmittedGSharp(argument.Expression) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func AnyFlowsValueNilableOnlyInEmittedGSharp(
