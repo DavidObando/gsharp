@@ -814,7 +814,13 @@ internal partial class ExpressionBinder {
                 let (statements, value) = BindStatementsBeforeValue(
                     ImmutableArray.Create[StatementSyntax](initializer),
                     syntax,
-                    () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+                    (capture((NarrowedBranchValue) -> void)?) -> BindIfExpressionBranches(
+                        syntax,
+                        targetType,
+                        canBeVoid,
+                        deferOnFailure,
+                        diagMark
+                    )
                 )
                 if value is BoundErrorExpression {
                     return value
@@ -1067,12 +1073,8 @@ internal partial class ExpressionBinder {
         targetType TypeSymbol? = nil,
         captureValue((NarrowedBranchValue) -> void)? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
-        let BindTrailingExpression = func () BoundExpression {
-            return if targetType == nil {
-                BindExpression(expression, canBeVoid)
-            } else {
-                BindExpression(expression, targetType)
-            }
+        let BindTrailingExpression = func (capture((NarrowedBranchValue) -> void)?) BoundExpression {
+            return BindBranchValue(expression, nil, targetType, capture, canBeVoid)
         }
         return BindStatementsBeforeValue(statements, expression, BindTrailingExpression, captureValue)
     }
@@ -1084,14 +1086,14 @@ internal partial class ExpressionBinder {
     /// statements of either bind exactly like the statements of a block.
     /// @param statements The prefix statements.
     /// @param valueSyntax The syntax the synthesized nodes for the value are attributed to.
-    /// @param bindValue Binds the value after the prefix statements.
+    /// @param bindValue Binds the value after the prefix statements, with the capture of its narrowed read.
     /// @param captureValue Receives a narrowed read that is the value, captured in the narrowing of the statements
-    /// (issue #5613), or `nil`.
+    /// (issue #5613), or `nil`. A value that goes into a cleanup result local is not captured.
     /// @returns The bound prefix statements and the bound value.
     private func BindStatementsBeforeValue(
         statements ImmutableArray[StatementSyntax],
         valueSyntax ExpressionSyntax,
-        bindValue() -> BoundExpression,
+        bindValue(((NarrowedBranchValue) -> void)?) -> BoundExpression,
         captureValue((NarrowedBranchValue) -> void)? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
         if !statements.Any(
@@ -1104,9 +1106,7 @@ internal partial class ExpressionBinder {
             var fastBoundStatements = bindStatementList(
                 statements,
                 () -> {
-                    let value = bindValue()
-                    CaptureBranchValue(value, valueSyntax.Location, captureValue)
-                    fastBoundExpression = value
+                    fastBoundExpression = bindValue(captureValue)
                     sentinel = BoundExpressionStatement(nil, BoundLiteralExpression(nil, value: 0, TypeSymbol.Void))
                     return sentinel
                 }
@@ -1129,7 +1129,7 @@ internal partial class ExpressionBinder {
         var boundExpression BoundExpression? = nil
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
-            var value = bindValue()
+            var value = bindValue(nil)
             // Cleanup replaces a tail with a result-local read. Diagnose an
             // unresolved value before that replacement hides its defaults.
             if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
@@ -1205,12 +1205,7 @@ internal partial class ExpressionBinder {
         }
         // If there are no prefix statements, just bind the expression directly.
         if syntax.Statements.IsDefaultOrEmpty {
-            let expression = if targetType == nil {
-                BindExpression(syntax.Expression!!, canBeVoid)
-            } else {
-                BindExpression(syntax.Expression!!, targetType)
-            }
-            CaptureBranchValue(expression, syntax.Expression!!.Location, capture)
+            let expression = BindBranchValue(syntax.Expression!!, nil, targetType, capture, canBeVoid)
             return if preserveEmptyBlock && !(expression is BoundErrorExpression) {
                 cast[BoundExpression](BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression))
             } else {
@@ -1419,18 +1414,19 @@ internal partial class ExpressionBinder {
     }
 
     /// Issue #5613: binds the value of a branch in its narrowing frame. A narrowed read that the value yields (the
-    /// value, or the trailing value of a block) is captured there (cref:CaptureBranchValue).
+    /// value, or the trailing value of a block, also of a nested block in parentheses) is captured there
+    /// (cref:CaptureBranchValue).
     /// @param syntax The branch syntax.
     /// @param narrowing The narrowing frame of the branch, or `nil`.
     /// @param targetType The target type of the branch, or `nil`.
-    /// @param captureValue Receives the captured narrowed read.
+    /// @param captureValue Receives the captured narrowed read, or `nil` for no capture.
     /// @param canBeVoid Whether the branch value may be void.
     /// @returns The bound branch value.
     private func BindBranchValue(
         syntax ExpressionSyntax,
         narrowing Dictionary[AccessPath, TypeSymbol]?,
         targetType TypeSymbol?,
-        captureValue(NarrowedBranchValue) -> void,
+        captureValue((NarrowedBranchValue) -> void)?,
         canBeVoid bool = false
     ) BoundExpression -> BindWithNarrowing(
         narrowing,
