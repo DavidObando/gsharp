@@ -2964,7 +2964,8 @@ internal class LambdaBinder {
         @SuppressDiagnostic("GSA0005")
         protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
             let rewritten = cast[BoundReturnStatement](base.RewriteReturnStatement(node))
-            if rewritten.Expression == nil {
+            let expression = rewritten.Expression
+            if expression == nil {
                 return rewritten
             }
             // Issue #889: when the adapter erases a value-returning literal to a
@@ -2976,20 +2977,16 @@ internal class LambdaBinder {
                 return BoundBlockStatement(
                     rewritten.Syntax,
                     ImmutableArray.Create[BoundStatement](
-                        BoundExpressionStatement(rewritten.Syntax, rewritten.Expression),
+                        BoundExpressionStatement(rewritten.Syntax, expression),
                         BoundReturnStatement(rewritten.Syntax, expression: nil)
                     )
                 )
             }
             // A bottom-typed return never reaches the target slot.
-            if rewritten.Expression!!.Type == this.adapterReturnType ||
-                rewritten.Expression!!.Type == TypeSymbol.Never {
+            if expression.Type == this.adapterReturnType || expression.Type == TypeSymbol.Never {
                 return rewritten
             }
-            return BoundReturnStatement(
-                nil,
-                BoundConversionExpression(nil, this.adapterReturnType, rewritten.Expression!!)
-            )
+            return BoundReturnStatement(nil, BoundConversionExpression(nil, this.adapterReturnType, expression))
         }
     }
 

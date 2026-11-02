@@ -32,6 +32,14 @@ internal partial class StatementBinder {
     private var effects AssignedRootsCollector? = nil
     // Member-mutation facts are a pure function of a statement's syntax.
     private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
+    // ADR-0208 R18: reused for each condition; read only before the branches are bound.
+    private var conditionRemovedFacts Dictionary[AccessPath, TypeSymbol]?
+    // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
+    // so the sibling else-branch can be bound without them. `nil` outside such a branch.
+    private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
+    // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
+    // `nil` otherwise, and the current aliases apply.
+    private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -326,7 +334,8 @@ internal partial class StatementBinder {
 
     private func InvalidateNarrowingsForAssignedVariables(
         statementSyntax SyntaxNode,
-        boundStatement BoundStatement? = nil
+        boundStatement BoundStatement? = nil,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     ) {
         EnsureClosureAssignedNames(statementSyntax)
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
@@ -454,6 +463,13 @@ internal partial class StatementBinder {
             }
             if toRemove != nil {
                 for key in toRemove {
+                    // The frames are visited innermost first, so the recorded type is the one a read saw.
+                    if removedFacts != nil && !removedFacts.ContainsKey(key) {
+                        removedFacts[key] = frame[key]
+                    }
+                    if removedFacts != nil {
+                        conditionKillJournal?.Add((frame, key, frame[key]))
+                    }
                     frame.Remove(key)
                 }
             }
@@ -569,6 +585,10 @@ internal partial class StatementBinder {
         }
         var mayMutateMemberPaths = false
         switch node {
+            // ADR-0208 R18 (#5534): creating a closure runs none of its body. A call of the closure is a call.
+            case FunctionLiteralExpressionSyntax, LambdaExpressionSyntax {
+                return false
+            }
             case CallExpressionSyntax,
             MemberFieldAssignmentExpressionSyntax,
             MemberIndexAssignmentExpressionSyntax,
@@ -1676,17 +1696,138 @@ internal partial class StatementBinder {
             return nil
         }
         let before = HashSet[VariableSymbol](externalCallableAliases)
-        let collector = NewCollector(nil, externalCallableAliases)
-        collector.VisitExpression(header)
-        if collector.MayMutateAnyRootViaPointer {
-            externalCallableAliases.Clear()
-        }
-        RemoveAssignedAliases(externalCallableAliases, collector)
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
-        }
+        RemoveHeaderAffectedAliases(externalCallableAliases, header)
         before.ExceptWith(externalCallableAliases)
         return before
+    }
+
+    // The one header rule: an alias that [`header`](paramref) assigns, or that an unknown callable in it can assign,
+    // is no longer known to be external.
+    private func RemoveHeaderAffectedAliases(aliases HashSet[VariableSymbol], header BoundExpression) {
+        let collector = NewCollector(nil, aliases)
+        collector.VisitExpression(header)
+        if collector.MayMutateAnyRootViaPointer {
+            aliases.Clear()
+        }
+        RemoveAssignedAliases(aliases, collector)
+        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
+            aliases.RemoveWhere(NamesClosureAssignedStorage)
+        }
+    }
+
+    /// ADR-0208 section 9 and row R18 (#5534): the else-branch of an `if` statement is bound under the state after
+    /// the condition, not after the then-branch. The condition of an `if` statement nested in the then-branch runs
+    /// only on that path, so the facts it removed from the enclosing frames are put back for the else-branch
+    /// (`if flag if Check(h) { } else { } else { return x.Value }`). Returns the journal of the enclosing branch.
+    private func BeginThenBranchConditionKills() List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]? {
+        let outer = conditionKillJournal
+        conditionKillJournal = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        return outer
+    }
+
+    /// Puts back the facts that the then-branch's conditions removed from frames that are still on the stack,
+    /// before the else-branch is bound, and restores the journal of the enclosing branch. Only a fact that held
+    /// in [`entry`](paramref), the state the else-branch starts from, is put back.
+    private func RestoreThenBranchConditionKills(
+        outer List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?,
+        entry NarrowingState,
+        header List[(Syntax SyntaxNode, Bound BoundExpression)]? = nil,
+        aliasesBeforeHeader HashSet[VariableSymbol]? = nil
+    ) List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)] {
+        let thenKills = conditionKillJournal!!
+        conditionKillJournal = outer
+        let restored = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        // The effects of a header that the else path also runs and that are not applied before the branches
+        // (the `if let` initializers and guard, #5545 shape 4).
+        var headerEffects AssignedRootsCollector? = nil
+        var headerMutatesMemberPaths = false
+        if thenKills.Count > 0 && header != nil && header.Count > 0 {
+            // The header is walked in evaluation order from the aliases it started with.
+            let collector = NewCollector(nil, aliasesBeforeHeader ?? externalCallableAliases)
+            for part in header {
+                collector.VisitExpression(part.Bound)
+                headerMutatesMemberPaths = headerMutatesMemberPaths || SyntaxMayMutateMemberPaths(part.Syntax)
+            }
+            headerEffects = collector
+        }
+        for kill in thenKills {
+            if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
+                entry.NarrowedType(kill.Path),
+                kill.Type
+            ) &&
+                !(
+                headerEffects != nil &&
+                    StatementKillsPath(
+                    headerEffects,
+                    kill.Path,
+                    headerMutatesMemberPaths || headerEffects.MayMutateMemberPaths,
+                    headerEffects.MayMutateReferenceStorage
+                )
+            ) {
+                kill.Frame[kill.Path] = kill.Type
+                restored.Add(kill)
+            }
+        }
+        outer?.AddRange(thenKills)
+        return restored
+    }
+
+    /// After the else-branch: the then-branch can have run, so the facts put back for the else-branch are removed
+    /// again, unless the else-branch changed them.
+    private func EndThenBranchConditionKills(restored List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]) {
+        for entry in restored {
+            if entry.Frame.TryGetValue(entry.Path, out var current) && current == entry.Type {
+                entry.Frame.Remove(entry.Path)
+            }
+        }
+    }
+
+    /// ADR-0208 R18: applies the effects of the initializer of `if init; cond` before the condition is bound. Inside
+    /// a then-branch the removed facts are recorded, as a condition's are, for the sibling else-branch.
+    private func ApplyInitializerEffectsToNarrowings(syntax SyntaxNode, initializer BoundStatement) {
+        if !HasAnyActiveNarrowings() {
+            return
+        }
+        let removedFacts = if conditionKillJournal == nil {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            Dictionary[AccessPath, TypeSymbol]()
+        }
+        InvalidateNarrowingsForAssignedVariables(syntax, initializer, removedFacts)
+    }
+
+    private func IsOnNarrowingStack(frame NarrowingFrame) bool {
+        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
+            if object.ReferenceEquals(binderCtx.NarrowedVariables[i], frame) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// ADR-0208 section 9 and row R18 (#5534): the effects of a branching condition apply to the narrowing facts
+    /// before either branch is bound. The condition runs first, so a call, a getter or an assignment in it can end a
+    /// fact that the branches would otherwise read. The same rule as a catch filter (row R10) and the one rule of
+    /// (cref:InvalidateNarrowingsForAssignedVariables). The facts that the condition itself proves are classified
+    /// after this call, so a test after the effect (`Check(h) && x != nil`) still narrows its branch. The
+    /// effects are read with the callable aliases from before the condition, as for a statement, so this runs
+    /// before (cref:ApplyHeaderCallableEffects). Returns the removed facts with the type a read saw, or `nil`.
+    private func ApplyConditionEffectsToNarrowings(syntax SyntaxNode, condition BoundExpression) Dictionary[
+        AccessPath,
+        TypeSymbol
+    ]? {
+        if !HasAnyActiveNarrowings() {
+            return nil
+        }
+        let removedFacts = conditionRemovedFacts ?? Dictionary[AccessPath, TypeSymbol]()
+        conditionRemovedFacts = removedFacts
+        removedFacts.Clear()
+        InvalidateNarrowingsForAssignedVariables(syntax, BoundExpressionStatement(nil, condition), removedFacts)
+        return if removedFacts.Count == 0 {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            removedFacts
+        }
     }
 
     private func EnsureClosureAssignedNames(anchor SyntaxNode) -> binderCtx.EnsureClosureAssignedNames(
