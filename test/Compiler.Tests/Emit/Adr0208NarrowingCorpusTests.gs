@@ -433,7 +433,7 @@ open class Adr0208NarrowingCorpusTests {
                 "z01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19",
                 "z02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19",
                 "z03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19",
-                "z04_5317_loop_switch_case_on_a_shadowing_local_calls_equals_R19",
+                "z04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19",
                 "z05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19"
             },
             names
@@ -8164,7 +8164,7 @@ func Run(o object) int32 {
 const One int32 = 1
 var n int32? = 1
 Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
-            yield[]object{"z04_5317_loop_switch_case_on_a_shadowing_local_calls_equals_R19", `import System
+            yield[]object{"z04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19", `import System
 class One { }
 class E {
     override func Equals(o object?) bool {
@@ -8173,19 +8173,20 @@ class E {
     }
     override func GetHashCode() int32 -> 1
 }
-func Run(o object) int32 {
+func Run(o object, p object) int32 {
     if n == nil { return 0 }
     var k = 0
     while n > 0 {
         k++
-        let One = 1
-        switch o { case One { } default { } }
+        if p is int32 One {
+            switch o { case One { } default { } }
+        }
         if k > 3 { break }
     }
     return k
 }
 var n int32? = 1
-Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
             yield[]object{"z05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19", `import System
 class One { }
 class E {
