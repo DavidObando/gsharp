@@ -2898,6 +2898,219 @@ func Run(flag bool, text string) int32 {
     return 0
 }
 func Main() { }`, "")
+            Add("constant-pattern-with-a-user-equals-keeps-a-by-reference-fact (A3, R19)", `package T
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(ref s string?, o object) int32 {
+    if s == nil { return 0 }
+    var n = 0
+    while s.Length > 0 && n < 3 {
+        n++
+        let m = o is 1
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("list-pattern-over-a-user-count-removes-a-by-reference-fact (R19)", `package T
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+class L : IList[int32] {
+    var Wipe () -> void = func() { }
+    prop Count int32 {
+        get {
+            Wipe()
+            return 1
+        }
+    }
+    prop IsReadOnly bool -> true
+    prop this[i int32] int32 {
+        get { return 1 }
+        set { }
+    }
+    func IndexOf(item int32) int32 -> 0
+    func Insert(index int32, item int32) { }
+    func RemoveAt(index int32) { }
+    func Add(item int32) { }
+    func Clear() { }
+    func Contains(item int32) bool -> true
+    func CopyTo(array []int32, index int32) { }
+    func Remove(item int32) bool -> false
+    func GetEnumerator() IEnumerator[int32] -> List[int32]{1}.GetEnumerator()
+    func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()
+}
+func Run(ref s string?, items ReadOnlyCollection[int32]) int32 {
+    if s == nil { return 0 }
+    var n = 0
+    while s.Length > 0 && n < 3 {
+        n++
+        let m = items is [1]
+    }
+    return n
+}
+func Main() { }`, "GS0158@45:13")
+            Add("constant-pattern-with-a-user-equals-removes-a-captured-fact (R19)", `package T
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    let i int32 = 5
+    let d = Dictionary[int32, int32]()
+    let li = List[int32]{1}
+    let arr = []int32{1}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    var n = 0
+    var more = true
+    while true {
+        if o is 1 { break }
+        break
+    }
+    return x.Value
+}
+func Main() { }`, "GS0158@35:14")
+            Add("constant-pattern-on-a-primitive-keeps-a-captured-fact (R19)", `package T
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    let i int32 = 5
+    let d = Dictionary[int32, int32]()
+    let li = List[int32]{1}
+    let arr = []int32{1}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    var n = 0
+    var more = true
+    while true {
+        if i is 1 { break }
+        break
+    }
+    return x.Value
+}
+func Main() { }`, "")
+            Add("list-pattern-over-a-list-counts-as-a-read (W5, stricter than R19)", `package T
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(ref s string?, li List[int32]) int32 {
+    if s == nil { return 0 }
+    var n = 0
+    while s.Length > 0 && n < 3 {
+        n++
+        let m = li is [1]
+    }
+    return n
+}
+func Main() { }`, "GS0158@21:13")
+            Add("switch-case-continue-after-a-user-equals-removes-the-fact (R19, #5629)", `package T
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+var g C? = C{}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch o { case 1 { continue } default { } }
+        break
+    }
+    return k
+}
+func Main() { }`, "GS0158@27:19")
             return rows
         }
     }
