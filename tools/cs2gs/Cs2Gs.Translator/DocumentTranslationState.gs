@@ -72,6 +72,7 @@ internal class DocumentTranslationState {
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         LiftedStaticLocalFunctions = Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
@@ -438,6 +439,12 @@ internal class DocumentTranslationState {
     // per capture and each read asks it. A capture whose input is another capture asks again, so the cache
     // keeps a chain of captures linear.
     prop VarCaptureInputNonNull Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: whether a `var` local is `T?` only in the emitted G#, because its initializer is. The
+    // answer is invariant per local, and the cache keeps a chain of locals linear.
+    prop NilableOnlyInEmittedGSharpLocals Dictionary[ILocalSymbol, bool] {
         get;
     }
 

@@ -2898,8 +2898,9 @@ partial class CSharpToGSharpTranslator {
         // Issue #5582: whether `value` is `T?` only in the emitted G#: C# proves it non-null, but G# gives it
         // the type of a value that it types `T?`. Such a value is a `var` capture of a maybe-nil input, a
         // dropped by-ref suppression (`EmittedValueIsNilableBeyondItsCSharpType`), a composed value with such
-        // an operand, or a `var` local that one initializes. It takes the target-aware bridge, so a slot that
-        // accepts nil stores the nil as C# does and a non-null slot is asserted.
+        // an operand (a conditional, a switch expression, `??`), or a `var` local that one initializes. It takes
+        // the target-aware bridge, so a slot that accepts nil stores the nil as C# does and a non-null slot is
+        // asserted.
         private func IsNilableOnlyInEmittedGSharp(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
             var value = value
             while value is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -2917,17 +2918,29 @@ partial class CSharpToGSharpTranslator {
                         conditional.WhenFalse
                     )
                 }
+                case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
+                    for arm in switchExpression.Arms {
+                        if this.IsNilableOnlyInEmittedGSharp(arm.Expression) {
+                            return true
+                        }
+                    }
+                    return false
+                }
                 case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                 ) {
                     return this.IsNilableOnlyInEmittedGSharp(coalesce.Right)
                 }
             }
-            return this
-                .context
-                .GetSymbolInfo(value)
-                .Symbol is ILocalSymbol local &&
-                local
+            if this.context.GetSymbolInfo(value).Symbol is not ILocalSymbol local {
+                return false
+            }
+            if this.state.NilableOnlyInEmittedGSharpLocals.TryGetValue(local, out var decided) {
+                return decided
+            }
+            // A local's answer is invariant. Recording it keeps a chain of locals linear.
+            this.state.NilableOnlyInEmittedGSharpLocals[local] = false
+            let answer = local
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{
@@ -2935,6 +2948,8 @@ partial class CSharpToGSharpTranslator {
                 Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax{Type: {IsVar: true}}
             } &&
                 this.IsNilableOnlyInEmittedGSharp(initializer)
+            this.state.NilableOnlyInEmittedGSharpLocals[local] = answer
+            return answer
         }
 
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {

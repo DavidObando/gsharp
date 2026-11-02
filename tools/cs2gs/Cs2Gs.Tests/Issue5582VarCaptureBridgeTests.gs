@@ -267,12 +267,18 @@ namespace Demo
         static Dictionary<string, int>? ArmReturn() => Volatile.Read(ref cache!) switch { var c => c };
         static Dictionary<string, int>? DirectReturn() => Volatile.Read(ref cache!);
         static Dictionary<string, int>? LocalReturn() { var d = Volatile.Read(ref cache!); return d; }
+        static Dictionary<string, int>? SwitchLocalReturn(bool flag)
+        {
+            var d = flag switch { true => Volatile.Read(ref cache!), _ => Volatile.Read(ref cache!) };
+            return d;
+        }
         public static string Run() =>
-            (IsReturn() == null) + " " + (ArmReturn() == null) + " " + (DirectReturn() == null) + " " + (LocalReturn() == null);
+            (IsReturn() == null) + " " + (ArmReturn() == null) + " " + (DirectReturn() == null) + " " + (LocalReturn() == null) +
+            " " + (SwitchLocalReturn(true) == null);
     }
 }`)
         Assert.DoesNotContain("!!", printed)
-        RunsAs(printed, "True True True True")
+        RunsAs(printed, "True True True True True")
     }
 
     /// A capture of a dropped by-ref suppression is `T?` only in G#, so it takes the target-aware bridge: a
