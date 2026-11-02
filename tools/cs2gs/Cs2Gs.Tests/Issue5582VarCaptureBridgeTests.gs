@@ -8,6 +8,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import System
+import System.Linq
 import Xunit
 
 /// Issue #5582: a `var` pattern capture has the G# type of the value that the pattern matches. C# types
@@ -425,6 +426,69 @@ namespace Demo
         RunsAs(printed, "node node node node")
     }
 
+    /// A value that is `T?` only in G# flows into a capture through a generic member read (`task.Result`),
+    /// `await`, a generic factory read by a property subpattern (`{ Value: var c }` over `Wrap(...)`), and a
+    /// nest of generic calls. Each capture keeps its `!!`.
+    @Fact
+    func AVarCaptureOfAGenericFlow_KeepsItsAssertion() {
+        let nested = Nest(8, "Volatile.Read(ref cache!)")
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+namespace Demo
+{
+    public class Box<T> { public Box(T value) { Value = value; } public T Value; }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
+        static T Id<T>(T x) => x;
+        static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static int ResultArm() => Task.FromResult(Volatile.Read(ref cache!)).Result switch { var r => r.Count };
+        static int ResultCase()
+        {
+            switch (Task.FromResult(Volatile.Read(ref cache!)).Result)
+            {
+                case var s: return s.Count;
+            }
+        }
+        static async Task<int> AwaitArm() => (await Task.FromResult(Volatile.Read(ref cache!))) switch { var a => a.Count };
+        static int BoxArm() => Wrap(Volatile.Read(ref cache!)) switch { { Value: var b } => b.Count, _ => -1 };
+        static int Nested() => ` + nested + ` switch { var n => n.Count };
+        public static string Run() =>
+            ResultArm() + " " + ResultCase() + " " + AwaitArm().Result + " " + BoxArm() + " " + Nested();
+    }
+}`)
+        Assert.Contains("case var r: r!!.Count", printed)
+        Assert.Contains("return s!!.Count", printed)
+        Assert.Contains("case var a: a!!.Count", printed)
+        Assert.Contains("case { Value: var b }: b!!.Count", printed)
+        Assert.Contains("case var n: n!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1")
+    }
+
+    /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
+    /// value translates without asking each inner call again at each level, and the capture needs no `!!`. Translation only: gsc binds such a nest in exponential time
+    /// (#5652).
+    @Fact
+    func ADeepNestOfGenericCalls_IsDecidedOncePerCall() {
+        let printed = TranslateOnly(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        static T Id<T>(T x) => x;
+        static int Nested() => ` + Nest(24, "new Dictionary<string, int>()") + ` switch { var n => n.Count };
+    }
+}`)
+        Assert.Contains("case var n: n.Count", printed)
+    }
+
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a
     /// local initialized from one. A capture has no recorded storage, so its store is not bridged (#5605).
     /// The taint widens a local that receives the element, so its store is not bridged either. Each form
@@ -503,6 +567,18 @@ namespace Demo
             TranslationTestValidation.AssertBinds(printed)
             return printed
         }
+
+        private func TranslateOnly(source string) string {
+            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            return GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        }
+
+        // `Id(Id(…inner…))`, `depth` calls deep.
+        private func Nest(depth int32, inner string) string -> String.Concat(Enumerable.Repeat("Id(", depth)) +
+            inner +
+            String(')', depth)
 
         // Compiles `printed` with gsc, runs `P.Run()` and compares what it prints.
         private func RunsAs(printed string, expected string) -> LocalFunctionHoistTranslationTests.CompileAndRun(

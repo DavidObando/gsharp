@@ -73,6 +73,7 @@ internal class DocumentTranslationState {
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         LiftedStaticLocalFunctions = Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
@@ -445,6 +446,11 @@ internal class DocumentTranslationState {
     // Issue #5582: whether a `var` local is `T?` only in the emitted G#, because its initializer is. The
     // answer is invariant per local, and the cache keeps a chain of locals linear.
     prop NilableOnlyInEmittedGSharpLocals Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: the same answer for an expression node, so that nested generic calls stay linear.
+    prop NilableOnlyInEmittedGSharpNodes Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool] {
         get;
     }
 

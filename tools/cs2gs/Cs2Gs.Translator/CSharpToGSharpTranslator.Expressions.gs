@@ -2909,6 +2909,19 @@ partial class CSharpToGSharpTranslator {
             if value == nil {
                 return false
             }
+            // The answer is invariant per node. Recording it keeps nested calls and chains linear.
+            if this.state.NilableOnlyInEmittedGSharpNodes.TryGetValue(value, out var decided) {
+                return decided
+            }
+            this.state.NilableOnlyInEmittedGSharpNodes[value] = false
+            let answer = this.ComputeNilableOnlyInEmittedGSharp(value)
+            this.state.NilableOnlyInEmittedGSharpNodes[value] = answer
+            return answer
+        }
+
+        private func ComputeNilableOnlyInEmittedGSharp(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
             if this.VarCaptureIsNonNull(value) == false || this.EmittedValueIsNilableBeyondItsCSharpType(value) {
                 return true
             }
@@ -3861,6 +3874,12 @@ partial class CSharpToGSharpTranslator {
             }
             if narrowedByTypeTest {
                 isNonNull = true
+            } else if local.Type.IsReferenceType && this.PatternScrutinee(local) is {} scrutinee &&
+                this
+                .FlowsValueNilableOnlyInEmittedGSharp(scrutinee) {
+                // The emitted type of the scrutinee, or of a member that a subpattern reads from it, can be
+                // `T?` although C# types it non-null.
+                isNonNull = false
             } else if input != nil {
                 isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
             } else {
@@ -3925,7 +3944,7 @@ partial class CSharpToGSharpTranslator {
                 returnParameter
             ) &&
                 invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
-                this.ContainsValueNilableOnlyInEmittedGSharp(receiverAccess.Expression) {
+                this.FlowsValueNilableOnlyInEmittedGSharp(receiverAccess.Expression) {
                 return true
             }
             let offset = if method.ReducedFrom != nil {
@@ -3943,25 +3962,143 @@ partial class CSharpToGSharpTranslator {
                     definition.Parameters[ordinal].Type,
                     returnParameter
                 ) &&
-                    this.ContainsValueNilableOnlyInEmittedGSharp(argument.Expression) {
+                    this.FlowsValueNilableOnlyInEmittedGSharp(argument.Expression) {
                     return true
                 }
             }
             return false
         }
 
-        // Whether `expression`, or an expression inside it (a lambda result, an array element), is `T?` only in
-        // the emitted G#.
-        private func ContainsValueNilableOnlyInEmittedGSharp(
+        // Issue #5582: whether a value that is `T?` only in G# can flow into the value of `expression`: through
+        // a generic call that infers its result (an argument, a lambda result, an array element, an extension
+        // receiver), a member whose type follows its receiver's type arguments (`task.Result`, `box.Value`,
+        // `list[i]`), `await`, or a composed value. The search fails closed: it does not decide which
+        // argument supplies a type parameter.
+        private func FlowsValueNilableOnlyInEmittedGSharp(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool -> expression
-            .DescendantNodesAndSelf()
+            .DescendantNodesAndSelf((node Microsoft.CodeAnalysis.SyntaxNode) -> this.CarriesItsOperandsValue(node))
             .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
             .Any(
             (candidate Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> this.IsNilableOnlyInEmittedGSharp(
                 candidate
             )
         )
+
+        // Whether the value of `node` can carry the type of a value inside it.
+        private func CarriesItsOperandsValue(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            switch node {
+                case Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConditionalExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AwaitExpressionSyntax,
+                AnonymousFunctionExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BlockSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ReturnStatementSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArgumentListSyntax,
+                ArgumentSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArrayCreationExpressionSyntax,
+                ImplicitArrayCreationExpressionSyntax,
+                InitializerExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CollectionExpressionSyntax,
+                ExpressionElementSyntax {
+                    return true
+                }
+                case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax {
+                    return binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression)
+                }
+                case invocation is InvocationExpressionSyntax {
+                    return this.InvocationInfersItsResultType(invocation)
+                }
+                case access is MemberAccessExpressionSyntax {
+                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(access).Symbol)
+                }
+                case element is ElementAccessExpressionSyntax {
+                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(element).Symbol)
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        // A generic call without type arguments whose result type mentions one of its method type parameters.
+        private func InvocationInfersItsResultType(invocation InvocationExpressionSyntax) bool {
+            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method || !method.IsGenericMethod {
+                return false
+            }
+            var callee = invocation.Expression
+            if callee is MemberAccessExpressionSyntax calleeAccess {
+                callee = calleeAccess.Name
+            } else if callee is MemberBindingExpressionSyntax calleeBinding {
+                callee = calleeBinding.Name
+            }
+            return !(callee is GenericNameSyntax) && this.TypeMentionsAnyTypeParameter(
+                (method.ReducedFrom ?? method).OriginalDefinition.ReturnType
+            )
+        }
+
+        // A field, property or indexer whose declared type mentions a type parameter of its containing type, or
+        // a reduced extension whose `this` parameter mentions a method type parameter.
+        private func MemberTypeFollowsItsReceiver(member ISymbol?) bool -> switch member {
+            case field is IFieldSymbol: this.TypeMentionsAnyTypeParameter(field.OriginalDefinition.Type)
+            case property is IPropertySymbol: this.TypeMentionsAnyTypeParameter(property.OriginalDefinition.Type)
+            case IMethodSymbol{ReducedFrom: {} reduced}: reduced
+                .Parameters
+                .Length > 0 &&
+                this.TypeMentionsAnyTypeParameter(reduced.OriginalDefinition.Parameters[0].Type)
+            default: false
+        }
+
+        private func TypeMentionsAnyTypeParameter(type ITypeSymbol?) bool -> switch type {
+            case ITypeParameterSymbol: true
+            case array is IArrayTypeSymbol: this.TypeMentionsAnyTypeParameter(array.ElementType)
+            case named is INamedTypeSymbol: named.TypeArguments.Any(
+                (argument ITypeSymbol) -> this.TypeMentionsAnyTypeParameter(argument)
+            )
+            default: false
+        }
 
         // Whether `type` is `parameter` or contains it as an array element or a type argument (`T[]`,
         // `Func<T>`, `IEnumerable<T>`).
@@ -3973,6 +4110,37 @@ partial class CSharpToGSharpTranslator {
                 (argument ITypeSymbol) -> this.TypeMentionsTypeParameter(argument, parameter)
             )
             default: false
+        }
+
+        // The expression that the pattern declaring `local` matches: of `x is …`, of a switch arm or of a
+        // `case` label.
+        private func PatternScrutinee(local ILocalSymbol) Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? {
+            let designation = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if designation == nil {
+                return nil
+            }
+            for ancestor in designation.Ancestors() {
+                switch ancestor {
+                    case isPattern is IsPatternExpressionSyntax {
+                        return isPattern.Expression
+                    }
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax{
+                        Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression
+                    } {
+                        return switchExpression.GoverningExpression
+                    }
+                    case CasePatternSwitchLabelSyntax{
+                        Parent: {Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement}
+                    } {
+                        return switchStatement.Expression
+                    }
+                }
+            }
+            return nil
         }
 
         /// Issue #5582: finds the value that a `var` pattern capture holds in the emitted G#.
