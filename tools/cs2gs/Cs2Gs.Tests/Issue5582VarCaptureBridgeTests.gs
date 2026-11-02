@@ -358,6 +358,48 @@ namespace Demo
         RunsAs(printed, "1 1 1 1")
     }
 
+    /// With #5601's slot query: a capture of an `[AllowNull]` field typed by an unconstrained `T` has the
+    /// emitted type `Node` (the slot stays `Value T`), so it goes into a non-null parameter without `!!`. With
+    /// `where T : class` the slot is `T?`, and the capture keeps its bridge.
+    @Fact
+    func AVarCaptureOfAnAllowNullTypeParameterSlot_FollowsTheEmittedSlot() {
+        let printed = Translate(`
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { public string Name => "node"; }
+    public class Box<T>
+    {
+        public Box(T value) { Value = value; }
+        [AllowNull] public T Value;
+    }
+    public class RefBox<T> where T : class
+    {
+        public RefBox(T value) { Value = value; }
+        [AllowNull] public T Value;
+    }
+    public static class P
+    {
+        static string Take(Node n) => n.Name;
+        static string Is(Box<Node> b) => b.Value is var c ? Take(c) : "none";
+        static string Arm(Box<Node> b) => b switch { { Value: var c } => Take(c), _ => "none" };
+        static string RefIs(RefBox<Node> b) => b.Value is var c ? Take(c) : "none";
+        static string RefArm(RefBox<Node> b) => b switch { { Value: var c } => Take(c), _ => "none" };
+        public static string Run() =>
+            Is(new Box<Node>(new Node())) + " " + Arm(new Box<Node>(new Node())) + " " +
+            RefIs(new RefBox<Node>(new Node())) + " " + RefArm(new RefBox<Node>(new Node()));
+    }
+}`)
+        Assert.Contains("var Value T\n", printed)
+        Assert.Contains("var Value T?", printed)
+        Assert.Contains("func Is(b Box[Node]) string -> if b.Value is var c { Take(c) }", printed)
+        Assert.Contains("case { Value: var c }: Take(c)\n", printed)
+        Assert.Contains("func RefIs(b RefBox[Node]) string -> if b.Value is var c { Take(c!!) }", printed)
+        Assert.Contains("case { Value: var c }: Take(c!!)", printed)
+        RunsAs(printed, "node node node node")
+    }
+
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a
     /// local initialized from one. A capture has no recorded storage, so its store is not bridged (#5605).
     /// The taint widens a local that receives the element, so its store is not bridged either. Each form
