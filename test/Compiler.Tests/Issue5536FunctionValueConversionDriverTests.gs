@@ -2566,8 +2566,9 @@ class Program {
         }
 
         // Issue #5635: `Id` infers its type argument, `F` has a `string` parameter and `V` a variadic one. `F2` and
-        // `Box.M` take a second argument that can assign the first.
-        private let NoConversionPrelude string = BranchValuePrelude +
+        // `Box.M` take a second argument that can assign the first. `Calls` is the imported contract.
+        private let NoConversionPrelude string = "import FunctionControl\n" +
+            BranchValuePrelude +
             "func Id[T](x T) T -> x\nfunc F(x string) int32 -> x.Length\nfunc V(xs ...string) int32 -> xs.Length\n" +
             "func F2(x string, y int32) int32 -> x.Length\nclass Box {\n    func M(x string, y int32) int32 -> x.Length\n}\n"
 
@@ -2581,6 +2582,7 @@ class Program {
             "let u = F(@s)",
             "let u = V(\"x\", @s)",
             "let u = Task.FromResult(@s)",
+            "let u = Calls.IdentityDefault(@s)",
             "let t = ({\n                n = n + 0\n                @s\n            })",
             "let t = ({\n                n = n + 0\n                @s\n            }).Length",
             "let t string = ({\n                n = n + 0\n                @s\n            })",
@@ -2646,6 +2648,7 @@ namespace FunctionControl {
         public static string Pz(System.Func<string> f, int x) => "F" + f();
         public static T Pick<T>(T a, T b) => a;
         public static bool IsNil<T>(T? value) where T : class => value == null;
+        public static T IdentityDefault<T>(T value = default!) => value;
         public static string Po(System.Func<object> f, int x) => "F" + f();
         public static string Po(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
         public static string Pz(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();

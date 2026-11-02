@@ -1240,8 +1240,9 @@ internal class ConversionClassifier {
             // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
             // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
             // type arguments, as `let t = s` is. The imported slot itself takes nil, so its conversion does not decide
-            // the read. A slot that the signature declares nullable (`T?`) takes the declared value. The declared
-            // read replaces the narrowed read when the slot takes it.
+            // the read. A slot that the signature declares `T?` takes the declared value. A null default (`T value =
+            // default`) does not make the slot nullable. The declared read replaces the narrowed read when the slot
+            // takes it.
             if paramIndex < parameters.Length &&
                 call?.TypeArgumentList == nil &&
                 method is {IsGenericMethod: true} genericMethod &&
@@ -1258,7 +1259,7 @@ internal class ConversionClassifier {
                 openParameter
                 .ParameterType
                 .IsGenericMethodParameter &&
-                !(ClrNullability.GetParameterTypeSymbol(openParameter) is NullableTypeSymbol) {
+                ClrNullability.GetParameterDeclaredState(openParameter) != ClrNullabilityState.Annotated {
                 let sourceIndex = i - receiverArgCount
                 argument = DecideNarrowedConversion(
                     if !parameterArgumentLocations.IsDefault &&
