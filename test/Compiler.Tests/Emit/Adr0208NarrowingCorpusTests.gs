@@ -416,7 +416,23 @@ open class Adr0208NarrowingCorpusTests {
                 "y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19",
                 "y26_5593_default_of_a_source_class_is_null_R19",
                 "y27_5593_default_of_an_enum_constrained_type_parameter_is_not_null_R19",
-                "y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19"
+                "y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19",
+                "z01_5599_open_auto_property_in_a_loop_can_run_an_override_R14",
+                "z02_5599_open_auto_property_read_removes_a_by_reference_fact_R14",
+                "z03_5599_interface_property_read_removes_a_by_reference_fact_R14",
+                "z04_5599_auto_property_that_is_not_open_keeps_the_fact_R14",
+                "z05_5599_auto_override_on_a_receiver_that_is_not_open_keeps_the_fact_R14",
+                "z06_5599_inherited_open_auto_property_on_a_sealed_receiver_keeps_the_fact_R14",
+                "z07_5599_sealed_receiver_still_runs_an_inherited_computed_override_R14",
+                "z08_5599_auto_override_in_an_open_class_can_be_overridden_again_R14",
+                "z09_5599_open_auto_property_write_removes_a_global_fact_R14",
+                "z10_5599_open_auto_property_in_a_condition_removes_a_global_fact_R14",
+                "z11_5599_open_auto_property_on_a_type_parameter_receiver_R14",
+                "z12_5599_open_auto_property_in_a_property_pattern_R14",
+                "z13_5599_open_auto_property_read_kills_the_member_path_R14",
+                "z14_5599_open_auto_property_read_removes_a_closure_assigned_fact_R14",
+                "z15_5599_initializer_of_a_construction_keeps_the_fact_R14",
+                "z16_5599_property_pattern_on_a_sealed_receiver_keeps_the_fact_R14"
             },
             names
         )
@@ -7837,6 +7853,358 @@ func Run[T class](e E) int32 {
     return 2
 }
 Console.WriteLine(Run[string](E{}))`, "", "run", "1", "R19"}
+            yield[]object{"z01_5599_open_auto_property_in_a_loop_can_run_an_override_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run(ref text string?, b Base) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        n = n + b.Auto * 0
+    }
+    return n
+}
+func Main() { Console.WriteLine(Run(ref Box.G, Derived())) }`, "GS0158@22:16", "reject", "", "R14"}
+            yield[]object{"z02_5599_open_auto_property_read_removes_a_by_reference_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run(ref text string?, b Base) int32 {
+    if text == nil { return 0 }
+    let n = b.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Derived()))`, "GS0158@22:17", "reject", "", "R14"}
+            yield[]object{"z03_5599_interface_property_read_removes_a_by_reference_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+interface ICounter { prop Auto int32 { get; } }
+class Clearing : ICounter {
+    prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+    }
+}
+func Run(ref text string?, c ICounter) int32 {
+    if text == nil { return 0 }
+    let n = c.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Clearing()))`, "GS0158@19:17", "reject", "", "R14"}
+            yield[]object{"z04_5599_auto_property_that_is_not_open_keeps_the_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    prop Auto int32 { get; set; }
+}
+class Derived : Base { }
+func Run(ref text string?, b Base) int32 {
+    if text == nil { return 0 }
+    let n = b.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Derived()))`, "", "run", "1", "R14"}
+            yield[]object{"z05_5599_auto_override_on_a_receiver_that_is_not_open_keeps_the_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+class Derived : Base {
+    override prop Auto int32 { get; set; }
+}
+func Run(ref text string?, d Derived) int32 {
+    if text == nil { return 0 }
+    let n = d.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Derived()))`, "", "run", "1", "R14"}
+            yield[]object{"z06_5599_inherited_open_auto_property_on_a_sealed_receiver_keeps_the_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Leaf : Base { }
+func Run(ref text string?, d Leaf) int32 {
+    if text == nil { return 0 }
+    let n = d.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Leaf()))`, "", "run", "1", "R14"}
+            yield[]object{"z07_5599_sealed_receiver_still_runs_an_inherited_computed_override_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+open class Mid : Base {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+class Leaf : Mid { }
+func Run(ref text string?, d Leaf) int32 {
+    if text == nil { return 0 }
+    let n = d.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Leaf()))`, "GS0158@23:17", "reject", "", "R14"}
+            yield[]object{"z08_5599_auto_override_in_an_open_class_can_be_overridden_again_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+open class Mid : Base {
+    override prop Auto int32 { get; set; }
+}
+class Leaf : Mid {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run(ref text string?, m Mid) int32 {
+    if text == nil { return 0 }
+    let n = m.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Leaf()))`, "GS0158@25:17", "reject", "", "R14"}
+            yield[]object{"z09_5599_open_auto_property_write_removes_a_global_fact_R14", `import System
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get -> 1
+        set { g = nil }
+    }
+}
+func Run(b Base) int32 {
+    if g == nil { return 0 }
+    b.Auto = 2
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run(Derived()))`, "GS0158@17:14", "reject", "", "R14"}
+            yield[]object{"z10_5599_open_auto_property_in_a_condition_removes_a_global_fact_R14", `import System
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            g = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run(b Base) int32 {
+    if g == nil { return 0 }
+    if b.Auto == 1 {
+        return g.Value
+    }
+    return 2
+}
+var g C? = C{}
+Console.WriteLine(Run(Derived()))`, "GS0158@20:18", "reject", "", "R14"}
+            yield[]object{"z11_5599_open_auto_property_on_a_type_parameter_receiver_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run[T Base](ref text string?, b T) int32 {
+    if text == nil { return 0 }
+    let n = b.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run[Derived](ref Box.G, Derived()))`, "GS0158@22:17", "reject", "", "R14"}
+            yield[]object{"z12_5599_open_auto_property_in_a_property_pattern_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run(ref text string?, b Base) int32 {
+    if text == nil { return 0 }
+    if b is {Auto: 1} {
+        return text.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(ref Box.G, Derived()))`, "GS0158@22:21", "reject", "", "R14"}
+            yield[]object{"z13_5599_open_auto_property_read_kills_the_member_path_R14", `import System
+class Pet {
+    var Name string = "a"
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Holder {
+    let Pet Pet?
+    init(p Pet?) { Pet = p }
+}
+func Run(h Holder, b Base) string {
+    if h.Pet == nil { return "" }
+    let n = b.Auto
+    return h.Pet.Name
+}
+Console.WriteLine(Run(Holder(Pet()), Base()))`, "GS0158@15:18", "reject", "", "R14"}
+            yield[]object{"z14_5599_open_auto_property_read_removes_a_closure_assigned_fact_R14", `import System
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    var Clear () -> void = func() { }
+    override prop Auto int32 {
+        get {
+            Clear()
+            return 1
+        }
+        set { }
+    }
+}
+func Run(d Derived) int32 {
+    var x C? = C{}
+    d.Clear = func() { x = nil }
+    let b Base = d
+    if x == nil { return 0 }
+    let n = b.Auto
+    return x.Value + n
+}
+Console.WriteLine(Run(Derived()))`, "GS0158@24:14", "reject", "", "R14"}
+            yield[]object{"z15_5599_initializer_of_a_construction_keeps_the_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    let b = Base{Auto: 1}
+    return text.Length + b.Auto * 0
+}
+Console.WriteLine(Run(ref Box.G))`, "", "run", "1", "R14"}
+            yield[]object{"z16_5599_property_pattern_on_a_sealed_receiver_keeps_the_fact_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Leaf : Base { }
+func Run(ref text string?, d Leaf) int32 {
+    if text == nil { return 0 }
+    if d is {Auto: 0} {
+        return text.Length
+    }
+    return 2
+}
+Console.WriteLine(Run(ref Box.G, Leaf()))`, "", "run", "1", "R14"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
