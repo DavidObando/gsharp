@@ -3419,6 +3419,24 @@ func Run(ref text string?, x I, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@11:16")
+            Add("static-call-on-an-interface-binds-its-shared-methods (A3)", `package T
+import System
+interface IS {
+    shared {
+        func Use(d DateTimeOffset) { }
+    }
+    func Use(d DateTime);
+}
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        IS.Use(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@12:16")
             return rows
         }
     }

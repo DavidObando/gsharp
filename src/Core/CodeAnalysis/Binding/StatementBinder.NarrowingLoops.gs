@@ -2239,7 +2239,13 @@ internal partial class StatementBinder {
             case contract is InterfaceSymbol {
                 for level in contract.SelfAndAllBaseInterfaces() {
                     level.EnsureMembersResolved()
-                    for function in level.GetMethods(name) {
+                    // A receiver that names the interface selects its `shared` (static) methods.
+                    let functions = if staticAccess {
+                        level.GetStaticMethods(name)
+                    } else {
+                        level.GetMethods(name)
+                    }
+                    for function in functions {
                         if !explicitTypeArguments && !TypeParametersInferable(function) {
                             continue
                         }
