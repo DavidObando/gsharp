@@ -1302,22 +1302,50 @@ internal partial class StatementBinder {
                 kinds.Add(ArgumentTyped)
             }
         }
-        var exact = false
-        var free = false
-        var user = false
-        for parameters in ParameterLists(call, name, effects) {
-            if parameters.Count != argumentTypes.Count {
-                continue
-            }
-            let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, call.HasTypeArguments)
-            exact = exact || candidate == CandidateExact
-            free = free || candidate == CandidateFree
-            user = user || candidate == CandidateUser
-        }
         // A candidate that takes every argument by identity is better than one that needs a conversion operator.
         // Otherwise a candidate that needs one can be the better one (a conversion to `Payload` beats one to
         // `object`), and a call that no candidate takes is not checked.
-        return !exact && (user || !free)
+        let candidates = List[List[TypeSymbol]]()
+        for parameters in ParameterLists(call, name, effects) {
+            if parameters.Count == argumentTypes.Count {
+                if CandidateIsExact(parameters, argumentTypes, kinds) {
+                    return false
+                }
+                candidates.Add(parameters)
+            }
+        }
+        var free = false
+        for parameters in candidates {
+            let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, call.HasTypeArguments)
+            if candidate == CandidateUser {
+                return true
+            }
+            free = free || candidate == CandidateFree
+        }
+        return !free
+    }
+
+    // Whether a candidate takes every argument of a known type by identity (the quick test before the classification).
+    private func CandidateIsExact(
+        parameters List[TypeSymbol],
+        argumentTypes List[List[TypeSymbol]?],
+        kinds List[int32]
+    ) bool {
+        for var index = 0; index < parameters.Count; index++ {
+            if kinds[index] == ArgumentSkipped {
+                continue
+            }
+            if kinds[index] != ArgumentTyped || argumentTypes[index] is not{} types {
+                return false
+            }
+            let stripped = StripAllNullability(parameters[index]) ?? parameters[index]
+            for argumentType in types {
+                if !object.Equals(argumentType, stripped) && !SameClrType(argumentType, stripped) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     // How a candidate takes the arguments: not at all, through a conversion operator, without one, or by identity.
@@ -1396,6 +1424,18 @@ internal partial class StatementBinder {
     // Whether a conversion operator converts some built-in type other than `string` to the type. An operator
     // argument that is not a string form has such a type (`n + 1`); a string form has the path `string`.
     private func BuiltInReachesThroughOperator(type TypeSymbol) bool {
+        builtInConversionTargets ??= Dictionary[TypeSymbol, bool]()
+        if builtInConversionTargets!!.TryGetValue(type, out var known) {
+            return known
+        }
+        let reaches = BuiltInReachesThroughOperatorCore(type)
+        builtInConversionTargets!![type] = reaches
+        return reaches
+    }
+
+    private var builtInConversionTargets Dictionary[TypeSymbol, bool]? = nil
+
+    private func BuiltInReachesThroughOperatorCore(type TypeSymbol) bool {
         for builtin in BuiltInTypes() {
             if !object.Equals(builtin, TypeSymbol.String) && !object.Equals(builtin, TypeSymbol.Object) &&
                 conversions.HasUserDefinedImplicitConversion(builtin, type) {
