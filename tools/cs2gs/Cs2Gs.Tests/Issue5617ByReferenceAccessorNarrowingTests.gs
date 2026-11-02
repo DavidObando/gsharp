@@ -236,6 +236,44 @@ public class Demo
         Assert.Contains("return s.X + 1", printed)
     }
 
+    /// A writable `ref` local of an element can write the storage that a by-reference parameter names, so gsc records
+    /// it as a write (R12, `RecordWritableReference`). A `ref readonly` local and a `ref` local of a local keep the fact.
+    @Fact
+    func RefParameter_ReadAfterAWritableRefLocalOfAnElement_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public class Demo
+{
+    public static int Writable(ref string? s, int[] xs)
+    {
+        if (s == null) return 0;
+        ref int alias = ref xs[0];
+        return s.Length + alias;
+    }
+    public static int ReadOnly(ref string? s, int[] xs)
+    {
+        if (s == null) return 0;
+        ref readonly int view = ref xs[0];
+        return s.Length + view + 1;
+    }
+    public static int OfLocal(ref string? s, int[] xs)
+    {
+        var n = xs[1];
+        if (s == null) return 0;
+        ref int local = ref n;
+        return s.Length + local + 2;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var xs = new int[] { 4, 5 };
+        return Writable(ref text, xs) + "," + ReadOnly(ref text, xs) + "," + OfLocal(ref text, xs);
+    }
+}`)
+        Assert.Contains("return s!!.Length + alias", printed)
+        Assert.Contains("return s.Length + view + 1", printed)
+        Assert.Contains("return s.Length + local + 2", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.

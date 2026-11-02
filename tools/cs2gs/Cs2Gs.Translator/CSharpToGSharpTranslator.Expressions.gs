@@ -4519,6 +4519,13 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return this.WritesThroughStorage(argument.Expression, isArgument: true)
                 }
+                case reference is Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax {
+                    // A writable `ref` alias of a member or an element names storage that a later write can change.
+                    return !this.IsReadOnlyReference(reference) && this.WritesThroughStorage(
+                        reference.Expression,
+                        isArgument: true
+                    )
+                }
                 case subpattern is Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax {
                     if this
                         .context
@@ -4655,6 +4662,52 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
             }
+        }
+
+        /// Whether the `ref` expression [`reference`](paramref) initializes or reassigns a `ref readonly` local, which
+        /// gsc does not record as a writable reference.
+        private func IsReadOnlyReference(reference Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax) bool {
+            var current Microsoft.CodeAnalysis.SyntaxNode = reference
+            while current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedExpressionSyntax ||
+                current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConditionalExpressionSyntax ||
+                current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .RefExpressionSyntax {
+                current = current.Parent!!
+            }
+            let target ISymbol? = switch current.Parent {
+                case initializer is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .EqualsValueClauseSyntax when initializer.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .VariableDeclaratorSyntax declarator: this
+                    .context
+                    .GetDeclaredSymbol(declarator)
+                case assignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when object.ReferenceEquals(assignment.Right, current): this
+                    .context
+                    .GetSymbolInfo(assignment.Left)
+                    .Symbol
+                default: default(ISymbol?)
+            }
+            return target is ILocalSymbol local && local.RefKind == RefKind.RefReadOnly
         }
 
         /// Issue #1887: cs2gs lowers a positional subpattern to a read of the member that its slot deconstructs to
