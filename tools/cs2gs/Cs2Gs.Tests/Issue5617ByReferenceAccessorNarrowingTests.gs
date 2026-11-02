@@ -166,6 +166,76 @@ public class Demo
         Assert.Contains("return s!!.Length + box.Field", printed)
     }
 
+    /// cs2gs lowers a positional subpattern to a read of the member that its slot deconstructs to, so a computed
+    /// getter there runs user code (R14). A positional record property is a plain auto property and keeps the fact.
+    @Fact
+    func RefParameter_ReadAfterAPositionalPatternOverAComputedGetter_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public sealed class Counter
+{
+    private int count;
+    public int Next => ++count;
+    public void Deconstruct(out int next) { next = Next; }
+}
+public sealed record Point(int X);
+public class Demo
+{
+    public static int Compute(ref string? s, Counter counter)
+    {
+        if (s == null) return 0;
+        var hit = counter is Counter(1);
+        return s.Length + (hit ? 1 : 0);
+    }
+    public static int Plain(ref string? s, Point point)
+    {
+        if (s == null) return 0;
+        var hit = point is Point(1);
+        return s.Length + (hit ? 1 : 0);
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Compute(ref text, new Counter()) + "," + Plain(ref text, new Point(1));
+    }
+}`)
+        Assert.Contains("return s!!.Length + (if hit", printed)
+        Assert.Contains("return s.Length + (if hit", printed)
+    }
+
+    /// The guard's own pattern runs its getters before the fact holds, so gsc does not narrow a by-reference variable
+    /// on a pattern with a computed getter (R18 (6)). A plain auto property keeps the fact.
+    @Fact
+    func RefParameter_GuardedByItsOwnPatternWithAComputedGetter_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public sealed class Box
+{
+    private int count;
+    public int P => ++count;
+    public int Q { get; set; }
+    public int X = 7;
+}
+public class Demo
+{
+    public static int Compute(ref Box? s)
+    {
+        if (s is Box { P: 1 } matched) return s.X;
+        return 0;
+    }
+    public static int Plain(ref Box? s)
+    {
+        if (s is Box { Q: 0 } matched) return s.X + 1;
+        return 0;
+    }
+    public static string Run()
+    {
+        Box? box = new Box();
+        return Compute(ref box) + "," + Plain(ref box);
+    }
+}`)
+        Assert.Contains("return s!!.X\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("return s.X + 1", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.

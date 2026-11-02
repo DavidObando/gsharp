@@ -4520,13 +4520,15 @@ partial class CSharpToGSharpTranslator {
                     return this.WritesThroughStorage(argument.Expression, isArgument: true)
                 }
                 case subpattern is Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax {
-                    return this
+                    if this
                         .context
                         .SemanticModel
                         .GetOperation(subpattern) is IPropertySubpatternOperation{
                         Member: IPropertyReferenceOperation reference
-                    } &&
-                        this.AccessorRunsUserCode(reference.Property, reference.Instance?.Type)
+                    } {
+                        return this.AccessorRunsUserCode(reference.Property, reference.Instance?.Type)
+                    }
+                    return this.PositionalSubpatternRunsUserCode(subpattern)
                 }
                 case listPattern is Microsoft.CodeAnalysis.CSharp.Syntax.ListPatternSyntax {
                     if this.context.SemanticModel.GetOperation(listPattern) is not IListPatternOperation operation {
@@ -4653,6 +4655,51 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
             }
+        }
+
+        /// Issue #1887: cs2gs lowers a positional subpattern to a read of the member that its slot deconstructs to
+        /// (cref:TryResolvePositionalSlot), so the slot follows the accessor rule of that member. A discard reads
+        /// nothing.
+        private func PositionalSubpatternRunsUserCode(
+            subpattern Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax
+        ) bool {
+            if subpattern.Pattern is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardPatternSyntax ||
+                subpattern.Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PositionalPatternClauseSyntax clause ||
+                clause.Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .RecursivePatternSyntax recursive {
+                return false
+            }
+            let positional PositionalSlots? = this.TryGetPositionalMembers(
+                recursive,
+                clause.Subpatterns.Count,
+                out var positionalFailure
+            )
+            if !this.TryResolvePositionalSlot(
+                subpattern,
+                clause.Subpatterns.IndexOf(subpattern),
+                positional,
+                positionalFailure,
+                nil,
+                out _,
+                out var member,
+                out _
+            ) ||
+                member is not IPropertySymbol property {
+                return false
+            }
+            let operation = this.context.SemanticModel.GetOperation(recursive) as IRecursivePatternOperation
+            return this.AccessorRunsUserCode(property, operation?.NarrowedType)
         }
 
         /// Whether a write to [`target`](paramref) can change storage that a by-reference variable names (ADR-0208
@@ -4784,6 +4831,15 @@ partial class CSharpToGSharpTranslator {
                 .DescendantNodesAndSelf(OutsideNestedFunctions)
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax]()
                 .Any(this.ConstantPatternMayCallEquals) {
+                return true
+            }
+            // ADR-0208 R18 (6) (#5617): the guard's own pattern runs its accessors, which can write the storage of a
+            // by-reference variable, so gsc does not narrow on that test either.
+            if narrowingGuard is IsPatternExpressionSyntax ownTest &&
+                ownTest
+                .Pattern
+                .DescendantNodesAndSelf(OutsideNestedFunctions)
+                .Any(WritesReferenceStorage) {
                 return true
             }
             if $scope.DescendantNodes(OutsideNestedFunctions).Any(
