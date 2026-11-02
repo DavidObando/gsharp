@@ -23,6 +23,8 @@
     <PackageTags>gsharp;dotnet;sdk;compiler;readytorun</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <Description>ReadyToRun G# compiler for one runtime identifier. Gsharp.NET.Sdk restores it with PackageDownload. Reference the SDK, not this package.</Description>
 
     <!-- Keep in step with src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Sdk.props. -->
@@ -37,6 +39,12 @@
     <PackageId>Gsharp.NET.Sdk.Compiler.$(GsharpCompilerPackRid)</PackageId>
     <Description>ReadyToRun G# compiler for $(GsharpCompilerPackRid). Gsharp.NET.Sdk restores it with PackageDownload. Reference the SDK, not this package.</Description>
   </PropertyGroup>
+
+  <!-- The six RID packages share one README and the icon of the other packages (issue #5621). -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\COMPILER_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Build-only references that order the compiler and the portable runtime projects before packing. -->
