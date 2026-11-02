@@ -3500,14 +3500,8 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
-            // Issue #5577: an `[AllowNull]` indexer, also one that another project of
-            // the run emits, takes a nullable value.
-            if ObliviousNullabilityAnalyzer.HasRunAllowNullWriteContract(
-                leftSymbol,
-                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-            ) {
-                return false
-            }
+            // An `[AllowNull]` indexer, also one that another project of the run
+            // emits (#4356), is promoted, so it takes a nullable value.
             return leftSymbol is not IPropertySymbol indexer || !this.ShouldPromoteToNullableReference(indexer)
         }
 

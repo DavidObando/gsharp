@@ -28,7 +28,12 @@ import Xunit
 /// | `(arr[0], i) = entry` into `Node[]` | `arr[0] = arrValue`, GS0155 | `arr[0] = arrValue!!`, as `arr[0] = entry.Item!!` |
 /// | `(list[0], i) = entry` into `List<Node>` | `list[0] = listValue`, GS0155 | `list[0] = listValue!!`, as `list[0] = entry.Item!!` |
 /// | a `Node?[]`, `List<Node?>` or a widened array local | no `!!` | unchanged: the element accepts null |
-/// | another project's `[AllowNull]` indexer | no `!!` | unchanged: the #5577 query (`HasRunAllowNullWriteContract`) keeps the slot `T?` |
+/// | another project's `[AllowNull]` indexer | no `!!` | unchanged: the indexer is promoted (#4356), so the slot is `T?` |
+/// @remarks Mutation witnesses (ADR-0154): the first two tests fail on 21e3f30fa (GS0155) and when the
+/// element arm of `BridgeDeconstructedElementStore` keeps the unbridged store. The nullable-element
+/// test throws `NullReferenceException` when that arm asks `TargetWillRemainNonNullableReference`
+/// instead of the element store query, and when the query does not ask `IsNullableArrayElementAccess`.
+/// The `[AllowNull]` test throws when the query does not ask whether the indexer is promoted.
 open class Issue5595DeconstructedElementStoreTests {
     /// A widened element stored into a `Node[]` element is bridged, as `arr[0] = entry.Item` is.
     @Fact
@@ -154,8 +159,7 @@ namespace Demo
     }
 
     /// Another project's `[AllowNull]` indexer, bound through its emitted reference, is emitted with a
-    /// `T?` value (#5577), so the deconstruction store and the plain store ask the same query and store
-    /// the null.
+    /// `T?` value, so the deconstruction store and the plain store ask the same query and store the null.
     @Fact
     func StoreThroughAnAllowNullIndexerFromAnotherProject_IsNotBridged() {
         let library = Compile("Lib", `
