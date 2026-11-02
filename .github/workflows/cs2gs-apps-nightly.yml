@@ -514,6 +514,20 @@ jobs:
           EXPECTED_LEGS: ${{ (github.event.inputs.legs != '' && github.event.inputs.legs != 'all') && github.event.inputs.legs || 'gsharp-csharp,oahu,code-exploder' }}
         run: |
           mkdir -p results
+          if [[ -z "${EXPECTED_LEGS}" || "${EXPECTED_LEGS}" == *, || "${EXPECTED_LEGS}" == ,* || "${EXPECTED_LEGS}" == *,,* ]]; then
+            echo "cs2gs-apps-nightly: malformed legs input '${EXPECTED_LEGS}'." >&2
+            exit 2
+          fi
+          IFS=',' read -ra requested_legs <<< "${EXPECTED_LEGS,,}"
+          for leg in "${requested_legs[@]}"; do
+            case "$leg" in
+              gsharp-csharp|oahu|code-exploder) ;;
+              *)
+                echo "cs2gs-apps-nightly: unsupported leg '$leg' in '${EXPECTED_LEGS}'." >&2
+                exit 2
+                ;;
+            esac
+          done
           # A leg whose OWN job was cancelled or skipped and left no result is
           # "incomplete": the gate stays red, but no issue is filed for a
           # migration failure nothing showed (run 38908586181). A job that
