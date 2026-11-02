@@ -97,10 +97,15 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 plan = selection(path)
                 self.assertEqual(set(plan["projects"].split()), all_tests)
-                self.assertTrue(ci.BUILD_JOBS.issubset(plan["jobs"]))
+                self.assertTrue(ci.COMPILER_JOBS.issubset(plan["jobs"]))
+                self.assertFalse(ci.EDITOR_JOBS.intersection(plan["jobs"]))
+                self.assertEqual(plan["docs_jobs"], [])
+                self.assertEqual(plan["harness_matrix"], {"name": ["comment-checker"]})
         for path in ("global.json", "Directory.Build.props", "new/unknown.input",
                      ".github/workflows/build.yml", "build/ci-selection.py", "GSharp.slnx"):
-            self.assertTrue(selection(path)["full"], path)
+            plan = selection(path)
+            self.assertTrue(plan["full"], path)
+            self.assertFalse(ci.GO_JOBS.intersection(plan["jobs"]), path)
 
     def test_owning_suites_and_downstream_consumers(self):
         for path, suites, jobs in (
@@ -552,11 +557,30 @@ class WorkflowTests(unittest.TestCase):
 
     def test_official_commands_artifacts_and_publication_dependencies_stay(self):
         text = (ROOT / ".github/workflows/build.yml").read_text()
-        for name in ("build", "tests", "test-partition"):
+        for name in ("build", "test-partition"):
             block = job(text, name)
             self.assertIn("dotnet restore GSharp.slnx --locked-mode", block)
             self.assertIn("dotnet build GSharp.slnx --configuration Release --no-restore -graph", block)
             self.assertIn("if: github.event_name != 'pull_request'", block)
+        self.assertEqual(job(text, "build").count("gsfmt.dll --check ."), 1)
+        self.assertIn("name: test-build-outputs", job(text, "test-partition"))
+        tests_block = job(text, "tests")
+        self.assertIn("needs: [select, discover-tests, test-partition]", tests_block)
+        self.assertIn("dotnet restore GSharp.slnx --locked-mode", tests_block)
+        self.assertIn("name: test-build-outputs", tests_block)
+        self.assertNotIn("dotnet build GSharp.slnx", tests_block)
+        self.assertNotIn("ci-projects.py build", tests_block)
+        self.assertNotIn("dotnet build csharp-source/GSharp.sln", tests_block)
+        nightly = (ROOT / ".github/workflows/cs2gs-apps-nightly.yml").read_text()
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", nightly)
+        self.assertIn("legs:", nightly)
+        self.assertNotIn("replace(", nightly)
+        self.assertNotIn("matrix.app", job(nightly, "app").split("runs-on:")[0].split("if:")[1])
+        self.assertIn('--expect "${EXPECTED_LEGS,,}"', job(nightly, "gate"))
+        self.assertNotIn("Build cs2gs (Release)", job(nightly, "csharp-validate"))
+        selfmig = (ROOT / "build/selfmig-common.sh").read_text()
+        self.assertIn("SELFMIG_PREREQUISITES_RESTORED", selfmig)
+        self.assertIn("SELFMIG_CORPUS_RESTORED", selfmig)
         # The publish jobs are covered by PublishJobTests (ADR-0218).
         for artifact in ("nuget-packages", "vscode-gsharp-vsix", "visual-studio-gsharp-vsix"):
             self.assertIn(f"name: {artifact}", job(text, "publish-verify"))

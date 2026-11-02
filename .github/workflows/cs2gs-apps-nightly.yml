@@ -75,6 +75,11 @@ on:
   schedule:
     - cron: '23 13 * * *'
   workflow_dispatch:
+    inputs:
+      legs:
+        description: 'Comma-separated legs to run (gsharp-csharp,oahu,code-exploder) or all'
+        required: false
+        default: 'all'
 
 env:
   NBGV_SetCloudBuildVersionVars: false
@@ -90,20 +95,35 @@ permissions:
 
 # Issue deduplication is search-then-create, so overlapping runs on main could
 # file duplicates: serialize runs per ref. Only main files issues, so a branch
-# run neither waits for nor blocks the scheduled one.
+# run neither waits for nor blocks the scheduled one, and a newer dispatch on
+# the same branch cancels the superseded run instead of holding runners.
 concurrency:
   group: cs2gs-apps-nightly-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   app:
     name: app (${{ matrix.app }})
+    if: >-
+      github.event.inputs.legs == '' ||
+      github.event.inputs.legs == 'all' ||
+      contains(format(',{0},', github.event.inputs.legs), ',oahu,') ||
+      contains(format(',{0},', github.event.inputs.legs), ',code-exploder,')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        app: [oahu, code-exploder]
+        app: >-
+          ${{
+            (github.event.inputs.legs == '' || github.event.inputs.legs == 'all' ||
+              (contains(format(',{0},', github.event.inputs.legs), ',oahu,') &&
+               contains(format(',{0},', github.event.inputs.legs), ',code-exploder,'))) &&
+            fromJSON('["oahu","code-exploder"]') ||
+            contains(format(',{0},', github.event.inputs.legs), ',oahu,') &&
+            fromJSON('["oahu"]') ||
+            fromJSON('["code-exploder"]')
+          }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -174,6 +194,10 @@ jobs:
 
   csharp-migrate:
     name: gsharp-csharp (translate)
+    if: >-
+      github.event.inputs.legs == '' ||
+      github.event.inputs.legs == 'all' ||
+      contains(format(',{0},', github.event.inputs.legs), ',gsharp-csharp,')
     runs-on: ubuntu-latest
     # The one gsharp-csharp job that cannot be split; the translate pass took
     # about 75 minutes before the cut-over. Keep the headroom.
@@ -208,10 +232,26 @@ jobs:
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
       - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
-        run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+        run: |
+          ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+          dotnet restore "$SELFMIG_SOURCE_ROOT/GSharp.sln" --locked-mode
+
+      - name: Cache the built C# corpus prerequisites
+        id: corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SELFMIG_SOURCE_ROOT }}/out
+          key: selfmig-corpus-out-${{ runner.os }}-${{ hashFiles('tools/cs2gs/external/gsharp-csharp.json') }}
 
       - name: Translate the corpus
+        env:
+          SELFMIG_CORPUS_RESTORED: ${{ steps.corpus-cache.outputs.cache-hit == 'true' && '1' || '0' }}
         run: ./build/run-cs2gs-selfmig-migrate.sh
+
+      - name: Archive built prerequisites for validation shards
+        run: |
+          tar -cf "$SELFMIG_GATE_ROOT/main-out.tar" out
+          tar -cf "$SELFMIG_GATE_ROOT/corpus-out.tar" -C "$SELFMIG_SOURCE_ROOT" out
 
       # Issue #3721: prefer the durations a recent run measured over the
       # checked-in map, so the packing tracks the migration instead of aging
@@ -264,6 +304,8 @@ jobs:
             ${{ env.SELFMIG_GATE_ROOT }}/migrate.log
             ${{ env.SELFMIG_GATE_ROOT }}/metrics.json
             ${{ env.SELFMIG_GATE_ROOT }}/migrate-run-dir.txt
+            ${{ env.SELFMIG_GATE_ROOT }}/main-out.tar
+            ${{ env.SELFMIG_GATE_ROOT }}/corpus-out.tar
 
   csharp-validate:
     name: gsharp-csharp (validate ${{ matrix.name }})
@@ -292,9 +334,6 @@ jobs:
       - name: Restore .NET local tools
         run: dotnet tool restore
 
-      - name: Build cs2gs (Release)
-        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
-
       # `cs2gs validate --corpus` reads the C# corpus too.
       - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
         run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
@@ -305,10 +344,20 @@ jobs:
           name: cs2gs-selfmig-migrated
           path: ${{ env.SELFMIG_GATE_ROOT }}
 
+      - name: Restore C# corpus packages and extract built prerequisites
+        run: |
+          dotnet restore "$SELFMIG_SOURCE_ROOT/GSharp.sln" --locked-mode
+          rm -rf out "$SELFMIG_SOURCE_ROOT/out"
+          tar -xf "$SELFMIG_GATE_ROOT/main-out.tar"
+          tar -xf "$SELFMIG_GATE_ROOT/corpus-out.tar" -C "$SELFMIG_SOURCE_ROOT"
+          rm -f "$SELFMIG_GATE_ROOT/main-out.tar" "$SELFMIG_GATE_ROOT/corpus-out.tar"
+
       - name: Validate shard
         env:
           SHARD_NAME: ${{ matrix.name }}
           SHARD_APPS: ${{ matrix.apps }}
+          SELFMIG_PREREQUISITES_RESTORED: '1'
+          SELFMIG_CORPUS_RESTORED: '1'
         # SHARD_APPS is a space-separated app-id list: one argument per app.
         run: |
           read -ra apps <<< "$SHARD_APPS"
@@ -342,7 +391,12 @@ jobs:
     # leave a result, and a crashed job must read as red with its reason rather
     # than as a missing result. A shard that left no result fails the merge
     # loudly (build/merge-selfmig-runs.py), which is red here too.
-    if: always()
+    if: >-
+      always() && (
+        github.event.inputs.legs == '' ||
+        github.event.inputs.legs == 'all' ||
+        contains(format(',{0},', github.event.inputs.legs), ',gsharp-csharp,')
+      )
     steps:
       - uses: actions/checkout@v5
 
@@ -457,8 +511,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXPECTED_LEGS: ${{ (github.event.inputs.legs != '' && github.event.inputs.legs != 'all') && github.event.inputs.legs || 'gsharp-csharp,oahu,code-exploder' }}
         run: |
           mkdir -p results
+          if [[ -z "${EXPECTED_LEGS}" || "${EXPECTED_LEGS}" == *, || "${EXPECTED_LEGS}" == ,* || "${EXPECTED_LEGS}" == *,,* ]]; then
+            echo "cs2gs-apps-nightly: malformed legs input '${EXPECTED_LEGS}'." >&2
+            exit 2
+          fi
+          IFS=',' read -ra requested_legs <<< "${EXPECTED_LEGS,,}"
+          for leg in "${requested_legs[@]}"; do
+            case "$leg" in
+              gsharp-csharp|oahu|code-exploder) ;;
+              *)
+                echo "cs2gs-apps-nightly: unsupported leg '$leg' in '${EXPECTED_LEGS}'." >&2
+                exit 2
+                ;;
+            esac
+          done
           # A leg whose OWN job was cancelled or skipped and left no result is
           # "incomplete": the gate stays red, but no issue is filed for a
           # migration failure nothing showed (run 38908586181). A job that
@@ -471,7 +540,7 @@ jobs:
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \
             --banked tools/cs2gs/apps-nightly-banked.json \
-            --expect gsharp-csharp,oahu,code-exploder \
+            --expect "${EXPECTED_LEGS,,}" \
             --jobs "$RUNNER_TEMP/jobs.json" \
             --leg-job "oahu=app (oahu)" \
             --leg-job "code-exploder=app (code-exploder)" \
