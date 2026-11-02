@@ -52,6 +52,8 @@ BUILD_JOBS = {
     "ilverify", "release-version-refs", "cs2gs-corpus", "vscode-extension",
     "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke",
 }
+EDITOR_JOBS = {"vscode-extension", "vsix", "visual-studio-extension"}
+COMPILER_JOBS = BUILD_JOBS - EDITOR_JOBS
 GO_JOBS = {"go2gs", "go2gs-windows", "go2gs-macos"}
 
 
@@ -155,18 +157,16 @@ def select(paths, event, projects=None, go_exists=None):
                 suites.add(SUITES[component])
         if "compiler" in areas:
             suites.update(all_tests)
-            jobs.update(BUILD_JOBS)
-            harnesses.update(HARNESS)
-            docs_jobs.update({"build", "visual"})
+            jobs.update(COMPILER_JOBS)
+            harnesses.add("comment-checker")
         if areas.intersection({"sdk", "generators"}):
             suites.update(SUITES[key] for key in (
                 "sdk", "compiler", "interpreter", "extensions", "channels", "cs2gs", "generators"))
             jobs.update({"build", "e2e", "ilverify", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke", "cs2gs-corpus"})
-            docs_jobs.update({"build", "visual"})
         if "sdk" in areas:
             # Core and all frontends consume the bundled runtimes.
             suites.update(all_tests)
-            jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
+            jobs.update(EDITOR_JOBS)
         if "cs2gs" in areas:
             suites.update({CS2GS, GENERATOR})
             jobs.update({"cs2gs-corpus", "e2e"})
@@ -177,11 +177,11 @@ def select(paths, event, projects=None, go_exists=None):
             jobs.add("cs2gs-corpus")
         if areas.intersection({"language-server", "formatting"}):
             suites.add(SUITES["interpreter"])
-            jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
+            jobs.update(EDITOR_JOBS)
         if areas.intersection({"interpreter", "language-server", "formatting"}):
             suites.add(SUITES["compiler"])
         if "vscode" in areas:
-            jobs.update({"vscode-extension", "vsix", "visual-studio-extension"})
+            jobs.update(EDITOR_JOBS)
             if "src/vscode-gsharp/src/test/grammar-cases.json" in paths:
                 docs_jobs.update({"build", "visual"})
         if "visual-studio" in areas:
@@ -202,7 +202,7 @@ def select(paths, event, projects=None, go_exists=None):
             jobs.add("format")
         if "build" in jobs:
             build_projects.update({SDK, TEMPLATES})
-    if go_exists and (full or "go" in areas):
+    if go_exists and (event != "pull_request" or "go" in areas):
         jobs.update(GO_JOBS)
     if "go" in areas and not go_exists:
         raise ValueError("Go inputs changed but tools/go2gs/go.mod is missing")

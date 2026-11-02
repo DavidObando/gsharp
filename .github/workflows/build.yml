@@ -114,9 +114,7 @@ jobs:
 
       - name: Check canonical G# formatting
         if: github.event_name != 'pull_request' || fromJSON(needs.select.outputs.plan).full
-        run: |
-          dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
-          dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
+        run: dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
 
       - name: Test the syntax child accessor generator
         run: python3 build/test-generate-syntax-children.py
@@ -200,7 +198,7 @@ jobs:
     # and the Cs2Gs.Tests shards also build the final C# tree. Rebalance the shards
     # (build/generate-ci-test-matrix.py) from this run's timings, then lower it.
     timeout-minutes: 90
-    needs: [select, discover-tests]
+    needs: [select, discover-tests, test-partition]
     if: contains(fromJSON(needs.select.outputs.plan).jobs, 'tests')
     strategy:
       fail-fast: false
@@ -252,12 +250,8 @@ jobs:
       # The C# originals of the compiler no longer exist in this tree
       # (docs/self-migration-cutover.md, "Source-inspection tests need the
       # final C# tree"), so the Cs2Gs.Tests shards check out the final C# commit
-      # beside the workspace and build it, and only they get the variable: the
-      # Core.Tests guards must keep scanning this G# tree. The commit is the
-      # single pin in tools/cs2gs/external/gsharp-csharp.json (also read by
-      # cs2gs-apps-nightly.yml): the head of the semi-frozen cs2gs/csharp-0.4
-      # branch, which takes back-ports such as the MessagePack bump for
-      # GHSA-qhrr-8q5h-9q3h (#4941), so it no longer equals tag v0.4.1270.
+      # beside the workspace and restore its packages; test-partition builds the
+      # C# tree once and shares the compiled output in test-build-outputs.
       - name: Read the pinned C# commit for the cs2gs tests
         id: csharp-pin
         if: contains(matrix.project, 'Cs2Gs.Tests')
@@ -271,21 +265,25 @@ jobs:
           path: csharp-source
           fetch-depth: 0
 
-      - name: Build the final C# tree for the cs2gs tests
+      - name: Restore the final C# tree for the cs2gs tests
         if: contains(matrix.project, 'Cs2Gs.Tests')
+        run: dotnet restore csharp-source/GSharp.sln --locked-mode
+
+      - name: Download built test outputs
+        uses: actions/download-artifact@v5
+        with:
+          name: test-build-outputs
+          path: ${{ runner.temp }}/test-build-outputs
+
+      - name: Extract built test outputs
         run: |
-          dotnet restore csharp-source/GSharp.sln --locked-mode
-          dotnet build csharp-source/GSharp.sln --configuration Release --no-restore -graph
-
-      - name: Build
-        if: github.event_name != 'pull_request'
-        run: dotnet build GSharp.slnx --configuration Release --no-restore -graph
-
-      - name: Build selected test graph
-        if: github.event_name == 'pull_request'
-        env:
-          PROJECTS: ${{ matrix.project }}
-        run: python3 build/ci-projects.py build --projects "$PROJECTS"
+          rm -rf out
+          tar -xf "$RUNNER_TEMP/test-build-outputs/out.tar"
+          if [[ -f "$RUNNER_TEMP/test-build-outputs/csharp-out.tar" && -d csharp-source ]]; then
+            rm -rf csharp-source/out
+            tar -xf "$RUNNER_TEMP/test-build-outputs/csharp-out.tar" -C csharp-source
+          fi
+          rm -rf "$RUNNER_TEMP/test-build-outputs"
 
       - name: Test
         if: env.GSHARP_5393_PRIVATE_ROUTE != 'true'
@@ -459,6 +457,50 @@ jobs:
         env:
           PROJECTS: ${{ fromJSON(needs.select.outputs.plan).projects }}
         run: python3 build/verify-ci-test-partition.py --projects "$PROJECTS" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Read the pinned C# commit for the cs2gs tests
+        id: csharp-pin
+        if: github.event_name != 'pull_request' || contains(fromJSON(needs.select.outputs.plan).projects, 'Cs2Gs.Tests')
+        run: echo "commit=$(jq -r '.commit' tools/cs2gs/external/gsharp-csharp.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the final C# tree for the cs2gs tests
+        if: github.event_name != 'pull_request' || contains(fromJSON(needs.select.outputs.plan).projects, 'Cs2Gs.Tests')
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.csharp-pin.outputs.commit }}
+          path: csharp-source
+          fetch-depth: 0
+
+      - name: Cache the built final C# tree for the cs2gs tests
+        id: csharp-cache
+        if: github.event_name != 'pull_request' || contains(fromJSON(needs.select.outputs.plan).projects, 'Cs2Gs.Tests')
+        uses: actions/cache@v4
+        with:
+          path: csharp-source/out
+          key: csharp-source-out-${{ runner.os }}-${{ steps.csharp-pin.outputs.commit }}
+
+      - name: Build the final C# tree for the cs2gs tests
+        if: >-
+          (github.event_name != 'pull_request' || contains(fromJSON(needs.select.outputs.plan).projects, 'Cs2Gs.Tests')) &&
+          steps.csharp-cache.outputs.cache-hit != 'true'
+        run: |
+          dotnet restore csharp-source/GSharp.sln --locked-mode
+          dotnet build csharp-source/GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Archive built test outputs
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-build-outputs"
+          tar -cf "$RUNNER_TEMP/test-build-outputs/out.tar" out
+          if [[ -d csharp-source/out ]]; then
+            tar -cf "$RUNNER_TEMP/test-build-outputs/csharp-out.tar" -C csharp-source out
+          fi
+
+      - name: Upload built test outputs
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-build-outputs
+          retention-days: 1
+          path: ${{ runner.temp }}/test-build-outputs/*.tar
 
   harness:
     needs: select

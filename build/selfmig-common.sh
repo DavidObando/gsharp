@@ -112,11 +112,17 @@ selfmig_project_filters=(
 # build is all it takes — in Release, which is the config the migration runs
 # under and the first one the resolver probes.
 selfmig_build_prerequisites() {
-  dotnet build "$repo_root/src/Compiler/Compiler.gsproj" -c Debug -graph
-  dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" -c Debug -graph
-  dotnet build \
-    "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" \
-    -c Release -graph
+  if [[ ! -f "$repo_root/out/bin/Debug/Compiler/gsc.dll" ]]; then
+    dotnet build "$repo_root/src/Compiler/Compiler.gsproj" -c Debug -graph
+  fi
+  if [[ ! -f "$repo_root/out/bin/Debug/Gsharp.NET.Sdk/Gsharp.NET.Sdk.dll" ]]; then
+    dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj" -c Debug -graph
+  fi
+  if ! compgen -G "$repo_root/out/bin/Release/nupkgs/GSharp.CodeAnalysis.Analyzers.Testing.*.nupkg" >/dev/null; then
+    dotnet build \
+      "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.gsproj" \
+      -c Release -graph
+  fi
   selfmig_prepare_corpus
 }
 
@@ -157,6 +163,13 @@ selfmig_prepare_corpus() {
   (
     set -e
     cd "$corpus"
+    if [[ -f "$corpus/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" &&
+          -f "$corpus/out/bin/Debug/Compiler/gsc.dll" &&
+          -f "$corpus/out/bin/Debug/Gsharp.NET.Sdk/Gsharp.NET.Sdk.dll" ]] &&
+        compgen -G "$corpus/out/bin/Release/nupkgs/GSharp.CodeAnalysis.Analyzers.Testing.*.nupkg" >/dev/null; then
+      dotnet tool restore
+      exit 0
+    fi
     dotnet restore "$corpus/GSharp.sln" --locked-mode
     dotnet tool restore
     dotnet build "$corpus/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj" --configuration Release --no-restore -graph
