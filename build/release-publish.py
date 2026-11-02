@@ -82,7 +82,10 @@ def list_packages(nupkgs: Path) -> tuple[dict[str, list[str]], dict[str, list[st
 
 
 def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
-    """The NuGet part of verify: inventory, one version, and the SDK's PackageDownload. Returns (errors, version)."""
+    """The NuGet part of verify: inventory, package metadata, one version, and the SDK's PackageDownload.
+
+    Returns (errors, version).
+    """
     errors: list[str] = []
     if not nupkgs.is_dir():
         return [f"{nupkgs} is not a folder"], None
@@ -95,6 +98,9 @@ def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
         errors += [f"unexpected {label}: {name}" for name in sorted(set(found) - wanted)]
         errors += [f"{label} {name} appears with versions {sorted(versions)}"
                    for name, versions in sorted(found.items()) if len(versions) > 1]
+    for name in sorted(want_primary & set(primary)):
+        for found_version in primary[name]:
+            errors += check_package_metadata(nupkgs / f"{name}.{found_version}.nupkg")
     versions = {v for found in (primary, symbols) for vs in found.values() for v in vs}
     if len(versions) != 1:
         errors.append(f"the packages carry {len(versions)} versions, expected one: {sorted(versions)}")
@@ -104,6 +110,36 @@ def check_nuget_packages(nupkgs: Path) -> tuple[list[str], str | None]:
     if sdk_file.is_file():
         errors += check_sdk_props(sdk_file, version)
     return errors, version
+
+
+def check_package_metadata(nupkg: Path) -> list[str]:
+    """Every published package names a license, a project URL, a readme and an icon (issue #5621).
+
+    nuget.org warns about a missing license or readme but accepts the package. A readme, an icon or a
+    license file that the nuspec names must be a file in the package.
+    """
+    try:
+        with zipfile.ZipFile(nupkg) as archive:
+            entries = set(archive.namelist())
+            nuspecs = [name for name in entries if "/" not in name and name.endswith(".nuspec")]
+            if len(nuspecs) != 1:
+                return [f"{nupkg.name}: expected one .nuspec at the package root, found {len(nuspecs)}"]
+            metadata = ET.fromstring(archive.read(nuspecs[0])).find("{*}metadata")
+    except (OSError, zipfile.BadZipFile, ET.ParseError) as error:
+        return [f"{nupkg.name}: cannot read the .nuspec: {error}"]
+    if metadata is None:
+        return [f"{nupkg.name}: the .nuspec has no metadata element"]
+    values = {local(element.tag): element for element in metadata}
+    errors = []
+    for field in ("license", "projectUrl", "readme", "icon"):
+        element = values.get(field)
+        text = (element.text or "").strip() if element is not None else ""
+        if not text:
+            errors.append(f"{nupkg.name}: the .nuspec has no <{field}>")
+        elif (field in ("readme", "icon") or element.get("type") == "file") \
+                and text.replace("\\", "/") not in entries:
+            errors.append(f"{nupkg.name}: <{field}> names {text}, which is not in the package")
+    return errors
 
 
 def check_sdk_props(sdk_file: Path, version: str) -> list[str]:

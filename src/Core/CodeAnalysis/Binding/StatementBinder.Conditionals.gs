@@ -919,10 +919,12 @@ internal partial class StatementBinder {
         return after
     }
 
-    // A pattern that reads no member and evaluates no expression: a discard, a literal, a type test, or `{}`.
+    // A pattern that reads no member and evaluates no expression: a discard, a literal whose test calls no user `Equals`,
+    // a type test, or `{}`.
     private func RunsNoCode(pattern BoundPattern) bool -> switch pattern {
         case BoundDiscardPattern: true
-        case constantPattern is BoundConstantPattern: constantPattern.Value is BoundLiteralExpression
+        case constantPattern is BoundConstantPattern: constantPattern.Value is BoundLiteralExpression &&
+            !ConstantPatternRunsUserCode(constantPattern)
         case typePattern is BoundTypePattern: typePattern.PropertyPattern == nil ||
             RunsNoCode(typePattern.PropertyPattern)
         case propertyPattern is BoundPropertyPattern: propertyPattern.Fields.Length == 0

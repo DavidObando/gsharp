@@ -468,6 +468,52 @@ public class Demo
         AssertCompilesWithGsc(printed)
     }
 
+    /// ADR-0208 R19 (#5593): the guard's own constant pattern on an `object` input calls the input's `Equals`, so gsc
+    /// does not narrow a closure-assigned local on that test. Mutation witness: the guard's own pattern is not checked.
+    @Fact
+    func ClosureAssignedLocal_GuardedByItsOwnConstantPatternOnObject_IsAsserted() {
+        let printed = Translate(`
+public class Demo
+{
+    public static int Run(object? seed)
+    {
+        object? current = seed;
+        void Reset() { current = null; }
+        if (current is 1)
+        {
+            return current.GetHashCode();
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.GetHashCode()", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
+    /// A `null` constant pattern on an `object` input calls no `Equals`, so the guard keeps the fact.
+    /// Mutation witness: every constant pattern may call `Equals`.
+    @Fact
+    func ClosureAssignedLocal_GuardedByItsOwnNullPatternOnObject_StaysBare() {
+        let printed = Translate(`
+public class Demo
+{
+    public static int Run(object? seed)
+    {
+        object? current = seed;
+        void Reset() { current = null; }
+        if (current is not null)
+        {
+            return current.GetHashCode();
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.DoesNotContain("current!!", printed)
+        AssertCompilesWithGsc(printed)
+    }
+
     shared {
         private func AssertCompilesWithGsc(printed string) {
             let compiler string? = FindCompiler()
