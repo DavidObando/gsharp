@@ -6,9 +6,12 @@ package Cs2Gs.Tests
 
 import System
 import System.Collections.Generic
+import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Threading.Tasks
 import Cs2Gs.Pipeline
+import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Xunit
 import System.Text.RegularExpressions
@@ -555,6 +558,316 @@ open class SdkCompileRunnerTests {
             NullAssertionPolishPass.SurveyWarningsNotAsErrors
         )
         Assert.Contains("-p:WarningsNotAsErrors=GS0536", args)
+    }
+
+    @Fact
+    func BuildMirroredBuildArguments_SharesRunLevelNugetPackagesRootAcrossSiblingApps() {
+        let runRoot = Path.Combine(Path.GetTempPath(), "cs2gs-run-" + Guid.NewGuid().ToString("N"))
+        let firstApp = Path.Combine(runRoot, "app-a")
+        let secondApp = Path.Combine(runRoot, "app-b")
+        let firstArgs = SdkCompileRunner.BuildMirroredBuildArguments(
+            "/out/A.gsproj",
+            firstApp,
+            "Release",
+            "/out/nuget.config"
+        )
+        let secondArgs = SdkCompileRunner.BuildMirroredBuildArguments(
+            "/out/B.gsproj",
+            secondApp,
+            "Release",
+            "/out/nuget.config"
+        )
+        let expectedRestorePackages = "-p:RestorePackagesPath=" + Path.Combine(
+            Path.GetFullPath(runRoot),
+            ".nuget-packages"
+        )
+        Assert.Contains(expectedRestorePackages, firstArgs)
+        Assert.Contains(expectedRestorePackages, secondArgs)
+        Assert.Contains("-p:Cs2GsArtifactRoot=" + firstApp, firstArgs)
+        Assert.Contains("-p:Cs2GsArtifactRoot=" + secondApp, secondArgs)
+    }
+
+    @Fact
+    async func TryResolveRepositoryTransitiveProjects_UsesEvaluatedCompileReferencesAndFallsBackWhenUnavailable() {
+        let root = Path.Combine(Path.GetTempPath(), "cs2gs-repo-projects-" + Guid.NewGuid().ToString("N"))
+        let importedDir = Path.Combine(root, "Imported")
+        let falseCondDir = Path.Combine(root, "FalseCond")
+        let nonCompileDir = Path.Combine(root, "NonCompile")
+        let extDir = Path.Combine(root, "Ext")
+        let appDir = Path.Combine(root, "App")
+        Directory.CreateDirectory(importedDir)
+        Directory.CreateDirectory(falseCondDir)
+        Directory.CreateDirectory(nonCompileDir)
+        Directory.CreateDirectory(extDir)
+        Directory.CreateDirectory(appDir)
+        try {
+            let importedProj = Path.Combine(importedDir, "Imported.csproj")
+            let falseCondProj = Path.Combine(falseCondDir, "FalseCond.csproj")
+            let nonCompileProj = Path.Combine(nonCompileDir, "NonCompile.csproj")
+            let extProj = Path.Combine(extDir, "Ext.csproj")
+            let importedProps = Path.Combine(root, "refs.props")
+            let appProj = Path.Combine(appDir, "App.csproj")
+            File.WriteAllText(
+                importedProj,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"
+            )
+            File.WriteAllText(
+                falseCondProj,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"
+            )
+            File.WriteAllText(
+                nonCompileProj,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"
+            )
+            File.WriteAllText(
+                extProj,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include=\"../Imported/Imported.csproj\" /></ItemGroup></Project>"
+            )
+            File.WriteAllText(
+                importedProps,
+                "<Project><ItemGroup><ProjectReference Include=\"$$(MSBuildThisFileDirectory)Ext/Ext.csproj\" /></ItemGroup></Project>"
+            )
+            File.WriteAllText(appProj, `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <Import Project="../refs.props" />
+  <ItemGroup>
+    <ProjectReference Condition="'false'" Include="../FalseCond/FalseCond.csproj" />
+    <ProjectReference Include="../NonCompile/NonCompile.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>`)
+            let evaluated = await CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
+                []string{appProj, extProj, importedProj, falseCondProj, nonCompileProj}
+            )
+            let appEvaluated = evaluated[Path.GetFullPath(appProj)]
+            Assert.Contains(Path.GetFullPath(extProj), appEvaluated)
+            Assert.Contains(Path.GetFullPath(importedProj), appEvaluated)
+            Assert.DoesNotContain(Path.GetFullPath(falseCondProj), appEvaluated)
+            Assert.DoesNotContain(Path.GetFullPath(nonCompileProj), appEvaluated)
+            let importedLoaded = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Imported.cs", "public class ImportedType {}")},
+                assemblyName: "Imported"
+            )
+            let appWithoutEdges = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("App.cs", "public class AppType {}")},
+                assemblyName: "App"
+            )
+            let mapWithoutEdges = Dictionary[string, LoadedCSharpProject](StringComparer.OrdinalIgnoreCase){
+                [Path.GetFullPath(importedProj)] = importedLoaded,
+                [Path.GetFullPath(appProj)] = appWithoutEdges
+            }
+            Assert.False(
+                TranslateStage.TryResolveRepositoryTransitiveProjects(
+                    appProj,
+                    mapWithoutEdges,
+                    []string{extProj},
+                    out _
+                )
+            )
+            let mapWithEdges = Dictionary[string, LoadedCSharpProject](StringComparer.OrdinalIgnoreCase){
+                [Path.GetFullPath(importedProj)] = importedLoaded,
+                [Path.GetFullPath(appProj)] = appWithoutEdges.WithEvaluatedProjectReferencePaths(appEvaluated)
+            }
+            Assert.False(
+                TranslateStage.TryResolveRepositoryTransitiveProjects(
+                    appProj,
+                    mapWithEdges,
+                    Array.Empty[string](),
+                    out _
+                )
+            )
+            Assert.True(
+                TranslateStage.TryResolveRepositoryTransitiveProjects(
+                    appProj,
+                    mapWithEdges,
+                    []string{extProj},
+                    out var resolved
+                )
+            )
+            Assert.Equal(2, resolved.Count)
+            Assert.Same(appWithoutEdges.Compilation, resolved[0].Compilation)
+            Assert.Same(importedLoaded.Compilation, resolved[1].Compilation)
+        } finally {
+            if Directory.Exists(root) {
+                Directory.Delete(root, recursive: true)
+            }
+        }
+    }
+
+    @Fact
+    async func RepositoryMigration_PrebuiltSiblingTupleFlowAndSharedLibraryCache_PreservesEvidenceAndComputesOnce() {
+        var dir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+        var compiler string? = nil
+        while dir != nil && compiler == nil {
+            for config in[]string{"Release", "Debug"} {
+                let candidate = Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll")
+                if File.Exists(candidate) {
+                    compiler = candidate
+                    break
+                }
+            }
+            dir = dir.Parent
+        }
+        if compiler == nil {
+            return
+        }
+        let root = Path.Combine(Path.GetTempPath(), "cs2gs-prebuilt-sibling-" + Guid.NewGuid().ToString("N"))
+        let source = Path.Combine(root, "source")
+        let destination = Path.Combine(root, "destination")
+        let libDir = Path.Combine(source, "src", "Lib")
+        let consumerADir = Path.Combine(source, "src", "ConsumerA")
+        let consumerBDir = Path.Combine(source, "src", "ConsumerB")
+        Directory.CreateDirectory(libDir)
+        Directory.CreateDirectory(consumerADir)
+        Directory.CreateDirectory(consumerBDir)
+        try {
+            let libProj = Path.Combine(libDir, "Lib.csproj")
+            let consumerAProj = Path.Combine(consumerADir, "ConsumerA.csproj")
+            let consumerBProj = Path.Combine(consumerBDir, "ConsumerB.csproj")
+            File.WriteAllText(libProj, `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+</Project>`)
+            File.WriteAllText(Path.Combine(libDir, "Lib.cs"), `namespace LibNs;
+public static class Lib
+{
+    public static string GetNull() => null;
+    public static string GetNonNull() => "ok";
+    public static string Identity(string value) => value;
+}`)
+            File.WriteAllText(consumerAProj, `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Lib/Lib.csproj" />
+  </ItemGroup>
+</Project>`)
+            File.WriteAllText(Path.Combine(consumerADir, "ConsumerA.cs"), `using LibNs;
+namespace ConsumerANs;
+public static class ConsumerA
+{
+    public static (string, string) Wrap() => (Lib.GetNull(), Lib.GetNonNull());
+}`)
+            File.WriteAllText(consumerBProj, `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Lib/Lib.csproj" />
+  </ItemGroup>
+</Project>`)
+            File.WriteAllText(Path.Combine(consumerBDir, "ConsumerB.cs"), `using LibNs;
+namespace ConsumerBNs;
+public static class ConsumerB
+{
+    public static (string, string) WrapAgain() => (Lib.GetNull(), Lib.GetNonNull());
+    public static string CallIdentity()
+    {
+        string maybeNull = null;
+        return Lib.Identity(maybeNull);
+    }
+}`)
+            for args in[]string{
+                "build \"" + libProj + "\" -nologo -v:q",
+                "restore \"" + consumerAProj + "\" -nologo -v:q",
+                "restore \"" + consumerBProj + "\" -nologo -v:q"
+            } {
+                let buildInfo = ProcessStartInfo("dotnet", args){
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+                using let buildProc = Process.Start(buildInfo)!!
+                buildProc.WaitForExit()
+                Assert.Equal(0, buildProc.ExitCode)
+            }
+            let options = PipelineOptions{
+                GscPath: compiler,
+                SourceRoot: source,
+                OutputRoot: destination,
+                ArtifactRoot: Path.Combine(root, "runs"),
+                OutputLayout: MigrationOutputLayout.Repository,
+                CompileViaSdk: true,
+                Config: "Release"
+            }
+            let pipeline = MigrationPipeline(options, []IMigrationStage{TranslateStage()})
+            let result = await pipeline.RunAsync(
+                []CorpusApp{
+                    CorpusApp(
+                        "src/Lib/Lib.csproj",
+                        libProj,
+                        TargetKind.Library,
+                        relativeProjectPath: Path.Combine("src", "Lib", "Lib.csproj")
+                    ),
+                    CorpusApp(
+                        "src/ConsumerA/ConsumerA.csproj",
+                        consumerAProj,
+                        TargetKind.Library,
+                        relativeProjectPath: Path.Combine("src", "ConsumerA", "ConsumerA.csproj")
+                    ),
+                    CorpusApp(
+                        "src/ConsumerB/ConsumerB.csproj",
+                        consumerBProj,
+                        TargetKind.Library,
+                        relativeProjectPath: Path.Combine("src", "ConsumerB", "ConsumerB.csproj")
+                    )
+                }
+            )
+            Assert.True(result.Succeeded)
+            let consumerAGs = File.ReadAllText(Path.Combine(destination, "src", "ConsumerA", "ConsumerA.gs"))
+            let consumerBGs = File.ReadAllText(Path.Combine(destination, "src", "ConsumerB", "ConsumerB.gs"))
+            let libGs = File.ReadAllText(Path.Combine(destination, "src", "Lib", "Lib.gs"))
+            // Prebuilt sibling scalar-to-tuple flow promotes the nullable first
+            // element (`GetNull()`) while keeping the non-null second element
+            // (`GetNonNull()`) non-null (ADR-0154 discrimination witness).
+            Assert.Contains("func Wrap()(string?, string)", consumerAGs, StringComparison.Ordinal)
+            Assert.Contains("func WrapAgain()(string?, string)", consumerBGs, StringComparison.Ordinal)
+            // ConsumerB's oblivious `Lib.Identity(null)` call does not leak
+            // reverse-dependent taint back into Lib's own signature.
+            Assert.Contains("func Identity(value string) string", libGs, StringComparison.Ordinal)
+            // Shared library taint analysis is computed exactly once across
+            // Lib, ConsumerA, and ConsumerB.
+            let libLoaded = options.RepositoryLoadedProjects!![Path.GetFullPath(libProj)]
+            Assert.Equal(1, ObliviousNullabilityAnalyzer.ComputeCount(libLoaded.Compilation))
+            // Separate consumers A and B (without a pre-registered repository
+            // union) also must not invalidate the shared library's cached
+            // analysis when each registers its own sibling set.
+            let freshLib = await CSharpProjectLoader.LoadProjectAsync(libProj)
+            let freshConsumerA = await CSharpProjectLoader.LoadProjectAsync(consumerAProj)
+            let freshConsumerB = await CSharpProjectLoader.LoadProjectAsync(consumerBProj)
+            let docA = Assert.Single(freshConsumerA.Documents)
+            let docB = Assert.Single(freshConsumerB.Documents)
+            CSharpToGSharpTranslator().TranslateDocument(
+                docA,
+                TranslationContext(
+                    freshConsumerA.Compilation,
+                    docA.SemanticModel,
+                    docA.FilePath,
+                    []Microsoft.CodeAnalysis.CSharp.CSharpCompilation{freshConsumerA.Compilation, freshLib.Compilation}
+                )
+            )
+            Assert.Equal(1, ObliviousNullabilityAnalyzer.ComputeCount(freshLib.Compilation))
+            CSharpToGSharpTranslator().TranslateDocument(
+                docB,
+                TranslationContext(
+                    freshConsumerB.Compilation,
+                    docB.SemanticModel,
+                    docB.FilePath,
+                    []Microsoft.CodeAnalysis.CSharp.CSharpCompilation{freshConsumerB.Compilation, freshLib.Compilation}
+                )
+            )
+            Assert.Equal(1, ObliviousNullabilityAnalyzer.ComputeCount(freshLib.Compilation))
+        } finally {
+            if Directory.Exists(root) {
+                Directory.Delete(root, recursive: true)
+            }
+        }
     }
 
     /// A scratch directory populated with one fake shared-framework assembly
