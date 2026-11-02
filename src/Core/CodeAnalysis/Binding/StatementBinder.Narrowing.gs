@@ -2569,7 +2569,19 @@ internal partial class StatementBinder {
             }
         }
 
+        protected open override func VisitConstantPattern(node BoundConstantPattern) {
+            // ADR-0208 (#5593): the test can call the input's `Equals`, which can be user code.
+            if StatementBinder.ConstantPatternRunsUserCode(node) {
+                MarkMayMutateGlobalRoots()
+            }
+            base.VisitConstantPattern(node)
+        }
+
         protected open override func VisitListPattern(node BoundListPattern) {
+            // ADR-0208 R16 and R17 (#5593): the `Length`/`Count` getter and the indexer of an indexable input.
+            if StatementBinder.ListPatternRunsUserCode(node) {
+                MarkMayMutateGlobalRoots()
+            }
             for element in node.Elements {
                 VisitPossiblySkipped(() -> VisitPattern(element))
             }
@@ -5221,6 +5233,33 @@ internal partial class StatementBinder {
             !IsStableClrGetter(property)
 
         internal func IsStableClrGetter(property PropertyInfo) bool -> IsStableClrAccessor(property, isSetter: false)
+
+        /// ADR-0208 R16 and R17 (#5593): a list pattern over an indexable input (not an array) calls its
+        /// `Length`/`Count` getter and its `this[int]` getter. They follow the one accessor rule.
+        internal func ListPatternRunsUserCode(node BoundListPattern) bool -> ClrMemberReadRunsUserCode(
+            node.LengthProperty
+        ) ||
+            (node.IndexerProperty is {} indexer && !IsStableClrAccessor(indexer, isSetter: false))
+
+        /// ADR-0208 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals` test
+        /// (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual `Equals`
+        /// of the input. An `object` input can hold any type, so its `Equals` can be a user override, even for a
+        /// literal pattern value. A nullable value input holds its underlying type, whose `Equals` runs no user code
+        /// only for a primitive, an enum or `decimal`.
+        internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
+            if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
+                return false
+            }
+            if node.Type is not NullableTypeSymbol nullable {
+                return true
+            }
+            let underlying = nullable.UnderlyingType
+            if underlying is EnumSymbol {
+                return false
+            }
+            return underlying.ClrType is not{} clr ||
+                !(clr.IsPrimitive || clr.IsEnum || ClrTypeInspector.IsSameAs(clr, typeof(decimal)))
+        }
 
         /// ADR-0208 R16 and R17 (#5231, #5532): the explicit list of imported accessors that run no user code. An
         /// accessor is stable when the declaring type is in a core library assembly, the accessor cannot be

@@ -850,6 +850,7 @@ compatibility note. "Probe" refers to section 4.
 | R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 | R17 | A write or read of an imported (CLR) property setter or indexer is a `call` too, unless the accessor is on the stable list (`IsStableClrAccessor`): the `List<T>` indexer (get and set) and `List<T>.Capacity` set, the `Span<T>` indexer, the `ReadOnlySpan<T>` indexer get, the `string` indexer get, the `StringBuilder` indexer (get and set) and `StringBuilder.Length` set. The same conditions as R16 apply (core library, not overridable). An index read on a receiver of an erased generic type (`List[T]` over a type parameter) is always a `call`, because it is emitted through the non-generic `IList` or `IDictionary` interface, which a subclass can reimplement; an index write and a `Span[T]` read over a type parameter keep the listed accessor. `Dictionary<K,V>` indexers are not stable: they call `GetHashCode` and `Equals` of the key. `var x C? = C{}; let oc = ObservableCollection[int32](); oc.Add(1); oc.CollectionChanged += (s, e) -> { x = nil }; if x == nil { return 0 }; oc[0] = 5; return x.Value` (bug [#5532](https://github.com/DavidObando/gsharp/issues/5532)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 | R18 | The effects of the condition of an `if` statement (a call, a getter with user code, an assignment) apply to the narrowing facts before either branch is bound, as section 9 says and as a catch filter already does (R10). `var x C? = C{}; let lazy = Lazy[int32](() -> { x = nil; return 1 }); if x == nil { return 0 }; if lazy.Value > 0 { return x.Value }` (bug [#5534](https://github.com/DavidObando/gsharp/issues/5534); the same with a plain call or a source getter). The facts that the condition proves are added after its effects, so `if Check(h) && x != nil { return x.Value }` still narrows | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact in either branch | less permissive (soundness) |
+| R19 | A pattern test that calls code which can be user code is a `call`, in a statement and in a condition, and so is the test of its own operand (R18 (6)). A constant pattern counts when its emitted test calls `object.Equals(object, object)`, which calls the `Equals` of the input: an `object` input, even with a literal pattern value, or a nullable value input whose underlying type is not a primitive, an enum or `decimal`. A list pattern over an indexable input counts when its `Length`/`Count` getter or its `this[int]` getter is not on the stable list of R16 and R17. `var x object? = e; e.Clear = func() { x = nil }; if x is 1 { return x.GetHashCode() }` where `E.Equals` calls `Clear`; `ReadOnlyCollection[int32](l) is [1]` where the `Count` of the wrapped `IList[int32]` clears `x` (bug [#5593](https://github.com/DavidObando/gsharp/issues/5593)). A test that the compiler emits as a reference test, `string.Equals`, `decimal.op_Equality` or `ceq` (an `int32`, `string`, `int32?`, `nil` or floating-point constant), and a list pattern over an array or a `List<T>`, keep the facts | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 
 Details per row:
 
@@ -949,6 +950,26 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R19 (#5593).** The construct table lists `BoundConstantPattern` and `BoundListPattern` as `call` when they
+  invoke user code, but the collector treated both as free of effects. A constant pattern on an `object` input is
+  emitted as `object.Equals(object, object)`, which calls the virtual `Equals` of the input, so a user override runs
+  even for a literal pattern value. A list pattern over an indexable input (not an array, issue #3501) calls the
+  `Length` or `Count` getter and the `this[int]` getter of the input's type, and an imported wrapper such as
+  `ReadOnlyCollection<T>` forwards them to a source `IList<T>`. `BoundConstantPattern.ClassifyTest` is now the one
+  decision of which test a constant pattern emits: the emitter emits it, and
+  `StatementBinder.ConstantPatternRunsUserCode` counts its `ObjectEquals` test as a call unless the input is a
+  nullable value of a primitive, an enum or `decimal`, whose `Equals` runs no user code. A reference test (`nil`),
+  `string.Equals`, `decimal.op_Equality`, an `isinst` and `ceq` of a floating-point constant and `ceq` run no user
+  code. `StatementBinder.ListPatternRunsUserCode` applies the accessor rule of R16 and R17
+  (`ClrMemberReadRunsUserCode` and `IsStableClrAccessor`) to the two getters, so `List<T>`, `Span<T>` and
+  `ReadOnlySpan<T>` keep their facts and an array reads none. The collector applies both in `VisitConstantPattern`
+  and `VisitListPattern`, so the rule holds in statements, in conditions (R18), in loops and in `finally`
+  summaries. The fast path of a test's own effects (R18 (6), `RunsNoCode`) treats a literal constant pattern as
+  free of code only when its test calls no user `Equals`. A list pattern also kills member paths, as a getter with
+  user code does (R14): row y06 was accepted and runs, and is now rejected. Corpus rows y01 to y14. cs2gs mirrors
+  the constant-pattern rule for closure-assigned locals (`ConstantPatternMayCallEquals`); a C# list pattern already
+  counts as code there. Not in this row: the own-pattern effect of a `switch` case and of an if-expression condition
+  (#5545 shape 8) applies to these tests too.
 - **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
   bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
   an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
@@ -986,7 +1007,7 @@ Details per row:
   aliases follow a `&&` chain operand by operand on its true path, so an alias gained earlier in the chain reaches
   the test (row w44); under `||` the walk joins both paths, so a conditional gain does not (row w46). The `if let`
   header is read from the aliases it started with (row w45). The `Equals` call of a constant pattern and the
-  accessors of a list pattern are not in the effect collector yet (#5593). A
+  accessors of a list pattern count as calls of the test since R19 (#5593). A
   later operand that removes it (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
   decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
   tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of

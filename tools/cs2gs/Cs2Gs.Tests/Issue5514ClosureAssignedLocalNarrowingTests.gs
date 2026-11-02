@@ -530,6 +530,53 @@ public class Demo
         Assert.DoesNotContain("current!!", printed)
     }
 
+    /// ADR-0208 R19 (#5593): a constant pattern on an `object` input calls the input's `Equals`.
+    @Fact
+    func ClosureAssignedLocal_ReadAfterAConstantPatternOnObject_IsAsserted() {
+        let printed = Translate(`
+public class Demo
+{
+    public static int Run(object o)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var matched = o is 1;
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current!!.Length", printed)
+    }
+
+    /// A `null` pattern and a constant pattern on a primitive or a nullable primitive call no `Equals`.
+    @Fact
+    func ClosureAssignedLocal_ReadAfterACallFreeConstantPattern_StaysBare() {
+        let printed = Translate(`
+public class Demo
+{
+    public static int Run(object o, int n, int? m)
+    {
+        string? current = "x";
+        void Reset() { current = null; }
+        if (current != null)
+        {
+            var a = o is null;
+            var b = n is 1;
+            var c = m is 2;
+            return current.Length;
+        }
+        Reset();
+        return 0;
+    }
+}`)
+        Assert.Contains("current.Length", printed)
+        Assert.DoesNotContain("current!!", printed)
+    }
+
     shared {
         private func Translate(source string, outputKind OutputKind = OutputKind.DynamicallyLinkedLibrary) string {
             let tree = CSharpSyntaxTree.ParseText(
