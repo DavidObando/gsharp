@@ -2576,7 +2576,20 @@ internal partial class StatementBinder {
             }
         }
 
+        protected open override func VisitConstantPattern(node BoundConstantPattern) {
+            // ADR-0208 R19 (#5593): the test can call the input's `Equals`, which can be user code. It is a plain
+            // method call, so it does not write by-reference storage (R12, amendment A3).
+            if StatementBinder.ConstantPatternRunsUserCode(node) {
+                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+            }
+            base.VisitConstantPattern(node)
+        }
+
         protected open override func VisitListPattern(node BoundListPattern) {
+            // ADR-0208 R19 (#5593): the `Length`/`Count` getter and the indexer of an indexable input (R16, R17).
+            if StatementBinder.ListPatternRunsUserCode(node) {
+                MarkMayMutateGlobalRoots()
+            }
             for element in node.Elements {
                 VisitPossiblySkipped(() -> VisitPattern(element))
             }
@@ -5228,6 +5241,78 @@ internal partial class StatementBinder {
             !IsStableClrGetter(property)
 
         internal func IsStableClrGetter(property PropertyInfo) bool -> IsStableClrAccessor(property, isSetter: false)
+
+        /// ADR-0208 R19 (#5593): a list pattern over an indexable input (not an array) calls its `Length`/`Count`
+        /// getter, and its `this[int]` getter for each element that reads the value. A slice is a discard there, and
+        /// a discard element (`_`) reads nothing. Both getters follow the one accessor rule of R16 and R17.
+        internal func ListPatternRunsUserCode(node BoundListPattern) bool -> ClrMemberReadRunsUserCode(
+            node.LengthProperty
+        ) ||
+            (
+            node.IndexerProperty is {} indexer && !IsStableClrAccessor(indexer, isSetter: false) && node.Elements.Any(
+                (element BoundPattern) -> element is not BoundSlicePattern && PatternReadsInput(element)
+            )
+        )
+
+        /// ADR-0208 R19 (#5593): whether the emitted test of [`pattern`](paramref) loads its input value, as
+        /// `EmitPattern` decides it. A discard without a variable loads nothing. Nor does `{}` on a value type that
+        /// is not nullable, which `EmitPropertyPattern` emits as nothing (no input local, no null test, no member).
+        /// `and`, `or` and `not` load it only through an operand that does. Every other pattern loads it.
+        private func PatternReadsInput(pattern BoundPattern) bool -> switch pattern {
+            case BoundDiscardPattern{Variable: nil}: false
+            case property is BoundPropertyPattern: property.InputVariable != nil ||
+                property
+                .Fields
+                .Length > 0 ||
+                property.Type is NullableTypeSymbol ||
+                !GSharp
+                .Core
+                .CodeAnalysis
+                .Emit
+                .ReflectionMetadataEmitter
+                .IsValueTypeSymbol(property.Type)
+            case binary is BoundBinaryPattern: PatternReadsInput(binary.Left) || PatternReadsInput(binary.Right)
+            case negation is BoundNotPattern: PatternReadsInput(negation.Pattern)
+            default: true
+        }
+
+        // The default of a type is null for every instantiation only for a value-type `Nullable<T>` (BCL or source) or
+        // a reference type (`Binder.IsReferenceTypeForConstraint`: a source class counts, and so does a type parameter
+        // with a `class` constraint). An unconstrained type parameter (`default(T)` is zero for `T` = `int32`) or a value
+        // type does not count.
+        private func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
+            NullableLifting.IsAnyValueTypeNullable(nullable) || Binder.IsReferenceTypeForConstraint(
+                nullable.UnderlyingType
+            )
+        } else {
+            Binder.IsReferenceTypeForConstraint(type)
+        }
+
+        /// ADR-0208 R19 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals`
+        /// test (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual
+        /// `Equals` of the input when both values are not null. An `object` input can hold any type, so its `Equals`
+        /// can be a user override, even for a literal pattern value. A null value (the `nil` literal, or the default
+        /// of a reference or nullable type) never reaches it. A nullable value input holds its underlying type,
+        /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
+        internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
+            if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
+                return false
+            }
+            let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
+            if value is BoundLiteralExpression{Value: nil} ||
+                (value is BoundDefaultExpression && IsNullDefault(value.Type)) {
+                return false
+            }
+            if node.Type is not NullableTypeSymbol nullable {
+                return true
+            }
+            let underlying = nullable.UnderlyingType
+            if underlying is EnumSymbol {
+                return false
+            }
+            return underlying.ClrType is not{} clr ||
+                !(clr.IsPrimitive || clr.IsEnum || ClrTypeInspector.IsSameAs(clr, typeof(decimal)))
+        }
 
         /// ADR-0208 R16 and R17 (#5231, #5532): the explicit list of imported accessors that run no user code. An
         /// accessor is stable when the declaring type is in a core library assembly, the accessor cannot be
