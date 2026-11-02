@@ -1305,8 +1305,8 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   region type-tests), and a path with steps in a region that type-tests a member or an element, can reach a function
   value, so the call is indirect; `Invoke`, `BeginInvoke` and `DynamicInvoke` (`holder.Cb.Invoke()`) are always
   indirect.
-- *User code on by-reference storage (coordinator decision 2026-11-01, pending maintainer review; A3 is the more
-  permissive alternative).* User code that ADR-0208 amendment A3 does not exempt removes the fact of a `ref` or `out`
+- *User code on by-reference storage (maintainer decision 2026-11-02; the more permissive A3-wide alternative is
+  not adopted and can be revisited separately).* User code that ADR-0208 amendment A3 does not exempt removes the fact of a `ref` or `out`
   parameter, a `ref` local or an external-storage alias, as on main, because a `ref` parameter can alias storage that
   the code writes (`Foo(ref s_field)`). A3 exempts only a plain call to a method; a source operator (of a type of the
   package, or an extension operator) is one. The rest uses the classifications of the straight-line pass: a member or

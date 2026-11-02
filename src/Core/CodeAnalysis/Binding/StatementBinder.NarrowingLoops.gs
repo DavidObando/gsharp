@@ -2988,8 +2988,8 @@ internal partial class StatementBinder {
             }
             indirectCall = resolved.CallsAreIndirect == true
         }
-        // Coordinator decision 2026-11-01 (pending maintainer review; amendment A3 is the more permissive
-        // alternative): a getter or an indexer that can run user code (ADR-0208 R14, R16 and R17) removes the fact
+        // Maintainer decision 2026-11-02 (the more permissive A3-wide alternative is not adopted and can be
+        // revisited separately): a getter or an indexer that can run user code (ADR-0208 R14, R16 and R17) removes the fact
         // of storage that a reference names, as on main, because the code can write the storage that the
         // reference aliases. Only such a fact needs the answer, so the reads are resolved only for it.
         // The same holds for a user-defined or imported operator or conversion and a static initializer (ADR-0208
