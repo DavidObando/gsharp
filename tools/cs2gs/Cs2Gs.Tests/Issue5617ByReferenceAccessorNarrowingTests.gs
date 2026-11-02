@@ -10,10 +10,12 @@ import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Runtime.Loader
 import System.Text
 import System.Text.RegularExpressions
 import Xunit
@@ -274,6 +276,47 @@ public class Demo
         Assert.Contains("return s.Length + local + 2", printed)
     }
 
+    /// gsc emits an index read on an imported `List<int>` subclass nested in `Outer<T>` through `IList`, because the
+    /// CLR type arguments of the nested type include `T` (R17). The listed `List<T>` indexer is then not the one that
+    /// runs. A closed `Outer<string>.Items` uses the listed indexer and keeps the fact.
+    @Fact
+    func RefParameter_ReadAfterAnIndexOfAnImportedNestedTypeOfAGenericParameter_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using Lib;
+public class Demo
+{
+    public static int Open<T>(ref string? s, Outer<T>.Items items)
+    {
+        if (s == null) return 0;
+        var n = items[0];
+        return s.Length + n;
+    }
+    public static int Closed(ref string? s, Outer<string>.Items items)
+    {
+        if (s == null) return 0;
+        var n = items[0];
+        return s.Length + n + 1;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var items = new Outer<string>().Values;
+        return Open<string>(ref text, items) + "," + Closed(ref text, items);
+    }
+}`, library: `
+using System.Collections.Generic;
+namespace Lib
+{
+    public class Outer<T>
+    {
+        public class Items : List<int> { }
+        public Items Values { get; } = new Items { 4 };
+    }
+}`)
+        Assert.Contains("return s!!.Length + n\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("return s.Length + n + 1", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.
@@ -331,7 +374,18 @@ public class Demo
     }
 
     shared {
-        private func AssertRunsLikeCSharp(source string) string {
+        /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
+        /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
+        private func AssertRunsLikeCSharp(source string, library string? = nil) string {
+            let libraryImage = if library == nil {
+                Array.Empty[byte]()
+            } else {
+                EmitCSharp("Lib5617", library)
+            }
+            let references = List[MetadataReference](CSharpProjectLoader.RuntimeReferences())
+            if libraryImage.Length > 0 {
+                references.Add(MetadataReference.CreateFromImage(libraryImage))
+            }
             let tree = CSharpSyntaxTree.ParseText(
                 source,
                 CSharpParseOptions(LanguageVersion.Latest),
@@ -340,7 +394,7 @@ public class Demo
             let compilation = CSharpCompilation.Create(
                 "Snippet" + Guid.NewGuid().ToString("N"),
                 []SyntaxTree{tree},
-                CSharpProjectLoader.RuntimeReferences(),
+                references,
                 CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
                     NullableContextOptions.Enable
                 )
@@ -348,21 +402,44 @@ public class Demo
             using let peStream = MemoryStream()
             let emitted = compilation.Emit(peStream)
             Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
-            let expected = cast[string](
-                Assembly.Load(peStream.ToArray()).GetType("Demo", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
-                    nil,
-                    nil
+            let loadContext = AssemblyLoadContext("Issue5617", isCollectible: true)
+            try {
+                if libraryImage.Length > 0 {
+                    loadContext.LoadFromStream(MemoryStream(libraryImage))
+                }
+                peStream.Position = 0
+                let expected = cast[string](
+                    loadContext.LoadFromStream(peStream).GetType("Demo", throwOnError: true)!!.GetMethod(
+                        "Run"
+                    )!!.Invoke(nil, nil)
                 )
-            )
-            let model = compilation.GetSemanticModel(tree)
-            let document = LoadedDocument("Snippet.cs", tree, model)
-            let context = TranslationContext(compilation, model, document.FilePath)
-            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-            Assert.Equal(expected, CompileAndRun(printed).Trim())
-            return printed
+                let model = compilation.GetSemanticModel(tree)
+                let document = LoadedDocument("Snippet.cs", tree, model)
+                let context = TranslationContext(compilation, model, document.FilePath)
+                let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                Assert.Equal(expected, CompileAndRun(printed, libraryImage).Trim())
+                return printed
+            } finally {
+                loadContext.Unload()
+            }
         }
 
-        private func CompileAndRun(printed string) string {
+        private func EmitCSharp(name string, source string)[]byte {
+            let compilation = CSharpCompilation.Create(
+                name,
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest))},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                    NullableContextOptions.Enable
+                )
+            )
+            using let stream = MemoryStream()
+            let emitted = compilation.Emit(stream)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            return stream.ToArray()
+        }
+
+        private func CompileAndRun(printed string, libraryImage[]byte) string {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -383,13 +460,13 @@ public class Demo
                     mainPath,
                     "import System${Environment.NewLine}Console.WriteLine(Demo.Run())${Environment.NewLine}"
                 )
-                let (compileExit, compileOutput) = RunDotnet(
-                    compiler!!,
-                    "/target:exe",
-                    "/out:$dllPath",
-                    gsPath,
-                    mainPath
-                )
+                let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath", gsPath, mainPath}
+                if libraryImage.Length > 0 {
+                    let libraryPath = Path.Combine(workDir, "Lib5617.dll")
+                    File.WriteAllBytes(libraryPath, libraryImage)
+                    arguments.Add("/r:" + libraryPath)
+                }
+                let (compileExit, compileOutput) = RunDotnet(arguments.ToArray())
                 Assert.True(
                     compileExit == 0 && !compileOutput.Contains("error", StringComparison.OrdinalIgnoreCase),
                     "gsc must compile the translated snippet. Output:\n" +

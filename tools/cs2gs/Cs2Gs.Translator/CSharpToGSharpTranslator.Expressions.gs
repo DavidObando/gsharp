@@ -4823,15 +4823,16 @@ partial class CSharpToGSharpTranslator {
         }
 
         /// ADR-0208 R17 (#5532): gsc emits an index read on an imported receiver whose type arguments hold a type
-        /// parameter (`List[T]`) through the non-generic `IList` (with an `int32` index) or `IDictionary`, which a
-        /// subclass can reimplement. This mirrors `ClrIndexReadIsErasedInterfaceCall`.
+        /// parameter (`List[T]`, or a type nested in `Outer[T]`, whose CLR type arguments include those of the outer
+        /// type) through the non-generic `IList` (with an `int32` index) or `IDictionary`, which a subclass can
+        /// reimplement. This mirrors `ClrIndexReadIsErasedInterfaceCall`.
         private func IsErasedInterfaceIndexRead(property IPropertySymbol, receiverType ITypeSymbol?) bool {
             if !property.IsIndexer ||
                 property
                 .Parameters
                 .Length != 1 ||
                 receiverType is not INamedTypeSymbol named ||
-                this.IsSourceSymbol(named) || !named.TypeArguments.Any(ContainsTypeParameter) {
+                this.IsSourceSymbol(named) || !ContainsTypeParameter(named) {
                 return false
             }
             let Implements = func (name string) bool {
