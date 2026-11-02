@@ -576,6 +576,9 @@ partial class CSharpToGSharpTranslator {
         private func SlotProvesNonNull(written ExpressionSyntax) bool {
             let parent SyntaxNode? = written.Parent
             let model = this.context.SemanticModel
+            if parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} element {
+                return this.TupleElementSlotProvesNonNull(tuple, tuple.Arguments.IndexOf(element))
+            }
             if parent is ArgumentSyntax argument {
                 let (parameter, prefix) = ArgumentDestination(argument, model)
                 if parameter == nil {
@@ -648,6 +651,87 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return false
+        }
+
+        // Whether element [`index`](paramref) of a tuple literal goes into a slot
+        // that is proven non-null: an element of a declared tuple local, field,
+        // parameter or return, or a deconstruction target that is declared with a
+        // type or is existing storage. An implicitly typed (`var`) target, a nested
+        // tuple, a discard and a slot that the run widens are not proven.
+        private func TupleElementSlotProvesNonNull(tuple TupleExpressionSyntax, index int32) bool {
+            let model = this.context.SemanticModel
+            var storage ISymbol? = nil
+            var slotType ITypeSymbol? = nil
+            var position = IndexPosition(index)
+            switch tuple.Parent {
+                case EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} {
+                    storage = model.GetDeclaredSymbol(declarator)
+                    if storage is ILocalSymbol local && IsImplicitlyTypedLocal(local) {
+                        return false
+                    }
+                    slotType = TupleElementType(StorageType(storage?.OriginalDefinition), index)
+                }
+                case assignment is AssignmentExpressionSyntax when assignment.Right == tuple {
+                    if assignment.Left is TupleExpressionSyntax targets {
+                        // A deconstruction writes each element into its own target.
+                        if index >= targets.Arguments.Count {
+                            return false
+                        }
+                        let target = targets.Arguments[index].Expression
+                        if target is DeclarationExpressionSyntax declaration {
+                            if declaration
+                                .Type
+                                .IsVar ||
+                                declaration.Designation is not SingleVariableDesignationSyntax designation {
+                                return false
+                            }
+                            storage = model.GetDeclaredSymbol(designation)
+                        } else if target is TupleExpressionSyntax {
+                            return false
+                        } else {
+                            storage = model.GetSymbolInfo(target).Symbol
+                            if storage is IDiscardSymbol {
+                                return false
+                            }
+                        }
+                        slotType = StorageType(storage?.OriginalDefinition)
+                        position = ""
+                    } else if assignment.Left is DeclarationExpressionSyntax {
+                        return false
+                    } else {
+                        storage = model.GetSymbolInfo(assignment.Left).Symbol
+                        slotType = TupleElementType(StorageType(storage?.OriginalDefinition), index)
+                    }
+                }
+                case result is SyntaxNode when result is ReturnStatementSyntax ||
+                    result is ArrowExpressionClauseSyntax {
+                    if !this.ResultSlotProvesNonNull(tuple) || model.GetEnclosingSymbol(
+                        tuple.SpanStart
+                    ) is not IMethodSymbol method ||
+                        method.IsAsync ||
+                        method.MethodKind == MethodKind.AnonymousFunction {
+                        return false
+                    }
+                    storage = AccessorStorage(method)
+                    slotType = TupleElementType(StorageType(storage?.OriginalDefinition), index)
+                }
+                case argument is ArgumentSyntax {
+                    let (parameter, prefix) = ArgumentDestination(argument, model)
+                    if parameter == nil || prefix != "" {
+                        return false
+                    }
+                    storage = parameter
+                    slotType = TupleElementType(parameter.OriginalDefinition.Type, index)
+                }
+                default {
+                    return false
+                }
+            }
+            if slotType == nil || this.ObliviousContainerPositions(storage)?.Contains(position) == true {
+                return false
+            }
+            return slotType is not ITypeParameterSymbol parameterType ||
+                NullableTypeArgumentViolatesTranslatedConstraints(parameterType)
         }
 
         // Whether the result slot of the function that returns [`result`](paramref) is
@@ -2157,6 +2241,21 @@ partial class CSharpToGSharpTranslator {
                     node = node.Parent
                 }
                 return nil
+            }
+
+            // The type of element [`index`](paramref) of a tuple type, or nil.
+            private func TupleElementType(
+                type ITypeSymbol?,
+                index int32
+            ) ITypeSymbol? -> if type is INamedTypeSymbol tupleType &&
+                tupleType.IsTupleType &&
+                index >= 0 &&
+                index < tupleType
+                .TupleElements
+                .Length {
+                tupleType.TupleElements[index].Type
+            } else {
+                nil
             }
 
             // Issue #5541: an array literal (explicit, implicit or a bare array

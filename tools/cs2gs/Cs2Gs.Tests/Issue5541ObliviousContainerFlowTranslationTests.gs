@@ -729,6 +729,28 @@ public static class Use
             }, []string{"Init", "1", "Cond", "5", "PromotedInit", "1"})
     }
 
+    /// Final review of #5571: a tuple element goes into the slot of its target. A
+    /// deconstruction into typed declarations or a declared tuple local is proven
+    /// non-null and keeps `!!`; an implicitly typed deconstruction or tuple takes a nil
+    /// element as it is.
+    @Fact
+    func A_Tuple_Element_Is_Asserted_Only_For_A_Declared_Target() {
+        this.Check("Review22", `using ObLib;
+
+public static class Use
+{
+    public static int Declared(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) = (lines[0], lines[1]); return a.Length + b.Length; }
+    public static int Local(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) t = (lines[0], lines[1]); return t.b.Length; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Holes(p); var (a, b) = (lines[0], lines[1]); return b == null ? 1 : 0; }
+    public static int Natural(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); return t.Item2 == null ? 1 : 0; }
+}`, []string{
+                "let (a, b) = (lines[0]!!, lines[1]!!)",
+                "let t (a string, b string) = (lines[0]!!, lines[1]!!)",
+                "let (a, b) = (lines[0], lines[1])",
+                "let t = (lines[0], lines[1])"
+            }, []string{"Declared", "4", "Local", "2", "Inferred", "1", "Natural", "1"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
