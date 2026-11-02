@@ -72,6 +72,8 @@ internal partial class ExpressionBinder {
             .CreateBuilder[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
         ]()
+        // Issue #5613: the narrowing frame of each arm, in arm order, for the conversion of its result.
+        let armNarrowings = List[Dictionary[AccessPath, TypeSymbol]?](syntax.Arms.Length)
         for armSyntax in syntax.Arms {
             var pattern BoundPattern? = nil
             if armSyntax.IsDefault {
@@ -85,6 +87,7 @@ internal partial class ExpressionBinder {
                     BindExpression(armSyntax.Result, targetType)
                 }
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
+                armNarrowings.Add(nil)
                 continue
             }
             $scope = BoundScope($scope)
@@ -127,6 +130,7 @@ internal partial class ExpressionBinder {
             )
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
+            armNarrowings.Add(frame)
         }
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
@@ -146,7 +150,8 @@ internal partial class ExpressionBinder {
         let diagMark = Diagnostics.Count
         var anyArmFailed = false
         let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](boundArmBuilders.Count)
-        for arm in boundArmBuilders {
+        for var armIndex = 0; armIndex < boundArmBuilders.Count; armIndex++ {
+            let arm = boundArmBuilders[armIndex]
             var result = arm.Result
             // Issue #1443: a bare `default` arm result (`case 0: default`) is
             // an untyped placeholder `BoundDefaultExpression(Error)` until a
@@ -177,13 +182,22 @@ internal partial class ExpressionBinder {
                     anyArmFailed = true
                 }
                 result = BoundErrorExpression(nil)
-            } else if !conversion.IsIdentity {
+            } else if !conversion.IsIdentity || conversions.IsNarrowedBranchValue(result) {
                 // Issue #1151: route the materialised conversion through
                 // BindConversion so value-type `nil → T?` arms are lowered to a
                 // BoundDefaultExpression (the verifiable Nullable<T> default),
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
-                result = conversions.BindConversion(arm.Syntax.Result.Location, result, resultType)
+                // Issue #5613: a narrowed read converts in its arm's narrowing frame, as a conditional branch does.
+                let armResult = result
+                result = BindWithNarrowing(
+                    armNarrowings[armIndex],
+                    () -> conversions.BindBranchConversion(
+                        BranchValueLocation(arm.Syntax.Result),
+                        armResult,
+                        resultType
+                    )
+                )
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
         }

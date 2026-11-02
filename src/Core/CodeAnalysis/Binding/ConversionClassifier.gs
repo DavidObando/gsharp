@@ -318,6 +318,41 @@ internal class ConversionClassifier {
         return result
     }
 
+    /// Issue #5613: converts a branch value of a conditional, `if`, `switch` or `??` value to the common type
+    /// [`target`](paramref). The conversion of a narrowed read goes through (cref:BindConversion), also when it is an
+    /// identity, so the backward `goto` check applies the narrowing decision to the common type. A block value
+    /// converts its trailing value, which the check then sees.
+    /// @param diagnosticLocation The location of the branch value.
+    /// @param value The bound branch value.
+    /// @param target The common type.
+    /// @returns The converted branch value.
+    func BindBranchConversion(
+        diagnosticLocation TextLocation,
+        value BoundExpression,
+        target TypeSymbol
+    ) BoundExpression {
+        if value is BoundBlockExpression block && IsNarrowedBranchValue(block.Expression) {
+            let trailing = BindBranchConversion(diagnosticLocation, block.Expression, target)
+            return if trailing is BoundErrorExpression {
+                trailing
+            } else {
+                cast[BoundExpression](BoundBlockExpression(block.Syntax, block.Statements, trailing))
+            }
+        }
+        return BindConversion(diagnosticLocation, value, target)
+    }
+
+    /// Issue #5613: gets a value indicating whether a branch value is a narrowed read, or a block whose trailing
+    /// value is one (cref:BinderContext.TryGetBackwardGotoNarrowingPath). Its conversion to the common type must
+    /// not be skipped as an identity (cref:BindBranchConversion).
+    /// @param value The bound branch value.
+    /// @returns `true` when the value is a narrowed read.
+    func IsNarrowedBranchValue(value BoundExpression) bool -> if value is BoundBlockExpression block {
+        IsNarrowedBranchValue(block.Expression)
+    } else {
+        binderCtx.TryGetBackwardGotoNarrowingPath(value, out _, out _)
+    }
+
     private func BindConversionCore(
         diagnosticLocation TextLocation,
         expression BoundExpression,

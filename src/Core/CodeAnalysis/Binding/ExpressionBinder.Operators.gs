@@ -738,8 +738,13 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType)
+        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType, whenTrueNarrowing)
+        let convertedFalse = ConvertConditionalBranch(
+            syntax.WhenFalse.Location,
+            whenFalse,
+            resultType,
+            whenFalseNarrowing
+        )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -877,8 +882,18 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.ThenBlock.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(elseSyntax.Location, whenFalse, resultType)
+        let convertedTrue = ConvertConditionalBranch(
+            BranchValueLocation(syntax.ThenBlock),
+            whenTrue,
+            resultType,
+            whenTrueNarrowing
+        )
+        let convertedFalse = ConvertConditionalBranch(
+            BranchValueLocation(elseSyntax),
+            whenFalse,
+            resultType,
+            whenFalseNarrowing
+        )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -1089,6 +1104,11 @@ internal partial class ExpressionBinder {
             // value to keep across the cleanup region either.
             if value is BoundErrorExpression || value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never {
                 return BoundExpressionStatement(valueSyntax, value)
+            }
+            // Issue #5613: the result local takes the type of the value, as `let t = s` does. A narrowed read converts
+            // to it with the backward `goto` check, where the narrowing frames of the block still hold.
+            if conversions.IsNarrowedBranchValue(value) {
+                value = conversions.BindConversion(valueSyntax.Location, value, value.Type)
             }
             let resultVariable = LocalVariableSymbol(
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
@@ -1307,7 +1327,8 @@ internal partial class ExpressionBinder {
     private func ConvertConditionalBranch(
         location TextLocation,
         branch BoundExpression,
-        target TypeSymbol?
+        target TypeSymbol?,
+        narrowing Dictionary[AccessPath, TypeSymbol]? = nil
     ) BoundExpression {
         // Issue #1496: a bare `default` arm is bound to a placeholder
         // `BoundDefaultExpression(syntax, TypeSymbol.Error)` (see
@@ -1338,14 +1359,30 @@ internal partial class ExpressionBinder {
         if branch.Type == TypeSymbol.Never {
             return branch
         }
-        if object.ReferenceEquals(branch.Type, target) {
+        if object.ReferenceEquals(branch.Type, target) && !conversions.IsNarrowedBranchValue(branch) {
             return branch
         }
-        return conversions.BindConversion(
-            location,
-            branch,
-            Invariant.Required(target, "a conditional branch has a result type", expression: "target")
+        // Issue #5613: the conversion sees the narrowing frame that the branch bound in. A narrowing that the branch
+        // itself proves is then not checked against a backward `goto` that removes an outer narrowing.
+        return BindWithNarrowing(
+            narrowing,
+            () -> conversions.BindBranchConversion(
+                location,
+                branch,
+                Invariant.Required(target, "a conditional branch has a result type", expression: "target")
+            )
         )
+    }
+
+    /// Issue #5613: gets the location of the value of a branch: the trailing value of a block, or the branch.
+    /// @param branch The branch syntax.
+    /// @returns The location of the branch value.
+    private func BranchValueLocation(branch ExpressionSyntax) TextLocation -> if branch is BlockExpressionSyntax{
+        Expression: {} value
+    } {
+        value.Location
+    } else {
+        branch.Location
     }
 
     private func BindChannelReceiveExpression(syntax UnaryExpressionSyntax) BoundExpression {
@@ -1763,9 +1800,11 @@ internal partial class ExpressionBinder {
             // the contextual target that makes the right group a value.
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
         } else if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
-            boundRight.Type != boundOperator.Type &&
-            boundRight.Type != TypeSymbol.Never {
-            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            (boundRight.Type != boundOperator.Type || conversions.IsNarrowedBranchValue(boundRight)) &&
+            boundRight.Type != TypeSymbol
+            .Never {
+            // Issue #5613: a narrowed right operand converts to the result type with the backward `goto` check.
+            boundRight = conversions.BindBranchConversion(syntax.Right.Location, boundRight, boundOperator.Type)
         }
         // Issue #3317 / ADR-0159: with sound empty-instance zero values, a nil
         // comparison whose non-nil operand's STATIC type is a bare (non-`?`)

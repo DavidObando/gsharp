@@ -119,8 +119,12 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.ThenBlock.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(syntax.ElseExpression!!.Location, whenFalse, resultType)
+        let convertedTrue = ConvertConditionalBranch(BranchValueLocation(syntax.ThenBlock), whenTrue, resultType)
+        let convertedFalse = ConvertConditionalBranch(
+            BranchValueLocation(syntax.ElseExpression!!),
+            whenFalse,
+            resultType
+        )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
