@@ -1172,6 +1172,12 @@ internal partial class StatementBinder {
     // conversion classifier, `HasUserDefinedImplicitConversion`). A site that the walker cannot follow can.
     private func ConversionsRunUserCode(effects RegionEffects) bool {
         for conversion in effects.Conversions {
+            if conversion.OperatorArms {
+                if OperatorsRunUserCode(effects, false) {
+                    return true
+                }
+                continue
+            }
             let targetPath = conversion.Target
             if targetPath == nil {
                 return true
@@ -1244,6 +1250,19 @@ internal partial class StatementBinder {
         }
         for access in effects.IndexAccesses {
             if CallArgumentsRunUserConversion(access, effects, operatorResultsKnown) {
+                return true
+            }
+        }
+        // An index in a constant pattern of a variable or a call is an index access; one of a type name is a
+        // generic type (`o is List[int32]`).
+        for access in effects.PatternIndexAccesses {
+            if access.Receiver is {} target &&
+                (
+                target.RootIsCall || target.RootType != nil || target.RootName is {} root && $scope.TryLookupSymbol(
+                    root
+                ) is VariableSymbol
+            ) &&
+                CallArgumentsRunUserConversion(access, effects, operatorResultsKnown) {
                 return true
             }
         }
@@ -1687,7 +1706,9 @@ internal partial class StatementBinder {
         var receivers List[ReceiverType]? = nil
         if call.Kind == RegionCallKind.NamedInvocation {
             for function in $scope.TryLookupFunctions(name) {
-                lists.Add(ParameterTypes(function))
+                if call.HasTypeArguments || TypeParametersInferable(function) {
+                    lists.Add(ParameterTypes(function))
+                }
             }
             return lists
         }
@@ -1709,7 +1730,7 @@ internal partial class StatementBinder {
             if name == RegionEffectScanner.IndexMemberName {
                 AddIndexParameterLists(receiver, call, effects, lists)
             } else {
-                AddMethodParameterLists(receiver, name, lists)
+                AddMethodParameterLists(receiver, name, call.HasTypeArguments, lists)
             }
         }
         return lists
@@ -1725,14 +1746,76 @@ internal partial class StatementBinder {
 
     // The parameter types of the methods of a name on a receiver, with the receiver's type arguments substituted
     // (`Add(T)` on `List[Token]` takes a `Token`).
-    private func AddMethodParameterLists(receiver ReceiverType, name string, lists List[List[TypeSymbol]]) {
+    // Whether a call without type arguments can infer every type parameter of a function from its parameters; a
+    // candidate that it cannot is not applicable (as `OverloadResolver` excludes it).
+    private func TypeParametersInferable(function FunctionSymbol) bool {
+        for typeParameter in function.TypeParameters {
+            var mentioned = false
+            for parameter in function.Parameters {
+                if TypeSymbol.AnyTypeParameter(
+                    parameter.Type,
+                    (candidate TypeParameterSymbol) -> object.ReferenceEquals(candidate, typeParameter)
+                ) {
+                    mentioned = true
+                }
+            }
+            if !mentioned {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ClrTypeParametersInferable(method MethodInfo) bool {
+        if !method.IsGenericMethod {
+            return true
+        }
+        for typeArgument in method.GetGenericArguments() {
+            var mentioned = false
+            for parameter in method.GetParameters() {
+                if MentionsClrType(parameter.ParameterType, typeArgument) {
+                    mentioned = true
+                }
+            }
+            if !mentioned {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func MentionsClrType(type Type, target Type) bool {
+        if ClrTypeUtilities.AreSame(type, target) {
+            return true
+        }
+        if type.HasElementType {
+            return type.GetElementType() is {} element && MentionsClrType(element, target)
+        }
+        if type.IsGenericType {
+            for argument in type.GetGenericArguments() {
+                if MentionsClrType(argument, target) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func AddMethodParameterLists(
+        receiver ReceiverType,
+        name string,
+        explicitTypeArguments bool,
+        lists List[List[TypeSymbol]]
+    ) {
         var clrType = receiver.Clr
         var symbolic TypeSymbol? = nil
         switch receiver.Symbol {
             case declared is StructSymbol {
                 for level in declared.GetHierarchy() {
                     for candidate in level.GetMembers() {
-                        if candidate is FunctionSymbol function && function.Name == name {
+                        if candidate is FunctionSymbol function &&
+                            function.Name == name &&
+                            (explicitTypeArguments || TypeParametersInferable(function)) {
                             let types = List[TypeSymbol]()
                             for parameter in function.Parameters {
                                 types.Add(level.SubstituteMemberType(parameter.Type) ?? parameter.Type)
@@ -1749,6 +1832,9 @@ internal partial class StatementBinder {
                 for level in contract.SelfAndAllBaseInterfaces() {
                     level.EnsureMembersResolved()
                     for function in level.GetMethods(name) {
+                        if !explicitTypeArguments && !TypeParametersInferable(function) {
+                            continue
+                        }
                         let types = List[TypeSymbol]()
                         for parameter in function.Parameters {
                             types.Add(level.SubstituteMemberType(parameter.Type))
@@ -1774,7 +1860,7 @@ internal partial class StatementBinder {
                 name,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
             ) {
-                if member is MethodInfo method {
+                if member is MethodInfo method && (explicitTypeArguments || ClrTypeParametersInferable(method)) {
                     lists.Add(ClrParameterTypes(symbolic, method, method.GetParameters()))
                 }
             }

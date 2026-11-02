@@ -2729,6 +2729,85 @@ func Run(start Node?) int32 {
     return total
 }
 func Main() { }`, "")
+            Add("arm-paths-are-taken-in-their-scopes (A3)", `package T
+import System
+func Run(ref text string?, flag bool, x DateTimeOffset, dt DateTime, dto DateTimeOffset) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let merged = if var x = dt; flag { x } else { dto }
+    }
+    return n
+}
+func Main() { }`, "GS0158@6:16")
+            Add("if-let-expression-arms-meet-through-a-conversion (A3)", `package T
+import System
+func Run(ref text string?, maybe string?, dt DateTime, dto DateTimeOffset) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let merged = if let v = maybe { dt } else { dto }
+    }
+    return n
+}
+func Main() { }`, "GS0158@6:16")
+            Add("merge-with-more-arms-than-the-bound-counts (A3)", `package T
+func Run(ref text string?, k int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let picked = k == 1 ? 1 : k == 2 ? 2 : k == 3 ? 3 : k == 4 ? 4 : k == 5 ? 5 : k == 6 ? 6 : k == 7 ? 7 : k == 8 ? 8 : 9
+    }
+    return n
+}
+func Main() { }`, "GS0158@5:16")
+            Add("operator-arms-meet-through-user-operator-results (A3)", `package T
+import System
+struct A { var Raw int32 }
+struct B { var Raw int32 }
+func (a A) operator +(k int32) DateTime { return DateTime.MinValue }
+func (b B) operator +(k int32) DateTimeOffset { return DateTimeOffset.MinValue }
+func Run(ref text string?, flag bool, a A, b B) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let merged = flag ? a + 1 : b + 1
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("pattern-index-of-a-variable-is-an-index-access (A3)", `package T
+import System
+struct Key { var Raw int32 }
+func operator implicit(value Key) int32 { return value.Raw }
+func Run(ref text string?, xs []int32, key Key, k int32) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if k is xs[key] { n++ }
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("generic-candidate-without-inferable-type-arguments-is-not-applicable (A3)", `package T
+import System
+func Use[T](x DateTime) { }
+func Use(x DateTimeOffset) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
             return rows
         }
     }

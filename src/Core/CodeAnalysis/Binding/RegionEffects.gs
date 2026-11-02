@@ -269,11 +269,18 @@ internal sealed class RegionOperator {
 /// A site where the binder converts a value to a target type (rule W4); the consumer asks whether a user-defined
 /// or imported conversion operator can run there. A `nil` source or target is one the walker cannot follow.
 internal sealed class RegionConversion {
-    init(source RegionReceiverPath?, target RegionReceiverPath?, sourceIsBuiltInByForm bool, sourceIsNil bool = false) {
+    init(
+        source RegionReceiverPath?,
+        target RegionReceiverPath?,
+        sourceIsBuiltInByForm bool,
+        sourceIsNil bool = false,
+        operatorArms bool = false
+    ) {
         Source = source
         Target = target
         SourceIsBuiltInByForm = sourceIsBuiltInByForm
         SourceIsNil = sourceIsNil
+        OperatorArms = operatorArms
     }
 
     prop Source RegionReceiverPath? {
@@ -291,6 +298,12 @@ internal sealed class RegionConversion {
 
     /// Whether the source is `nil`, which reaches a non-nullable value type only through a conversion operator.
     prop SourceIsNil bool {
+        get;
+    }
+
+    /// Whether the site is where two operator arms meet (`flag ? a + 1 : b + 1`): their types are built in, and meet
+    /// without an operator, only when the operators of the region are predefined.
+    prop OperatorArms bool {
         get;
     }
 }
@@ -412,6 +425,7 @@ internal sealed class RegionEffects {
         Writes = List[RegionWrite]()
         Calls = List[RegionCall]()
         IndexAccesses = List[RegionCall]()
+        PatternIndexAccesses = List[RegionCall]()
         PatternReads = List[RegionMemberRead]()
         NilCompareOperandPaths = List[RegionReceiverPath?]()
         Declared = List[string]()
@@ -439,6 +453,11 @@ internal sealed class RegionEffects {
     /// Gets the index accesses (`t[i]`), each as a call of the member `[]` on the target, for the consumer's check of
     /// index argument conversions. They are not calls.
     prop IndexAccesses List[RegionCall] {
+        get;
+    }
+
+    /// Gets the index accesses of a constant pattern (`n is xs[key]`), which can name a generic type instead.
+    prop PatternIndexAccesses List[RegionCall] {
         get;
     }
 
@@ -633,6 +652,7 @@ internal sealed class RegionEffects {
         }
         Calls.AddRange(other.Calls)
         IndexAccesses.AddRange(other.IndexAccesses)
+        PatternIndexAccesses.AddRange(other.PatternIndexAccesses)
         PatternReads.AddRange(other.PatternReads)
         NilCompareOperandPaths.AddRange(other.NilCompareOperandPaths)
         MemberReads.AddRange(other.MemberReads)

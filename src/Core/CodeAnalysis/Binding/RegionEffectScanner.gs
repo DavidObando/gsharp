@@ -265,6 +265,14 @@ internal sealed class RegionEffectScanner {
     }
 
     private func Visit(node SyntaxNode?) {
+        VisitNode(node)
+        // The path of a merged arm is taken where its names are in scope (`if var x = dt; flag { x } else { dto }`).
+        if armTargets.Count > 0 && node is ExpressionSyntax arm && armTargets.Remove(arm) {
+            armPaths[arm] = BuildPath(arm)
+        }
+    }
+
+    private func VisitNode(node SyntaxNode?) {
         if node == nil {
             return
         }
@@ -316,10 +324,11 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.ConditionalExpression {
                 let conditional = cast[ConditionalExpressionSyntax](node)
-                RecordMergeConversions(node)
+                let merge = BeginMerge(node)
                 VisitCondition(conditional.Condition)
                 Visit(conditional.WhenTrue)
                 Visit(conditional.WhenFalse)
+                EndMerge(merge)
             }
             case SyntaxKind.NameExpression {
                 let read = cast[NameExpressionSyntax](node).IdentifierToken.ValueText
@@ -358,13 +367,14 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.IfExpression {
                 let ifExpression = cast[IfExpressionSyntax](node)
-                RecordMergeConversions(node)
+                let merge = BeginMerge(node)
                 VisitIf(
                     ifExpression.Initializer,
                     ifExpression.Condition,
                     ifExpression.ThenBlock,
                     ifExpression.ElseExpression
                 )
+                EndMerge(merge)
             }
             case SyntaxKind.IfLetStatement {
                 let ifLet = cast[IfLetStatementSyntax](node)
@@ -377,12 +387,14 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.IfLetExpression {
                 let ifLet = cast[IfLetExpressionSyntax](node)
+                let merge = BeginMerge(node)
                 Push()
                 VisitBindings(ifLet.Bindings)
                 VisitCondition(ifLet.Guard)
                 Visit(ifLet.ThenBlock)
                 Pop()
                 Visit(ifLet.ElseExpression)
+                EndMerge(merge)
             }
             case SyntaxKind.GuardLetStatement {
                 let guardLet = cast[GuardLetStatementSyntax](node)
@@ -499,7 +511,7 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.SwitchExpression {
                 let switchExpression = cast[SwitchExpressionSyntax](node)
-                RecordMergeConversions(node)
+                let merge = BeginMerge(node)
                 Visit(switchExpression.Expression)
                 for arm in switchExpression.Arms {
                     RecordTypeTests(switchExpression.Expression, arm.Value)
@@ -512,6 +524,7 @@ internal sealed class RegionEffectScanner {
                     Visit(arm.Result)
                     Pop()
                 }
+                EndMerge(merge)
             }
             case SyntaxKind.SelectCase {
                 let selectCase = cast[SelectCaseSyntax](node)
@@ -1136,6 +1149,7 @@ internal sealed class RegionEffectScanner {
         let bareBefore = current.BareReads.ToArray()
         let callsBefore = current.Calls.Count
         let indexAccessesBefore = current.IndexAccesses.Count
+        let patternIndexAccessesBefore = current.PatternIndexAccesses.Count
         let readsBefore = current.MemberReads.Count
         let patternReadsBefore = current.PatternReads.Count
         let nilComparesBefore = current.NilCompareOperandPaths.Count
@@ -1194,35 +1208,8 @@ internal sealed class RegionEffectScanner {
                 call.HasTypeArguments
             )
         }
-        for var i = indexAccessesBefore; i < current.IndexAccesses.Count; i++ {
-            let access = current.IndexAccesses[i]
-            let arguments = List[RegionReceiverPath?]()
-            for argument in access.Arguments {
-                arguments.Add(
-                    if argument == nil {
-                        default(RegionReceiverPath?)
-                    } else {
-                        Rebase(argument)
-                    }
-                )
-            }
-            current.IndexAccesses[i] = RegionCall(
-                access.Kind,
-                access.CalleeName,
-                access.ByReferenceNames,
-                access.ByValueNames,
-                false,
-                access.Position,
-                nil,
-                if access.Receiver == nil {
-                    default(RegionReceiverPath?)
-                } else {
-                    Rebase(access.Receiver)
-                },
-                arguments,
-                access.ArgumentForms
-            )
-        }
+        RebaseIndexAccesses(current.IndexAccesses, indexAccessesBefore)
+        RebaseIndexAccesses(current.PatternIndexAccesses, patternIndexAccessesBefore)
         for var i = operatorsBefore; i < current.Operators.Count; i++ {
             let rebased = List[RegionReceiverPath?]()
             for operand in current.Operators[i].Operands {
@@ -1254,7 +1241,8 @@ internal sealed class RegionEffectScanner {
                     Rebase(conversion.Target)
                 },
                 conversion.SourceIsBuiltInByForm,
-                conversion.SourceIsNil
+                conversion.SourceIsNil,
+                conversion.OperatorArms
             )
         }
         for var i = readsBefore; i < current.MemberReads.Count; i++ {
@@ -1279,6 +1267,39 @@ internal sealed class RegionEffectScanner {
             if DeclaringStorageFrame(name) >= 0 && !bareBefore.Contains(name) {
                 current.BareReads.Remove(name)
             }
+        }
+    }
+
+    // Rebases the index accesses that a nested record added from [`before`](paramref) on.
+    private func RebaseIndexAccesses(accesses List[RegionCall], before int32) {
+        for var i = before; i < accesses.Count; i++ {
+            let access = accesses[i]
+            let arguments = List[RegionReceiverPath?]()
+            for argument in access.Arguments {
+                arguments.Add(
+                    if argument == nil {
+                        default(RegionReceiverPath?)
+                    } else {
+                        Rebase(argument)
+                    }
+                )
+            }
+            accesses[i] = RegionCall(
+                access.Kind,
+                access.CalleeName,
+                access.ByReferenceNames,
+                access.ByValueNames,
+                false,
+                access.Position,
+                nil,
+                if access.Receiver == nil {
+                    default(RegionReceiverPath?)
+                } else {
+                    Rebase(access.Receiver)
+                },
+                arguments,
+                access.ArgumentForms
+            )
         }
     }
 
@@ -2022,34 +2043,87 @@ internal sealed class RegionEffectScanner {
         RecordConversion(element, target)
     }
 
-    // The arms of a conditional, `if` or switch expression meet in one type, so each arm is converted to the type of
-    // each other arm that is not an operator (`flag ? dt : dto` converts `DateTime` to `DateTimeOffset`, `flag ? nf
-    // : 1.0` converts an `NFloat` to `double`); a literal arm is a target of its literal type. An arm without a path
-    // that is not an operator is a target that the walker cannot type. Nested arms are merged with the
-    // others; a nested expression that is merged again records its own arms a second time, which changes nothing.
-    private func RecordMergeConversions(node SyntaxNode) {
-        if !Active() {
-            return
+    // The arms of a conditional, `if`, `if let` or switch expression meet in one type, so each arm is converted to the
+    // type of each other arm that is not an operator (`flag ? dt : dto` converts `DateTime` to `DateTimeOffset`,
+    // `flag ? nf : 1.0` converts an `NFloat` to `double`); a literal arm is a target of its literal type, and two
+    // operator arms meet without an operator only when the operators of the region are predefined. Nested arms are
+    // merged into the outermost expression, which records the pairs once; each arm's path is taken when the arm has
+    // been visited, in its scopes. An expression with more arms than the bound is one site that can run code.
+    private const MaxMergeArms int32 = 8
+
+    private let armTargets HashSet[ExpressionSyntax] = HashSet[ExpressionSyntax](ReferenceEqualityComparer.Instance)
+    private let armPaths Dictionary[ExpressionSyntax, RegionReceiverPath?] = Dictionary[
+        ExpressionSyntax,
+        RegionReceiverPath?
+    ](ReferenceEqualityComparer.Instance)
+    private let flattenedMerges HashSet[SyntaxNode] = HashSet[SyntaxNode](ReferenceEqualityComparer.Instance)
+
+    private func BeginMerge(node SyntaxNode) List[ExpressionSyntax]? {
+        if flattenedMerges.Remove(node) {
+            return nil
         }
         let arms = List[ExpressionSyntax]()
         CollectArms(node, arms)
-        for source in arms {
-            for target in arms {
-                if object.ReferenceEquals(source, target) {
-                    continue
-                }
-                let inner = UnwrapParentheses(target)
-                if inner == nil || IsNilLiteral(inner) {
-                    continue
-                }
-                // Two operator arms meet in a predefined way, and an operator arm converted to another arm's type is
-                // checked with that arm as the target.
-                if IsOperatorForm(inner) && BuildPath(inner) == nil {
-                    continue
-                }
-                RecordConversion(source, BuildPath(target))
+        if arms.Count <= MaxMergeArms {
+            for arm in arms {
+                armTargets.Add(arm)
             }
         }
+        return arms
+    }
+
+    private func EndMerge(arms List[ExpressionSyntax]?) {
+        guard let merged = arms else {
+            return
+        }
+        let paths = List[RegionReceiverPath?]()
+        for arm in merged {
+            armTargets.Remove(arm)
+            var path RegionReceiverPath? = nil
+            if armPaths.Remove(arm, out var captured) {
+                path = captured
+            }
+            paths.Add(path)
+        }
+        if !Active() {
+            return
+        }
+        if merged.Count > MaxMergeArms {
+            current.Conversions.Add(RegionConversion(nil, nil, false))
+            return
+        }
+        var operatorArms = 0
+        for var targetIndex = 0; targetIndex < merged.Count; targetIndex++ {
+            let target = merged[targetIndex]
+            if IsNilLiteral(target) {
+                continue
+            }
+            if IsOperatorForm(target) && paths[targetIndex] == nil {
+                operatorArms++
+                continue
+            }
+            for var sourceIndex = 0; sourceIndex < merged.Count; sourceIndex++ {
+                if sourceIndex != targetIndex {
+                    RecordArmConversion(merged[sourceIndex], paths[sourceIndex], paths[targetIndex])
+                }
+            }
+        }
+        if operatorArms >= 2 {
+            current.Conversions.Add(RegionConversion(nil, nil, true, false, operatorArms: true))
+        }
+    }
+
+    // An arm converted to the type of another arm, with the path taken in the arm's scopes.
+    private func RecordArmConversion(arm ExpressionSyntax, path RegionReceiverPath?, target RegionReceiverPath?) {
+        if IsNilLiteral(arm) {
+            current.Conversions.Add(RegionConversion(nil, target, false, sourceIsNil: true))
+            return
+        }
+        let builtInByForm = arm is BinaryExpressionSyntax ||
+            arm is LiteralExpressionSyntax ||
+            arm is InterpolatedStringExpressionSyntax ||
+            (arm is UnaryExpressionSyntax unary && unary.OperatorToken.Kind != SyntaxKind.BangBangToken)
+        current.Conversions.Add(RegionConversion(path, target, builtInByForm))
     }
 
     private func CollectArms(node SyntaxNode?, arms List[ExpressionSyntax]) {
@@ -2061,6 +2135,10 @@ internal sealed class RegionEffectScanner {
             case ifExpression is IfExpressionSyntax {
                 AddArm(ifExpression.ThenBlock, arms)
                 AddArm(ifExpression.ElseExpression, arms)
+            }
+            case ifLet is IfLetExpressionSyntax {
+                AddArm(ifLet.ThenBlock, arms)
+                AddArm(ifLet.ElseExpression, arms)
             }
             case switchExpression is SwitchExpressionSyntax {
                 for arm in switchExpression.Arms {
@@ -2078,7 +2156,8 @@ internal sealed class RegionEffectScanner {
         }
         switch value {
             case nil { }
-            case ConditionalExpressionSyntax, IfExpressionSyntax, SwitchExpressionSyntax {
+            case ConditionalExpressionSyntax, IfExpressionSyntax, IfLetExpressionSyntax, SwitchExpressionSyntax {
+                flattenedMerges.Add(value!!)
                 CollectArms(value, arms)
             }
             case ThrowExpressionSyntax { }
@@ -2142,8 +2221,7 @@ internal sealed class RegionEffectScanner {
     // An index access `t[i]`, recorded as a call of the member `[]` on the target for the consumer's check of the
     // conversions of its arguments. A range argument has the form `Range`.
     private func RecordIndexAccess(target RegionReceiverPath?, index IndexExpressionSyntax, position int32) {
-        // A name-shaped pattern (`o is List[int32]`) names a type, as for a read.
-        if !Active() || constantPatternDepth > 0 {
+        if !Active() {
             return
         }
         let arguments = List[RegionReceiverPath?]()
@@ -2166,7 +2244,13 @@ internal sealed class RegionEffectScanner {
                 }
             )
         }
-        current.IndexAccesses.Add(
+        // In a constant pattern the access can name a generic type (`o is List[int32]`); the consumer decides.
+        let accesses = if constantPatternDepth > 0 {
+            current.PatternIndexAccesses
+        } else {
+            current.IndexAccesses
+        }
+        accesses.Add(
             RegionCall(
                 RegionCallKind.MemberInvocation,
                 IndexMemberName,
