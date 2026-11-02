@@ -113,6 +113,12 @@ open class Adr0208NarrowingCorpusTests {
         Assert.Equal(names.Length, names.Distinct().Count())
         Assert.Equal(
             []string{
+                "b01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19",
+                "b02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19",
+                "b03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19",
+                "b04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19",
+                "b05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19",
+                "b06_5317_nested_loop_switch_case_on_an_enclosing_pattern_variable_calls_equals_R19",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -429,13 +435,7 @@ open class Adr0208NarrowingCorpusTests {
                 "y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19",
                 "y26_5593_default_of_a_source_class_is_null_R19",
                 "y27_5593_default_of_an_enum_constrained_type_parameter_is_not_null_R19",
-                "y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19",
-                "z01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19",
-                "z02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19",
-                "z03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19",
-                "z04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19",
-                "z05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19",
-                "z06_5317_nested_loop_switch_case_on_an_enclosing_pattern_variable_calls_equals_R19"
+                "y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19"
             },
             names
         )
@@ -7403,6 +7403,138 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "", "run", "a", "R14"}
+            yield[]object{"b01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if o is 1 { }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        switch o { case 1 { } default { } }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if o is One { }
+        if k > 3 { break }
+    }
+    return k
+}
+const One int32 = 1
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19", `import System
+class One { }
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object, p object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if p is int32 One {
+            switch o { case One { } default { } }
+        }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
+            yield[]object{"b05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19", `import System
+class One { }
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    let One = 1
+    var k = 0
+    while n > 0 {
+        k++
+        switch o { case One { } default { } }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b06_5317_nested_loop_switch_case_on_an_enclosing_pattern_variable_calls_equals_R19", `import System
+class One { }
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object, p object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if p is int32 One {
+            while true {
+                switch o { case One { } default { } }
+                break
+            }
+        }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {
@@ -8104,138 +8236,6 @@ func Run[T class](e E) int32 {
     return 2
 }
 Console.WriteLine(Run[string](E{}))`, "", "run", "1", "R19"}
-            yield[]object{"z01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        if o is 1 { }
-        if k > 3 { break }
-    }
-    return k
-}
-var n int32? = 1
-Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
-            yield[]object{"z02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19", `import System
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        switch o { case 1 { } default { } }
-        if k > 3 { break }
-    }
-    return k
-}
-var n int32? = 1
-Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
-            yield[]object{"z03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        if o is One { }
-        if k > 3 { break }
-    }
-    return k
-}
-const One int32 = 1
-var n int32? = 1
-Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
-            yield[]object{"z04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19", `import System
-class One { }
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object, p object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        if p is int32 One {
-            switch o { case One { } default { } }
-        }
-        if k > 3 { break }
-    }
-    return k
-}
-var n int32? = 1
-Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
-            yield[]object{"z05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19", `import System
-class One { }
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object) int32 {
-    if n == nil { return 0 }
-    let One = 1
-    var k = 0
-    while n > 0 {
-        k++
-        switch o { case One { } default { } }
-        if k > 3 { break }
-    }
-    return k
-}
-var n int32? = 1
-Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
-            yield[]object{"z06_5317_nested_loop_switch_case_on_an_enclosing_pattern_variable_calls_equals_R19", `import System
-class One { }
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object, p object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        if p is int32 One {
-            while true {
-                switch o { case One { } default { } }
-                break
-            }
-        }
-        if k > 3 { break }
-    }
-    return k
-}
-var n int32? = 1
-Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
