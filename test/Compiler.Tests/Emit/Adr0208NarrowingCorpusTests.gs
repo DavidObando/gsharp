@@ -431,7 +431,8 @@ open class Adr0208NarrowingCorpusTests {
                 "y27_5593_default_of_an_enum_constrained_type_parameter_is_not_null_R19",
                 "y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19",
                 "z01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19",
-                "z02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19"
+                "z02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19",
+                "z03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19"
             },
             names
         )
@@ -8138,6 +8139,27 @@ func Run(o object) int32 {
     }
     return k
 }
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"z03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if o is One { }
+        if k > 3 { break }
+    }
+    return k
+}
+const One int32 = 1
 var n int32? = 1
 Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
         }
