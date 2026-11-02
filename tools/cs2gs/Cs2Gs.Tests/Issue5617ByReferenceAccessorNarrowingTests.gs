@@ -426,6 +426,67 @@ public class Demo
         Assert.Contains("return s.Length + n + 2", printed)
     }
 
+    /// A `switch` case or arm runs its test, and its guard, before its body (ADR-0208, #5629). cs2gs lowers a property
+    /// case to a guard that reads the property, so a computed getter there removes the fact for the body. A constant
+    /// case on `object` calls `Equals`, a plain call that keeps the fact of a by-reference variable (amendment A3).
+    @Fact
+    func RefParameter_ReadInASwitchCaseAfterAnAccessorTest_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+public sealed class Box { private int count; public int P => ++count; }
+public class Demo
+{
+    public static int Case(ref string? s, object o)
+    {
+        if (s == null) return 0;
+        switch (o)
+        {
+            case Box { P: 1 }:
+                return s.Length;
+            default:
+                return 0;
+        }
+    }
+    public static int Arm(ref string? s, object o)
+    {
+        if (s == null) return 0;
+        return o switch { Box { P: 1 } => s.Length + 1, _ => 0 };
+    }
+    public static int Guard(ref string? s, int n, Lazy<int> lazy)
+    {
+        if (s == null) return 0;
+        switch (n)
+        {
+            case 1 when lazy.Value > 0:
+                return s.Length + 2;
+            default:
+                return 0;
+        }
+    }
+    public static int Constant(ref string? s, object o)
+    {
+        if (s == null) return 0;
+        switch (o)
+        {
+            case 1:
+                return s.Length + 3;
+            default:
+                return 0;
+        }
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Case(ref text, new Box()) + "," + Arm(ref text, new Box()) + "," +
+            Guard(ref text, 1, new Lazy<int>(() => 1)) + "," + Constant(ref text, 1);
+    }
+}`)
+        Assert.Contains("return s!!.Length\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("s!!.Length + 1", printed)
+        Assert.Contains("return s!!.Length + 2", printed)
+        Assert.Contains("return s.Length + 3", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.
