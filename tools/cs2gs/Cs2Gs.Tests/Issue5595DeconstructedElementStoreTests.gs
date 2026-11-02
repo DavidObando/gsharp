@@ -30,7 +30,9 @@ import Xunit
 /// | a `Node?[]`, `List<Node?>` or a widened array local | no `!!` | unchanged: the element accepts null |
 /// | another project's `[AllowNull]` indexer | no `!!` | unchanged: the indexer is promoted (#4356), so the slot is `T?` |
 /// | an oblivious indexer or array element of a prebuilt library outside the run | plain `h[0] = entry.Item!!` | no `!!` in either form: gsc imports the slot as a platform type (#3865) |
-/// | that library's `T[] Items` of a `Box<Node>`, or an annotated `Node[]` | plain `box.Items[0] = entry.Item!!` | bridged in both forms: the slot is non-null |
+/// | the same array through a `var` alias (`var nodes = h.Nodes`) | plain `nodes[0] = entry.Item!!` | no `!!` in either form: G# infers the alias from its initializer |
+/// | that library's `T[] Items` of a `Box<Node>`, an annotated `Node[]`, or an explicitly typed `Node[]` local | plain `box.Items[0] = entry.Item!!` | bridged: the slot is non-null |
+/// | a value converted by a source `implicit operator Ext.Box(Node)` into that library's oblivious `Box` indexer | `h[0] = entry.Item!!` | unchanged in the plain form; `h[0] = hValue!!` in the deconstruction: the operator's input is bridged |
 /// @remarks Mutation witnesses (ADR-0154): the first two tests fail on 21e3f30fa (GS0155) and when the
 /// element arm of `BridgeDeconstructedElementStore` keeps the unbridged store. The nullable-element
 /// test throws `NullReferenceException` when that arm asks `TargetWillRemainNonNullableReference`
@@ -39,6 +41,8 @@ import Xunit
 /// imported oblivious element test throws when `ElementStoreSlotAcceptsNil` does not ask
 /// `ElementStoreSlotIsImportedOblivious`, or when that query does not read an array receiver, and
 /// fails binding (GS0155) when it exempts a substituted `T[]` element or an annotated array element.
+/// The alias rows throw when `var` locals are not followed. The conversion test fails binding when the
+/// plain store skips its bridges for every slot that accepts nil.
 open class Issue5595DeconstructedElementStoreTests {
     /// A widened element stored into a `Node[]` element is bridged, as `arr[0] = entry.Item` is.
     @Fact
@@ -266,6 +270,29 @@ namespace Demo.App
             object o = h.Nodes[0];
             return (o == null).ToString();
         }
+        public static string StoreAlias(Entry entry)
+        {
+            var nodes = new Ext.Holder().Nodes;
+            int i;
+            (nodes[0], i) = entry;
+            object o = nodes[0];
+            return (o == null) + ":" + i;
+        }
+        public static string PlainAlias(Entry entry)
+        {
+            var nodes = new Ext.Holder().Nodes;
+            nodes[0] = entry.Item;
+            object o = nodes[0];
+            return (o == null).ToString();
+        }
+        public static string StoreTyped(Entry entry)
+        {
+            Ext.Node[] typed = new Ext.Holder().Nodes;
+            int i;
+            (typed[0], i) = entry;
+            object o = typed[0];
+            return (o == null) + ":" + i;
+        }
         public static string StoreGeneric(Entry entry)
         {
             var box = new Ext.Box<Ext.Node>();
@@ -300,23 +327,78 @@ namespace Demo.App
         {
             var entry = new Entry(new Ext.Node(), 2);
             return Store(Empty()) + " " + Plain(Empty()) + " " + StoreArray(Empty()) + " " + PlainArray(Empty()) +
-                " " + StoreGeneric(entry) + " " + PlainGeneric(entry) + " " + StoreStrict(entry) + " " +
-                PlainStrict(entry);
+                " " + StoreAlias(Empty()) + " " + PlainAlias(Empty()) + " " + StoreTyped(entry) + " " +
+                StoreGeneric(entry) + " " + PlainGeneric(entry) + " " + StoreStrict(entry) + " " + PlainStrict(entry);
         }
     }
 }`, Emit(library))
         let appPrinted = Translate(app, []CSharpCompilation{app})
         Assert.Equal(
-            "True:0 True True:0 True False:2 False False:2 False",
+            "True:0 True True:0 True True:0 True False:2 False:2 False False:2 False",
             CompileAndRun([]string{appPrinted}, "Demo.App.Use.Run()", library).Trim()
         )
         Assert.Contains("Item Node?", appPrinted)
         Assert.DoesNotContain("hValue!!", appPrinted)
+        Assert.DoesNotContain("nodesValue!!", appPrinted)
+        Assert.Contains("= typedValue!!\n", appPrinted)
         Assert.Contains("= boxValue!!\n", appPrinted)
         Assert.Contains("box.Items!![0] = entry.Item!!\n", appPrinted)
         Assert.Contains("= strictValue!!\n", appPrinted)
         Assert.Contains("strict.Nodes[0] = entry.Item!!\n", appPrinted)
         Assert.Equal(3, appPrinted.Split("entry.Item!!").Length)
+    }
+
+    /// A source conversion whose input stays non-null still needs `!!` on a nullable value that it
+    /// converts into a slot that accepts nil, in the plain store and in the deconstruction.
+    @Fact
+    func StoreThroughAConversionIntoAnImportedObliviousSlot_BridgesTheOperatorInput() {
+        let library = Compile("Ext", `
+namespace Ext
+{
+    public class Box { public string Tag; }
+    public class BoxHolder
+    {
+        private Box stored;
+        public Box this[int index] { get { return stored; } set { stored = value; } }
+    }
+}`, nil)
+        let app = Compile("App", `
+namespace Demo.App
+{
+    public class Node
+    {
+        public override string ToString() => "node";
+        public static implicit operator Ext.Box(Node node) => new Ext.Box { Tag = node.ToString() };
+    }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Store(Entry entry)
+        {
+            var h = new Ext.BoxHolder();
+            int i;
+            (h[0], i) = entry;
+            return h[0].Tag + i;
+        }
+        public static string Plain(Entry entry)
+        {
+            var h = new Ext.BoxHolder();
+            h[0] = entry.Item;
+            return h[0].Tag;
+        }
+        public static string Run()
+        {
+            var entry = new Entry(new Node(), 1);
+            return Store(entry) + " " + Plain(entry);
+        }
+    }
+}`, Emit(library))
+        let appPrinted = Translate(app, []CSharpCompilation{app})
+        Assert.Equal("node1 node", CompileAndRun([]string{appPrinted}, "Demo.App.Use.Run()", library).Trim())
+        Assert.Contains("Item Node?", appPrinted)
+        Assert.Contains("h[0] = hValue!!\n", appPrinted)
+        Assert.Contains("h[0] = entry.Item!!\n", appPrinted)
     }
 
     private func Translate(source string) string {

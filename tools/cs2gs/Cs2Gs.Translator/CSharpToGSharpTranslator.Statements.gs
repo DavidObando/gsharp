@@ -3526,12 +3526,17 @@ partial class CSharpToGSharpTranslator {
         // platform type, which takes a nullable value. An array element has no
         // symbol: its contract is the element position of the receiver's
         // declaration, read before type-argument substitution, so a `T[]` whose
-        // `T` the consumer substitutes keeps that type argument's contract.
+        // `T` the consumer substitutes keeps that type argument's contract. A
+        // `var` local without a type clause has the type of its initializer, so
+        // it is followed to the declaration of that initializer.
         private func ElementStoreSlotIsImportedOblivious(target ElementAccessExpressionSyntax, slot ISymbol?) bool {
             if slot != nil {
                 return this.IsImportedObliviousNullableTarget(slot)
             }
-            let receiver ISymbol? = this.context.GetSymbolInfo(target.Expression).Symbol
+            var receiver ISymbol? = this.context.GetSymbolInfo(target.Expression).Symbol
+            for var depth = 0; depth < 8 && receiver is ILocalSymbol; depth++ {
+                receiver = this.InferredLocalInitializerSymbol(cast[ILocalSymbol](receiver))
+            }
             let declared ITypeSymbol? = switch receiver?.OriginalDefinition {
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
@@ -3540,6 +3545,23 @@ partial class CSharpToGSharpTranslator {
             }
             return declared is IArrayTypeSymbol array && this.TargetContractIsFrozenInMetadata(receiver) &&
                 ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(array.ElementType)
+        }
+
+        // The declaration that the initializer of a `var` local reads, when the
+        // local's emitted declaration has no type clause (see
+        // `InferredLocalDeclarationIsNullable`), so G# infers it from that initializer.
+        private func InferredLocalInitializerSymbol(local ILocalSymbol) ISymbol? {
+            if this.InferredLocalDeclarationIsNullable(local) {
+                return nil
+            }
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} declarator &&
+                declarator.Parent is VariableDeclarationSyntax{Type: {IsVar: true}} {
+                return this.context.GetSymbolInfo(initializer).Symbol
+            }
+            return nil
         }
 
         // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
@@ -4482,9 +4504,17 @@ partial class CSharpToGSharpTranslator {
             // Issues #4500 and #4525: a write into an element of an array
             // cs2gs emits as `T?` accepts nil, so none of the null-forgiveness
             // bridges below may assert the value. The coercions above still apply.
-            // Issue #5595: the same holds for a slot of a prebuilt oblivious library.
-            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && this.ElementStoreSlotAcceptsNil(
-                assignment.Left
+            // Issue #5595: the same holds for a slot of a prebuilt oblivious library,
+            // unless a user-defined conversion converts the value: the bridges below
+            // decide the operator's input.
+            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                (
+                this.IsNullableArrayElementAccess(assignment.Left) ||
+                    (
+                    this.ElementStoreSlotAcceptsNil(assignment.Left) && !this.FlowsThroughUserDefinedConversion(
+                        assignment.Right
+                    )
+                )
             ) {
                 return value
             }
