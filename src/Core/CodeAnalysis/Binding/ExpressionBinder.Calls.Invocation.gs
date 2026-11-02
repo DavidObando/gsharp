@@ -338,6 +338,19 @@ internal partial class ExpressionBinder {
         return result
     }
 
+    /// Issue #5569: the parameter lists of a probe's candidates, for (cref:BindLambdaWithCandidateTarget).
+    /// @param methods The candidate methods.
+    /// @returns Their parameter lists, in candidate order.
+    private func CollectProbeParameterLists(methods IReadOnlyList[MethodInfo]) List[[]ParameterInfo] {
+        let result = List[[]ParameterInfo](methods.Count)
+        for method in methods {
+            if method != nil {
+                result.Add(method.GetParameters())
+            }
+        }
+        return result
+    }
+
     /// Issue #891: infers the target delegate type for each deferred un-typed
     /// arrow lambda argument of a member-style call by probing the applicable
     /// candidate methods — instance methods on the receiver, imported
@@ -641,16 +654,25 @@ internal partial class ExpressionBinder {
                         // void-discard / ordinary target-typed return-type
                         // inference applies instead of inferring the return
                         // type purely from the lambda body.
-                        let literal = lambdas.BindLambdaExpression(
+                        let slotIndex = idx
+                        let inferReturn = !exactReturnIndices.Contains(idx)
+                        boundArgs[idx] = BindLambdaWithCandidateTarget(
                             lambdaSyntax,
+                            CollectProbeParameterLists(probe.Methods),
+                            (parameters[]ParameterInfo) -> MapSourceArgumentToParameter(
+                                parameters,
+                                ce,
+                                slotIndex,
+                                probe.ReceiverParameterOffset
+                            ),
                             target.FunctionType,
-                            inferReturnTypeFromBody: !exactReturnIndices.Contains(idx)
+                            inferReturn,
+                            (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                                ce.Arguments[slotIndex],
+                                literal,
+                                target.DelegateType
+                            )
                         )
-                        boundArgs[idx] = if ShouldConvertToNominalDelegate(target.DelegateType) {
-                            conversions.BindConversion(ce.Arguments[idx].Location, literal, target.DelegateType)
-                        } else {
-                            literal
-                        }
                     }
                 }
                 return
@@ -739,10 +761,12 @@ internal partial class ExpressionBinder {
                     allMapped = false
                     break
                 }
-                let parameterType Type? = parameters[paramIndex].ParameterType
-                if parameterType == nil ||
-                    parameterType.ContainsGenericParameters ||
-                    !MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out var fn) || fn == nil {
+                let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
+                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionType(
+                    parameterType,
+                    out var fn
+                ) ||
+                    fn == nil {
                     allMapped = false
                     break
                 }
@@ -757,11 +781,18 @@ internal partial class ExpressionBinder {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
                 if inner is LambdaExpressionSyntax lambdaSyntax {
                     let target = targets[idx]
-                    boundArgs[idx] = BindLambdaWithDelegateTarget(
-                        ce.Arguments[idx],
+                    let slotIndex = idx
+                    boundArgs[idx] = BindLambdaWithCandidateTarget(
                         lambdaSyntax,
+                        CollectProbeParameterLists(probe.Methods),
+                        (parameters[]ParameterInfo) -> MapSourceArgumentToParameter(parameters, ce, slotIndex, offset),
                         target.FunctionType,
-                        target.DelegateType
+                        false,
+                        (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                            ce.Arguments[slotIndex],
+                            literal,
+                            target.DelegateType
+                        )
                     )
                 }
             }
@@ -1072,7 +1103,8 @@ internal partial class ExpressionBinder {
                     candidateUsable = false
                     break
                 }
-                let openParameterType = openParameters[paramIndex].ParameterType
+                // Issue #5543: a lambda is a plain value, so an `in` slot targets its pointee.
+                let openParameterType = ConversionClassifier.GetPlainValueClrParameterType(openParameters[paramIndex])
                 var mappedDelegate TypeSymbol?
                 var functionType FunctionTypeSymbol?
                 // Issue #3666: set when the delegate's RETURN shape was closed
@@ -1188,7 +1220,9 @@ internal partial class ExpressionBinder {
                     // only the erased CLR shape.
                     if mappedDelegate is ImportedTypeSymbol{OpenDefinition: {} mappedOpenDefinition} mappedImported &&
                         paramIndex < closedParameters.Length &&
-                        closedParameters[paramIndex].ParameterType is {} closedParameterType &&
+                        ConversionClassifier.GetPlainValueClrParameterType(
+                        closedParameters[paramIndex]
+                    ) is {} closedParameterType &&
                         !closedParameterType.ContainsGenericParameters &&
                         !closedParameterType.IsSameAs(mappedImported.ClrType) &&
                         closedParameterType.IsGenericType &&
@@ -1436,7 +1470,7 @@ internal partial class ExpressionBinder {
         if receiver != nil && NativeSliceTypes.TryGetElement(receiver.Type, out _, out _) {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             let saved = DeclareRangeTemp("callReceiver", receiver.Type, receiver, statements)
-            let call = BindAccessorCallCore(
+            let call = BindAccessorCallKeepingLiteralTargetErrors(
                 BoundVariableExpression(receiver.Syntax, saved),
                 classSymbol,
                 ce,
@@ -1445,7 +1479,21 @@ internal partial class ExpressionBinder {
             )
             return BoundBlockExpression(ce, statements.ToImmutable(), call)
         }
-        return BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        return BindAccessorCallKeepingLiteralTargetErrors(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+    }
+
+    private func BindAccessorCallKeepingLiteralTargetErrors(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        ce CallExpressionSyntax,
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
+        let pending = literalTargetDiagnostics.Count
+        let mark = Diagnostics.Count
+        let call = BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        ReportDiscardedLiteralTargetDiagnostics(pending, HasErrorDiagnosticSince(mark))
+        return call
     }
 
     private func BindAccessorCallCore(
@@ -1718,8 +1766,20 @@ internal partial class ExpressionBinder {
                     if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
                         // target: non-null whenever hasClosedTarget is true
                         // ([NotNullWhen(true)] on TryResolveDelegateTargetFromCandidates).
+                        let slotIndex = argSlot
                         boundArguments.Add(
-                            BindLambdaWithDelegateTarget(argument, lambdaSyntax, target!!, nominalTarget)
+                            BindLambdaWithCandidateTarget(
+                                lambdaSyntax,
+                                delegateTargetCandidateParams!!,
+                                (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
+                                target!!,
+                                false,
+                                (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                                    argument,
+                                    literal,
+                                    nominalTarget
+                                )
+                            )
                         )
                         lambdaHandled = true
                     }
@@ -4180,7 +4240,8 @@ internal partial class ExpressionBinder {
             if paramIndex < 0 || paramIndex >= openParams.Length {
                 return false
             }
-            var openParamType = openParams[paramIndex].ParameterType
+            // Issue #5543: a lambda is a plain value, so an `in` slot targets its pointee.
+            var openParamType Type? = ConversionClassifier.GetPlainValueClrParameterType(openParams[paramIndex])
             // Issue #2365: an `Expression<TDelegate>` parameter is not itself a
             // delegate (it exposes no `Invoke`), so unwrap it to the wrapped open
             // delegate type first. Both a direct delegate parameter and an
@@ -4337,31 +4398,21 @@ internal partial class ExpressionBinder {
         /// @returns `true` when the slot can receive the lambda.
         private func CanParameterReceiveLambdaOfArity(parameter ParameterInfo, arity int32, out determined bool) bool {
             determined = true
-            var parameterType Type? = parameter.ParameterType
-            if parameterType == nil {
-                determined = false
-                return false
-            }
-            if parameterType.IsByRef {
-                parameterType = parameterType.GetElementType()
-                if parameterType == nil {
-                    determined = false
-                    return false
-                }
-            }
-            if parameterType!!.IsGenericParameter {
+            // Issue #5543: a lambda is a plain value, so only an `in` slot passes it by reference.
+            let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameter)
+            if parameterType.IsGenericParameter {
                 // A bare method/type parameter slot (e.g. `TDelegate`) says nothing
                 // about the delegate shape it will close over.
                 determined = false
                 return false
             }
             try {
-                if MatchesDelegateArity(parameterType!!, arity) {
+                if MatchesDelegateArity(parameterType, arity) {
                     return true
                 }
                 // A `params Func[...][]` slot receives the lambda through the array
                 // element type in expanded form.
-                return parameterType!!.IsArray && parameterType!!.GetElementType() is {} elementType &&
+                return parameterType.IsArray && parameterType.GetElementType() is {} elementType &&
                     MatchesDelegateArity(elementType, arity)
             } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
                 determined = false

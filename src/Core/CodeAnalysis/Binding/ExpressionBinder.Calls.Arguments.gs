@@ -2259,8 +2259,9 @@ internal partial class ExpressionBinder {
             let hasTargetFunctionType = if parameterTypeOverride != nil {
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeOverride, out targetFunctionType)
             } else {
+                // Issue #5543: a function literal is a plain value, so an `in` slot targets its pointee.
                 paramIndex < parameters.Length && MemberLookup.TryGetLambdaTargetFunctionType(
-                    parameters[paramIndex].ParameterType,
+                    ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex]),
                     out targetFunctionType
                 )
             }
@@ -2368,8 +2369,9 @@ internal partial class ExpressionBinder {
                 if literalFnType != nil &&
                     literalFnType.ReturnType != TypeSymbol.Void &&
                     literalFnType.ReturnType != TypeSymbol.Error &&
-                    MemberLookup.TryGetLambdaTargetFunctionType(
-                    parameters[paramIndex].ParameterType,
+                    MemberLookup
+                    .TryGetLambdaTargetFunctionType(
+                    ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex]),
                     out var targetFunctionType
                 ) &&
                     targetFunctionType!!.ReturnType != TypeSymbol.Void &&

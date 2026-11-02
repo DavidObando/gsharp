@@ -306,6 +306,11 @@ internal class BinderContext {
 
     prop PotentialReachabilityLabel string?
 
+    /// Issue #5569: set while a speculative lambda body converts a `return` value to its delegate result. A
+    /// backward `goto` narrowing use recorded then belongs to that conversion only, so its diagnostic waits for the
+    /// lambda binder's choice between the delegate and the natural function type.
+    prop DeferredReturnNarrowingOwner LambdaBinder.DeferredReturnState?
+
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
     /// local-function body contains any user-written `goto` statement or non-loop
     /// `label:` declaration (issue #4285), computed syntactically,
@@ -842,7 +847,8 @@ internal class BinderContext {
             kind,
             operationRequiredType,
             MemberLookup.GetDeclaredAccessPathType(path, narrowedType),
-            targetType
+            targetType,
+            DeferredReturnNarrowingOwner
         )
         for entry in BackwardGotoNarrowingStates {
             let state = entry.Value

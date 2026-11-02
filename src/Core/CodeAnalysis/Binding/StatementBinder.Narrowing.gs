@@ -1085,6 +1085,7 @@ internal partial class StatementBinder {
                     if (sourceType == nil || !IsRepresentationPreservingJoin(sourceType, access.RequiredType)) &&
                         reported
                         .Add(access) {
+                        let accessMark = Diagnostics.Count
                         switch access.Kind {
                             case BackwardGotoNarrowingUseKind.Function {
                                 Diagnostics.ReportUnableToFindFunction(access.Location, access.MemberName)
@@ -1117,6 +1118,12 @@ internal partial class StatementBinder {
                             default {
                                 Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName)
                             }
+                        }
+                        // Issue #5569: a use of a speculative lambda's `return` conversion to its delegate result
+                        // waits for the lambda binder's choice of the function type.
+                        if access.HeldBy is {} owner {
+                            owner.HoldNarrowingUse(access, Diagnostics.Skip(accessMark).ToImmutableArray())
+                            Diagnostics.TruncateTo(accessMark)
                         }
                     }
                 }

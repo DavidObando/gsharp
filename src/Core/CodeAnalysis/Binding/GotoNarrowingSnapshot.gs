@@ -167,7 +167,8 @@ internal data class BackwardGotoNarrowingAccess(
     Kind BackwardGotoNarrowingUseKind,
     RequiredType TypeSymbol,
     DeclaredType TypeSymbol,
-    TargetType TypeSymbol? = nil
+    TargetType TypeSymbol? = nil,
+    HeldBy LambdaBinder.DeferredReturnState? = nil
 ) : IEquatable[BackwardGotoNarrowingAccess] {
     prop Variable VariableSymbol -> Path.Root
 }
