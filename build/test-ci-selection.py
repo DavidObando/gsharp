@@ -574,8 +574,13 @@ class WorkflowTests(unittest.TestCase):
         nightly = (ROOT / ".github/workflows/cs2gs-apps-nightly.yml").read_text()
         self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", nightly)
         self.assertIn("legs:", nightly)
+        self.assertNotIn("replace(", nightly)
+        self.assertNotIn("matrix.app", job(nightly, "app").split("runs-on:")[0].split("if:")[1])
         self.assertIn('--expect "$EXPECTED_LEGS"', job(nightly, "gate"))
         self.assertNotIn("Build cs2gs (Release)", job(nightly, "csharp-validate"))
+        selfmig = (ROOT / "build/selfmig-common.sh").read_text()
+        self.assertIn("SELFMIG_PREREQUISITES_RESTORED", selfmig)
+        self.assertIn("SELFMIG_CORPUS_RESTORED", selfmig)
         # The publish jobs are covered by PublishJobTests (ADR-0218).
         for artifact in ("nuget-packages", "vscode-gsharp-vsix", "visual-studio-gsharp-vsix"):
             self.assertIn(f"name: {artifact}", job(text, "publish-verify"))

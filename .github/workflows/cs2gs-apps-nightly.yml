@@ -107,13 +107,23 @@ jobs:
     if: >-
       github.event.inputs.legs == '' ||
       github.event.inputs.legs == 'all' ||
-      contains(fromJSON(format('["{0}"]', replace(github.event.inputs.legs, ',', '","'))), matrix.app)
+      contains(format(',{0},', github.event.inputs.legs), ',oahu,') ||
+      contains(format(',{0},', github.event.inputs.legs), ',code-exploder,')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        app: [oahu, code-exploder]
+        app: >-
+          ${{
+            (github.event.inputs.legs == '' || github.event.inputs.legs == 'all' ||
+              (contains(format(',{0},', github.event.inputs.legs), ',oahu,') &&
+               contains(format(',{0},', github.event.inputs.legs), ',code-exploder,'))) &&
+            fromJSON('["oahu","code-exploder"]') ||
+            contains(format(',{0},', github.event.inputs.legs), ',oahu,') &&
+            fromJSON('["oahu"]') ||
+            fromJSON('["code-exploder"]')
+          }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -187,7 +197,7 @@ jobs:
     if: >-
       github.event.inputs.legs == '' ||
       github.event.inputs.legs == 'all' ||
-      contains(fromJSON(format('["{0}"]', replace(github.event.inputs.legs, ',', '","'))), 'gsharp-csharp')
+      contains(format(',{0},', github.event.inputs.legs), ',gsharp-csharp,')
     runs-on: ubuntu-latest
     # The one gsharp-csharp job that cannot be split; the translate pass took
     # about 75 minutes before the cut-over. Keep the headroom.
@@ -222,15 +232,20 @@ jobs:
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
       - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
-        run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+        run: |
+          ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+          dotnet restore "$SELFMIG_SOURCE_ROOT/GSharp.sln" --locked-mode
 
       - name: Cache the built C# corpus prerequisites
+        id: corpus-cache
         uses: actions/cache@v4
         with:
           path: ${{ env.SELFMIG_SOURCE_ROOT }}/out
           key: selfmig-corpus-out-${{ runner.os }}-${{ hashFiles('tools/cs2gs/external/gsharp-csharp.json') }}
 
       - name: Translate the corpus
+        env:
+          SELFMIG_CORPUS_RESTORED: ${{ steps.corpus-cache.outputs.cache-hit == 'true' && '1' || '0' }}
         run: ./build/run-cs2gs-selfmig-migrate.sh
 
       - name: Archive built prerequisites for validation shards
@@ -341,6 +356,8 @@ jobs:
         env:
           SHARD_NAME: ${{ matrix.name }}
           SHARD_APPS: ${{ matrix.apps }}
+          SELFMIG_PREREQUISITES_RESTORED: '1'
+          SELFMIG_CORPUS_RESTORED: '1'
         # SHARD_APPS is a space-separated app-id list: one argument per app.
         run: |
           read -ra apps <<< "$SHARD_APPS"
@@ -378,7 +395,7 @@ jobs:
       always() && (
         github.event.inputs.legs == '' ||
         github.event.inputs.legs == 'all' ||
-        contains(fromJSON(format('["{0}"]', replace(github.event.inputs.legs, ',', '","'))), 'gsharp-csharp')
+        contains(format(',{0},', github.event.inputs.legs), ',gsharp-csharp,')
       )
     steps:
       - uses: actions/checkout@v5
