@@ -528,21 +528,9 @@ class Lowerer : BoundTreeRewriter {
     /// <inheritdoc />
     /// ```
     protected override func RewritePropertyAccessExpression(node BoundPropertyAccessExpression) BoundExpression {
-        // ADR-0051: auto-properties lower to backing field access, but ONLY when
-        // we are inside the type that DIRECTLY declares the property. The backing
-        // field is private (DeclarationBinder), so it is only legal to touch from
-        // its exact declaring type. Issue #1486: an INHERITED auto-property read
-        // from a derived method must instead dispatch through the accessor
-        // (callvirt get_X) — node.StructType is the receiver's static type, not
-        // the property's declaring type, so it cannot gate this on its own.
-        if node
-            .Property
-            .IsAutoProperty &&
-            node
-            .Property
-            .BackingField != nil &&
-            this.declaringType != nil &&
-            DeclaresPropertyDirectly(this.declaringType, node.Property) {
+        // ADR-0051: an auto-property read lowers to a backing-field read only
+        // when UsesBackingField permits it. Otherwise it stays an accessor call.
+        if UsesBackingField(node.Property, isWrite: false) {
             return BoundFieldAccessExpression(
                 node.Syntax,
                 node.Receiver,
@@ -563,20 +551,9 @@ class Lowerer : BoundTreeRewriter {
     protected override func RewritePropertyAssignmentExpression(
         node BoundPropertyAssignmentExpression
     ) BoundExpression {
-        // ADR-0051: auto-properties lower to backing field assignment, but ONLY
-        // when we are inside the type that DIRECTLY declares the property (same
-        // private-backing-field rationale as read access). Issue #1486: writing
-        // an INHERITED auto-property from a derived method must dispatch through
-        // the accessor (callvirt set_X) instead of touching the base's private
-        // backing field.
-        if node
-            .Property
-            .IsAutoProperty &&
-            node
-            .Property
-            .BackingField != nil &&
-            this.declaringType != nil &&
-            DeclaresPropertyDirectly(this.declaringType, node.Property) {
+        // ADR-0051: an auto-property write lowers to a backing-field store only
+        // when UsesBackingField permits it. Otherwise it stays an accessor call.
+        if UsesBackingField(node.Property, isWrite: true) {
             let value = RewriteExpression(node.Value)
             // Issue #263: static auto-property assignment — lower to static field assignment.
             if node.Receiver == nil {
@@ -609,6 +586,29 @@ class Lowerer : BoundTreeRewriter {
         // Computed properties (or non-variable receivers, or external access)
         // remain as BoundPropertyAssignmentExpression.
         return base.RewritePropertyAssignmentExpression(node)
+    }
+
+    /// Determines whether an access to [`prop`](paramref) lowers to the
+    /// synthesized backing field instead of an accessor call. The read lowering and the write lowering both use this decision.
+    /// @remarks The backing field is private. Only the type that directly declares
+    /// the property can access it (issue #1486). The field access must also give
+    /// the same result as the accessor call, so the dispatch must be exact (issue #5630).
+    /// A write to a get-only auto-property is the constructor store that issue #4350
+    /// permits. It has no setter, so it always stores the backing field, as in C#.
+    /// @param prop The accessed property.
+    /// @param isWrite `true` for a store, `false` for a read.
+    /// @returns `true` when the access lowers to the backing field.
+    private func UsesBackingField(prop PropertySymbol, isWrite bool) bool {
+        if !prop.IsAutoProperty ||
+            prop.BackingField == nil ||
+            this.declaringType is not{} owner ||
+            !DeclaresPropertyDirectly(owner, prop) {
+            return false
+        }
+        if isWrite && !prop.HasSetter {
+            return true
+        }
+        return HasExactPropertyDispatch(prop, owner)
     }
 
     private func LowerAwaitForRange(
@@ -1263,6 +1263,24 @@ class Lowerer : BoundTreeRewriter {
             result = lowerer.WrapWithMethodExitEpilogue(result)
             let protectedResult = lowerer.RewriteProtectedRegionEntries(result)
             return SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult)
+        }
+
+        /// Issue #5630: determines whether an accessor call of [`prop`](paramref)
+        /// always runs the accessors that [`owner`](paramref) declares.
+        /// @remarks A property that is not `open` and not `override` has no override.
+        /// Otherwise a subclass of the owner can override it, so the dispatch is exact
+        /// only when the owner has no subclass. A value type has no subclass. A class
+        /// has a subclass only when it is `open` (ADR-0017) or `sealed` (ADR-0078).
+        /// The rule reads the owner and not the static receiver type, so it does not
+        /// depend on how the binder typed or narrowed the receiver.
+        /// @param prop The accessed property.
+        /// @param owner The type that directly declares [`prop`](paramref).
+        /// @returns `true` when the dispatch is exact.
+        private func HasExactPropertyDispatch(prop PropertySymbol, owner StructSymbol) bool {
+            if !prop.IsVirtual && !prop.IsOverride {
+                return true
+            }
+            return !owner.IsClass || (!owner.IsOpen && !owner.IsSealedHierarchy)
         }
 
         /// Issue #1486: determines whether [`type`](paramref) DIRECTLY declares
