@@ -3260,6 +3260,25 @@ class Derived : Base {
     }
 }
 func Main() { Console.WriteLine(Derived().Run(ref Box.G)) }`, "GS0158@13:20")
+            Add("each-receiver-alternative-binds-its-own-overloads (A3)", `package T
+import System
+class A {
+    func Use(d DateTime) { }
+}
+class B {
+    func Use(d DateTimeOffset) { }
+}
+func Run(ref text string?, o object, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is A { }
+        if o is B { o.Use(dt) }
+    }
+    return n
+}
+func Main() { }`, "GS0158@12:16")
             return rows
         }
     }

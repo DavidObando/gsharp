@@ -106,11 +106,13 @@ run()`)
         } else {
             // The rejection is the narrowing error at the `c.Value` read of the loop body, and nothing else.
             let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-            Assert.True(errors.Length > 0, "$shape/$$scope must be rejected")
-            for error in errors {
-                Assert.Equal("GS0158", error.Id)
-                Assert.Contains("Value", error.Message)
-            }
+            let index = source.IndexOf("c.Value", StringComparison.Ordinal) + 2
+            let line = source.Substring(0, index).Count((character char) -> character == '\n') + 1
+            let column = index - source.LastIndexOf('\n', index - 1)
+            Assert.Equal(
+                []string{"GS0158@$line:$column"},
+                errors.Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            )
         }
     }
 

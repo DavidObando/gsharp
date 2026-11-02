@@ -1437,22 +1437,49 @@ internal partial class StatementBinder {
                 kinds.Add(ArgumentTyped)
             }
         }
-        // A candidate that takes every argument by identity is better than one that needs a conversion operator.
-        // Otherwise a candidate that needs one can be the better one (a conversion to `Payload` beats one to
-        // `object`), and a call that no candidate takes is not checked.
-        let candidates = List[List[TypeSymbol]]()
-        for parameters in ParameterLists(call, name, effects) {
-            if parameters.Count == argumentTypes.Count {
-                // A call with named type arguments selects by generic arity, which the lists do not show.
-                if !call.HasTypeArguments && CandidateIsExact(parameters, argumentTypes, kinds) {
+        // The receiver can have each of its alternative types (its declared type, a narrowing, a type test of the
+        // region), and the call binds among the candidates of the one it has. Each alternative that has candidates
+        // of this arity must take the call without a conversion operator; one without any cannot be the type the
+        // call binds on. A call that no alternative takes is not checked.
+        var anyAlternative = false
+        for group in ParameterListGroups(call, name, effects) {
+            let candidates = List[List[TypeSymbol]]()
+            for parameters in group {
+                if parameters.Count == argumentTypes.Count {
+                    candidates.Add(parameters)
+                }
+            }
+            if candidates.Count == 0 {
+                continue
+            }
+            anyAlternative = true
+            if CandidatesRunUserConversion(candidates, argumentTypes, kinds, call.HasTypeArguments) {
+                return true
+            }
+        }
+        return !anyAlternative
+    }
+
+    // A candidate that takes every argument by identity is better than one that needs a conversion operator.
+    // Otherwise a candidate that needs one can be the better one (a conversion to `Payload` beats one to `object`),
+    // and a call that no candidate takes is not checked.
+    private func CandidatesRunUserConversion(
+        candidates List[List[TypeSymbol]],
+        argumentTypes List[List[TypeSymbol]?],
+        kinds List[int32],
+        explicitTypeArguments bool
+    ) bool {
+        // A call with named type arguments selects by generic arity, which the lists do not show.
+        if !explicitTypeArguments {
+            for parameters in candidates {
+                if CandidateIsExact(parameters, argumentTypes, kinds) {
                     return false
                 }
-                candidates.Add(parameters)
             }
         }
         var free = false
         for parameters in candidates {
-            let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, call.HasTypeArguments)
+            let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, explicitTypeArguments)
             if candidate == CandidateUser {
                 return true
             }
@@ -1846,19 +1873,22 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func ParameterLists(call RegionCall, name string, effects RegionEffects) List[List[TypeSymbol]] {
-        let lists = List[List[TypeSymbol]]()
+    // The parameter lists of the candidates, one group for each alternative type of the receiver.
+    private func ParameterListGroups(call RegionCall, name string, effects RegionEffects) List[List[List[TypeSymbol]]] {
+        let groups = List[List[List[TypeSymbol]]]()
         var receivers List[ReceiverType]? = nil
         if call.Kind == RegionCallKind.NamedInvocation {
+            let lists = List[List[TypeSymbol]]()
             for function in $scope.TryLookupFunctions(name) {
                 if call.HasTypeArguments || TypeParametersInferable(function) {
                     lists.Add(ParameterTypes(function))
                 }
             }
-            return lists
+            groups.Add(lists)
+            return groups
         }
         if call.Kind != RegionCallKind.MemberInvocation {
-            return lists
+            return groups
         }
         if call.ReceiverName is {} receiverName {
             let types = List[ReceiverType]()
@@ -1869,18 +1899,20 @@ internal partial class StatementBinder {
             receivers = ResolveReceiverPath(path, effects)
         }
         if receivers == nil {
-            return lists
+            return groups
         }
         // A receiver that names a type selects its static methods; a value selects instance methods.
         let staticAccess = ReceiverNamesType(call)
         for receiver in receivers {
+            let lists = List[List[TypeSymbol]]()
             if name == RegionEffectScanner.IndexMemberName {
                 AddIndexParameterLists(receiver, call, effects, lists)
             } else {
                 AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists)
             }
+            groups.Add(lists)
         }
-        return lists
+        return groups
     }
 
     private func ReceiverNamesType(call RegionCall) bool {

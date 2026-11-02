@@ -9,6 +9,7 @@ import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Text.RegularExpressions
 import GSharp.Compiler
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Text
@@ -120,13 +121,26 @@ func Main() {
     @InlineData("member-call", "GS0159")
     @InlineData("implicit-field", "GS0159")
     @InlineData("closure", "GS0159")
-    @InlineData("break-only", "GS0159")
-    @InlineData("labeled-break", "GS0159")
-    @InlineData("other-instance-field", "GS0159")
     func AssignmentReachingBackEdge_InvalidatesInheritedNarrowing(shape string, expectedDiagnostic string) {
         let compilation = Compile(BuildRejectedSource(shape))
         let errors = compilation.BoundProgram.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.IsError).ToArray()
         Assert.Contains(errors, (diagnostic Diagnostic) -> diagnostic.Id == expectedDiagnostic)
+    }
+
+    // ADR-0213 L1: a write on a path that leaves the loop, and a write to another instance's field, remove the fact
+    // at the loop entry; each shape reports the one diagnostic at its read.
+    @Theory
+    @InlineData("break-only", "GS0159@9:7")
+    @InlineData("labeled-break", "GS0159@9:7")
+    @InlineData("other-instance-field", "GS0159@22:16")
+    func LoopEntryRemoval_IsReportedAtTheRead(shape string, expected string) {
+        let errors = Compile(BuildRejectedSource(shape))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic Diagnostic) -> diagnostic.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal(expected, string.Join(" ", errors))
     }
 
     @Theory
@@ -180,7 +194,12 @@ ok
         let source = NonNullAssignmentSource(secondIterationAssignment, "function")
         let (exitCode, output) = CompileWithDriver(source, "non-null-after-use-rejected-$shape")
         Assert.NotEqual(0, exitCode)
-        Assert.Contains("GS0159", output, StringComparison.Ordinal)
+        let marker = "c.Print()"
+        let index = source.IndexOf(marker, StringComparison.Ordinal)
+        let line = source.Substring(0, index).Count((character char) -> character == '\n') + 1
+        let column = index - source.LastIndexOf('\n', index) + 2
+        Assert.Contains("test.gs($line,$column,$line,${column + 7}): error GS0159", output, StringComparison.Ordinal)
+        Assert.Equal(1, Regex.Matches(output, `: error GS\d+`).Count)
     }
 
     // ADR-0208 R11 (#5170): a call may assign a top-level variable, so `c.Print()` cannot rely on
