@@ -59,6 +59,12 @@ internal partial class StatementBinder {
         let armEntryLabels = [syntax.Cases.Length]BoundLabel?
         let savedFallthroughTarget = binderCtx.CurrentFallthroughTarget
         let savedFallthroughAnchor = binderCtx.CurrentFallthroughAnchor
+        // #5629: the patterns of the cases after a `default` that is not last bind before its body, which runs only
+        // after their tests fail; each case reuses its pattern and scope.
+        let earlyHeaders = [syntax.Cases.Length]SwitchArmHeader?
+        let earlyScopes = [syntax.Cases.Length]BoundScope?
+        // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
+        var discriminantStale = false
         binderCtx.LoopStack.Push((nil, switchBreakLabel, nil))
         try {
             for var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++ {
@@ -98,12 +104,51 @@ internal partial class StatementBinder {
                         Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Keyword.Location)
                     }
                     hasDefault = true
-                    var defaultBody = BindBlockStatement(caseSyntax.Body)
+                    let defaultIndex = caseIndex
+                    var defaultExitAliases HashSet[VariableSymbol]? = nil
+                    var defaultBody = if defaultIndex == syntax.Cases.Length - 1 {
+                        BindBlockStatement(caseSyntax.Body)
+                    } else {
+                        cast[BoundStatement](
+                            BindAfterLaterArmTests(
+                                func () {
+                                    for var later = defaultIndex + 1; later < syntax.Cases.Length; later++ {
+                                        let laterSyntax = syntax.Cases[later]
+                                        if laterSyntax.IsDefault {
+                                            continue
+                                        }
+                                        let laterValue = Invariant.Required(
+                                            laterSyntax.Value,
+                                            "a non-default switch case has a pattern value",
+                                            expression: "laterSyntax.Value"
+                                        )
+                                        $scope = BoundScope($scope)
+                                        let laterHeader = BindSwitchArmHeader(
+                                            laterValue,
+                                            laterSyntax.Guard,
+                                            discriminant,
+                                            discriminantStale
+                                        )
+                                        discriminantStale = discriminantStale || laterHeader.MayRemoveDiscriminantFact
+                                        earlyHeaders[later] = laterHeader
+                                        earlyScopes[later] = $scope
+                                        $scope = $scope.Pop()
+                                    }
+                                },
+                                endsInFallthrough,
+                                func () BoundNode {
+                                    let body = BindBlockStatement(caseSyntax.Body)
+                                    defaultExitAliases = CaptureExternalCallableAliases()
+                                    return body
+                                }
+                            )
+                        )
+                    }
                     ShadowAddBranch(shadowFlow, nil, defaultBody, true)
                     shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))
-                    let callableDefaultExit = CaptureExternalCallableAliases()
+                    let callableDefaultExit = defaultExitAliases ?? CaptureExternalCallableAliases()
                     callableFallthrough = if endsInFallthrough {
                         callableDefaultExit
                     } else {
@@ -121,13 +166,28 @@ internal partial class StatementBinder {
                     }
                     continue
                 }
-                $scope = BoundScope($scope)
                 let caseValue = Invariant.Required(
                     caseSyntax.Value,
                     "a non-default switch case has a pattern value",
                     expression: "caseSyntax.Value"
                 )
-                let pattern = patterns.BindPattern(caseValue, switchType)
+                // ADR-0208 R18 and R19 (#5629): the case's header (its test and guard) runs after the headers before it
+                // and before its body. A header bound before a `default` applies its effects again here.
+                var removedAliases HashSet[VariableSymbol]? = nil
+                let header = if earlyHeaders[caseIndex] is {} early {
+                    $scope = earlyScopes[caseIndex]!!
+                    removedAliases = ReapplySwitchArmHeaderEffects(caseValue, caseSyntax.Guard, early)
+                    early
+                } else {
+                    $scope = BoundScope($scope)
+                    let bound = BindSwitchArmHeader(caseValue, caseSyntax.Guard, discriminant, discriminantStale)
+                    removedAliases = bound.RemovedAliases
+                    bound
+                }
+                discriminantStale = discriminantStale || header.MayRemoveDiscriminantFact
+                let pattern = header.Pattern
+                let frame = header.Frame
+                let guard_ = header.Guard
                 // Issue #3501 A3: a fallthrough INTO this arm skips its pattern
                 // test — pattern bindings and guards would run unassigned/
                 // unevaluated, so such targets are rejected. Pattern-declared
@@ -149,19 +209,12 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                 }
-                let frame Dictionary[AccessPath, TypeSymbol]? = TryClassifyPatternNarrowing(discriminant, pattern)
-                var guard_ BoundExpression? = nil
-                if hasGuard {
-                    guard_ = BindGuardExpressionWithNarrowing(
-                        Invariant.Required(
-                            guardSyntax,
-                            "a guarded switch case has a guard expression",
-                            expression: "guardSyntax"
-                        ),
-                        frame
-                    )
-                    callableEntry.ExceptWith(ApplyHeaderCallableEffects(guard_) ?? HashSet[VariableSymbol]())
-                    ShadowAddGuard(shadowFlow, guard_)
+                // The pattern can replace an alias too, so the later arms do not start from it either.
+                if removedAliases != nil {
+                    callableEntry.ExceptWith(removedAliases)
+                }
+                if guard_ is {} boundGuard {
+                    ShadowAddGuard(shadowFlow, boundGuard)
                 }
                 // ADR-0166: the arm body runs only when the guard was true, so the
                 // guard's when-true pattern variables (`when x.Tag is string tag`)
