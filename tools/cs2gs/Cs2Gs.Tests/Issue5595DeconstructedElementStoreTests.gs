@@ -150,10 +150,7 @@ namespace Demo
     }
 #nullable restore
 }`)
-        Assert.Equal(
-            "True:0 True True:0 True True:0 True",
-            CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim()
-        )
+        Assert.Equal("True:0 True True:0 True True:0 True", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
         Assert.DoesNotContain("Value!!", printed)
         Assert.DoesNotContain("entry.Item!!", printed)
     }

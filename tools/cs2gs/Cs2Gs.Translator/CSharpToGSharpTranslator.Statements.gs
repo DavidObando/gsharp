@@ -3482,8 +3482,7 @@ partial class CSharpToGSharpTranslator {
         // element-access target (`(arr[0], i) = entry`) has no right-hand side per
         // element, so its store bridge asks this with the target alone.
         private func ElementAccessStoreRequiresNonNullReference(target ExpressionSyntax) bool {
-            if !(target is ElementAccessExpressionSyntax) ||
-                this.IsNullableArrayElementAccess(target) ||
+            if !(target is ElementAccessExpressionSyntax) || this.IsNullableArrayElementAccess(target) ||
                 // Issue #5537: the element of oblivious container storage is `T?`.
             this.StoreTargetIsObliviousContainerElement(target) {
                 return false

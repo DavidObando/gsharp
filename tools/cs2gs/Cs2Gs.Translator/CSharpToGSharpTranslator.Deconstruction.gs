@@ -913,9 +913,11 @@ partial class CSharpToGSharpTranslator {
         // by `ElementAccessStoreRequiresNonNullReference`, the query of the plain
         // `arr[0] = entry.Item` (#2259).
         private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
-            if !(target is IdentifierNameSyntax ||
-                target is MemberAccessExpressionSyntax ||
-                target is ElementAccessExpressionSyntax) {
+            if !(
+                target is IdentifierNameSyntax ||
+                    target is MemberAccessExpressionSyntax ||
+                    target is ElementAccessExpressionSyntax
+            ) {
                 return value
             }
             let model = this.context.SemanticModel
