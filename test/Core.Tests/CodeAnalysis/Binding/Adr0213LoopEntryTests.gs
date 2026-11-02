@@ -90,6 +90,39 @@ func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPat
         Assert.Equal("GS0155@8:27", string.Join(" ", errors))
     }
 
+    @Fact
+    func NilComparisonOfAnImportedValueTypeMember_RunsItsEquality() {
+        // An imported struct's `==` that takes a reference is called by `holder.Token == nil`, and can write the
+        // storage that a `ref` parameter aliases (coordinator decision 2026-11-01).
+        using let fixture = CSharpFixture(`namespace Adr0213NilEquality;
+public struct Token {
+    public static System.Action? OnCompare;
+    public static bool operator ==(Token a, object? b) { OnCompare?.Invoke(); return false; }
+    public static bool operator !=(Token a, object? b) { OnCompare?.Invoke(); return true; }
+    public override bool Equals(object? o) => false;
+    public override int GetHashCode() => 0;
+}
+public sealed class Holder { public Token Token; }`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import Adr0213NilEquality
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if holder.Token == nil { n++ }
+    }
+    return n
+}
+func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@6:16", string.Join(" ", errors))
+    }
+
     shared {
         func Rows() IEnumerable[[]object] {
             let rows = List[[]object]()
@@ -2465,6 +2498,80 @@ func Run(ref text string?) int32 {
         Console.WriteLine("a" + n.ToString())
         Console.WriteLine("n=${n}")
         Consume(n)
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("pattern-member-getter-removes-a-by-reference-fact (R14)", `package T
+import System
+class Holder {
+    prop P string {
+        get { return "a" }
+    }
+}
+func Run(ref text string?, holder Holder, key string) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if key is holder.P { n++ }
+    }
+    return n
+}
+func Main() { }`, "GS0158@11:16")
+            Add("operator-result-of-a-concatenation-converts-by-its-type (A3)", `package T
+import System
+struct Tok { var Raw int32 }
+func (a Tok) operator +(b string) DateTime { return DateTime.MinValue }
+func Run(ref text string?, token Tok) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let d DateTimeOffset = token + "x"
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("named-type-argument-overload-is-not-proved-by-identity (A3)", `package T
+import System
+func Use[T](x T) { }
+func Use(x DateTime) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use[DateTimeOffset](dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("reference-argument-of-another-type-is-not-an-identity-candidate (A3)", `package T
+import System
+func Use(ref a int64, b DateTime) { }
+func Use(ref a int32, b DateTimeOffset) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    var n32 int32 = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(ref n32, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
+            Add("type-and-enum-patterns-keep-a-by-reference-fact (A3)", `package T
+import System
+enum Color { Red, Green }
+func Run(ref text string?, o object, c Color) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is System.String { n++ }
+        if c is Color.Red { n++ }
     }
     return n
 }

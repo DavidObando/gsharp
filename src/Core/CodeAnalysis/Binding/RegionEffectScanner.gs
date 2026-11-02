@@ -633,7 +633,10 @@ internal sealed class RegionEffectScanner {
                         } else if !current.NilCompareOperandNames.Contains(text) {
                             current.NilCompareOperandNames.Add(text)
                         }
-                    } else if inner.Kind != SyntaxKind.AccessorExpression && inner.Kind != SyntaxKind.IndexExpression {
+                    } else if inner.Kind == SyntaxKind.AccessorExpression || inner.Kind == SyntaxKind.IndexExpression {
+                        // A member or an element of an imported value type may select its `==` (the consumer checks).
+                        current.NilCompareOperandPaths.Add(BuildPath(inner))
+                    } else {
                         // A construction or a call may produce a value type: `default(Token) == nil`.
                         current.ContainsOperatorCandidate = true
                         current.OperatorHasUnresolvedOperand = true
@@ -1112,6 +1115,8 @@ internal sealed class RegionEffectScanner {
         let callsBefore = current.Calls.Count
         let indexAccessesBefore = current.IndexAccesses.Count
         let readsBefore = current.MemberReads.Count
+        let patternReadsBefore = current.PatternReads.Count
+        let nilComparesBefore = current.NilCompareOperandPaths.Count
         let operatorsBefore = current.Operators.Count
         let conversionsBefore = current.Conversions.Count
         let testsBefore = current.TypeTests.Count
@@ -1234,6 +1239,17 @@ internal sealed class RegionEffectScanner {
             let read = current.MemberReads[i]
             if read.Receiver != nil {
                 current.MemberReads[i] = RegionMemberRead(Rebase(read.Receiver), read.Member)
+            }
+        }
+        for var i = patternReadsBefore; i < current.PatternReads.Count; i++ {
+            let read = current.PatternReads[i]
+            if read.Receiver != nil {
+                current.PatternReads[i] = RegionMemberRead(Rebase(read.Receiver), read.Member)
+            }
+        }
+        for var i = nilComparesBefore; i < current.NilCompareOperandPaths.Count; i++ {
+            if current.NilCompareOperandPaths[i] is {} compared {
+                current.NilCompareOperandPaths[i] = Rebase(compared)
             }
         }
         // A name that an enclosing declaration of the region hides is no property read.
@@ -1899,8 +1915,11 @@ internal sealed class RegionEffectScanner {
         if inner is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax {
             return RegionArgumentForm.FunctionLiteral
         }
-        if IsStringForm(inner) {
+        if IsPureStringForm(inner) {
             return RegionArgumentForm.Path
+        }
+        if IsStringForm(inner) {
+            return RegionArgumentForm.StringByForm
         }
         if IsOperatorForm(inner) || inner is InterpolatedStringExpressionSyntax {
             return RegionArgumentForm.BuiltInByForm
@@ -1908,8 +1927,26 @@ internal sealed class RegionEffectScanner {
         return RegionArgumentForm.Path
     }
 
-    // An interpolated string, or a `+` with a string literal or interpolated operand, is a `string` (its path is
-    // a `string` literal type), so a call's overloads are matched against `string`.
+    // An interpolated string, or a `+` with a string literal or interpolated operand. It is a `string` when its
+    // operators are predefined; a user-defined `+` (`token + "x"`) can return another type.
+    // A string literal, an interpolated string, or a `+` of such operands only: a `string` without any operator
+    // of the region.
+    private func IsPureStringForm(expression ExpressionSyntax?) bool {
+        let inner = UnwrapParentheses(expression)
+        if inner is InterpolatedStringExpressionSyntax {
+            return true
+        }
+        if inner is LiteralExpressionSyntax literal {
+            return literal.LiteralToken.Kind == SyntaxKind.StringToken
+        }
+        return inner is BinaryExpressionSyntax binary &&
+            binary
+            .OperatorToken
+            .Kind == SyntaxKind.PlusToken &&
+            IsPureStringForm(binary.Left) &&
+            IsPureStringForm(binary.Right)
+    }
+
     private func IsStringForm(expression ExpressionSyntax?) bool {
         let inner = UnwrapParentheses(expression)
         if inner is InterpolatedStringExpressionSyntax {
@@ -2079,9 +2116,15 @@ internal sealed class RegionEffectScanner {
         ImmutableArray[RegionReceiverStep].Empty
     )
 
+    // A read inside a constant pattern can name a type or a constant (`o is System.String`); the consumer decides.
     private func RecordRead(receiver RegionReceiverPath?, member string?) {
-        if Active() && constantPatternDepth == 0 {
+        if !Active() {
+            return
+        }
+        if constantPatternDepth == 0 {
             current.MemberReads.Add(RegionMemberRead(receiver, member))
+        } else {
+            current.PatternReads.Add(RegionMemberRead(receiver, member))
         }
     }
 
@@ -2176,15 +2219,22 @@ internal sealed class RegionEffectScanner {
         let arguments = List[RegionReceiverPath?]()
         let argumentForms = List[RegionArgumentForm]()
         for argument in call.Arguments {
-            let form = ArgumentForm(argument)
-            argumentForms.Add(form)
-            arguments.Add(
-                if form == RegionArgumentForm.Path {
-                    BuildPath(argument)
-                } else {
-                    default(RegionReceiverPath?)
+            var form = ArgumentForm(argument)
+            var path = if form == RegionArgumentForm.Path {
+                BuildPath(argument)
+            } else {
+                default(RegionReceiverPath?)
+            }
+            // A `ref` or `out` argument binds a parameter of its exact type; an `out var` takes the parameter's.
+            if argument is RefArgumentExpressionSyntax byReference {
+                if byReference.IsInlineDeclaration {
+                    form = RegionArgumentForm.InlineDeclaration
+                } else if byReference.Expression != nil {
+                    path = BuildPath(byReference.Expression)
                 }
-            )
+            }
+            argumentForms.Add(form)
+            arguments.Add(path)
             switch argument {
                 case reference is RefArgumentExpressionSyntax {
                     NodesVisited++
@@ -2311,8 +2361,8 @@ internal sealed class RegionEffectScanner {
                 return AppendPath(BuildPath(accessor.LeftPart), accessor.RightPart)
             }
             default {
-                // A string concatenation or an interpolated string is a `string`.
-                if IsStringForm(expression) {
+                // A concatenation of string literals or an interpolated string is a `string`.
+                if IsPureStringForm(expression) {
                     return RegionReceiverPath(
                         nil,
                         false,

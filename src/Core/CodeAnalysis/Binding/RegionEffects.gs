@@ -309,6 +309,11 @@ internal enum RegionArgumentForm {
     Nil,
     /// A named argument, which the walker does not match to a parameter.
     Named,
+    /// A string concatenation with an operand that is not a string literal (`"a" + x`): a `string` when the
+    /// operators of the region are predefined.
+    StringByForm,
+    /// An `out var` or `out let` declaration, which takes the parameter's type.
+    InlineDeclaration,
     /// A range index (`t[a..b]`), which the binder slices; the read classification decides whether that runs code.
     Range,
 }
@@ -407,6 +412,8 @@ internal sealed class RegionEffects {
         Writes = List[RegionWrite]()
         Calls = List[RegionCall]()
         IndexAccesses = List[RegionCall]()
+        PatternReads = List[RegionMemberRead]()
+        NilCompareOperandPaths = List[RegionReceiverPath?]()
         Declared = List[string]()
         BareReads = List[string]()
         OperatorOperandNames = List[string]()
@@ -432,6 +439,17 @@ internal sealed class RegionEffects {
     /// Gets the index accesses (`t[i]`), each as a call of the member `[]` on the target, for the consumer's check of
     /// index argument conversions. They are not calls.
     prop IndexAccesses List[RegionCall] {
+        get;
+    }
+
+    /// Gets the reads of a constant pattern (`key is holder.P`), which can name a type or a constant instead.
+    prop PatternReads List[RegionMemberRead] {
+        get;
+    }
+
+    /// Gets the member and element operands compared with `nil` (`holder.Token == nil`), or `nil` for one that
+    /// has no path.
+    prop NilCompareOperandPaths List[RegionReceiverPath?] {
         get;
     }
 
@@ -615,6 +633,8 @@ internal sealed class RegionEffects {
         }
         Calls.AddRange(other.Calls)
         IndexAccesses.AddRange(other.IndexAccesses)
+        PatternReads.AddRange(other.PatternReads)
+        NilCompareOperandPaths.AddRange(other.NilCompareOperandPaths)
         MemberReads.AddRange(other.MemberReads)
         Operators.AddRange(other.Operators)
         Conversions.AddRange(other.Conversions)

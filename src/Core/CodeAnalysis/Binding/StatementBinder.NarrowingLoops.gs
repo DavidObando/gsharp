@@ -1254,6 +1254,7 @@ internal partial class StatementBinder {
     private const ArgumentBuiltIn int32 = 1
     private const ArgumentTyped int32 = 2
     private const ArgumentNil int32 = 3
+    private const ArgumentByReference int32 = 4
 
     private func CallArgumentsRunUserConversion(
         call RegionCall,
@@ -1277,11 +1278,29 @@ internal partial class StatementBinder {
             if form == RegionArgumentForm.Named {
                 return true
             }
-            if form == RegionArgumentForm.ByReference ||
+            if form == RegionArgumentForm.ByReference {
+                // A `ref` or `out` argument binds a parameter of its exact type.
+                let types = if call.Arguments[index] is {} path {
+                    ConversionTypes(path, effects)
+                } else {
+                    default(List[TypeSymbol]?)
+                }
+                argumentTypes.Add(types)
+                kinds.Add(ArgumentByReference)
+            } else if form == RegionArgumentForm.InlineDeclaration ||
                 form == RegionArgumentForm.FunctionLiteral ||
                 form == RegionArgumentForm.Range {
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentSkipped)
+            } else if form == RegionArgumentForm.StringByForm {
+                // A concatenation is a `string` when the operators of the region are predefined.
+                if !operatorResultsKnown {
+                    return true
+                }
+                let text = List[TypeSymbol]()
+                text.Add(TypeSymbol.String)
+                argumentTypes.Add(text)
+                kinds.Add(ArgumentTyped)
             } else if form == RegionArgumentForm.Nil {
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentNil)
@@ -1308,7 +1327,8 @@ internal partial class StatementBinder {
         let candidates = List[List[TypeSymbol]]()
         for parameters in ParameterLists(call, name, effects) {
             if parameters.Count == argumentTypes.Count {
-                if CandidateIsExact(parameters, argumentTypes, kinds) {
+                // A call with named type arguments selects by generic arity, which the lists do not show.
+                if !call.HasTypeArguments && CandidateIsExact(parameters, argumentTypes, kinds) {
                     return false
                 }
                 candidates.Add(parameters)
@@ -1335,10 +1355,11 @@ internal partial class StatementBinder {
             if kinds[index] == ArgumentSkipped {
                 continue
             }
-            if kinds[index] != ArgumentTyped || argumentTypes[index] is not{} types {
+            if (kinds[index] != ArgumentTyped && kinds[index] != ArgumentByReference) ||
+                argumentTypes[index] is not{} types {
                 return false
             }
-            let stripped = StripAllNullability(parameters[index]) ?? parameters[index]
+            let stripped = ReferencedType(parameters[index])
             for argumentType in types {
                 if !object.Equals(argumentType, stripped) && !SameClrType(argumentType, stripped) {
                     return false
@@ -1369,7 +1390,17 @@ internal partial class StatementBinder {
             let parameter = parameters[index]
             let stripped = StripAllNullability(parameter) ?? parameter
             var argument = CandidateExact
-            if kind == ArgumentNil {
+            if kind == ArgumentByReference {
+                // The parameter takes the argument by identity, or not at all; an argument that the walker cannot
+                // type proves nothing.
+                argument = if argumentTypes[index] is not{} referenced {
+                    CandidateFree
+                } else if CandidateIsExactReference(referenced, ReferencedType(parameter)) {
+                    CandidateExact
+                } else {
+                    CandidateNotApplicable
+                }
+            } else if kind == ArgumentNil {
                 argument = if AcceptsNilWithoutOperator(parameter) {
                     CandidateFree
                 } else {
@@ -1392,6 +1423,25 @@ internal partial class StatementBinder {
         return result
     }
 
+    private func CandidateIsExactReference(types List[TypeSymbol], parameter TypeSymbol) bool {
+        for argumentType in types {
+            if !object.Equals(argumentType, parameter) && !SameClrType(argumentType, parameter) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // The type that a parameter takes, without nullability and a by-reference layer.
+    private func ReferencedType(parameter TypeSymbol) TypeSymbol {
+        let referenced = if parameter is ByRefTypeSymbol byReference {
+            byReference.PointeeType
+        } else {
+            parameter
+        }
+        return StripAllNullability(referenced) ?? referenced
+    }
+
     // The worst way that one argument, of any of its possible types, reaches the parameter. A conversion operator
     // counts before a type that the parameter does not take.
     private func ClassifyArgument(
@@ -1409,6 +1459,9 @@ internal partial class StatementBinder {
             if ArgumentFits(argumentType, parameter, explicitTypeArguments) {
                 result = Math.Min(result, CandidateFree)
             } else if conversions.HasUserDefinedImplicitConversion(argumentType, stripped) {
+                return CandidateUser
+            } else if explicitTypeArguments && TypeParameterTakesArgument(stripped, false) {
+                // A type argument that the call names can take the argument through a conversion operator.
                 return CandidateUser
             } else {
                 notApplicable = true
@@ -1793,6 +1846,124 @@ internal partial class StatementBinder {
             if ReadRunsUserCode(read, effects) {
                 return true
             }
+        }
+        for read in effects.PatternReads {
+            if PatternReadRunsUserCode(read, effects) {
+                return true
+            }
+        }
+        for compared in effects.NilCompareOperandPaths {
+            if NilCompareRunsUserOperator(compared, effects) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // A read of a constant pattern names a type (`o is System.String`, `o is Box[int32]`), a namespace on the way to
+    // one (`System.Text`), or a member. A member of a variable or a call is a read. Otherwise the longest prefix of
+    // the dotted name that names a type decides: the whole name is a type (no code), or one member of the type
+    // follows it and is classified as a read (a static property runs its getter, a constant or an enum member
+    // does not). A name with no type prefix is a namespace on the way to a type that is read separately.
+    private func PatternReadRunsUserCode(read RegionMemberRead, effects RegionEffects) bool {
+        guard let path = read.Receiver else {
+            return true
+        }
+        if path.RootIsCall ||
+            path.RootType != nil ||
+            path.RootLiteralType != nil ||
+            path.RootName is {} root &&
+            $scope.TryLookupSymbol(root) is VariableSymbol {
+            return ReadRunsUserCode(read, effects)
+        }
+        guard let segments = PatternNameSegments(path, read.Member) else {
+            return ReadRunsUserCode(read, effects)
+        }
+        if read.Member == nil {
+            // An index of a name: a generic type with type arguments (`List[int32]`).
+            let name = string.Join(".", segments)
+            for var arity = 0; arity <= 4; arity++ {
+                if ResolveTestedType(name, arity) != nil {
+                    return false
+                }
+            }
+            return true
+        }
+        for var length = segments.Count; length >= 1; length-- {
+            guard let type = ResolveTestedType(string.Join(".", segments.Take(length)), 0) else {
+                continue
+            }
+            if length == segments.Count {
+                return false
+            }
+            if length == segments.Count - 1 {
+                return ReadOfTypeRunsUserCode(ReceiverType(type, nil), segments[length])
+            }
+            return true
+        }
+        return false
+    }
+
+    // The segments of a pattern read made of member steps only (`System`, `Text`, `StringBuilder`), or `nil`.
+    private func PatternNameSegments(path RegionReceiverPath, member string?) List[string]? {
+        guard let root = path.RootName else {
+            return nil
+        }
+        let segments = List[string]()
+        segments.Add(root)
+        for step in path.Steps {
+            if step.Kind != RegionReceiverStepKind.Member || step.Name is not{} name {
+                return nil
+            }
+            segments.Add(name)
+        }
+        if member != nil {
+            segments.Add(member)
+        }
+        return segments
+    }
+
+    // Whether a member or an element compared with `nil` has an imported value type whose `==` or `!=` takes a
+    // reference (`operator ==(Token, object)`), which the comparison calls. A source operator is a plain call
+    // (A3). An operand that does not resolve can run one.
+    private func NilCompareRunsUserOperator(compared RegionReceiverPath?, effects RegionEffects) bool {
+        if compared == nil || ResolveReceiverPath(compared, effects) is not{} types {
+            return true
+        }
+        for type in types {
+            let clr = type.Clr ??
+                (
+                if type.Symbol is StructSymbol {
+                    default(Type?)
+                } else {
+                    type.Symbol?.ClrType
+                }
+            )
+            if clr != nil && ClrEqualityTakesReference(clr) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ClrEqualityTakesReference(type Type) bool {
+        if ReflectionType(type) is not{} reflected || !reflected.IsValueType {
+            return false
+        }
+        try {
+            for method in reflected.GetMethods(BindingFlags.Public | BindingFlags.Static) {
+                if method.Name != "op_Equality" && method.Name != "op_Inequality" {
+                    continue
+                }
+                for parameter in method.GetParameters() {
+                    let parameterType = parameter.ParameterType
+                    if !parameterType.IsValueType || parameterType.IsGenericType && parameterType.Name == "Nullable`1" {
+                        return true
+                    }
+                }
+            }
+        } catch (ex NotSupportedException) {
+            return true
         }
         return false
     }
