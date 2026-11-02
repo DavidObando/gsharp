@@ -21,7 +21,8 @@ import Xunit
 /// native `is` bindings, to the scrutinee, or to a capture outside a conjunction, a control row emits
 /// `Take(m)` or `Take(c)` with a `Node?` capture, which does not bind (GS0154). Without the type-test rule
 /// for a conjunction, `o is Node and var c` emits a redundant `c!!`.
-/// Without the emitted-type check of the input, the by-ref row does not bind (GS0159).
+/// Without the emitted-type check, the by-ref rows do not bind; with it only on the capture's own input, the
+/// composed by-ref row does not bind.
 /// The deconstruction row throws `NullReferenceException` when #5598's bridge also asserts a store into a
 /// local with no recorded storage, or records an explicit `Node?` local as non-null.
 open class Issue5582VarCaptureBridgeTests {
@@ -209,6 +210,41 @@ namespace Demo
         Assert.Contains("return c!!.Count", printed)
         Assert.Contains("is var c { c!!.Count }", printed)
         RunsAs(printed, "1 1 1 1")
+    }
+
+    /// The emitted type of each operand decides a composed input: a conditional or a `??` of two
+    /// `Volatile.Read(ref cache!)` calls is `Dictionary?` in G#, so the capture keeps its `!!`, and so does a
+    /// `var` local initialized from one call (the same shared classification).
+    @Fact
+    func AVarCaptureOfAComposedDroppedByRefSuppression_KeepsItsAssertion() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class P
+    {
+        private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
+        static int Arm(bool flag) => (flag ? Volatile.Read(ref cache!) : Volatile.Read(ref cache!)) switch { var c => c.Count };
+        static int Case(bool flag)
+        {
+            switch (flag ? Volatile.Read(ref cache!) : Volatile.Read(ref cache!))
+            {
+                case var c: return c.Count;
+            }
+        }
+        static int Is(bool flag) => (flag ? Volatile.Read(ref cache!) : Volatile.Read(ref cache!)) is var c ? c.Count : -1;
+        static int Coalesce() => (Volatile.Read(ref cache!) ?? Volatile.Read(ref cache!)) switch { var c => c.Count };
+        static int Local() { var d = Volatile.Read(ref cache!); return d.Count; }
+        public static string Run() => Arm(true) + " " + Case(false) + " " + Is(true) + " " + Coalesce() + " " + Local();
+    }
+}`)
+        Assert.Contains("case var c: c!!.Count", printed)
+        Assert.Contains("return c!!.Count", printed)
+        Assert.Contains("is var c { c!!.Count }", printed)
+        Assert.Contains("return d!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1")
     }
 
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a

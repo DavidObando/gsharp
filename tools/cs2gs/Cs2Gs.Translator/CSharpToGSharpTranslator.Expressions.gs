@@ -3518,6 +3518,11 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
+            // Issue #5582: the emitted value is `T?` although C# types it non-null. Asked here, so that each
+            // operand of a composed value (`flag ? a : b`, `a ?? b`) is decided by its emitted type too.
+            if expression != nil && this.EmittedValueIsNilableBeyondItsCSharpType(expression) {
+                return false
+            }
             // Issue #4356: a Roslyn member that is non-null in C# — even a
             // SyntaxToken struct — but `T?` on the G# analyzer API it is
             // retargeted onto is never statically non-null in the output, nor
@@ -3798,8 +3803,7 @@ partial class CSharpToGSharpTranslator {
             if narrowedByTypeTest {
                 isNonNull = true
             } else if input != nil {
-                isNonNull = !this.EmittedValueIsNilableBeyondItsCSharpType(input) &&
-                    this.GSharpExpressionIsStaticallyNonNull(input)
+                isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
             } else {
                 // The analyzer map can retarget a non-null Roslyn member onto a `T?` G# member (issue #4356).
                 isNonNull = !this.IsGSharpNullableAnalyzerApiMember(member) && this.DeclaredValueIsStaticallyNonNull(
@@ -3814,7 +3818,8 @@ partial class CSharpToGSharpTranslator {
         /// Issue #5582: whether the emitted G# value of [`expression`](paramref) can be nil although its C#
         /// type is non-null. A dropped by-ref suppression (`Volatile.Read(ref cache!)`, issue #4287), a
         /// widened managed-reference array element and an imported generic tuple element are such values.
-        /// The receiver bridge asserts each of them; a `var` capture of one has the same `T?` type.
+        /// The receiver bridge asserts each of them. (cref:GSharpExpressionIsStaticallyNonNull) asks it for each
+        /// operand, so a `var` capture of such a value, or of a composed value with such an operand, is `T?`.
         private func EmittedValueIsNilableBeyondItsCSharpType(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool -> this.GenericResultInfersNilableThroughDroppedByRefSuppression(expression) ||
