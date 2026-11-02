@@ -1357,6 +1357,15 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   types, so no conversion operator is missed. A typed range loop variable converts each element. A predefined
   conversion (`for n int64 in values` over `[]int32`) runs no user code, as on main; a user-defined one binds as a call
   and counts.
+  A name in a pattern is a value when the region declares it or the entry scope has a variable of that name, since a
+  switch case resolves a value before a type (`let One = 1; switch o { case One { } }` calls `Equals`). A constant
+  pattern's `Equals` is code that runs in the region for the enclosing `when` filters (W8) too. A `with` update is a
+  member write through a setter (W4), as a member assignment is. An `in` argument takes an `in` parameter, which is
+  listed by value, and a value takes it too; an `in` argument proves no candidate by identity. A typed local keeps the
+  `?` of a nullable value type (`let local DateTime? = dt`). A narrowed variable has its narrowed type at a conversion
+  site only when the region cannot remove the narrowing (no write to it and no writer that the walker cannot see);
+  otherwise the declared type with its `?` counts as well. This is stricter than main, whose second pass does not
+  check a `ref` fact again after an argument loses its narrowing.
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
