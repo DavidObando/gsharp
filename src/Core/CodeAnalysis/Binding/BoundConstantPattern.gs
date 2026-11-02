@@ -11,7 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 /// `StringEquals` calls `string.Equals(string, string)`, `DecimalEquals` calls `decimal.op_Equality`,
 /// `BoxedFloatEquals` unboxes a floating-point input with `isinst` and compares it with `ceq`, `ObjectEquals` calls
 /// `object.Equals(object, object)`, which calls the virtual `Equals` of the input, and `PrimitiveEquals` is `ceq`.
-enum ConstantPatternTestKind {
+internal enum ConstantPatternTestKind {
     NullCheck,
     StringEquals,
     DecimalEquals,
@@ -47,7 +47,7 @@ class BoundConstantPattern : BoundPattern {
         /// @param valueType The static type of the tested value.
         /// @param value The pattern value.
         /// @returns The test.
-        func ClassifyTest(valueType TypeSymbol, value BoundExpression) ConstantPatternTestKind {
+        internal func ClassifyTest(valueType TypeSymbol, value BoundExpression) ConstantPatternTestKind {
             if value is BoundLiteralExpression literal && literal.Value == nil {
                 return ConstantPatternTestKind.NullCheck
             }
@@ -81,7 +81,7 @@ class BoundConstantPattern : BoundPattern {
         /// @param valueType The static type of the tested value.
         /// @param value The pattern value.
         /// @returns The value before that conversion.
-        func UnwrapInputConversion(
+        internal func UnwrapInputConversion(
             valueType TypeSymbol,
             value BoundExpression
         ) BoundExpression -> if value is BoundConversionExpression conversion &&
