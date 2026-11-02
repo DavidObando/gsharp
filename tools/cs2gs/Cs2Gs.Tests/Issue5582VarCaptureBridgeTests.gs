@@ -21,6 +21,7 @@ import Xunit
 /// native `is` bindings, to the scrutinee, or to a capture outside a conjunction, a control row emits
 /// `Take(m)` or `Take(c)` with a `Node?` capture, which does not bind (GS0154). Without the type-test rule
 /// for a conjunction, `o is Node and var c` emits a redundant `c!!`.
+/// Without the emitted-type check of the input, the by-ref row does not bind (GS0159).
 /// The deconstruction row throws `NullReferenceException` when #5598's bridge also asserts a store into a
 /// local with no recorded storage, or records an explicit `Node?` local as non-null.
 open class Issue5582VarCaptureBridgeTests {
@@ -175,6 +176,39 @@ namespace Demo
         Assert.Contains("case var c: Items.IndexOf(c!!) + 2", printed)
         Assert.Contains("Items.Add(c!!)", printed)
         RunsAs(printed, "4")
+    }
+
+    /// A capture has the type that the translation gives its input. `Volatile.Read(ref cache!)` drops the
+    /// by-ref `!`, so G# infers its result from `Dictionary?` (issue #4287) and the receiver of a capture
+    /// keeps its `!!` in each form, as the direct receiver does.
+    @Fact
+    func AVarCaptureOfADroppedByRefSuppression_KeepsItsAssertion() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class P
+    {
+        private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
+        static int Arm() => Volatile.Read(ref cache!) switch { var c => c.Count };
+        static int Case()
+        {
+            switch (Volatile.Read(ref cache!))
+            {
+                case var c: return c.Count;
+            }
+        }
+        static int Is() => Volatile.Read(ref cache!) is var c ? c.Count : -1;
+        static int Direct() => Volatile.Read(ref cache!).Count;
+        public static string Run() => Arm() + " " + Case() + " " + Is() + " " + Direct();
+    }
+}`)
+        Assert.Contains("case var c: c!!.Count", printed)
+        Assert.Contains("return c!!.Count", printed)
+        Assert.Contains("is var c { c!!.Count }", printed)
+        RunsAs(printed, "1 1 1 1")
     }
 
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a

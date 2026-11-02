@@ -3798,7 +3798,8 @@ partial class CSharpToGSharpTranslator {
             if narrowedByTypeTest {
                 isNonNull = true
             } else if input != nil {
-                isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
+                isNonNull = !this.EmittedValueIsNilableBeyondItsCSharpType(input) &&
+                    this.GSharpExpressionIsStaticallyNonNull(input)
             } else {
                 // The analyzer map can retarget a non-null Roslyn member onto a `T?` G# member (issue #4356).
                 isNonNull = !this.IsGSharpNullableAnalyzerApiMember(member) && this.DeclaredValueIsStaticallyNonNull(
@@ -3809,6 +3810,16 @@ partial class CSharpToGSharpTranslator {
             this.state.VarCaptureInputNonNull[local] = isNonNull
             return true
         }
+
+        /// Issue #5582: whether the emitted G# value of [`expression`](paramref) can be nil although its C#
+        /// type is non-null. A dropped by-ref suppression (`Volatile.Read(ref cache!)`, issue #4287), a
+        /// widened managed-reference array element and an imported generic tuple element are such values.
+        /// The receiver bridge asserts each of them; a `var` capture of one has the same `T?` type.
+        private func EmittedValueIsNilableBeyondItsCSharpType(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool -> this.GenericResultInfersNilableThroughDroppedByRefSuppression(expression) ||
+            this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
+            this.ImportedGenericTupleElementRequiresAssertion(expression)
 
         /// Issue #5582: finds the value that a `var` pattern capture holds in the emitted G#.
         /// @param local The capture.
