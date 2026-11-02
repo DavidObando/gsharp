@@ -1444,7 +1444,8 @@ internal partial class StatementBinder {
         // a method of the name is not the type the call binds on unless an extension method can bind it, which is
         // not checked either. A call that no alternative takes counts.
         let unproven = HashSet[List[TypeSymbol]]()
-        guard let groups = ParameterListGroups(call, name, effects, unproven) else {
+        let otherArity = HashSet[List[TypeSymbol]]()
+        guard let groups = ParameterListGroups(call, name, effects, unproven, otherArity) else {
             return true
         }
         var anyAlternative = false
@@ -1453,13 +1454,25 @@ internal partial class StatementBinder {
                 continue
             }
             let candidates = List[List[TypeSymbol]]()
+            // An imported candidate of another arity that can take the call through omitted optional parameters or
+            // in expanded form is not classified; it can be the better one.
+            var unclassified = false
             for parameters in group {
                 if parameters.Count == argumentTypes.Count {
                     candidates.Add(parameters)
+                } else if otherArity.Contains(parameters) {
+                    unclassified = true
                 }
             }
             anyAlternative = true
-            if CandidatesRunUserConversion(candidates, argumentTypes, kinds, call.HasTypeArguments, unproven) {
+            if CandidatesRunUserConversion(
+                candidates,
+                argumentTypes,
+                kinds,
+                call.HasTypeArguments,
+                unproven,
+                unclassified
+            ) {
                 return true
             }
         }
@@ -1468,7 +1481,8 @@ internal partial class StatementBinder {
 
     // A candidate that takes every argument by identity is better than one that needs a conversion operator, when
     // lookup finds it (`unproven` holds the candidates that the binder may not select: a private or explicit-interface
-    // method, or an imported base method that a source method of the name hides). Otherwise a candidate that needs one
+    // method, or an imported base method that a source method of the name hides). Without one, an unclassified
+    // candidate of another arity counts. Otherwise a candidate that needs one
     // can be the better one (a conversion to `Payload` beats one to `object`), and a call that no candidate takes is
     // not checked.
     private func CandidatesRunUserConversion(
@@ -1476,7 +1490,8 @@ internal partial class StatementBinder {
         argumentTypes List[List[TypeSymbol]?],
         kinds List[int32],
         explicitTypeArguments bool,
-        unproven HashSet[List[TypeSymbol]]
+        unproven HashSet[List[TypeSymbol]],
+        unclassified bool
     ) bool {
         // A call with named type arguments selects by generic arity, which the lists do not show.
         if !explicitTypeArguments {
@@ -1485,6 +1500,9 @@ internal partial class StatementBinder {
                     return false
                 }
             }
+        }
+        if unclassified {
+            return true
         }
         var free = false
         for parameters in candidates {
@@ -2053,7 +2071,8 @@ internal partial class StatementBinder {
         call RegionCall,
         name string,
         effects RegionEffects,
-        unproven HashSet[List[TypeSymbol]]
+        unproven HashSet[List[TypeSymbol]],
+        otherArity HashSet[List[TypeSymbol]]
     ) List[List[List[TypeSymbol]]]? {
         let groups = List[List[List[TypeSymbol]]]()
         var receivers List[ReceiverType]? = nil
@@ -2090,7 +2109,15 @@ internal partial class StatementBinder {
             } else {
                 // A method of the name that the lists do not show (of a base interface of an imported interface, or
                 // an extension method) is not checked, so the call counts.
-                if !AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists, unproven) ||
+                if !AddMethodParameterLists(
+                    receiver,
+                    name,
+                    call.HasTypeArguments,
+                    staticAccess,
+                    lists,
+                    unproven,
+                    otherArity
+                ) ||
                     lists.Count == 0 &&
                     !staticAccess &&
                     (
@@ -2202,7 +2229,8 @@ internal partial class StatementBinder {
         explicitTypeArguments bool,
         staticAccess bool,
         lists List[List[TypeSymbol]],
-        unproven HashSet[List[TypeSymbol]]
+        unproven HashSet[List[TypeSymbol]],
+        otherArity HashSet[List[TypeSymbol]]
     ) bool {
         var clrType = receiver.Clr
         var symbolic TypeSymbol? = nil
@@ -2290,10 +2318,20 @@ internal partial class StatementBinder {
                 if member is MethodInfo method &&
                     method.IsStatic == staticAccess &&
                     (explicitTypeArguments || ClrTypeParametersInferable(method)) {
-                    let types = ClrParameterTypes(symbolic, method, method.GetParameters())
+                    let methodParameters = method.GetParameters()
+                    let types = ClrParameterTypes(symbolic, method, methodParameters)
                     lists.Add(types)
                     if sourceHides {
                         unproven.Add(types)
+                    }
+                    // The CLR resolver also takes a candidate with omitted optional parameters, or in expanded form.
+                    if methodParameters.Any((parameter ParameterInfo) -> parameter.IsOptional) ||
+                        methodParameters.Length > 0 &&
+                        methodParameters[methodParameters.Length - 1]
+                        .GetCustomAttributesData().Any(
+                        (data CustomAttributeData) -> data.AttributeType.FullName == "System.ParamArrayAttribute"
+                    ) {
+                        otherArity.Add(types)
                     }
                 }
             }
