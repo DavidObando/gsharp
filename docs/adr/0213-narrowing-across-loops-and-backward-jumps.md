@@ -1326,7 +1326,12 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   its argument; a compound one (`List[T]`) takes an argument without a conversion only when the argument has its
   generic definition (itself, a base or an interface). The arms of a conditional, `if` or switch expression meet in
   one type, so each arm is a conversion site against each other arm that is not an operator (`flag ? dt : dto`,
-  `flag ? nf : 1.0`); a literal arm is a target of its literal type. A function-literal argument proves no
+  `flag ? nf : 1.0`); a literal arm is a target of its literal type, and two operator arms meet without an
+  operator only when the operators of the region are predefined. The arms of `if let` expressions merge the same
+  way. Each arm's path is taken where its names are in scope (`if var x = dt; flag { x } else { dto }`), nested
+  arms merge into the outermost expression, and an expression with more than eight arms is one site that can run
+  code. A generic candidate whose type arguments a call without type arguments cannot infer is not applicable, and
+  an index in a constant pattern of a variable (`n is xs[key]`) is an index access. A function-literal argument proves no
   candidate by identity, and a base call (`base.Touch()`) is a call that the walker does not resolve.
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
