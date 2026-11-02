@@ -963,9 +963,13 @@ Details per row:
   statements, in conditions (R18), in loops and in `finally` summaries. An auto accessor runs no user code when the
   property is neither `open` nor an `override`, or the receiver type cannot have a subclass: a value type, or a
   class that is neither `open` nor `sealed` (the `TypeAttributes.Sealed` decision of `TypeDefEmitter`). A type
-  parameter receiver can. A `base.` access is a `BoundBaseClassCallExpression`, a call already. The rule does not
-  rely on the lowering of an auto property to its backing field inside its declaring type, which skips an override
-  (#5630). Corpus rows z01 to z16. Impact: no new diagnostic in the 18 projects of the repository. cs2gs does not
+  parameter receiver can. A `base.` access is a `BoundBaseClassCallExpression`, a call already. A constructor's
+  store to an auto property without a setter writes the backing field and calls no accessor (row z17). The rule
+  does not rely on the lowering of an auto property to its backing field inside its declaring type, which skips an
+  override (#5630). Not in this row: a call in an earlier operand does not remove a fact read by a later operand of
+  the same expression (#5637, the same for every call), and an auto property that is not `open` but implements an
+  interface is emitted `virtual` without `final`, so another assembly can override it (#5638). Corpus rows z01 to
+  z17. Impact: no new diagnostic in the 18 projects of the repository. cs2gs does not
   change: it counts every C# property read as code for a closure-assigned local, a member path gets `!!`, and a
   by-reference read after any accessor call is #5617.
 - **R19 (#5593).** The construct table lists `BoundConstantPattern` and `BoundListPattern` as `call` when they

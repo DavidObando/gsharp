@@ -5193,7 +5193,8 @@ internal partial class StatementBinder {
             case write is BoundPropertyAssignmentExpression: SourcePropertyRunsUserCode(
                 write.Property,
                 write.Receiver?.Type,
-                write.InterfaceType != nil
+                write.InterfaceType != nil,
+                isWrite: true
             )
             default: false
         }
@@ -5204,16 +5205,22 @@ internal partial class StatementBinder {
         /// auto accessor runs none unless the call can dispatch to an override: the property is `open` or an
         /// `override` (a property override is itself overridable, #3223), or it is reached through an interface, and
         /// the receiver type can have a subclass. A value type, and a class that is neither `open` nor `sealed`
-        /// (`TypeAttributes.Sealed` in `TypeDefEmitter`), cannot. A `base.` access is a call node of its own.
+        /// (`TypeAttributes.Sealed` in `TypeDefEmitter`), cannot. A `base.` access is a call node of its own. A
+        /// write ([`isWrite`](paramref)) of an auto property without a setter, which only a constructor can make,
+        /// stores the backing field and calls no accessor.
         internal func SourcePropertyRunsUserCode(
             property PropertySymbol,
             receiverType TypeSymbol?,
-            throughInterface bool = false
+            throughInterface bool = false,
+            isWrite bool = false
         ) bool {
             if !property.IsAutoProperty || throughInterface {
                 return true
             }
-            if property.IsStatic || receiverType == nil || !(property.IsVirtual || property.IsOverride) {
+            if (isWrite && !property.HasSetter) ||
+                property.IsStatic ||
+                receiverType == nil ||
+                !(property.IsVirtual || property.IsOverride) {
                 return false
             }
             var type = PlatformTypeSymbol.StripTopLevel(receiverType)
