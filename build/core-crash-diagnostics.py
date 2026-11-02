@@ -17,6 +17,7 @@ PRIVATE = Path("out/5393-ci/private")
 PUBLIC = Path("TestResults/5393")
 OWNER = b"gsharp-core-crash-5393-v1\n"
 MAX_INPUT = 16 * 1024 * 1024
+COMPILER_RIDS = ("linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64")
 MAX_TOTAL_INPUT = 64 * 1024 * 1024
 MAX_FILES = 256
 MAX_CASES = 20000
@@ -105,7 +106,7 @@ def provenance(root):
     require(os.environ.get("TEST_PROJECTS") == "test/Core.Tests/Core.Tests.gsproj"
             and os.environ.get("TEST_FILTER") == FILTER, "test-shape")
     policy = json.loads(read(root / "global.json", 16384))
-    require(policy["msbuild-sdks"]["Gsharp.NET.Sdk"] == "0.5.212"
+    require(policy["msbuild-sdks"]["Gsharp.NET.Sdk"] == "0.5.460-g21e3f30fa3"
             and policy["sdk"] == {"version": "10.0.300", "rollForward": "latestFeature"},
             "sdk-policy")
     git = subprocess.run(
@@ -162,9 +163,12 @@ def provenance(root):
         return physical
 
     named = {key: declared(value) for key, value in named.items()}
-    for key in ("COMPILER", "TASK"):
-        require(named[key].is_relative_to(roots[1] / "gsharp.net.sdk/0.5.212"),
-                "compiler-selection")
+    sdk = roots[1] / "gsharp.net.sdk/0.5.460-g21e3f30fa3"
+    # ADR-0207: the SDK selects the ReadyToRun compiler from its RID package on a known host.
+    compilers = [sdk, *(roots[1] / f"gsharp.net.sdk.compiler.{rid}/0.5.460-g21e3f30fa3"
+                        for rid in COMPILER_RIDS)]
+    require(any(named["COMPILER"].is_relative_to(base) for base in compilers)
+            and named["TASK"].is_relative_to(sdk), "compiler-selection")
     tools = [(declared(path), digest) for path, digest in tools]
     tool_images = [
         image(declared(path), "compiler" if path == named["COMPILER"] else
@@ -193,7 +197,7 @@ def provenance(root):
         "pull_request_base": base, "run_id": run_id, "run_attempt": 1,
         "test_project": "test/Core.Tests/Core.Tests.gsproj", "test_filter": FILTER,
         "configuration": "Release",
-        "sdk_package": "Gsharp.NET.Sdk/0.5.212",
+        "sdk_package": "Gsharp.NET.Sdk/0.5.460-g21e3f30fa3",
         "global_json_sha256": hashlib.sha256(read(root / "global.json", 16384)).hexdigest(),
         "workflow_sha256": hashlib.sha256(read(root / ".github/workflows/build.yml")).hexdigest(),
         "input_stamp_sha256": hashlib.sha256(stamp_bytes).hexdigest(),
