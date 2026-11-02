@@ -901,7 +901,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         // Issue #5561: the store bridge of `target = element` for a variable,
-        // field or property that a deconstruction assigns. The temp holds the
+        // field, property or element (#5595) that a deconstruction assigns. The temp holds the
         // `Deconstruct` element, which G# types from its declaration, so a
         // widened element stored into a slot that stays non-null is asserted
         // exactly as `n = entry.Item!!` is. The slot is the input of a
@@ -909,10 +909,13 @@ partial class CSharpToGSharpTranslator {
         // else the target's storage. A local's storage is what its declaration
         // emitted (`EmittedLocalStorageAcceptsNil`), and a local with no record
         // is not bridged; any other target is decided by its declaration, as
-        // for a plain assignment.
-        // An element-access target is #5595.
+        // for a plain assignment. An array element or indexer target is decided
+        // by `ElementAccessStoreRequiresNonNullReference`, the query of the plain
+        // `arr[0] = entry.Item` (#2259).
         private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
-            if !(target is IdentifierNameSyntax || target is MemberAccessExpressionSyntax) {
+            if !(target is IdentifierNameSyntax ||
+                target is MemberAccessExpressionSyntax ||
+                target is ElementAccessExpressionSyntax) {
                 return value
             }
             let model = this.context.SemanticModel
@@ -939,6 +942,12 @@ partial class CSharpToGSharpTranslator {
                     .EmittedLocalStorageAcceptsNil
                     .TryGetValue(local, out var acceptsNil) &&
                     !acceptsNil {
+                    EnsureNonNullAssertion(value)
+                } else {
+                    value
+                }
+            } else if target is ElementAccessExpressionSyntax {
+                return if this.ElementAccessStoreRequiresNonNullReference(target) {
                     EnsureNonNullAssertion(value)
                 } else {
                     value

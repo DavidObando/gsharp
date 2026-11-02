@@ -3473,24 +3473,39 @@ partial class CSharpToGSharpTranslator {
         // indexer (arrays resolve to no symbol at all) is not itself promoted to
         // `T?` by the taint fixpoint. An already-nullable sink has nothing to
         // forgive, and a compound assignment is a different shape entirely.
-        private func ElementAccessAssignmentRequiresNonNullReference(assignment AssignmentExpressionSyntax?) bool {
-            if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
-                !(assignment!!.Left is ElementAccessExpressionSyntax) ||
-                this.IsNullableArrayElementAccess(assignment!!.Left) ||
+        private func ElementAccessAssignmentRequiresNonNullReference(
+            assignment AssignmentExpressionSyntax?
+        ) bool -> assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+            this.ElementAccessStoreRequiresNonNullReference(assignment!!.Left)
+
+        // Issue #5595: the target half of the rule above. A deconstruction into an
+        // element-access target (`(arr[0], i) = entry`) has no right-hand side per
+        // element, so its store bridge asks this with the target alone.
+        private func ElementAccessStoreRequiresNonNullReference(target ExpressionSyntax) bool {
+            if !(target is ElementAccessExpressionSyntax) ||
+                this.IsNullableArrayElementAccess(target) ||
                 // Issue #5537: the element of oblivious container storage is `T?`.
-            this.WritesObliviousContainerStorageElement(assignment!!.Right) {
+            this.StoreTargetIsObliviousContainerElement(target) {
                 return false
             }
             let leftSymbol ISymbol? = this.GetProjectedAssignmentTarget(
-                assignment!!.Left,
-                this.context.GetSymbolInfo(assignment!!.Left).Symbol
+                target,
+                this.context.GetSymbolInfo(target).Symbol
             )
-            let leftType ITypeSymbol? = this.GetAssignmentTargetType(assignment!!.Left, leftSymbol)
+            let leftType ITypeSymbol? = this.GetAssignmentTargetType(target, leftSymbol)
             if !(leftType != nil && leftType.IsReferenceType == true) ||
                 leftType.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
+                return false
+            }
+            // Issue #5577: an `[AllowNull]` indexer, also one that another project of
+            // the run emits, takes a nullable value.
+            if ObliviousNullabilityAnalyzer.HasRunAllowNullWriteContract(
+                leftSymbol,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
                 return false
             }
             return leftSymbol is not IPropertySymbol indexer || !this.ShouldPromoteToNullableReference(indexer)
