@@ -128,6 +128,9 @@ open class Adr0208NarrowingCorpusTests {
                 "a13_5629_tests_after_a_default_do_not_reach_earlier_cases_R19",
                 "a14_5629_tests_after_a_default_do_not_reach_earlier_arms_R19",
                 "a15_5629_continue_in_do_while_false_is_no_back_edge",
+                "a16_5629_case_value_after_a_default_sees_the_tests_before_it_R19",
+                "a17_5629_arm_value_after_a_default_sees_the_tests_before_it_R19",
+                "a18_5629_default_fallthrough_carries_the_later_tests_R19",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7551,6 +7554,86 @@ func Run(s string?, k int32) int32 {
     return 1
 }
 Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
+            yield[]object{"a16_5629_case_value_after_a_default_sees_the_tests_before_it_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { }
+        case 1 { }
+        case x.Value { return 3 }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@23:16", "reject", "", "R19"}
+            yield[]object{"a17_5629_arm_value_after_a_default_sees_the_tests_before_it_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    return switch o {
+        default: 2
+        case 1: 3
+        case x.Value: 4
+    }
+}
+Console.WriteLine(Run())`, "GS0158@23:16", "reject", "", "R19"}
+            yield[]object{"a18_5629_default_fallthrough_carries_the_later_tests_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { fallthrough }
+        case nil { return x.Value }
+        case 1 { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:29", "reject", "", "R19"}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {

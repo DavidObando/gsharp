@@ -102,33 +102,38 @@ internal partial class StatementBinder {
                         Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Keyword.Location)
                     }
                     hasDefault = true
-                    let laterTests = List[(Syntax SyntaxNode, Pattern BoundPattern)]()
-                    for var later = caseIndex + 1; later < syntax.Cases.Length; later++ {
-                        let laterSyntax = syntax.Cases[later]
-                        if laterSyntax.IsDefault {
-                            continue
-                        }
-                        let laterValue = Invariant.Required(
-                            laterSyntax.Value,
-                            "a non-default switch case has a pattern value",
-                            expression: "laterSyntax.Value"
+                    let defaultIndex = caseIndex
+                    var defaultBody = if defaultIndex == syntax.Cases.Length - 1 {
+                        BindBlockStatement(caseSyntax.Body)
+                    } else {
+                        cast[BoundStatement](
+                            BindAfterLaterArmTests(
+                                func () {
+                                    for var later = defaultIndex + 1; later < syntax.Cases.Length; later++ {
+                                        let laterSyntax = syntax.Cases[later]
+                                        if laterSyntax.IsDefault {
+                                            continue
+                                        }
+                                        let laterValue = Invariant.Required(
+                                            laterSyntax.Value,
+                                            "a non-default switch case has a pattern value",
+                                            expression: "laterSyntax.Value"
+                                        )
+                                        $scope = BoundScope($scope)
+                                        let laterPattern = patterns.BindPattern(laterValue, switchType)
+                                        earlyPatterns[later] = laterPattern
+                                        earlyScopes[later] = $scope
+                                        $scope = $scope.Pop()
+                                        ApplySwitchArmTestEffects(laterValue, switchType, laterPattern)
+                                    }
+                                },
+                                endsInFallthrough,
+                                func () BoundNode {
+                                    return BindBlockStatement(caseSyntax.Body)
+                                }
+                            )
                         )
-                        $scope = BoundScope($scope)
-                        let laterPattern = patterns.BindPattern(laterValue, switchType)
-                        earlyPatterns[later] = laterPattern
-                        earlyScopes[later] = $scope
-                        $scope = $scope.Pop()
-                        laterTests.Add((laterValue, laterPattern))
                     }
-                    var defaultBody = cast[BoundStatement](
-                        BindAfterLaterArmTests(
-                            laterTests,
-                            switchType,
-                            func () BoundNode {
-                                return BindBlockStatement(caseSyntax.Body)
-                            }
-                        )
-                    )
                     ShadowAddBranch(shadowFlow, nil, defaultBody, true)
                     shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])

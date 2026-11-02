@@ -84,37 +84,46 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
-                let laterTests = List[(Syntax SyntaxNode, Pattern BoundPattern)]()
-                for var later = armIndex + 1; later < syntax.Arms.Length; later++ {
-                    let laterSyntax = syntax.Arms[later]
-                    if laterSyntax.IsDefault {
-                        continue
+                let defaultIndex = armIndex
+                let result = if defaultIndex == syntax.Arms.Length - 1 {
+                    if targetType == nil {
+                        BindExpression(armSyntax.Result, canBeVoid)
+                    } else {
+                        BindExpression(armSyntax.Result, targetType)
                     }
-                    let laterValue = Invariant.Required(
-                        laterSyntax.Value,
-                        "a non-default switch arm has a pattern value",
-                        expression: "laterSyntax.Value"
-                    )
-                    $scope = BoundScope($scope)
-                    let laterPattern = patterns.BindPattern(laterValue, switchType)
-                    earlyPatterns[later] = laterPattern
-                    earlyScopes[later] = $scope
-                    $scope = $scope.Pop()
-                    laterTests.Add((laterValue, laterPattern))
-                }
-                let result = cast[BoundExpression](
-                    bindAfterLaterArmTests(
-                        laterTests,
-                        switchType,
-                        func () BoundNode {
-                            return if targetType == nil {
-                                BindExpression(armSyntax.Result, canBeVoid)
-                            } else {
-                                BindExpression(armSyntax.Result, targetType)
+                } else {
+                    cast[BoundExpression](
+                        bindAfterLaterArmTests(
+                            func () {
+                                for var later = defaultIndex + 1; later < syntax.Arms.Length; later++ {
+                                    let laterSyntax = syntax.Arms[later]
+                                    if laterSyntax.IsDefault {
+                                        continue
+                                    }
+                                    let laterValue = Invariant.Required(
+                                        laterSyntax.Value,
+                                        "a non-default switch arm has a pattern value",
+                                        expression: "laterSyntax.Value"
+                                    )
+                                    $scope = BoundScope($scope)
+                                    let laterPattern = patterns.BindPattern(laterValue, switchType)
+                                    earlyPatterns[later] = laterPattern
+                                    earlyScopes[later] = $scope
+                                    $scope = $scope.Pop()
+                                    applySwitchArmTestEffects(laterValue, switchType, laterPattern)
+                                }
+                            },
+                            false,
+                            func () BoundNode {
+                                return if targetType == nil {
+                                    BindExpression(armSyntax.Result, canBeVoid)
+                                } else {
+                                    BindExpression(armSyntax.Result, targetType)
+                                }
                             }
-                        }
+                        )
                     )
-                )
+                }
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
             }

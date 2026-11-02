@@ -2023,24 +2023,24 @@ internal partial class StatementBinder {
         )
     }
 
-    /// #5629: a `default` that is not the last arm runs after the tests of the arms after it, so their effects apply
-    /// to its body only. The facts that they remove are put back afterwards (as R18 does for an else-branch), and each
-    /// of those arms applies its own test where it is dispatched.
-    internal func BindAfterLaterArmTests(
-        tests List[(Syntax SyntaxNode, Pattern BoundPattern)],
-        inputType TypeSymbol,
-        bind() -> BoundNode
-    ) BoundNode {
-        if tests.Count == 0 {
-            return bind()
-        }
+    /// #5629: a `default` that is not the last arm runs after the tests of the arms after it.
+    /// [`bindLaterTests`](paramref) binds those arms' patterns in dispatch order, each after the tests before it, and
+    /// applies their effects; [`bind`](paramref) then binds the default's body. The facts that the tests and the
+    /// default's conditions removed are put back afterwards (as R18 does for an else-branch), and each of those arms
+    /// applies its own test where it is dispatched. A default that falls through keeps them: the next arm's body also
+    /// runs after the default, and that path removes at least what the arm's own dispatch removes.
+    internal func BindAfterLaterArmTests(bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) BoundNode {
         let outer = BeginThenBranchConditionKills()
         let entry = binderCtx.Narrowing
-        for test in tests {
-            ApplySwitchArmTestEffects(test.Syntax, inputType, test.Pattern)
-        }
+        bindLaterTests()
         let bound = bind()
-        RestoreThenBranchConditionKills(outer, entry)
+        if fallsThrough {
+            let kills = conditionKillJournal!!
+            conditionKillJournal = outer
+            outer?.AddRange(kills)
+        } else {
+            RestoreThenBranchConditionKills(outer, entry)
+        }
         return bound
     }
 
