@@ -124,6 +124,36 @@ func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPat
     }
 
     @Fact
+    func StaticAccessOfAnImportedType_TakesOnlyStaticCandidates() {
+        // `Sink.Use(dt)` binds the static `Use(DateTimeOffset)` through an imported conversion operator, which can
+        // write the storage that a `ref` parameter aliases; the instance `Use(DateTime)` is not a candidate.
+        using let fixture = CSharpFixture(`namespace Adr0213StaticAccess;
+public sealed class Sink {
+    public void Use(System.DateTime v) { }
+    public static void Use(System.DateTimeOffset v) { }
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import System
+import Adr0213StaticAccess
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Sink.Use(dt)
+    }
+    return n
+}
+func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@7:16", string.Join(" ", errors))
+    }
+
+    @Fact
     func CompoundGenericParameterOfAnImportedConversion_IsAConversion() {
         // `Use(payload, 1)` infers `T = int32` from the second argument and converts `Payload` to `List[int32]` with
         // an imported operator, which can write the storage that a `ref` parameter aliases.
