@@ -3959,6 +3959,13 @@ partial class CSharpToGSharpTranslator {
                         declaredBindingType,
                         forEachInfo.ElementConversion
                     ) ??
+                        (
+                        if forEachInfo.ElementConversion.IsIdentity {
+                            projectedElement
+                        } else {
+                            default(ITypeSymbol?)
+                        }
+                    ) ??
                         declaredBindingType
                     let projectedBindingType = forEachElement != nil &&
                         projectedElement != nil &&

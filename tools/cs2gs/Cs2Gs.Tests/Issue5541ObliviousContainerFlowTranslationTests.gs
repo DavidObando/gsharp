@@ -733,24 +733,53 @@ public static class Use
     /// deconstruction into typed declarations is proven non-null and keeps `!!`. A
     /// tuple local is storage that states its elements' positions, so it takes a nil
     /// element as it is and its dereference asserts it; an implicitly typed
-    /// deconstruction takes a nil element as it is.
+    /// deconstruction takes a nil element as it is and keeps the element's positions
+    /// for dereferences and generic calls, in enabled and disabled regions alike.
     @Fact
     func A_Tuple_Element_Is_Asserted_Only_For_A_Declared_Target() {
         this.Check("Review22", `using ObLib;
 
 public static class Use
 {
+    static T Id<T>(T x) => x;
     public static int Declared(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) = (lines[0], lines[1]); return a.Length + b.Length; }
     public static int Local(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) t = (lines[0], lines[1]); return t.b.Length; }
-    public static int Inferred(string p) { string[] lines; lines = Node.Holes(p); var (a, b) = (lines[0], lines[1]); return b == null ? 1 : 0; }
-    public static int Natural(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); return t.Item2 == null ? 1 : 0; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Holes(p); var (a, b) = (lines[0], lines[1]); return a.Length + Id(a).Length + (Id(b) == null ? 10 : 0); }
+    public static int InferredThrows(string p) { string[] lines; lines = Node.Holes(p); var (a, b) = (lines[0], lines[1]); try { return b.Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int Natural(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); return t.Item1.Length + (t.Item2 == null ? 10 : 0); }
+    public static int Disabled(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+#nullable disable
+        var (a, b) = (lines[0], lines[1]);
+        return a.Length + (b == null ? 10 : 0);
+#nullable restore
+    }
 }`, []string{
                 "let (a, b) = (lines[0]!!, lines[1]!!)",
                 "let t (a string?, b string?) = (lines[0], lines[1])",
                 "return t.b!!.Length",
                 "let (a, b) = (lines[0], lines[1])",
-                "let t = (lines[0], lines[1])"
-            }, []string{"Declared", "4", "Local", "2", "Inferred", "1", "Natural", "1"})
+                "return a!!.Length + Id(a)!!.Length + (if Id(b) == nil { 10 } else { 0 })",
+                "return b!!.Length",
+                "let t = (lines[0], lines[1])",
+                "return t.Item1!!.Length + (if t.Item2 == nil { 10 } else { 0 })",
+                "return a!!.Length + (if b == nil { 10 } else { 0 })"
+            }, []string{
+                "Declared",
+                "4",
+                "Local",
+                "2",
+                "Inferred",
+                "14",
+                "InferredThrows",
+                "-1",
+                "Natural",
+                "12",
+                "Disabled",
+                "12"
+            })
     }
 
     /// Final review of #5571: a conditional access, a slice and a tuple literal carry
@@ -777,6 +806,29 @@ public static class Use
                 "return t.Item1!!.Length + n.Item2!!.Length",
                 "return t.Item2!!.Length"
             }, []string{"Conditional", "2", "ConditionalNil", "1", "Slice", "14", "Tuple", "4", "TupleThrows", "-1"})
+    }
+
+    /// Final review of #5571: a `foreach` variable stored as a whole in promoted
+    /// container storage gives its collection those element positions, so the
+    /// collection and its nested literals state `[]string?` and the loop variable's
+    /// element dereference needs `!!` without GS0536.
+    @Fact
+    func A_ForEach_Binding_Assigned_To_Storage_Promotes_Its_Collection() {
+        this.Check("Review24", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Array(string p) { string[] lines; lines = Node.Holes(p); var rows = new[] { new[] { "x" } }; int n = 0; foreach (var row in rows) { lines = row; n += row[0].Length; } return n + lines[0].Length; }
+    public static int Listed(string p) { string[] lines; lines = Node.Holes(p); var rows = new List<string[]> { new[] { "x" } }; int n = 0; foreach (var row in rows) { lines = row; n += row[0].Length; } return n + lines[0].Length; }
+    public static int Inline(string p) { string[] lines; lines = Node.Holes(p); int n = 0; foreach (var row in new[] { new[] { "x" } }) { lines = row; n += row[0].Length; } return n + lines[0].Length; }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); var rows = new[] { new[] { "x" } }; foreach (var row in rows) { if (p.Length == 0) { lines = row; } } try { return lines[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "let rows [][]string? = [][]string?{[]string?{\"x\"}}",
+                "let rows List[[]string?] = List[[]string?]{ []string?{\"x\"} }",
+                "for row in [][]string?{[]string?{\"x\"}}",
+                "n += row[0]!!.Length"
+            }, []string{"Array", "2", "Listed", "2", "Inline", "2", "Throws", "-1"})
     }
 
     // Translates the C#, checks the printed form, compiles and verifies the G#, and

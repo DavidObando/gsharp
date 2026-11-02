@@ -318,19 +318,16 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // The positions that a construction states: those of the storage that receives
-        // it (an `async` method's task result included) and those that its arguments
-        // and initializer give its type arguments. The spelling, the constructor
-        // arguments and the initializer writes all read these.
+        // The positions that a construction states: those of the sink that receives it
+        // (an `async` method's task result included) and those that its arguments and
+        // initializer give its type arguments. The spelling, the constructor arguments
+        // and the initializer writes all read these.
         private func EffectiveCreationPositions(
             creation ExpressionSyntax,
             createdType ITypeSymbol?
         ) ObliviousPositionSet {
             let positions = ObliviousPositionSet()
-            let (sinkPositions, sinkType) = this.SinkStorage(this.ResolveValueSink(creation))
-            if sinkPositions != nil && SameContainerShape(createdType, sinkType) {
-                positions.Nullable.UnionWith(sinkPositions)
-            }
+            positions.Nullable.UnionWith(this.SinkNullablePositions(creation, createdType))
             if creation is BaseObjectCreationExpressionSyntax objectCreation {
                 positions.UnionWith(
                     this.ObliviousCreationPositions(
@@ -341,6 +338,159 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return positions
+        }
+
+        // The nullable positions that the sink of [`value`](paramref) states for it:
+        // the storage, enclosing element literal, tuple literal, initializer or
+        // `foreach` statement that receives it.
+        private func SinkNullablePositions(value ExpressionSyntax?, valueType ITypeSymbol?) HashSet[string] {
+            let positions = HashSet[string](System.StringComparer.Ordinal)
+            if value == nil || !this.ObliviousContainerFlowState().HasNullable {
+                return positions
+            }
+            var whole ExpressionSyntax = value
+            while true {
+                let parent SyntaxNode? = whole.Parent
+                let next ExpressionSyntax? = switch parent {
+                    case parenthesized is ParenthesizedExpressionSyntax: parenthesized
+                    case castExpression is CastExpressionSyntax: castExpression
+                    case checkedExpression is CheckedExpressionSyntax: checkedExpression
+                    case conditional is ConditionalExpressionSyntax when conditional.Condition != whole: conditional
+                    case coalesce is BinaryExpressionSyntax when coalesce.IsKind(
+                        SyntaxKind.CoalesceExpression
+                    ): coalesce
+                    case arm is SwitchExpressionArmSyntax when arm.Expression == whole: arm.Parent as SwitchExpressionSyntax
+                    default: default(ExpressionSyntax?)
+                }
+                if next == nil {
+                    break
+                }
+                whole = next
+            }
+            let parent SyntaxNode? = whole.Parent
+            if parent is InitializerExpressionSyntax arrayInitializer && arrayInitializer.IsKind(
+                SyntaxKind.ArrayInitializerExpression
+            ) {
+                let enclosing ExpressionSyntax = if arrayInitializer.Parent is ArrayCreationExpressionSyntax ||
+                    arrayInitializer.Parent is ImplicitArrayCreationExpressionSyntax {
+                    cast[ExpressionSyntax](arrayInitializer.Parent)
+                } else {
+                    arrayInitializer
+                }
+                SubtreeInto(this.ObliviousArrayLiteralPositions(enclosing), "0", positions)
+                positions.Remove("")
+                return positions
+            }
+            if parent is ExpressionElementSyntax{Parent: CollectionExpressionSyntax collection} {
+                SubtreeInto(this.ObliviousArrayLiteralPositions(collection), "0", positions)
+                positions.Remove("")
+                return positions
+            }
+            if parent is SpreadElementSyntax{Parent: CollectionExpressionSyntax spreadCollection} {
+                if ElementIsPositionZero(valueType) {
+                    let element = HashSet[string](System.StringComparer.Ordinal)
+                    SubtreeInto(this.ObliviousArrayLiteralPositions(spreadCollection), "0", element)
+                    for position in element {
+                        positions.Add(JoinPosition("0", position))
+                    }
+                }
+                return positions
+            }
+            if parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} tupleArgument {
+                let tupleType ITypeSymbol? = this.context.GetTypeInfo(tuple).Type
+                SubtreeInto(
+                    this.SinkNullablePositions(tuple, tupleType),
+                    IndexPosition(tuple.Arguments.IndexOf(tupleArgument)),
+                    positions
+                )
+                positions.Remove("")
+                return positions
+            }
+            if parent is ForEachStatementSyntax forEach && forEach.Expression == whole {
+                let loopSymbol ISymbol? = this.context.GetDeclaredSymbol(forEach)
+                let loopPositions = this.ObliviousContainerPositions(loopSymbol)
+                if loopPositions != nil {
+                    let mapped = CollectionPositionsForElement(
+                        valueType,
+                        StorageType(loopSymbol?.OriginalDefinition),
+                        loopPositions,
+                        this.context.Compilation
+                    )
+                    if mapped != nil {
+                        positions.UnionWith(mapped)
+                    }
+                }
+                return positions
+            }
+            let (creation, member) = this.InitializerWriteTarget(whole)
+            if creation != nil && member != nil {
+                let createdType ITypeSymbol? = this.context.GetTypeInfo(creation).Type
+                let slot = MemberPositions(this.EffectiveCreationPositions(creation, createdType), createdType, member)
+                if slot != nil {
+                    positions.UnionWith(slot.Nullable)
+                    positions.Remove("")
+                }
+                return positions
+            }
+            if parent is ArgumentSyntax callArgument && callArgument.Parent?.Parent is ExpressionSyntax argumentCall {
+                let (parameter, argumentPrefix) = ArgumentDestination(callArgument, this.context.SemanticModel)
+                if parameter != nil && argumentPrefix == "" {
+                    let slot = this.CallSlotPositions(argumentCall, parameter.OriginalDefinition.Type)
+                    if slot != nil &&
+                        (
+                        SameContainerShape(valueType, parameter.Type) ||
+                            (ElementIsPositionZero(valueType) && ElementIsPositionZero(parameter.Type))
+                    ) {
+                        positions.UnionWith(slot.Nullable)
+                        positions.Remove("")
+                    }
+                }
+            }
+            let (sink, prefix) = this.DirectValueSink(whole)
+            let (sinkPositions, sinkType) = this.SinkStorage(sink)
+            if sinkPositions == nil {
+                return positions
+            }
+            if prefix == "0" {
+                if SameContainerShape(valueType, (sinkType as IArrayTypeSymbol)?.ElementType) {
+                    SubtreeInto(sinkPositions, "0", positions)
+                    positions.Remove("")
+                }
+            } else if SameContainerShape(valueType, sinkType) {
+                positions.UnionWith(sinkPositions)
+            }
+            return positions
+        }
+
+        private func DirectValueSink(whole ExpressionSyntax)(Sink ISymbol?, Prefix string) {
+            return switch whole.Parent {
+                case EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator}: (
+                    this.context.GetDeclaredSymbol(declarator),
+                    ""
+                )
+                case EqualsValueClauseSyntax{Parent: PropertyDeclarationSyntax property}: (
+                    this.context.GetDeclaredSymbol(property),
+                    ""
+                )
+                case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                    SyntaxKind.SimpleAssignmentExpression
+                ) &&
+                    assignment.Right == whole: (this.context.GetSymbolInfo(assignment.Left).Symbol, "")
+                case argument is ArgumentSyntax: ArgumentDestination(argument, this.context.SemanticModel)
+                case returnStatement is ReturnStatementSyntax: (
+                    this.context.SemanticModel.GetEnclosingSymbol(returnStatement.SpanStart) as IMethodSymbol,
+                    ""
+                )
+                case yieldStatement is YieldStatementSyntax: (
+                    this.context.SemanticModel.GetEnclosingSymbol(yieldStatement.SpanStart) as IMethodSymbol,
+                    ""
+                )
+                case arrow is ArrowExpressionClauseSyntax: (
+                    this.context.SemanticModel.GetEnclosingSymbol(arrow.Expression.SpanStart),
+                    ""
+                )
+                default: (default(ISymbol?), "")
+            }
         }
 
         // The declared positions and type of the storage that receives a value. An
@@ -493,20 +643,18 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // The nullable positions of an array literal's type: those of the storage
-        // that receives it (an `async` method's task result included) and those that
-        // its elements give it.
+        // The nullable positions of an array literal's type: those of the sink that
+        // receives it (an `async` method's task result included) and those that its
+        // elements give it.
         private func ObliviousArrayLiteralPositions(literal ExpressionSyntax?) HashSet[string] {
-            let positions = HashSet[string](System.StringComparer.Ordinal)
             if literal == nil || !this.ObliviousContainerFlowState().HasNullable {
-                return positions
+                return HashSet[string](System.StringComparer.Ordinal)
             }
             let literalType ITypeSymbol? = ElementLiteralType(literal, this.context.SemanticModel)
-            let (sinkPositions, sinkType) = this.SinkStorage(this.ResolveValueSink(literal))
-            if sinkPositions != nil &&
-                (literalType is IArrayTypeSymbol || literal is CollectionExpressionSyntax) &&
-                SameContainerShape(literalType, sinkType) {
-                positions.UnionWith(sinkPositions)
+            let positions = if literalType is IArrayTypeSymbol || literal is CollectionExpressionSyntax {
+                this.SinkNullablePositions(literal, literalType)
+            } else {
+                HashSet[string](System.StringComparer.Ordinal)
             }
             if IsElementLiteral(literal) {
                 let own = this.ObliviousValuePositions(literal)
@@ -906,8 +1054,27 @@ partial class CSharpToGSharpTranslator {
                     return this.StoreTargetIsObliviousContainerElement(assignment.Left)
                 }
             }
-            // `new List<T> { value }`, `new Dictionary<K, V> { { key, value } }`,
-            // `new Dictionary<K, V> { [key] = value }` and `new Box<T> { Value = value }`.
+            let (creation, member) = this.InitializerWriteTarget(written)
+            if creation != nil && member != nil {
+                let createdType ITypeSymbol? = this.context.GetTypeInfo(creation).Type
+                return MemberPositionIsNullable(
+                    this.EffectiveCreationPositions(creation, createdType),
+                    createdType,
+                    member
+                )
+            }
+            return false
+        }
+
+        // The construction and the member or `Add` parameter that an object or
+        // collection initializer write fills: `new List<T> { value }`,
+        // `new Dictionary<K, V> { { key, value } }`, `new Dictionary<K, V> { [key] = value }`
+        // and `new Box<T> { Value = value }`.
+        private func InitializerWriteTarget(written ExpressionSyntax)(
+            Creation BaseObjectCreationExpressionSyntax?,
+            Member ISymbol?
+        ) {
+            let parent SyntaxNode? = written.Parent
             var element SyntaxNode = written
             var index = 0
             var member ISymbol? = nil
@@ -927,7 +1094,7 @@ partial class CSharpToGSharpTranslator {
             }
             if element.Parent is not InitializerExpressionSyntax initializer ||
                 initializer.Parent is not BaseObjectCreationExpressionSyntax creation {
-                return false
+                return (nil, nil)
             }
             if member == nil {
                 if !initializer.IsKind(SyntaxKind.CollectionInitializerExpression) ||
@@ -940,12 +1107,11 @@ partial class CSharpToGSharpTranslator {
                     index >= add
                     .Parameters
                     .Length {
-                    return false
+                    return (nil, nil)
                 }
                 member = add.Parameters[index]
             }
-            let createdType ITypeSymbol? = this.context.GetTypeInfo(creation).Type
-            return MemberPositionIsNullable(this.EffectiveCreationPositions(creation, createdType), createdType, member)
+            return (creation, member)
         }
 
         /// Issue #5595: whether the store target [`target`](paramref) is a position that
@@ -972,9 +1138,17 @@ partial class CSharpToGSharpTranslator {
         // Whether the type [`slotType`](paramref) of a parameter or delegate result of
         // the call [`call`](paramref), with the call's type arguments bound as the
         // analysis binds them, is nullable at the top level.
-        private func CallSlotIsNullable(call ExpressionSyntax, slotType ITypeSymbol, position string = "") bool {
+        private func CallSlotIsNullable(call ExpressionSyntax, slotType ITypeSymbol, position string = "") bool -> this
+            .CallSlotPositions(call, slotType)
+            ?.Nullable
+            .Contains(position) == true
+
+        // The positions of the type [`slotType`](paramref) of a parameter or delegate
+        // result of the call [`call`](paramref), with the call's type arguments bound
+        // as the analysis binds them.
+        private func CallSlotPositions(call ExpressionSyntax, slotType ITypeSymbol) ObliviousPositionSet? {
             if !MentionsTypeParameter(slotType) {
-                return false
+                return nil
             }
             let flow = this.ObliviousContainerFlowState()
             let model = this.context.SemanticModel
@@ -1023,11 +1197,11 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if bindings == nil {
-                return false
+                return nil
             }
             let slot = ObliviousPositionSet()
             Substitute(slotType, bindings, "", slot)
-            return slot.Nullable.Contains(position)
+            return slot
         }
 
         // Whether a value that a lambda returns has a nullable delegate result, because
@@ -1639,7 +1813,7 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     let positions = this.ObliviousPositionsOf(value, model, flow)
-                    if positions == nil && (kind != 0 || flow.Destinations.Count == 0) {
+                    if positions == nil && flow.Destinations.Count == 0 {
                         continue
                     }
                     var original = destination!!.OriginalDefinition
@@ -1695,12 +1869,61 @@ partial class CSharpToGSharpTranslator {
                                 )
                             }
                         }
-                    } else if positions == nil {
-                        continue
                     } else {
+                        // An inferred local, a `foreach` variable or a deconstruction
+                        // local that is stored into declared storage gives its own
+                        // source those positions.
+                        if flow.Destinations.TryGetValue(original, out var storedLocal) {
+                            if kind == 1 {
+                                changed |= this.AddAliasedSourcePositions(
+                                    flow,
+                                    value,
+                                    model,
+                                    destinationType,
+                                    storedLocal,
+                                    compilation
+                                )
+                            } else if kind == 2 {
+                                let collectionType ITypeSymbol? = StoredValueType(value, model)
+                                let collectionPositions = CollectionPositionsForElement(
+                                    collectionType,
+                                    destinationType,
+                                    storedLocal,
+                                    compilation
+                                )
+                                if collectionPositions != nil {
+                                    changed |= this.AddAliasedSourcePositions(
+                                        flow,
+                                        value,
+                                        model,
+                                        collectionType,
+                                        collectionPositions,
+                                        compilation
+                                    )
+                                }
+                            } else if kind == 4 {
+                                let tuplePositions = HashSet[string](System.StringComparer.Ordinal)
+                                for position in storedLocal {
+                                    tuplePositions.Add(JoinPosition(prefix, position))
+                                }
+                                changed |= this.AddAliasedSourcePositions(
+                                    flow,
+                                    value,
+                                    model,
+                                    StoredValueType(value, model),
+                                    tuplePositions,
+                                    compilation
+                                )
+                            }
+                        }
+                        if positions == nil {
+                            continue
+                        }
                         // A local whose C# type is not annotated gets a `!!` on its
                         // initializer (TranslateValueWithNullForgiveness), so only its
-                        // nested positions follow the value.
+                        // nested positions follow the value. A deconstruction binding
+                        // has no element initializer assertion, so it keeps the
+                        // element's top level.
                         let source ObliviousPositionSet? = if kind == 4 {
                             Subtree(positions, prefix)
                         } else {
@@ -1708,11 +1931,14 @@ partial class CSharpToGSharpTranslator {
                         }
                         let stored = if kind == 2 {
                             EnumeratedPositions(StoredValueType(value, model), positions, compilation)
-                        } else if kind == 1 &&
-                            destinationType?.NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated {
+                        } else if kind == 4 ||
+                            (
+                            kind == 1 &&
+                                destinationType?.NullableAnnotation == Microsoft
+                                .CodeAnalysis
+                                .NullableAnnotation
+                                .Annotated
+                        ) {
                             source
                         } else {
                             WithoutTopLevel(source)
@@ -1831,6 +2057,86 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 return changed
+            }
+            if read is TupleExpressionSyntax tuple {
+                var tupleChanged = false
+                for var i = 0; i < tuple.Arguments.Count && i < 7; i++ {
+                    let element = HashSet[string](System.StringComparer.Ordinal)
+                    SubtreeInto(positions, IndexPosition(i), element)
+                    element.Remove("")
+                    if element.Count > 0 {
+                        tupleChanged |= this.AddAliasedSourcePositions(
+                            flow,
+                            tuple.Arguments[i].Expression,
+                            model,
+                            TupleElementType(destinationType, i),
+                            element,
+                            compilation
+                        )
+                    }
+                }
+                return tupleChanged
+            }
+            if read != nil && IsElementLiteral(read) && ElementIsPositionZero(destinationType) {
+                let element = HashSet[string](System.StringComparer.Ordinal)
+                SubtreeInto(positions, "0", element)
+                element.Remove("")
+                if element.Count == 0 {
+                    return false
+                }
+                let elementType ITypeSymbol? = PositionType(destinationType, "0")
+                var literalChanged = false
+                let initializer InitializerExpressionSyntax? = switch read {
+                    case explicitArray is ArrayCreationExpressionSyntax: explicitArray.Initializer
+                    case implicitArray is ImplicitArrayCreationExpressionSyntax: implicitArray.Initializer
+                    case bare is InitializerExpressionSyntax: bare
+                    default: default(InitializerExpressionSyntax?)
+                }
+                if initializer != nil {
+                    for item in initializer.Expressions {
+                        literalChanged |= this.AddAliasedSourcePositions(
+                            flow,
+                            item,
+                            model,
+                            elementType,
+                            element,
+                            compilation
+                        )
+                    }
+                }
+                if read is CollectionExpressionSyntax collection {
+                    for item in collection.Elements {
+                        if item is ExpressionElementSyntax expressionElement {
+                            literalChanged |= this.AddAliasedSourcePositions(
+                                flow,
+                                expressionElement.Expression,
+                                model,
+                                elementType,
+                                element,
+                                compilation
+                            )
+                        } else if item is SpreadElementSyntax spread {
+                            let spreadType ITypeSymbol? = StoredValueType(spread.Expression, model)
+                            let spreadPositions = CollectionPositionsForElement(
+                                spreadType,
+                                elementType,
+                                element,
+                                compilation
+                            )
+                            if spreadPositions != nil {
+                                literalChanged |= this.AddAliasedSourcePositions(
+                                    flow,
+                                    spread.Expression,
+                                    model,
+                                    spreadType,
+                                    spreadPositions,
+                                    compilation
+                                )
+                            }
+                        }
+                    }
+                }
+                return literalChanged
             }
             if !(
                 read is IdentifierNameSyntax ||
@@ -2789,6 +3095,51 @@ partial class CSharpToGSharpTranslator {
                 }
             }
 
+            // The positions on a collection of type [`collectionType`](paramref) that
+            // give its enumerated element of type [`elementType`](paramref) the
+            // [`elementPositions`](paramref).
+            private func CollectionPositionsForElement(
+                collectionType ITypeSymbol?,
+                elementType ITypeSymbol?,
+                elementPositions HashSet[string],
+                compilation Compilation
+            ) HashSet[string]? {
+                if collectionType == nil || elementType == nil || elementPositions.Count == 0 {
+                    return nil
+                }
+                if collectionType is IArrayTypeSymbol {
+                    let result = HashSet[string](System.StringComparer.Ordinal)
+                    for position in elementPositions {
+                        result.Add(JoinPosition("0", position))
+                    }
+                    return result
+                }
+                if collectionType is not INamedTypeSymbol named {
+                    return nil
+                }
+                let enumerableType = compilation.GetSpecialType(SpecialType.System_Collections_Generic_IEnumerable_T)
+                let definition = named.OriginalDefinition
+                for view in ContainerViews(definition) {
+                    if SymbolEqualityComparer.Default.Equals(view.OriginalDefinition, enumerableType) &&
+                        view
+                        .TypeArguments
+                        .Length == 1 {
+                        let carried = ObliviousPositionSet()
+                        carried.Nullable.UnionWith(elementPositions)
+                        let bindings = TypeParameterMap()
+                        Unify(view.TypeArguments[0], elementType, carried, bindings)
+                        let result = ObliviousPositionSet()
+                        Substitute(definition, bindings, "", result)
+                        return if result.Nullable.Count == 0 {
+                            nil
+                        } else {
+                            result.Nullable
+                        }
+                    }
+                }
+                return nil
+            }
+
             // The positions of a value of type [`valueType`](paramref) in storage of
             // type [`storageType`](paramref): the same container, or a generic type that
             // the container implements or derives from, such as `IEnumerable[T]` for
@@ -2855,16 +3206,20 @@ partial class CSharpToGSharpTranslator {
                 return existing.Nullable.Count + existing.Platform.Count > count
             }
 
-            // Whether the member result, parameter or indexer of a container with these
-            // positions, typed by one of the container's type parameters, is nullable. A
-            // nil member is the element of an array.
-            private func MemberPositionIsNullable(
+            // The positions of the member result, parameter or indexer of a container with
+            // these positions, typed by one of the container's type parameters. A nil
+            // member is the element of an array.
+            private func MemberPositions(
                 positions ObliviousPositionSet,
                 containerType ITypeSymbol?,
                 member ISymbol?
-            ) bool {
+            ) ObliviousPositionSet? {
                 if containerType is IArrayTypeSymbol {
-                    return member == nil && positions.Nullable.Contains("0")
+                    return if member == nil {
+                        Subtree(positions, "0")
+                    } else {
+                        default(ObliviousPositionSet?)
+                    }
                 }
                 let memberType ITypeSymbol? = if member != nil {
                     StorageType(UnreducedDefinition(member))
@@ -2877,14 +3232,23 @@ partial class CSharpToGSharpTranslator {
                     member?.ContainingType
                 }
                 if memberType == nil || owner == nil || containerType == nil {
-                    return false
+                    return nil
                 }
                 let bindings = TypeParameterMap()
                 Unify(owner.OriginalDefinition, containerType, positions, bindings)
                 let result = ObliviousPositionSet()
                 Substitute(memberType, bindings, "", result)
-                return result.Nullable.Contains("")
+                return result
             }
+
+            // Whether the member result, parameter or indexer of a container with these
+            // positions, typed by one of the container's type parameters, is nullable. A
+            // nil member is the element of an array.
+            private func MemberPositionIsNullable(
+                positions ObliviousPositionSet,
+                containerType ITypeSymbol?,
+                member ISymbol?
+            ) bool -> MemberPositions(positions, containerType, member)?.Nullable.Contains("") == true
 
             // Source storage that can carry oblivious container positions to another
             // destination.
@@ -3071,7 +3435,14 @@ partial class CSharpToGSharpTranslator {
             // constructions of one generic definition.
             private func SameContainerShape(source ITypeSymbol?, storage ITypeSymbol?) bool {
                 if source is IArrayTypeSymbol sourceArray {
-                    return storage is IArrayTypeSymbol storageArray && sourceArray.Rank == storageArray.Rank
+                    return storage is IArrayTypeSymbol storageArray &&
+                        sourceArray.Rank == storageArray.Rank &&
+                        (
+                        !(
+                            sourceArray.ElementType is IArrayTypeSymbol || storageArray.ElementType is IArrayTypeSymbol
+                        ) ||
+                            SameContainerShape(sourceArray.ElementType, storageArray.ElementType)
+                    )
                 }
                 return source is INamedTypeSymbol sourceNamed &&
                     storage is INamedTypeSymbol storageNamed &&

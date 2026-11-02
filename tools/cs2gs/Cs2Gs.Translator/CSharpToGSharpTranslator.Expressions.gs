@@ -3760,7 +3760,18 @@ partial class CSharpToGSharpTranslator {
                     .Equals(this.context.GetDeclaredSymbol(forEach), local) {
                     continue
                 }
-                let elementType ITypeSymbol? = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
+                let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
+                let elementType ITypeSymbol? = if forEachInfo
+                    .ElementConversion
+                    .IsIdentity &&
+                    this
+                    .context
+                    .GetTypeInfo(forEach.Expression)
+                    .Type is IArrayTypeSymbol arrayType {
+                    arrayType.ElementType
+                } else {
+                    forEachInfo.ElementType
+                }
                 return if elementType != nil && elementType.IsValueType == true {
                     elementType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
                 } else {
