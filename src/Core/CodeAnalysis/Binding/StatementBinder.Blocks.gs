@@ -35,7 +35,7 @@ internal partial class StatementBinder {
         var boundGuard BoundExpression? = nil
         if caseSyntax.Guard is {} guardSyntax {
             let bound = BindGuardExpressionWithNarrowing(guardSyntax, frame)
-            ApplySwitchGuardEffects(guardSyntax, bound)
+            ApplySwitchGuardEffects(guardSyntax, bound, frame)
             boundGuard = bound
         }
         return (pattern, frame, boundGuard)
@@ -192,7 +192,7 @@ internal partial class StatementBinder {
                     $scope = earlyScopes[caseIndex]!!
                     ApplySwitchArmTestEffects(caseValue, switchType, early)
                     if caseSyntax.Guard is {} earlyGuardSyntax && earlyGuards[caseIndex] is {} earlyGuard {
-                        ApplySwitchGuardEffects(earlyGuardSyntax, earlyGuard)
+                        ApplySwitchGuardEffects(earlyGuardSyntax, earlyGuard, earlyFrames[caseIndex])
                     }
                     pattern = early
                     frame = earlyFrames[caseIndex]

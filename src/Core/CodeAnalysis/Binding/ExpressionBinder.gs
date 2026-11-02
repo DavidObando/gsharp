@@ -73,7 +73,7 @@ internal partial class ExpressionBinder {
         AccessPath,
         TypeSymbol
     ]?
-    private let applySwitchGuardEffects(SyntaxNode, BoundExpression) -> void
+    private let applySwitchGuardEffects(SyntaxNode, BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> void
     private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
@@ -118,7 +118,7 @@ internal partial class ExpressionBinder {
         bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
         applySwitchArmTestEffects(SyntaxNode, TypeSymbol, BoundPattern) -> void,
         switchArmPatternNarrowing(SyntaxNode, BoundExpression, BoundPattern) -> Dictionary[AccessPath, TypeSymbol]?,
-        applySwitchGuardEffects(SyntaxNode, BoundExpression) -> void,
+        applySwitchGuardEffects(SyntaxNode, BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> void,
         bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")

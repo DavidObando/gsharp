@@ -533,8 +533,11 @@ partial class Binder {
             Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern),
             switchArmPatternNarrowing: (syntax SyntaxNode, discriminant BoundExpression, pattern BoundPattern) ->
             Statements.SwitchArmPatternNarrowing(syntax, discriminant, pattern),
-            applySwitchGuardEffects: (syntax SyntaxNode, boundGuard BoundExpression) ->
-            Statements.ApplySwitchGuardEffects(syntax, boundGuard),
+            applySwitchGuardEffects: (
+                syntax SyntaxNode,
+                boundGuard BoundExpression,
+                frame Dictionary[AccessPath, TypeSymbol]?
+            ) -> Statements.ApplySwitchGuardEffects(syntax, boundGuard, frame),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
             Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
         )

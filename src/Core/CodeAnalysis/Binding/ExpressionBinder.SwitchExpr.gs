@@ -41,7 +41,7 @@ internal partial class ExpressionBinder {
         var boundGuard BoundExpression? = nil
         if armSyntax.Guard is {} guardSyntax {
             let bound = BindGuardExpression(guardSyntax, frame)
-            applySwitchGuardEffects(guardSyntax, bound)
+            applySwitchGuardEffects(guardSyntax, bound, frame)
             boundGuard = bound
         }
         return (pattern, frame, boundGuard)
@@ -163,7 +163,7 @@ internal partial class ExpressionBinder {
                 $scope = earlyScopes[armIndex]!!
                 applySwitchArmTestEffects(patternSyntax, switchType, early)
                 if armSyntax.Guard is {} earlyGuardSyntax && earlyGuards[armIndex] is {} earlyGuard {
-                    applySwitchGuardEffects(earlyGuardSyntax, earlyGuard)
+                    applySwitchGuardEffects(earlyGuardSyntax, earlyGuard, earlyFrames[armIndex])
                 }
                 pattern = early
                 frame = earlyFrames[armIndex]

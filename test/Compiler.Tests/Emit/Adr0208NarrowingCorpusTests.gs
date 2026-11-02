@@ -136,6 +136,8 @@ open class Adr0208NarrowingCorpusTests {
                 "a21_5629_case_test_that_clears_the_discriminant_narrows_nothing_R18",
                 "a22_5629_statements_after_a_hidden_continue_are_not_on_the_back_edge",
                 "a23_5629_continue_under_a_false_guard_is_no_back_edge",
+                "a24_5629_guard_effects_reach_the_pattern_proof_of_the_case_body_R18",
+                "a25_5629_guard_effects_reach_the_pattern_proof_of_the_arm_result_R18",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7742,6 +7744,35 @@ func Run(s string?, k int32) int32 {
     return 1
 }
 Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
+            yield[]object{"a24_5629_guard_effects_reach_the_pattern_proof_of_the_case_body_R18", `import System
+
+func Run(o object) int32 {
+    var x string? = "ab"
+    let clear = func() bool {
+        x = nil
+        return true
+    }
+    switch x {
+        case string when clear() { return x.Length }
+        default { }
+    }
+    return 0
+}
+Console.WriteLine(Run(1))`, "GS0158@10:45", "reject", "", "R18"}
+            yield[]object{"a25_5629_guard_effects_reach_the_pattern_proof_of_the_arm_result_R18", `import System
+
+func Run(o object) int32 {
+    var x string? = "ab"
+    let clear = func() bool {
+        x = nil
+        return true
+    }
+    return switch x {
+        case string when clear(): x.Length
+        default: 0
+    }
+}
+Console.WriteLine(Run(1))`, "GS0158@10:37", "reject", "", "R18"}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {

@@ -2071,8 +2071,23 @@ internal partial class StatementBinder {
 
     /// #5629: a switch arm's guard runs after its test and before its body and the later arms, so its effects apply
     /// as a condition's do (R18).
-    internal func ApplySwitchGuardEffects(syntax SyntaxNode, boundGuard BoundExpression) {
-        ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+    /// The pattern's frame is on the stack while they apply, so a fact that it proves and the guard removes is not
+    /// restored for the body (the body pushes the same dictionary).
+    internal func ApplySwitchGuardEffects(
+        syntax SyntaxNode,
+        boundGuard BoundExpression,
+        frame Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        if frame == nil {
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+            return
+        }
+        binderCtx.PushNarrowingFrame(frame)
+        try {
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+        } finally {
+            binderCtx.EndNarrowingProof()
+        }
     }
 
     /// #5629: a `default` that is not the last arm runs after the tests of the arms after it.
