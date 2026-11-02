@@ -1010,14 +1010,21 @@ Details per row:
   the guard or body is not part of it (rows a11 and a12). A case's guard runs after its test and before its body
   and the later cases, so its effects apply as a condition's do (rows a19 and a20), and a test whose own effects can
   remove the tested fact proves no narrowing of the discriminant, as for `if x is P` (row a21). Each case's pattern
-  and body see the headers (test and guard) of the cases before it. A `default` that is not last runs after the tests of the cases after it: those patterns bind in
+  and body see the headers (test and guard) of the cases before it: a case proves no narrowing of the discriminant
+  when a header before it can remove that fact (rows a27 and a28), and a callable alias that a pattern or guard
+  replaces is not external for the later cases (rows a29 to a31). The guard's effects also reach the narrowing that
+  its own pattern proves (rows a24 and a25). A `default` that is not last runs after the tests of the cases after it: those patterns bind in
   dispatch order before its body, and their effects apply to its body only and are put back afterwards with the R18
-  journal (rows a03, a13, a14, a16 and a17), unless the default falls through to the next case, whose body then
+  journal (rows a03, a13, a14, a16 and a17). A statement in a guard block that binds early is not a condition, so the
+  facts it removes are recorded separately and put back the same way; each of those cases removes them again where
+  it is dispatched (rows a34 to a36). This holds unless the default falls through to the next case, whose body then
   runs on that path too (row a18).
   A loop's back edge includes a `switch`, `try` or `fixed` statement with a `continue` inside it: the control-flow
   graph keeps such a statement as one statement, so the jump adds no edge, and its block and the blocks before it
   now reach the back edge (rows a06 to a09): the statements of that block up to the statement, not those after it,
-  which the jump skips (row a22). An arm whose guard is the literal `false` hides no jump (row a23), and a
+  which the jump skips (row a22). Of that statement, the discriminant, every header and the bodies of the arms that
+  reach the jump, directly or by falling through, are counted; an arm that only leaves the loop is not (rows a32 and
+  a33). A jump in a guard block counts (row a26). An arm whose guard is the literal `false` hides no jump (row a23), and a
   `do { } while false` has no back edge (row a15). The if-expression condition of #5545 shape 8 is not in this change.
 - **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
   bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
