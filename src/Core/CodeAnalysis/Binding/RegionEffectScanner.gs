@@ -1007,14 +1007,27 @@ internal sealed class RegionEffectScanner {
         return result
     }
 
-    private func VisitBindings(bindings SeparatedSyntaxList[IfLetBindingClauseSyntax]) {
+    // The bindings of `if let`, `guard let` or `while let`. A typed binding converts its initializer to the binding's
+    // type. An `if let` or `guard let` initializer sees the earlier bindings; a `while let` initializer is bound in
+    // the enclosing scope (`BindWhileLetBindingClause`), so its bindings are declared after all initializers.
+    private func VisitBindings(bindings SeparatedSyntaxList[IfLetBindingClauseSyntax], declareAfterAll bool = false) {
         for binding in bindings {
             NodesVisited++
             Visit(binding.Initializer)
             if Active() {
                 current.ContainsConversionCandidate = true
+                if binding.TypeClause != nil {
+                    RecordConversion(binding.Initializer, TypeOrigin(binding.TypeClause))
+                }
             }
-            Declare(binding.Identifier, "binding")
+            if !declareAfterAll {
+                Declare(binding.Identifier, "binding")
+            }
+        }
+        if declareAfterAll {
+            for binding in bindings {
+                Declare(binding.Identifier, "binding")
+            }
         }
     }
 
@@ -1496,7 +1509,7 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.WhileLetStatement {
                 let loop = cast[WhileLetStatementSyntax](node)
                 Push()
-                VisitBindings(loop.Bindings)
+                VisitBindings(loop.Bindings, declareAfterAll: true)
                 VisitCondition(loop.Guard)
                 Visit(loop.Body)
                 Pop()

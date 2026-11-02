@@ -1726,14 +1726,31 @@ internal partial class StatementBinder {
         if receivers == nil {
             return lists
         }
+        // A receiver that names a type selects its static methods; a value selects instance methods.
+        let staticAccess = ReceiverNamesType(call)
         for receiver in receivers {
             if name == RegionEffectScanner.IndexMemberName {
                 AddIndexParameterLists(receiver, call, effects, lists)
             } else {
-                AddMethodParameterLists(receiver, name, call.HasTypeArguments, lists)
+                AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists)
             }
         }
         return lists
+    }
+
+    private func ReceiverNamesType(call RegionCall) bool {
+        let root = call.ReceiverName ??
+            (
+            if call.Receiver is {} path && path.Steps.Length == 0 && !path.RootIsCall && path.RootType == nil {
+                path.RootName
+            } else {
+                default(string?)
+            }
+        )
+        if root == nil || $scope.TryLookupSymbol(root) is VariableSymbol {
+            return false
+        }
+        return ResolveTypeName(root) != nil
     }
 
     private func ParameterTypes(function FunctionSymbol) List[TypeSymbol] {
@@ -1805,6 +1822,7 @@ internal partial class StatementBinder {
         receiver ReceiverType,
         name string,
         explicitTypeArguments bool,
+        staticAccess bool,
         lists List[List[TypeSymbol]]
     ) {
         var clrType = receiver.Clr
@@ -1815,6 +1833,7 @@ internal partial class StatementBinder {
                     for candidate in level.GetMembers() {
                         if candidate is FunctionSymbol function &&
                             function.Name == name &&
+                            function.IsStatic == staticAccess &&
                             (explicitTypeArguments || TypeParametersInferable(function)) {
                             let types = List[TypeSymbol]()
                             for parameter in function.Parameters {
@@ -1860,7 +1879,9 @@ internal partial class StatementBinder {
                 name,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
             ) {
-                if member is MethodInfo method && (explicitTypeArguments || ClrTypeParametersInferable(method)) {
+                if member is MethodInfo method &&
+                    method.IsStatic == staticAccess &&
+                    (explicitTypeArguments || ClrTypeParametersInferable(method)) {
                     lists.Add(ClrParameterTypes(symbolic, method, method.GetParameters()))
                 }
             }
@@ -2868,6 +2889,7 @@ internal partial class StatementBinder {
                     invalidations.Add((i, path))
                 }
             }
+            JournalLoopEntryKills(invalidations)
             InvalidateInheritedNarrowings(invalidations)
             externalCallableAliases.Clear()
             CompilationMeasurements.Count("narrowing.region-facts-killed", cast[int64](invalidations.Count))
@@ -2948,6 +2970,7 @@ internal partial class StatementBinder {
                 }
             }
         }
+        JournalLoopEntryKills(invalidations)
         InvalidateInheritedNarrowings(invalidations)
         // ADR-0213 section 13: a function value that the region may reassign is no longer external at the
         // loop header, so a call in the loop can reach a closure.
@@ -2977,6 +3000,20 @@ internal partial class StatementBinder {
                 factCount - killedCount,
                 "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
             )
+        }
+    }
+
+    // ADR-0208 R18: a loop in a then-branch runs only on that path, so the facts that its entry removes are put back for
+    // the sibling else-branch, as a condition's are (`if flag { while flag { } } else { return s.Length }`).
+    private func JournalLoopEntryKills(invalidations List[(FrameIndex int32, Path AccessPath)]) {
+        guard let journal = conditionKillJournal else {
+            return
+        }
+        for (frameIndex, path) in invalidations {
+            let frame = binderCtx.NarrowedVariables[frameIndex]
+            if frame.TryGetValue(path, out var type) && type != nil {
+                journal.Add((frame, path, type))
+            }
         }
     }
 

@@ -2808,6 +2808,66 @@ func Run(ref text string?, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@8:16")
+            Add("typed-binding-converts-its-initializer (A3)", `package T
+import System
+func Run(ref text string?, maybe DateTime?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if let b DateTimeOffset = maybe { n++ }
+    }
+    return n
+}
+func Main() { }`, "GS0158@6:16")
+            Add("while-let-initializers-see-the-enclosing-scope (W1)", `package T
+func Next(n int32) string? { return "x" }
+func Keep(v string?) string? { return "y" }
+func Run(s0 string?) int32 {
+    var s = s0
+    if s == nil { return 0 }
+    var n = 0
+    while let s = Next(s.Length), let other = Keep(s = nil) {
+        n++
+        if n > 3 { break }
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:26")
+            Add("static-access-selects-static-candidates (A3)", `package T
+import System
+class Sink {
+    func Use(x DateTime) { }
+    shared {
+        func Use(x DateTimeOffset) { }
+    }
+}
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Sink.Use(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@12:16")
+            Add("loop-entry-removals-are-restored-for-the-else-branch (R18)", `package T
+var cleaner () -> void = func() { }
+func Run(flag bool, text string) int32 {
+    var s string? = "a"
+    cleaner = func() { s = nil }
+    if s == nil { return 0 }
+    if flag {
+        while flag {
+            let n = text.Length
+        }
+    } else {
+        return s.Length
+    }
+    return 0
+}
+func Main() { }`, "")
             return rows
         }
     }
