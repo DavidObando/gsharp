@@ -1339,14 +1339,24 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   candidates. A loop in the then-branch of a condition removes facts that the else-branch still has, so its entry
   removals go into the R18 condition journal and come back for the else-branch, as a condition's removals do
   (`if flag { while flag { } } else { return s.Length }`).
-  The pattern tests of ADR-0208 R19 (#5593) keep their straight-line meaning inside a loop. A constant pattern that
-  calls a user `Equals` is a plain call (A3), so it keeps the fact of a `ref` or `out` parameter, as on main. The
-  facts that such a call removes (captured locals, member paths and package variables) cannot be read in a loop
-  without a member read, a call or a conversion, and each of those already removes them at the loop entry
-  (R7 (c), R7 (e)). The body is bound by the straight-line pass, which applies R19 itself. The walker counts every
-  list pattern as a read that can run user code, including a read of a `ref` or `out` fact. This is a superset of R19, whose
-  getter and indexer rule (R16, R17) keeps the fact for `List[T]`, arrays and spans. The difference is listed
-  in the PR with its row; a syntax-level copy of the binder's indexable lookup would be a second calculation.
+  The pattern tests of ADR-0208 R19 (#5593) are effects inside a loop too. The walker records each constant pattern
+  (`o is 1`, `case 1`, a switch arm) with the paths of its subject and value. The consumer applies the one R19
+  decision (`ConstantPatternTestRunsUserCode` on `BoundConstantPattern.ClassifyTestOf`, which the bound pattern
+  also uses) to the types that it resolves. A name that is a type tests the type, and a subject that does not resolve
+  can call `Equals`. The call is a plain call (A3): it removes the facts that a call removes, such as a package variable
+  `n int32?` that a predefined operator reads in the header (`while n > 0 { if o is 1 { } }`), and it keeps a `ref`
+  or `out` fact, as on main. The walker counts every list pattern as a read that can run user code, including for a
+  `ref` or `out` fact. This is a superset of R19, whose getter and indexer rule (R16, R17) keeps the fact for
+  `List[T]`, arrays and spans. The difference is listed in the PR with its row; a syntax-level copy of the binder's
+  indexable lookup would be a second calculation.
+  The candidates of a call keep their passing modes. A `ref` or `out` argument, including an inline declaration
+  (`Use(out var v, dt)`), takes only a `ref` or `out` parameter, and any other argument only a parameter that is not
+  one; an imported `in` parameter takes a value. The argument at a conversion site keeps the `?` of a nullable value
+  type that is not narrowed (`Use(dt)` with `dt DateTime?` does not take `Use(DateTime)`). Types are compared by their
+  effective CLR type (`Nullable<T>`), and the classifier is also asked for the lifted conversion between the value
+  types, so no conversion operator is missed. A typed range loop variable converts each element. A predefined
+  conversion (`for n int64 in values` over `[]int32`) runs no user code, as on main; a user-defined one binds as a call
+  and counts.
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
