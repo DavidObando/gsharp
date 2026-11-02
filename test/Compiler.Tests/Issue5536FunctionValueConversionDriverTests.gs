@@ -1200,7 +1200,8 @@ func Main() {
     /// operand of `??`, or in the trailing value of a branch block, converts to the common type with the backward
     /// `goto` check. A `goto` that removes the narrowing reports GS0155 at the read, as `let t = s` does. This
     /// applies to an inferred local, to a nested branch, to the `return` value of a function literal with an
-    /// inferred result, and to a member read that a type test or a nil guard narrows.
+    /// inferred result, and to a member read that a type test or a nil guard narrows. The check uses the narrowing
+    /// state where the read binds, so an assignment in the other branch or a `goto` into the branch does not hide it.
     @Fact
     func BranchValue_KeepsTheNarrowingCheckOfABackwardGoto() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1231,6 +1232,7 @@ func Main() {
                 "s"
             )
         }
+        RejectMarked(fixture, BranchValuePrelude + BranchValueJumpIntoBranch, "s")
         RejectMarked(
             fixture,
             MemberResultSource("let f = () -> {", "Dog()", "holder = Holder(Cat())").Replace(
@@ -2289,7 +2291,13 @@ class Program {
             "        L: if n > 0 {\n            |\n            return\n        }\n        n++\n        #\n" +
             "        goto L\n    }"
 
-        // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch.
+        // Issue #5613: a backward `goto` into a branch whose condition narrows `s`, after `s = nil`.
+        private const BranchValueJumpIntoBranch string = "func Main() {\n    var s string? = \"a\"\n    var n = 0\n" +
+            "    let t = if s != nil {\n        M: n++\n        @s\n    } else {\n        \"x\"\n    }\n" +
+            "    Console.Write(t == nil)\n    if n < 2 {\n        s = nil\n        goto M\n    }\n}\n"
+
+        // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch. The last form
+        // assigns `s` in the other branch, after the read binds.
         private let BranchValueForms[]string = []string{
             "n > 1 ? \"t\" : @s",
             "n > 1 ? \"t\" : (n > 2 ? \"u\" : @s)",
@@ -2299,7 +2307,8 @@ class Program {
             "if let q = U() { @s } else { \"x\" }",
             "switch n { case 5: \"t\" default: @s }",
             "U() ?? @s",
-            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                @s }"
+            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                @s }",
+            "if n > 1 { @s } else { s = nil\n                \"x\" }"
         }
 
         private const Contract string = `#nullable enable

@@ -7,7 +7,6 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
-import System.Collections.Generic
 
 /// ```xmldoc
 /// <content>
@@ -65,8 +64,10 @@ internal partial class ExpressionBinder {
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
-        // Issue #5613: the then-block value converts to the common type in the narrowing that the header proves.
-        var thenNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
+        // Issue #5613: a narrowed read that a branch yields is captured where it binds, in the narrowing that the
+        // header proves for the then-block.
+        var whenTrueRead NarrowedBranchValue? = nil
+        var whenFalseRead NarrowedBranchValue? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -78,13 +79,14 @@ internal partial class ExpressionBinder {
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
             (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
-            () -> {
-                let value = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
-                thenNarrowing = Dictionary[AccessPath, TypeSymbol](
-                    binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1].Entries
-                )
-                return value
-            }
+            () -> BindBlockExpressionValue(
+                syntax.ThenBlock,
+                canBeVoid,
+                targetType,
+                captureValue: (read NarrowedBranchValue) -> {
+                    whenTrueRead = read
+                }
+            )
         )
         var whenTrue = whenTrueBound
         var anyInvalid = false
@@ -95,7 +97,14 @@ internal partial class ExpressionBinder {
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
-        var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
+        var whenFalse = BindIfLetElseBranch(
+            syntax.ElseExpression!!,
+            canBeVoid,
+            targetType,
+            (read NarrowedBranchValue) -> {
+                whenFalseRead = read
+            }
+        )
         if anyInvalid ||
             clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||
@@ -132,12 +141,13 @@ internal partial class ExpressionBinder {
             BranchValueLocation(syntax.ThenBlock),
             whenTrue,
             resultType,
-            thenNarrowing
+            whenTrueRead
         )
         let convertedFalse = ConvertConditionalBranch(
             BranchValueLocation(syntax.ElseExpression!!),
             whenFalse,
-            resultType
+            resultType,
+            whenFalseRead
         )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
@@ -171,6 +181,7 @@ internal partial class ExpressionBinder {
     private func BindIfLetElseBranch(
         elseSyntax ExpressionSyntax,
         canBeVoid bool,
-        targetType TypeSymbol? = nil
-    ) BoundExpression -> BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType)
+        targetType TypeSymbol? = nil,
+        captureValue((NarrowedBranchValue) -> void)? = nil
+    ) BoundExpression -> BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType, captureValue)
 }

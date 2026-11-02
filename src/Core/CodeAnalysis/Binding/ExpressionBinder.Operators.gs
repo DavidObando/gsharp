@@ -679,11 +679,21 @@ internal partial class ExpressionBinder {
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        // Issue #5613: a narrowed read that a branch yields is captured where it binds.
+        var whenTrueRead NarrowedBranchValue? = nil
+        var whenFalseRead NarrowedBranchValue? = nil
         let bindWhenTrue = func (branchTargetType TypeSymbol?) BoundExpression {
             return BindWithPatternVariables(
                 patternWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing, branchTargetType)
+                    return BindBranchValue(
+                        syntax.WhenTrue,
+                        whenTrueNarrowing,
+                        branchTargetType,
+                        (read NarrowedBranchValue) -> {
+                            whenTrueRead = read
+                        }
+                    )
                 }
             )
         }
@@ -691,7 +701,14 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing, branchTargetType)
+                    return BindBranchValue(
+                        syntax.WhenFalse,
+                        whenFalseNarrowing,
+                        branchTargetType,
+                        (read NarrowedBranchValue) -> {
+                            whenFalseRead = read
+                        }
+                    )
                 }
             )
         }
@@ -738,13 +755,8 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType, whenTrueNarrowing)
-        let convertedFalse = ConvertConditionalBranch(
-            syntax.WhenFalse.Location,
-            whenFalse,
-            resultType,
-            whenFalseNarrowing
-        )
+        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType, whenTrueRead)
+        let convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType, whenFalseRead)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -836,14 +848,31 @@ internal partial class ExpressionBinder {
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        // Issue #5613: a narrowed read that a branch yields is captured where it binds.
+        var whenTrueRead NarrowedBranchValue? = nil
+        var whenFalseRead NarrowedBranchValue? = nil
         let bindWhenTrue() -> BoundExpression = () -> {
-            return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+            return BindBlockExpressionValue(
+                syntax.ThenBlock,
+                canBeVoid,
+                targetType,
+                captureValue: (read NarrowedBranchValue) -> {
+                    whenTrueRead = read
+                }
+            )
         }
         let bindWhenFalse() -> BoundExpression = () -> {
             return if elseSyntax == nil {
                 cast[BoundExpression](BoundLiteralExpression(syntax, value: 0, TypeSymbol.Void))
             } else {
-                BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType)
+                BindIfExpressionElseBranch(
+                    elseSyntax,
+                    canBeVoid,
+                    targetType,
+                    (read NarrowedBranchValue) -> {
+                        whenFalseRead = read
+                    }
+                )
             }
         }
         let bindWhenTrueNarrowed() -> BoundExpression = () -> {
@@ -886,13 +915,13 @@ internal partial class ExpressionBinder {
             BranchValueLocation(syntax.ThenBlock),
             whenTrue,
             resultType,
-            whenTrueNarrowing
+            whenTrueRead
         )
         let convertedFalse = ConvertConditionalBranch(
             BranchValueLocation(elseSyntax),
             whenFalse,
             resultType,
-            whenFalseNarrowing
+            whenFalseRead
         )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
@@ -992,7 +1021,8 @@ internal partial class ExpressionBinder {
     private func BindIfExpressionElseBranch(
         elseSyntax ExpressionSyntax,
         canBeVoid bool = false,
-        targetType TypeSymbol? = nil
+        targetType TypeSymbol? = nil,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     ) BoundExpression {
         if elseSyntax is IfExpressionSyntax nestedIf {
             return BindIfExpression(nestedIf, targetType, canBeVoid)
@@ -1004,7 +1034,7 @@ internal partial class ExpressionBinder {
             return BindIfLetExpression(nestedIfLet, targetType, canBeVoid)
         }
         if elseSyntax is BlockExpressionSyntax block {
-            return BindBlockExpressionValue(block, canBeVoid, targetType)
+            return BindBlockExpressionValue(block, canBeVoid, targetType, captureValue: captureValue)
         }
         // Should not happen from well-formed parse trees.
         return BoundErrorExpression(nil)
@@ -1034,7 +1064,8 @@ internal partial class ExpressionBinder {
         statements ImmutableArray[StatementSyntax],
         expression ExpressionSyntax,
         canBeVoid bool,
-        targetType TypeSymbol? = nil
+        targetType TypeSymbol? = nil,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
         let BindTrailingExpression = func () BoundExpression {
             return if targetType == nil {
@@ -1043,7 +1074,7 @@ internal partial class ExpressionBinder {
                 BindExpression(expression, targetType)
             }
         }
-        return BindStatementsBeforeValue(statements, expression, BindTrailingExpression)
+        return BindStatementsBeforeValue(statements, expression, BindTrailingExpression, captureValue)
     }
 
     /// Binds [`statements`](paramref) in order and then, with their
@@ -1054,11 +1085,14 @@ internal partial class ExpressionBinder {
     /// @param statements The prefix statements.
     /// @param valueSyntax The syntax the synthesized nodes for the value are attributed to.
     /// @param bindValue Binds the value after the prefix statements.
+    /// @param captureValue Receives a narrowed read that is the value, captured in the narrowing of the statements
+    /// (issue #5613), or `nil`.
     /// @returns The bound prefix statements and the bound value.
     private func BindStatementsBeforeValue(
         statements ImmutableArray[StatementSyntax],
         valueSyntax ExpressionSyntax,
-        bindValue() -> BoundExpression
+        bindValue() -> BoundExpression,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
         if !statements.Any(
             (statement StatementSyntax) -> statement is UsingStatementSyntax ||
@@ -1070,7 +1104,9 @@ internal partial class ExpressionBinder {
             var fastBoundStatements = bindStatementList(
                 statements,
                 () -> {
-                    fastBoundExpression = bindValue()
+                    let value = bindValue()
+                    CaptureBranchValue(value, valueSyntax.Location, captureValue)
+                    fastBoundExpression = value
                     sentinel = BoundExpressionStatement(nil, BoundLiteralExpression(nil, value: 0, TypeSymbol.Void))
                     return sentinel
                 }
@@ -1107,8 +1143,8 @@ internal partial class ExpressionBinder {
             }
             // Issue #5613: the result local takes the type of the value, as `let t = s` does. A narrowed read converts
             // to it with the backward `goto` check, where the narrowing frames of the block still hold.
-            if conversions.IsNarrowedBranchValue(value) {
-                value = conversions.BindBranchConversion(valueSyntax.Location, value, value.Type)
+            if conversions.IsNarrowedRead(value) {
+                value = conversions.BindConversion(valueSyntax.Location, value, value.Type)
             }
             let resultVariable = LocalVariableSymbol(
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
@@ -1142,10 +1178,11 @@ internal partial class ExpressionBinder {
         syntax BlockExpressionSyntax,
         canBeVoid bool = false,
         targetType TypeSymbol? = nil,
-        preserveEmptyBlock bool = false
+        preserveEmptyBlock bool = false,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     ) BoundExpression -> BindInBlockExpressionScope(
         () -> {
-            return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock)
+            return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock, captureValue)
         }
     )
 
@@ -1153,7 +1190,8 @@ internal partial class ExpressionBinder {
         syntax BlockExpressionSyntax,
         canBeVoid bool,
         targetType TypeSymbol?,
-        preserveEmptyBlock bool
+        preserveEmptyBlock bool,
+        captureValue((NarrowedBranchValue) -> void)?
     ) BoundExpression {
         if syntax.Expression == nil {
             return BindValuelessBlockExpression(syntax, canBeVoid)
@@ -1165,6 +1203,7 @@ internal partial class ExpressionBinder {
             } else {
                 BindExpression(syntax.Expression!!, targetType)
             }
+            CaptureBranchValue(expression, syntax.Expression!!.Location, captureValue)
             return if preserveEmptyBlock && !(expression is BoundErrorExpression) {
                 cast[BoundExpression](BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression))
             } else {
@@ -1180,7 +1219,8 @@ internal partial class ExpressionBinder {
                 expression: "syntax.Expression"
             ),
             canBeVoid,
-            targetType
+            targetType,
+            captureValue
         )
         if IsDeferredBranchyArgumentPlaceholder(boundExpression, out _) {
             return BoundErrorExpression(syntax)
@@ -1328,7 +1368,7 @@ internal partial class ExpressionBinder {
         location TextLocation,
         branch BoundExpression,
         target TypeSymbol?,
-        narrowing Dictionary[AccessPath, TypeSymbol]? = nil
+        narrowedRead NarrowedBranchValue? = nil
     ) BoundExpression {
         // Issue #1496: a bare `default` arm is bound to a placeholder
         // `BoundDefaultExpression(syntax, TypeSymbol.Error)` (see
@@ -1359,19 +1399,161 @@ internal partial class ExpressionBinder {
         if branch.Type == TypeSymbol.Never {
             return branch
         }
-        if object.ReferenceEquals(branch.Type, target) && !conversions.IsNarrowedBranchValue(branch) {
-            return branch
+        let commonType = Invariant.Required(target, "a conditional branch has a result type", expression: "target")
+        let value = if narrowedRead is {} read {
+            ResolveNarrowedBranchValue(branch, read, commonType)
+        } else {
+            branch
         }
-        // Issue #5613: the conversion sees the narrowing frame that the branch bound in. A narrowing that the branch
-        // itself proves is then not checked against a backward `goto` that removes an outer narrowing.
-        return BindWithNarrowing(
-            narrowing,
-            () -> conversions.BindBranchConversion(
+        if object.ReferenceEquals(value.Type, commonType) {
+            return value
+        }
+        return conversions.BindConversion(location, value, commonType, trackNarrowing: false)
+    }
+
+    /// Issue #5613: binds the value of a branch in its narrowing frame. A narrowed read that the value yields (the
+    /// value, or the trailing value of a block) is captured there (cref:CaptureBranchValue).
+    /// @param syntax The branch syntax.
+    /// @param narrowing The narrowing frame of the branch, or `nil`.
+    /// @param targetType The target type of the branch, or `nil`.
+    /// @param captureValue Receives the captured narrowed read.
+    /// @param canBeVoid Whether the branch value may be void.
+    /// @returns The bound branch value.
+    private func BindBranchValue(
+        syntax ExpressionSyntax,
+        narrowing Dictionary[AccessPath, TypeSymbol]?,
+        targetType TypeSymbol?,
+        captureValue(NarrowedBranchValue) -> void,
+        canBeVoid bool = false
+    ) BoundExpression -> BindWithNarrowing(
+        narrowing,
+        () -> {
+            // A block value captures its trailing value in the narrowing of its statements.
+            pendingBlockValueCapture = if syntax is BlockExpressionSyntax {
+                captureValue
+            } else {
+                default(((NarrowedBranchValue) -> void)?)
+            }
+            try {
+                let value = if targetType == nil {
+                    BindExpression(syntax, canBeVoid)
+                } else {
+                    BindExpression(syntax, targetType)
+                }
+                if !(syntax is BlockExpressionSyntax) {
+                    CaptureBranchValue(value, syntax.Location, captureValue)
+                }
+                return value
+            } finally {
+                pendingBlockValueCapture = nil
+            }
+        }
+    )
+
+    /// Issue #5613: takes the capture of a block value that (cref:BindBranchValue) binds, so a nested block does not
+    /// receive it.
+    /// @returns The capture, or `nil`.
+    private func TakeBlockValueCapture()((NarrowedBranchValue) -> void)? {
+        let capture = pendingBlockValueCapture
+        pendingBlockValueCapture = nil
+        return capture
+    }
+
+    /// Issue #5613: captures a narrowed read that is the value of a branch, where the read binds, with its backward
+    /// `goto` facts (cref:BinderContext.CaptureBackwardGotoNarrowingUse). A later assignment or narrowing frame does
+    /// not change them. A read whose narrowing changes the runtime type of a local is checked at the read.
+    /// @param value The bound value.
+    /// @param location The location of the value.
+    /// @param captureValue Receives the narrowed read, or `nil` for no capture.
+    private func CaptureBranchValue(
+        value BoundExpression,
+        location TextLocation,
+        captureValue((NarrowedBranchValue) -> void)?
+    ) {
+        if captureValue == nil || !binderCtx.TryGetBackwardGotoNarrowingPath(
+            value,
+            out var path,
+            out var narrowedType
+        ) {
+            return
+        }
+        let sink = Invariant.Required(captureValue, "a branch value capture has a receiver", expression: "captureValue")
+        let narrowedPath = Invariant.Required(path, "a narrowed branch value has an access path", expression: "path")
+        let narrowedValueType = Invariant.Required(
+            narrowedType,
+            "a narrowed branch value has a narrowed type",
+            expression: "narrowedType"
+        )
+        if !narrowedPath.HasMembers && BinderContext.NarrowedReadChangesRuntimeType(
+            narrowedPath.Root.Type,
+            narrowedValueType
+        ) {
+            return
+        }
+        sink(
+            NarrowedBranchValue(
+                value,
                 location,
-                branch,
-                Invariant.Required(target, "a conditional branch has a result type", expression: "target")
+                narrowedPath,
+                narrowedValueType,
+                binderCtx.CaptureBackwardGotoNarrowingUse(narrowedPath)
             )
         )
+    }
+
+    /// Issue #5613: decides the backward `goto` check of a narrowed branch value for the common type, with the
+    /// decision of every other conversion (cref:ConversionClassifier.ConversionNeedsNarrowedSource). The declared read
+    /// replaces the narrowed read when the common type takes it (cref:ConversionClassifier.TryRecoverDeclaredMemberRead).
+    /// Otherwise a common type that needs the narrowing records the use from the capture.
+    /// @param branch The bound branch value.
+    /// @param read The narrowed read that the branch yields.
+    /// @param commonType The common type of the branches.
+    /// @returns The branch value, with the declared read when it replaces the narrowed read.
+    private func ResolveNarrowedBranchValue(
+        branch BoundExpression,
+        read NarrowedBranchValue,
+        commonType TypeSymbol
+    ) BoundExpression {
+        if ConversionClassifier.TryRecoverDeclaredMemberRead(
+            read.Value,
+            read.Path,
+            read.NarrowedType,
+            commonType,
+            out var declaredRead
+        ) &&
+            ReplaceBranchLeaf(branch, read.Value, declaredRead!!) is {} recovered {
+            return recovered
+        }
+        if read.Use is {} use && ConversionClassifier.ConversionNeedsNarrowedSource(
+            MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
+            read.NarrowedType,
+            commonType
+        ) {
+            binderCtx.RecordBackwardGotoNarrowingUse(
+                use,
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                commonType
+            )
+        }
+        return branch
+    }
+
+    // Issue #5613: replaces the narrowed read that a branch value yields (the value, or a block's trailing value).
+    private func ReplaceBranchLeaf(
+        branch BoundExpression,
+        leaf BoundExpression,
+        replacement BoundExpression
+    ) BoundExpression? {
+        if object.ReferenceEquals(branch, leaf) {
+            return replacement
+        }
+        if branch is BoundBlockExpression block &&
+            ReplaceBranchLeaf(block.Expression, leaf, replacement) is {} trailing {
+            return BoundBlockExpression(block.Syntax, block.Statements, trailing)
+        }
+        return nil
     }
 
     /// Issue #5613: gets the location of the value of a branch: the trailing value of a block, or the branch.
@@ -1800,11 +1982,11 @@ internal partial class ExpressionBinder {
             // the contextual target that makes the right group a value.
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
         } else if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
-            (boundRight.Type != boundOperator.Type || conversions.IsNarrowedBranchValue(boundRight)) &&
+            (boundRight.Type != boundOperator.Type || conversions.IsNarrowedRead(boundRight)) &&
             boundRight.Type != TypeSymbol
             .Never {
             // Issue #5613: a narrowed right operand converts to the result type with the backward `goto` check.
-            boundRight = conversions.BindBranchConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
         }
         // Issue #3317 / ADR-0159: with sound empty-instance zero values, a nil
         // comparison whose non-nil operand's STATIC type is a bare (non-`?`)

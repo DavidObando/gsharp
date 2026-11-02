@@ -296,15 +296,25 @@ internal class ConversionClassifier {
     /// classification.
     /// @param callParameter The target parameter when binding a call
     /// argument; supplies the call-specific GS0154 diagnostic contract.
+    /// @param trackNarrowing When `false`, the caller has decided the
+    /// backward `goto` check of a narrowed read (issue #5613).
     /// @returns The shaped bound expression.
     func BindConversion(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         type TypeSymbol?,
         allowExplicit bool = false,
-        callParameter ParameterSymbol? = nil
+        callParameter ParameterSymbol? = nil,
+        trackNarrowing bool = true
     ) BoundExpression {
-        let result = BindConversionCore(diagnosticLocation, expression, type, allowExplicit, callParameter)
+        let result = BindConversionCore(
+            diagnosticLocation,
+            expression,
+            type,
+            allowExplicit,
+            callParameter,
+            trackNarrowing
+        )
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
@@ -318,47 +328,20 @@ internal class ConversionClassifier {
         return result
     }
 
-    /// Issue #5613: converts a branch value of a conditional, `if`, `switch` or `??` value to the common type
-    /// [`target`](paramref). The conversion of a narrowed read goes through (cref:BindConversion), also when it is an
-    /// identity, so the backward `goto` check applies the narrowing decision to the common type. A block value
-    /// converts its trailing value, which the check then sees.
-    /// @param diagnosticLocation The location of the branch value.
-    /// @param value The bound branch value.
-    /// @param target The common type.
-    /// @returns The converted branch value.
-    func BindBranchConversion(
-        diagnosticLocation TextLocation,
-        value BoundExpression,
-        target TypeSymbol
-    ) BoundExpression {
-        if value is BoundBlockExpression block && IsNarrowedBranchValue(block.Expression) {
-            let trailing = BindBranchConversion(diagnosticLocation, block.Expression, target)
-            return if trailing is BoundErrorExpression {
-                trailing
-            } else {
-                cast[BoundExpression](BoundBlockExpression(block.Syntax, block.Statements, trailing))
-            }
-        }
-        return BindConversion(diagnosticLocation, value, target)
-    }
-
-    /// Issue #5613: gets a value indicating whether a branch value is a narrowed read, or a block whose trailing
-    /// value is one (cref:BinderContext.TryGetBackwardGotoNarrowingPath). Its conversion to the common type must
-    /// not be skipped as an identity (cref:BindBranchConversion).
-    /// @param value The bound branch value.
+    /// Issue #5613: gets a value indicating whether [`value`](paramref) is a narrowed read
+    /// (cref:BinderContext.TryGetBackwardGotoNarrowingPath). Its conversion to a common type must not be skipped as
+    /// an identity, so the backward `goto` check sees it.
+    /// @param value The bound value.
     /// @returns `true` when the value is a narrowed read.
-    func IsNarrowedBranchValue(value BoundExpression) bool -> if value is BoundBlockExpression block {
-        IsNarrowedBranchValue(block.Expression)
-    } else {
-        binderCtx.TryGetBackwardGotoNarrowingPath(value, out _, out _)
-    }
+    func IsNarrowedRead(value BoundExpression) bool -> binderCtx.TryGetBackwardGotoNarrowingPath(value, out _, out _)
 
     private func BindConversionCore(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         type TypeSymbol?,
         allowExplicit bool,
-        callParameter ParameterSymbol?
+        callParameter ParameterSymbol?,
+        trackNarrowing bool
     ) BoundExpression {
         var expression = expression
         if type != nil && NativeProtocolOperations.GetProtocol(type) != nil &&
@@ -366,8 +349,9 @@ internal class ConversionClassifier {
             expression.Type != TypeSymbol.Error {
             return bindNativeProtocolConversion(diagnosticLocation, expression, type)
         }
-        // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result.
-        if binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
+        // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
+        // a branch value converts to the common type without it, because the branch decided it where the read binds.
+        if trackNarrowing && binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
             let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
             let narrowedSourceType = Invariant.Required(
                 narrowedType,

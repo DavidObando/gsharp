@@ -72,8 +72,8 @@ internal partial class ExpressionBinder {
             .CreateBuilder[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
         ]()
-        // Issue #5613: the narrowing frame of each arm, in arm order, for the conversion of its result.
-        let armNarrowings = List[Dictionary[AccessPath, TypeSymbol]?](syntax.Arms.Length)
+        // Issue #5613: the narrowed read that each arm result yields, in arm order, captured where it binds.
+        let armReads = List[NarrowedBranchValue?](syntax.Arms.Length)
         for armSyntax in syntax.Arms {
             var pattern BoundPattern? = nil
             if armSyntax.IsDefault {
@@ -81,13 +81,18 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
-                let result = if targetType == nil {
-                    BindExpression(armSyntax.Result, canBeVoid)
-                } else {
-                    BindExpression(armSyntax.Result, targetType)
-                }
+                var defaultRead NarrowedBranchValue? = nil
+                let result = BindBranchValue(
+                    armSyntax.Result,
+                    nil,
+                    targetType,
+                    (read NarrowedBranchValue) -> {
+                        defaultRead = read
+                    },
+                    canBeVoid
+                )
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
-                armNarrowings.Add(nil)
+                armReads.Add(defaultRead)
                 continue
             }
             $scope = BoundScope($scope)
@@ -122,15 +127,24 @@ internal partial class ExpressionBinder {
             }
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
+            var armRead NarrowedBranchValue? = nil
             let armResult = BindWithPatternVariables(
                 guardWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType, canBeVoid)
+                    return BindBranchValue(
+                        armSyntax.Result,
+                        frame,
+                        targetType,
+                        (read NarrowedBranchValue) -> {
+                            armRead = read
+                        },
+                        canBeVoid
+                    )
                 }
             )
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
-            armNarrowings.Add(frame)
+            armReads.Add(armRead)
         }
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
@@ -182,21 +196,18 @@ internal partial class ExpressionBinder {
                     anyArmFailed = true
                 }
                 result = BoundErrorExpression(nil)
-            } else if !conversion.IsIdentity || conversions.IsNarrowedBranchValue(result) {
+            } else if !conversion.IsIdentity || armReads[armIndex] != nil {
                 // Issue #1151: route the materialised conversion through
                 // BindConversion so value-type `nil → T?` arms are lowered to a
                 // BoundDefaultExpression (the verifiable Nullable<T> default),
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
-                // Issue #5613: a narrowed read converts in its arm's narrowing frame, as a conditional branch does.
-                let armResult = result
-                result = BindWithNarrowing(
-                    armNarrowings[armIndex],
-                    () -> conversions.BindBranchConversion(
-                        BranchValueLocation(arm.Syntax.Result),
-                        armResult,
-                        resultType
-                    )
+                // Issue #5613: a narrowed read is decided for the result type as a conditional branch is.
+                result = ConvertConditionalBranch(
+                    BranchValueLocation(arm.Syntax.Result),
+                    result,
+                    resultType,
+                    armReads[armIndex]
                 )
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
