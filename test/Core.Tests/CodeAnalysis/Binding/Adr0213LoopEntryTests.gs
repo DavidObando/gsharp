@@ -2661,6 +2661,73 @@ func Run(ref text string?, flag bool, dto DateTimeOffset, ys List[int32], n0 int
     return n
 }
 func Main() { }`, "")
+            Add("base-call-is-not-a-call-of-a-function-of-its-name (A3)", `package T
+import System
+open class Parent {
+    open func Touch() { }
+}
+func Touch() { }
+class Child : Parent {
+    override func Touch() { }
+    func Run(ref text string?) int32 {
+        if text == nil { return 0 }
+        var n = 0
+        while text.Length > 0 && n < 3 {
+            n++
+            base.Touch()
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0158@12:20")
+            Add("function-literal-argument-proves-no-identity-overload (A3)", `package T
+import System
+func Use(f (int32) -> int32, d DateTime) { }
+func Use(f () -> int32, d DateTimeOffset) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(() -> 1, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("literal-arm-is-a-conversion-target (A3)", `package T
+import System
+import System.Runtime.InteropServices
+func Run(ref text string?, flag bool, nf NFloat) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        let merged = flag ? nf : 1.0
+    }
+    return n
+}
+func Main() { }`, "GS0158@7:16")
+            Add("nested-write-from-an-enclosing-pattern-variable-keeps-the-fact (Q4)", `package T
+class Node {
+    var V int32 = 0
+    var Next Node? = nil
+}
+func Run(start Node) int32 {
+    var access Node = start
+    var total = 0
+    var steps = 0
+    while steps < 3 {
+        steps++
+        total = total + access.V
+        if access.Next is Node inner {
+            for var i = 0; i < 1; i++ {
+                access = inner
+            }
+        }
+    }
+    return total
+}
+func Main() { }`, "")
             return rows
         }
     }

@@ -687,6 +687,17 @@ internal sealed class RegionEffectScanner {
                     }
                 }
             }
+            case SyntaxKind.BaseClassCallExpression, SyntaxKind.BaseInterfaceCallExpression {
+                // A base call runs the base member, which the walker does not resolve; its inner call is not a call
+                // of a function of that name (the bound-tree collector counts it as a call that writes storage).
+                if Active() {
+                    current.ContainsCall = true
+                    current.Calls.Add(
+                        RegionCall(RegionCallKind.Other, nil, List[string](), List[string](), true, node.Span.Start)
+                    )
+                }
+                VisitChildren(node)
+            }
             case SyntaxKind.FromEndIndexExpression {
                 // `^n` constructs a `System.Index` (a constructor is no plain call, ADR-0208 amendment A3).
                 RecordConstruction(node)
@@ -1091,7 +1102,15 @@ internal sealed class RegionEffectScanner {
                 },
                 write.ConstructedTypeName,
                 write.RightSideName,
-                write.RightSideDeclaration,
+                // A nested scan does not see a pattern variable of the enclosing region (Q4).
+                write.RightSideDeclaration ??
+                    (
+                    if write.RightSideName is {} rightName {
+                        DeclarationKind(rightName)
+                    } else {
+                        default(string?)
+                    }
+                ),
                 write.ViaCallArgument,
                 write.FollowedByExit
             )
@@ -2004,11 +2023,12 @@ internal sealed class RegionEffectScanner {
     }
 
     // The arms of a conditional, `if` or switch expression meet in one type, so each arm is converted to the type of
-    // each other arm that has a path (`flag ? dt : dto` converts `DateTime` to `DateTimeOffset`). Two operator or
-    // literal arms meet in a predefined way; an arm without a path that is neither is a target that the walker
-    // cannot type. A nested arm of the same kind is merged with the others.
+    // each other arm that is not an operator (`flag ? dt : dto` converts `DateTime` to `DateTimeOffset`, `flag ? nf
+    // : 1.0` converts an `NFloat` to `double`); a literal arm is a target of its literal type. An arm without a path
+    // that is not an operator is a target that the walker cannot type. Nested arms are merged with the
+    // others; a nested expression that is merged again records its own arms a second time, which changes nothing.
     private func RecordMergeConversions(node SyntaxNode) {
-        if !Active() || node.Parent?.Kind == node.Kind {
+        if !Active() {
             return
         }
         let arms = List[ExpressionSyntax]()
@@ -2019,7 +2039,12 @@ internal sealed class RegionEffectScanner {
                     continue
                 }
                 let inner = UnwrapParentheses(target)
-                if inner == nil || IsNilLiteral(inner) || IsOperatorForm(inner) || inner is LiteralExpressionSyntax {
+                if inner == nil || IsNilLiteral(inner) {
+                    continue
+                }
+                // Two operator arms meet in a predefined way, and an operator arm converted to another arm's type is
+                // checked with that arm as the target.
+                if IsOperatorForm(inner) && BuildPath(inner) == nil {
                     continue
                 }
                 RecordConversion(source, BuildPath(target))

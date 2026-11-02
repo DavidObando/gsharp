@@ -1255,6 +1255,7 @@ internal partial class StatementBinder {
     private const ArgumentTyped int32 = 2
     private const ArgumentNil int32 = 3
     private const ArgumentByReference int32 = 4
+    private const ArgumentFunction int32 = 5
 
     private func CallArgumentsRunUserConversion(
         call RegionCall,
@@ -1287,9 +1288,12 @@ internal partial class StatementBinder {
                 }
                 argumentTypes.Add(types)
                 kinds.Add(ArgumentByReference)
-            } else if form == RegionArgumentForm.InlineDeclaration ||
-                form == RegionArgumentForm.FunctionLiteral ||
-                form == RegionArgumentForm.Range {
+            } else if form == RegionArgumentForm.FunctionLiteral {
+                // A function literal converts to a delegate without an operator, but it does not show which
+                // candidate's delegate type it fits, so it proves no candidate by identity.
+                argumentTypes.Add(nil)
+                kinds.Add(ArgumentFunction)
+            } else if form == RegionArgumentForm.InlineDeclaration || form == RegionArgumentForm.Range {
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentSkipped)
             } else if form == RegionArgumentForm.StringByForm {
@@ -1390,7 +1394,9 @@ internal partial class StatementBinder {
             let parameter = parameters[index]
             let stripped = StripAllNullability(parameter) ?? parameter
             var argument = CandidateExact
-            if kind == ArgumentByReference {
+            if kind == ArgumentFunction {
+                argument = CandidateFree
+            } else if kind == ArgumentByReference {
                 // The parameter takes the argument by identity, or not at all; an argument that the walker cannot
                 // type proves nothing.
                 argument = if argumentTypes[index] is not{} referenced {
