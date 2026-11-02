@@ -166,41 +166,8 @@ internal shared class SelfMigratedCompilerSource {
                 )
             )
         }
-        let documentList = documents.ToList()
-        if documentList.Count > 1 {
-            let parallelResults = ConcurrentDictionary[string, MigratedFile](StringComparer.Ordinal)
-            Parallel.ForEach(
-                documentList,
-                func (document LoadedDocument) {
-                    let stem = Path.GetFileNameWithoutExtension(document.FilePath)
-                    let cacheKey = (projectPath, preservePartialParts, stem)
-                    if isDefaultRoot && CachedTranslations.TryGetValue(cacheKey, out var cachedFile) {
-                        parallelResults[stem] = cachedFile
-                        return
-                    }
-                    let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-                    let text = GSharpPrinter.Print(
-                        CSharpToGSharpTranslator(preservePartialParts: preservePartialParts).TranslateDocument(
-                            document,
-                            context
-                        )
-                    )
-                    let migrated = MigratedFile(text, context.Diagnostics)
-                    if isDefaultRoot {
-                        CachedTranslations.TryAdd(cacheKey, migrated)
-                    }
-                    parallelResults[stem] = migrated
-                }
-            )
-            let ordered = Dictionary[string, MigratedFile](StringComparer.Ordinal)
-            for document in documentList {
-                let stem = Path.GetFileNameWithoutExtension(document.FilePath)
-                ordered.Add(stem, parallelResults[stem])
-            }
-            return ordered
-        }
         let translated = Dictionary[string, MigratedFile](StringComparer.Ordinal)
-        for document in documentList {
+        for document in documents {
             let stem = Path.GetFileNameWithoutExtension(document.FilePath)
             let cacheKey = (projectPath, preservePartialParts, stem)
             if isDefaultRoot && CachedTranslations.TryGetValue(cacheKey, out var cachedFile) {
