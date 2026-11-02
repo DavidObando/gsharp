@@ -101,6 +101,9 @@ internal partial class StatementBinder {
     private let internallyReachableLoopBacks HashSet[BoundLabel] = HashSet[BoundLabel]()
     private var internalReachabilityGeneration int32
     private var currentStatementListFallsThrough bool = true
+    // Issue #5569: the user labels of the first pass of a retried return value, which the second pass reuses so
+    // both bound values and the code after them refer to the same label objects.
+    private var retriedValueUserLabels Dictionary[string, BoundLabel]?
     private var usingInitializationFlagCount int32
 
     init(

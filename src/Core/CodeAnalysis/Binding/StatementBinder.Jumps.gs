@@ -60,10 +60,19 @@ internal partial class StatementBinder {
         if binderCtx.UserLabels.TryGetValue(labelName, out var label) {
             return label
         }
-        label = BoundLabel(labelName)
+        label = CreateUserLabel(labelName)
         binderCtx.UserLabels[labelName] = label
         binderCtx.UnresolvedGotoLabels[labelName] = location
         return label
+    }
+
+    // Issue #5569: creates the label object of a user label name, reusing the one that the first pass of a
+    // retried return value created for the same name.
+    private func CreateUserLabel(labelName string) BoundLabel {
+        if retriedValueUserLabels?.TryGetValue(labelName, out var label) == true {
+            return label
+        }
+        return BoundLabel(labelName)
     }
 
     /// Issue #1884: declares a `goto` label at a `label: statement`
@@ -97,7 +106,7 @@ internal partial class StatementBinder {
         binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState
         binderCtx.UnresolvedGotoLabels.Remove(labelName)
         if !binderCtx.UserLabels.TryGetValue(labelName, out var label) {
-            label = BoundLabel(labelName)
+            label = CreateUserLabel(labelName)
             binderCtx.UserLabels[labelName] = label
         }
         return label
@@ -269,6 +278,246 @@ internal partial class StatementBinder {
         }
     }
 
+    /// The function-wide binder state that a speculative bind can change: diagnostics, narrowing frame
+    /// contents, pending exit and goto narrowing states, labels and jumps, callable aliases, assignment
+    /// generations, reachability, finally and cleanup bookkeeping, the synthetic local counter, and the held
+    /// returns of a speculative lambda body (issue #5569). A speculative lambda return value (issue #5569) binds
+    /// again after a restore; a loop body binds once (ADR-0213 L1).
+    private sealed class SpeculativeBindState {
+        internal let DiagnosticCount int32
+        internal let NarrowingFrames[]Dictionary[AccessPath, TypeSymbol]
+        internal let PendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]
+        internal let PendingSwitchExitFrames[]KeyValuePair[
+            BoundPatternSwitchStatement,
+            Dictionary[AccessPath, TypeSymbol]
+        ]
+        internal let DefinedUserLabels[]string
+        internal let PendingGotoAssignmentStarts[]KeyValuePair[string, int32]
+        internal let ExternalCallableAliases[]VariableSymbol
+        internal let AssignmentNarrowingGenerations[]KeyValuePair[VariableSymbol, int32]
+        internal let AssignmentNarrowingGeneration int32
+        internal let PendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]]
+        internal let BackwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState]
+        internal let ReachableUserLabels[]string
+        internal let DeferredUnreachableGotoEdges[](
+            SourceLabel string?,
+            TargetLabel string,
+            Snapshot GotoNarrowingSnapshot
+        )
+        internal let PotentialReachabilityLabel string?
+        internal let UserLabels[]KeyValuePair[string, BoundLabel]
+        internal let UnresolvedGotoLabels[]KeyValuePair[string, TextLocation]
+        internal let UserLabelHandlerRegions[]KeyValuePair[string, ImmutableArray[SyntaxNode]]
+        internal let UserGotoHandlerRegions[](
+            LabelName string,
+            Location TextLocation,
+            SourceRegions ImmutableArray[SyntaxNode]
+        )
+        internal let BoundFinallyBlocks[]KeyValuePair[FinallyClauseSyntax, BoundStatement]
+        internal let FinallyEntryExternalCallableAliases[]KeyValuePair[
+            FinallyClauseSyntax,
+            ImmutableArray[VariableSymbol]
+        ]
+        internal let FinallyFlowSummaries[]KeyValuePair[BoundStatement, FinallyFlowSummary]
+        internal let ActiveFinallyClauses[]FinallyClauseSyntax
+        internal let ActiveCleanupStatements[]BoundStatement
+        internal let ActiveCleanupRegions[]GotoCleanupRegion
+        internal let CurrentStatementListFallsThrough bool
+        internal let SyntheticLocalCounter int32
+        internal let DeferredReturns LambdaBinder.DeferredReturnState?
+        internal let DeferredReturnCollections LambdaBinder.DeferredReturnSnapshot?
+
+        init(
+            diagnosticCount int32,
+            narrowingFrames[]Dictionary[AccessPath, TypeSymbol],
+            pendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]],
+            pendingSwitchExitFrames[]KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]],
+            definedUserLabels[]string,
+            pendingGotoAssignmentStarts[]KeyValuePair[string, int32],
+            externalCallableAliases[]VariableSymbol,
+            assignmentNarrowingGenerations[]KeyValuePair[VariableSymbol, int32],
+            assignmentNarrowingGeneration int32,
+            pendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]],
+            backwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState],
+            reachableUserLabels[]string,
+            deferredUnreachableGotoEdges[](SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot),
+            potentialReachabilityLabel string?,
+            userLabels[]KeyValuePair[string, BoundLabel],
+            unresolvedGotoLabels[]KeyValuePair[string, TextLocation],
+            userLabelHandlerRegions[]KeyValuePair[string, ImmutableArray[SyntaxNode]],
+            userGotoHandlerRegions[](LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]),
+            boundFinallyBlocks[]KeyValuePair[FinallyClauseSyntax, BoundStatement],
+            finallyEntryExternalCallableAliases[]KeyValuePair[FinallyClauseSyntax, ImmutableArray[VariableSymbol]],
+            finallyFlowSummaries[]KeyValuePair[BoundStatement, FinallyFlowSummary],
+            activeFinallyClauses[]FinallyClauseSyntax,
+            activeCleanupStatements[]BoundStatement,
+            activeCleanupRegions[]GotoCleanupRegion,
+            currentStatementListFallsThrough bool,
+            syntheticLocalCounter int32,
+            deferredReturns LambdaBinder.DeferredReturnState?
+        ) {
+            DiagnosticCount = diagnosticCount
+            NarrowingFrames = narrowingFrames
+            PendingEarlyExitFrames = pendingEarlyExitFrames
+            PendingSwitchExitFrames = pendingSwitchExitFrames
+            DefinedUserLabels = definedUserLabels
+            PendingGotoAssignmentStarts = pendingGotoAssignmentStarts
+            ExternalCallableAliases = externalCallableAliases
+            AssignmentNarrowingGenerations = assignmentNarrowingGenerations
+            AssignmentNarrowingGeneration = assignmentNarrowingGeneration
+            PendingGotoNarrowingSnapshots = pendingGotoNarrowingSnapshots
+            BackwardGotoNarrowingStates = backwardGotoNarrowingStates
+            ReachableUserLabels = reachableUserLabels
+            DeferredUnreachableGotoEdges = deferredUnreachableGotoEdges
+            PotentialReachabilityLabel = potentialReachabilityLabel
+            UserLabels = userLabels
+            UnresolvedGotoLabels = unresolvedGotoLabels
+            UserLabelHandlerRegions = userLabelHandlerRegions
+            UserGotoHandlerRegions = userGotoHandlerRegions
+            BoundFinallyBlocks = boundFinallyBlocks
+            FinallyEntryExternalCallableAliases = finallyEntryExternalCallableAliases
+            FinallyFlowSummaries = finallyFlowSummaries
+            ActiveFinallyClauses = activeFinallyClauses
+            ActiveCleanupStatements = activeCleanupStatements
+            ActiveCleanupRegions = activeCleanupRegions
+            CurrentStatementListFallsThrough = currentStatementListFallsThrough
+            SyntheticLocalCounter = syntheticLocalCounter
+            DeferredReturns = deferredReturns
+            DeferredReturnCollections = deferredReturns?.Capture()
+        }
+    }
+
+    /// Captures the binder state that (cref:RestoreSpeculativeBindState) puts back. Narrowing frames keep
+    /// their identity; only their contents are copied.
+    /// @returns The captured state.
+    private func CaptureSpeculativeBindState() SpeculativeBindState -> SpeculativeBindState(
+        Diagnostics.Count,
+        binderCtx
+            .NarrowedVariables
+            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
+            .ToArray(),
+        binderCtx.PendingEarlyExitFrames.ToArray(),
+        binderCtx.PendingSwitchExitFrames.ToArray(),
+        binderCtx.DefinedUserLabels.ToArray(),
+        binderCtx.PendingGotoAssignmentStarts.ToArray(),
+        externalCallableAliases.ToArray(),
+        binderCtx.AssignmentNarrowingGenerations.ToArray(),
+        binderCtx.AssignmentNarrowingGeneration,
+        binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
+            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
+            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
+                .Value
+                .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
+                .ToList()
+        ),
+        binderCtx.BackwardGotoNarrowingStates.ToDictionary(
+            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Key,
+            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Value.Clone()
+        ),
+        binderCtx.ReachableUserLabels.ToArray(),
+        binderCtx.DeferredUnreachableGotoEdges.ToArray(),
+        binderCtx.PotentialReachabilityLabel,
+        binderCtx.UserLabels.ToArray(),
+        binderCtx.UnresolvedGotoLabels.ToArray(),
+        userLabelHandlerRegions.ToArray(),
+        userGotoHandlerRegions.ToArray(),
+        boundFinallyBlocks.ToArray(),
+        finallyEntryExternalCallableAliases.ToArray(),
+        finallyFlowSummaries.ToArray(),
+        activeFinallyClauses.ToArray(),
+        activeCleanupStatements.ToArray(),
+        activeCleanupRegions.ToArray(),
+        currentStatementListFallsThrough,
+        binderCtx.SyntheticLocalCounter,
+        function?.DeferredReturns
+    )
+
+    /// Puts back the state that (cref:CaptureSpeculativeBindState) captured, and removes the diagnostics
+    /// reported after it. The narrowing frames must be the frames of the capture.
+    /// @param state The captured state.
+    private func RestoreSpeculativeBindState(state SpeculativeBindState) {
+        Diagnostics.TruncateTo(state.DiagnosticCount)
+        for var i = 0; i < state.NarrowingFrames.Length; i++ {
+            let frame = binderCtx.NarrowedVariables[i]
+            frame.Clear()
+            for entry in state.NarrowingFrames[i] {
+                frame.Add(entry.Key, entry.Value)
+            }
+        }
+        RestoreEntries(binderCtx.PendingEarlyExitFrames, state.PendingEarlyExitFrames)
+        RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
+        RestoreItems(binderCtx.DefinedUserLabels, state.DefinedUserLabels)
+        RestoreEntries(binderCtx.PendingGotoAssignmentStarts, state.PendingGotoAssignmentStarts)
+        RestoreItems(externalCallableAliases, state.ExternalCallableAliases)
+        RestoreEntries(binderCtx.AssignmentNarrowingGenerations, state.AssignmentNarrowingGenerations)
+        this.binderCtx.AssignmentNarrowingGeneration = state.AssignmentNarrowingGeneration
+        binderCtx.PendingGotoNarrowingSnapshots.Clear()
+        for entry in state.PendingGotoNarrowingSnapshots {
+            binderCtx.PendingGotoNarrowingSnapshots.Add(
+                entry.Key,
+                entry.Value.Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone()).ToList()
+            )
+        }
+        binderCtx.BackwardGotoNarrowingStates.Clear()
+        for entry in state.BackwardGotoNarrowingStates {
+            binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value.Clone())
+        }
+        RestoreItems(binderCtx.ReachableUserLabels, state.ReachableUserLabels)
+        binderCtx.DeferredUnreachableGotoEdges.Clear()
+        binderCtx.DeferredUnreachableGotoEdges.AddRange(state.DeferredUnreachableGotoEdges)
+        this.binderCtx.PotentialReachabilityLabel = state.PotentialReachabilityLabel
+        RestoreEntries(binderCtx.UserLabels, state.UserLabels)
+        RestoreEntries(binderCtx.UnresolvedGotoLabels, state.UnresolvedGotoLabels)
+        RestoreEntries(userLabelHandlerRegions, state.UserLabelHandlerRegions)
+        userGotoHandlerRegions.Clear()
+        for region in state.UserGotoHandlerRegions {
+            userGotoHandlerRegions.Add(region)
+        }
+        RestoreEntries(boundFinallyBlocks, state.BoundFinallyBlocks)
+        RestoreEntries(finallyEntryExternalCallableAliases, state.FinallyEntryExternalCallableAliases)
+        RestoreEntries(finallyFlowSummaries, state.FinallyFlowSummaries)
+        RestoreStack(activeFinallyClauses, state.ActiveFinallyClauses)
+        RestoreStack(activeCleanupStatements, state.ActiveCleanupStatements)
+        RestoreStack(activeCleanupRegions, state.ActiveCleanupRegions)
+        currentStatementListFallsThrough = state.CurrentStatementListFallsThrough
+        this.binderCtx.SyntheticLocalCounter = state.SyntheticLocalCounter
+        // Issue #5569: the held values, conversions and narrowing uses of a speculative lambda body.
+        let deferredReturnCollections = state.DeferredReturnCollections
+        if deferredReturnCollections != nil {
+            Invariant.Required(
+                state.DeferredReturns,
+                "captured collections have a state",
+                expression: "state.DeferredReturns"
+            )
+                .Restore(deferredReturnCollections)
+        }
+    }
+
+    private func RestoreEntries[TKey, TValue](
+        destination Dictionary[TKey, TValue],
+        snapshot[]KeyValuePair[TKey, TValue]
+    ) {
+        destination.Clear()
+        for entry in snapshot {
+            destination.Add(entry.Key, entry.Value)
+        }
+    }
+
+    private func RestoreItems[T](destination HashSet[T], snapshot[]T) {
+        destination.Clear()
+        for item in snapshot {
+            destination.Add(item)
+        }
+    }
+
+    // A stack copies to an array top first, so the pushes run from the bottom.
+    private func RestoreStack[T](destination Stack[T], snapshot[]T) {
+        destination.Clear()
+        for var i = snapshot.Length - 1; i >= 0; i-- {
+            destination.Push(snapshot[i])
+        }
+    }
+
     private func BindBreakStatement(syntax BreakStatementSyntax) BoundStatement {
         if binderCtx.LoopStack.Count == 0 {
             Diagnostics.ReportInvalidBreakOrContinue(syntax.Keyword.Location, syntax.Keyword.Text)
@@ -355,6 +604,112 @@ internal partial class StatementBinder {
         return BindErrorStatement()
     }
 
+    /// Issue #5569: binds a target-typed return value of a speculative lambda body in two passes: with the
+    /// target type, then with its natural type from the binder state before the value (see
+    /// (cref:CaptureSpeculativeBindState)). The body keeps the natural value. The target-typed value and the
+    /// diagnostics of both passes wait in [`deferredReturns`](paramref) for the lambda binder's decision, so
+    /// another return that fails the target can still use this value's natural type. When the natural pass
+    /// fails, the target-typed value stays with its diagnostics. The binder keeps the state of the target pass
+    /// when that pass succeeds, and of the natural pass otherwise. The caller passes only values without a
+    /// function literal, and a return nested in the value binds in the pass of the value without its own
+    /// passes, so each value binds twice and nested values do not multiply the work. Each pass has its own
+    /// scope, so a variable that the value declares is not declared twice. A user label keeps one object in both
+    /// passes, so a `goto` after the value refers to the label of whichever value the lambda binder selects.
+    /// @param syntax The return statement.
+    /// @param value The return value.
+    /// @param targetType The lambda's target return type.
+    /// @param deferredReturns The state of the lambda body.
+    /// @param bindTarget Binds the target pass, when it is not the value bound with the target type.
+    /// @returns The bound value for the body: the natural one, or the target-typed one when the natural pass fails.
+    private func BindDeferredTargetTypedReturn(
+        syntax ReturnStatementSyntax,
+        value ExpressionSyntax,
+        targetType TypeSymbol,
+        deferredReturns LambdaBinder.DeferredReturnState,
+        bindTarget(() -> BoundExpression)? = nil
+    ) BoundExpression {
+        let beforeValue = CaptureSpeculativeBindState()
+        let targetTyped = BindReturnValuePass(
+            deferredReturns,
+            true,
+            bindTarget ?? (() -> bindExpressionWithTargetType(value, targetType))
+        )
+        HoldDeferredReturnConversion(deferredReturns, value.Location, targetTyped, targetType)
+        let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let afterTarget = CaptureSpeculativeBindState()
+        let targetPassLabels = Dictionary[string, BoundLabel](binderCtx.UserLabels)
+        RestoreSpeculativeBindState(beforeValue)
+        // Synthetic local names stay unique across both passes.
+        this.binderCtx.SyntheticLocalCounter = afterTarget.SyntheticLocalCounter
+        // Each user label keeps one object in both passes, so the kept state and either bound value agree.
+        let outerRetriedLabels = retriedValueUserLabels
+        retriedValueUserLabels = targetPassLabels
+        var natural BoundExpression
+        try {
+            natural = BindReturnValuePass(deferredReturns, false, () -> bindExpression(value, false))
+        } finally {
+            retriedValueUserLabels = outerRetriedLabels
+        }
+        let naturalDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let naturalCounter = binderCtx.SyntheticLocalCounter
+        let naturalFailed = naturalDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError)
+        Diagnostics.TruncateTo(beforeValue.DiagnosticCount)
+        if naturalFailed || !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) {
+            RestoreSpeculativeBindState(afterTarget)
+            this.binderCtx.SyntheticLocalCounter = naturalCounter
+        }
+        if naturalFailed {
+            Diagnostics.AddRange(targetDiagnostics)
+            return targetTyped
+        }
+        deferredReturns.Hold(syntax, targetTyped, targetDiagnostics, naturalDiagnostics)
+        return natural
+    }
+
+    // Issue #5569: converts a return value of a speculative lambda body to the target where the value binds, as an
+    // eager bind does, so the conversion's narrowing checks (backward `goto` uses) apply. The result, its
+    // diagnostics and the narrowing uses that only this conversion records wait in the body's state for the lambda
+    // binder's decision.
+    private func HoldDeferredReturnConversion(
+        deferredReturns LambdaBinder.DeferredReturnState,
+        location TextLocation,
+        value BoundExpression,
+        targetType TypeSymbol
+    ) {
+        let mark = Diagnostics.Count
+        let outerOwner = binderCtx.DeferredReturnNarrowingOwner
+        this.binderCtx.DeferredReturnNarrowingOwner = deferredReturns
+        var converted BoundExpression
+        try {
+            converted = conversions.BindConversion(location, value, targetType)
+        } finally {
+            this.binderCtx.DeferredReturnNarrowingOwner = outerOwner
+        }
+        deferredReturns.HoldConversion(value, converted, Diagnostics.Skip(mark).ToImmutableArray())
+        Diagnostics.TruncateTo(mark)
+    }
+
+    // Binds one pass of a speculative return value in its own scope, with the pass recorded for nested returns.
+    private func BindReturnValuePass(
+        deferredReturns LambdaBinder.DeferredReturnState,
+        targetPass bool,
+        bind() -> BoundExpression
+    ) BoundExpression {
+        $scope = BoundScope($scope)
+        if targetPass {
+            deferredReturns.InTargetPass = true
+        } else {
+            deferredReturns.InNaturalPass = true
+        }
+        try {
+            return bind()
+        } finally {
+            deferredReturns.InTargetPass = false
+            deferredReturns.InNaturalPass = false
+            $scope = $scope.Pop()
+        }
+    }
+
     private func BindReturnStatement(syntax ReturnStatementSyntax) BoundStatement {
         // ADR-0055 Tier 4: returning an interpolated string where the function's
         // declared type is IFormattable/FormattableString lowers to
@@ -363,10 +718,35 @@ internal partial class StatementBinder {
             function != nil &&
             function!!.Type != TypeSymbol.Void &&
             isFormattableStringTargetType(function!!.Type) {
-            return BoundReturnStatement(
-                syntax,
-                bindInterpolatedStringAsFormattable(interpolatedReturn, function!!.Type)
-            )
+            let formattableType = function!!.Type
+            let deferredReturns = function!!.DeferredReturns
+            // Issue #5569: in a speculative lambda body the formattable value is the target pass of a retried value,
+            // so the literal can still take its natural type (a string). A return nested in a value's natural pass
+            // binds as a string, below. A hole with a function literal keeps the formattable bind.
+            if deferredReturns != nil &&
+                !deferredReturns.InTargetPass &&
+                !deferredReturns.InNaturalPass &&
+                !interpolatedReturn
+                .DescendantNodesAndSelf().Any(
+                (node SyntaxNode) -> node is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax
+            ) {
+                return BoundReturnStatement(
+                    syntax,
+                    BindDeferredTargetTypedReturn(
+                        syntax,
+                        interpolatedReturn,
+                        formattableType,
+                        deferredReturns,
+                        () -> bindInterpolatedStringAsFormattable(interpolatedReturn, formattableType)
+                    )
+                )
+            }
+            if deferredReturns?.InNaturalPass != true {
+                return BoundReturnStatement(
+                    syntax,
+                    bindInterpolatedStringAsFormattable(interpolatedReturn, formattableType)
+                )
+            }
         }
         // ADR-0100 / issue #795: a bare `return default` takes its type
         // from the enclosing function's declared return type. We special-
@@ -411,14 +791,26 @@ internal partial class StatementBinder {
                 function!!.Type != TypeSymbol.Void &&
                 function!!.Type != TypeSymbol
                 .Error {
-                expression = bindExpressionWithTargetType(
-                    Invariant.Required(
-                        syntax.Expression,
-                        "a target-typed return has an expression",
-                        expression: "syntax.Expression"
-                    ),
-                    function!!.Type
+                let value = Invariant.Required(
+                    syntax.Expression,
+                    "a target-typed return has an expression",
+                    expression: "syntax.Expression"
                 )
+                let deferredReturns = function!!.DeferredReturns
+                expression = if deferredReturns?.InNaturalPass == true {
+                    // Issue #5569: a return nested in a value that binds with its natural type does the same.
+                    bindExpression(value, false)
+                } else if deferredReturns != nil &&
+                    !deferredReturns.InTargetPass &&
+                    !targetTypesLambdaReturn &&
+                    !value
+                    .DescendantNodesAndSelf().Any(
+                    (node SyntaxNode) -> node is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax
+                ) {
+                    BindDeferredTargetTypedReturn(syntax, value, function!!.Type, deferredReturns)
+                } else {
+                    bindExpressionWithTargetType(value, function!!.Type)
+                }
             } else {
                 expression = if syntax.Expression == nil {
                     default(BoundExpression?)
@@ -461,6 +853,27 @@ internal partial class StatementBinder {
             }
         } else if function == nil {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location)
+        } else if function!!.DefersReturnConversion {
+            // Issue #5569: the lambda binder decides the conversion, and reports a missing value, after the body.
+            // A value that has no held target-typed value converts to the target now, in the eager bind's state.
+            let deferredReturns = Invariant.Required(
+                function!!.DeferredReturns,
+                "a deferred return conversion has a state",
+                expression: "function.DeferredReturns"
+            )
+            if expression != nil && !deferredReturns.Holds(syntax) && !deferredReturns.HasConversion(expression) {
+                HoldDeferredReturnConversion(
+                    deferredReturns,
+                    Invariant.Required(
+                        syntax.Expression,
+                        "a return expression is present",
+                        expression: "syntax.Expression"
+                    )
+                        .Location,
+                    expression,
+                    function!!.Type
+                )
+            }
         } else if function!!.IsReturnTypeInferred {
             // ADR-0076 / issue #716: arrow-lambda binding deferred return-type
             // resolution to a post-bind pass. The expression has been bound,

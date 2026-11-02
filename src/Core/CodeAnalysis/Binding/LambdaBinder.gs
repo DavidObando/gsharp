@@ -965,12 +965,21 @@ internal class LambdaBinder {
     /// closed parameter types (the delegate's return type is an un-inferred
     /// method type parameter and a placeholder occupies the target's return
     /// slot).
+    /// @param acceptsNaturalType Issue #5569: when set, another overload candidate can take the literal's natural
+    /// function type. A block body then binds once with its return conversions deferred. When a `return` value
+    /// does not convert to the target and this callback accepts the natural function type, the literal keeps
+    /// that type and the target conversion diagnostics go to [`discardedTargetDiagnostics`](paramref).
+    /// @param discardedTargetDiagnostics Receives the target conversion diagnostics of a literal that keeps its
+    /// natural type.
     /// @returns The bound lambda as a (cref:BoundFunctionLiteralExpression).
     func BindLambdaExpression(
         syntax LambdaExpressionSyntax,
         targetFunctionType FunctionTypeSymbol? = nil,
-        inferReturnTypeFromBody bool = false
+        inferReturnTypeFromBody bool = false,
+        acceptsNaturalType((TypeSymbol) -> bool)? = nil,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil
     ) BoundExpression {
+        let startMark = Diagnostics.Count
         if bindLambdaBodyExpression == nil {
             throw InvalidOperationException(
                 "LambdaBinder was constructed without a bindLambdaBodyExpression callback; arrow-lambda binding is unavailable."
@@ -979,6 +988,38 @@ internal class LambdaBinder {
         let bindLambdaBodyExpression = bindLambdaBodyExpression!!
         let isAsync = syntax.IsAsync
         let arityMatchesTarget = targetFunctionType != nil && targetFunctionType.Arity == syntax.Parameters.Count
+        // Issue #5569: a speculative literal whose parameter types are all written (a destructured parameter
+        // through the types of its elements) can fall back to its natural type.
+        let naturalTypeAvailable = acceptsNaturalType != nil && syntax.Parameters.All(
+            (parameter ParameterSyntax) -> parameter.Type != nil ||
+                (
+                parameter.DeconstructionPattern is {} written && written.Elements.All(
+                    (element ParameterSyntax) -> element.Type != nil
+                )
+            )
+        )
+        if naturalTypeAvailable && targetFunctionType != nil && !arityMatchesTarget {
+            let arityMark = Diagnostics.Count
+            Diagnostics.ReportWrongArgumentCount(
+                syntax.Location,
+                "lambda",
+                targetFunctionType.Arity,
+                syntax.Parameters.Count
+            )
+            let arityDiagnostics = Diagnostics.Skip(arityMark).ToImmutableArray()
+            Diagnostics.TruncateTo(arityMark)
+            if TryBindNaturalFallback(
+                syntax,
+                arityDiagnostics,
+                acceptsNaturalType!!,
+                discardedTargetDiagnostics,
+                out var natural
+            ) {
+                return natural!!
+            }
+            Diagnostics.AddRange(arityDiagnostics)
+            return BoundErrorExpression(nil)
+        }
         if targetFunctionType != nil && !arityMatchesTarget {
             Diagnostics.ReportWrongArgumentCount(
                 syntax.Location,
@@ -991,6 +1032,8 @@ internal class LambdaBinder {
         let parameterSymbols = ImmutableArray.CreateBuilder[ParameterSymbol](syntax.Parameters.Count)
         let seen = HashSet[string]()
         var hasIncompatibleExplicitParameter = false
+        // Issue #5569: the parameter diagnostics that only the target causes, for a speculative literal.
+        let parameterTargetDiagnostics = List[Diagnostic]()
         var needsExplicitParameterAdapter = false
         let exactTargetParameterSlots = [syntax.Parameters.Count]bool
         // ADR-0185: every destructured parameter's pattern, recorded here so
@@ -1059,6 +1102,7 @@ internal class LambdaBinder {
                         conversion.IsImplicit ||
                         conversions.HasUserDefinedImplicitConversion(targetParameterTypeForPattern, tupleParameterType)
                     if !compatible {
+                        let parameterMark = Diagnostics.Count
                         if conversion.Exists {
                             Diagnostics.ReportCannotConvertImplicitly(
                                 pattern.Location,
@@ -1071,6 +1115,11 @@ internal class LambdaBinder {
                                 targetParameterTypeForPattern,
                                 tupleParameterType
                             )
+                        }
+                        // Issue #5569: held as for an ordinary written parameter type.
+                        if naturalTypeAvailable {
+                            parameterTargetDiagnostics.AddRange(Diagnostics.Skip(parameterMark))
+                            Diagnostics.TruncateTo(parameterMark)
                         }
                         hasIncompatibleExplicitParameter = true
                     } else if !runtimeEquivalent {
@@ -1228,10 +1277,15 @@ internal class LambdaBinder {
                     )
                 )
                 if !compatible {
+                    let parameterMark = Diagnostics.Count
                     if conversion.Exists {
                         Diagnostics.ReportCannotConvertImplicitly(p.Type!!.Location, targetParameterType, parameterType)
                     } else {
                         Diagnostics.ReportCannotConvert(p.Type!!.Location, targetParameterType, parameterType)
+                    }
+                    if naturalTypeAvailable {
+                        parameterTargetDiagnostics.AddRange(Diagnostics.Skip(parameterMark))
+                        Diagnostics.TruncateTo(parameterMark)
                     }
                     hasIncompatibleExplicitParameter = true
                 } else if !runtimeEquivalent && !structurallyCompatibleDelegate {
@@ -1263,6 +1317,20 @@ internal class LambdaBinder {
             parameterTypes.Add(parameterType)
         }
         if hasIncompatibleExplicitParameter {
+            // Issue #5569: the target bind stops here without binding the body, so the natural bind is the only one.
+            if parameterTargetDiagnostics.Count > 0 {
+                let held = parameterTargetDiagnostics.ToImmutableArray()
+                if TryBindNaturalFallback(
+                    syntax,
+                    held,
+                    acceptsNaturalType!!,
+                    discardedTargetDiagnostics,
+                    out var natural
+                ) {
+                    return natural!!
+                }
+                Diagnostics.AddRange(held)
+            }
             return BoundErrorExpression(nil)
         }
         // ADR-0101 follow-up / issue #812: enforce variadic structural rules.
@@ -1290,6 +1358,17 @@ internal class LambdaBinder {
         let placeholder = FunctionSymbol(syntheticName, parameterSymbols.ToImmutable(), placeholderReturnType)
         placeholder.IsAsync = isAsync
         placeholder.IsReturnTypeInferred = placeholderReturnType == TypeSymbol.Error
+        // Issue #5569: a speculative bind converts its `return` values after the body, so the body binds once for
+        // both the target and the natural function type.
+        let defersReturnConversion = acceptsNaturalType != nil &&
+            !isAsync &&
+            placeholderReturnType != TypeSymbol.Error &&
+            placeholderReturnType != TypeSymbol.Void
+        placeholder.DeferredReturns = if defersReturnConversion {
+            DeferredReturnState()
+        } else {
+            default(DeferredReturnState?)
+        }
         let outerScope = Scope
         let outerFunction = getCurrentFunction()
         Scope = BoundScope(outerScope)
@@ -1408,6 +1487,63 @@ internal class LambdaBinder {
             },
             isAsync
         )
+        if defersReturnConversion {
+            // Issue #5569: convert the returns as an eager target bind does. When a return or the trailing value
+            // does not convert, the literal keeps its natural type only if no other error occurred and another
+            // candidate accepts it. The return values whose target typing failed bound again with their natural
+            // type; the target-typed values and their diagnostics are in the placeholder's state.
+            let deferredReturns = Invariant.Required(
+                placeholder.DeferredReturns,
+                "a deferred return conversion has a state",
+                expression: "placeholder.DeferredReturns"
+            )
+            let targetBody = deferredReturns.WithTargetOperands(boundBody)
+            let trialMark = Diagnostics.Count
+            let converted = ApplyInferredReturnTypeConversion(
+                targetBody,
+                syntax,
+                placeholderReturnType,
+                true,
+                deferredReturns
+            )
+            // A backward `goto` narrowing check of a target conversion fails the target, as the eager bind does.
+            let targetDiagnostics = deferredReturns
+                .NarrowingDiagnostics()
+                .AddRange(deferredReturns.OperandDiagnostics())
+                .AddRange(Diagnostics.Skip(trialMark))
+            Diagnostics.TruncateTo(trialMark)
+            // The body fits the target only when the target-typed inference adopts the target return type, which
+            // also checks a trailing value that is not a `return`.
+            let fitsTarget = !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) &&
+                InferLambdaReturnType(converted, syntax, targetFunctionType, isAsync) == placeholderReturnType
+            let naturalReturnType = if !fitsTarget {
+                InferLambdaReturnType(boundBody, syntax, nil, isAsync)
+            } else {
+                TypeSymbol.Error
+            }
+            // The natural type is not used when its result also needs a narrowing that a held use reports.
+            if naturalReturnType != TypeSymbol.Error && !Diagnostics.Skip(startMark).Any(
+                (diagnostic Diagnostic) -> diagnostic.IsError
+            ) &&
+                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
+                acceptsNaturalType!!(
+                FunctionTypeSymbol.Get(
+                    parameterTypes.ToImmutable(),
+                    BuildVariadicFlagsIfAny(parameterSymbols),
+                    naturalReturnType
+                )
+            ) {
+                discardedTargetDiagnostics?.Add(targetDiagnostics)
+                Diagnostics.AddRange(deferredReturns.NaturalDiagnostics())
+                returnType = naturalReturnType
+                // The natural literal keeps its written parameter types, so no adapter to the target applies.
+                needsExplicitParameterAdapter = false
+            } else {
+                Diagnostics.AddRange(targetDiagnostics)
+                boundBody = converted
+                returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync)
+            }
+        }
         if isAsync && isAsyncIteratorReturnType(returnType) {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
             return BoundErrorExpression(syntax)
@@ -1441,7 +1577,7 @@ internal class LambdaBinder {
         // ADR-0076 / issue #716: rewrite the bound body so every return
         // statement's expression is converted to the inferred return type.
         // We deferred the conversion in BindReturnStatement; apply it now.
-        boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType)
+        boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
         let bodyStatements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -2382,15 +2518,312 @@ internal class LambdaBinder {
     // rewrite is a single pass and stops at nested function literals
     // (BoundTreeRewriter's default RewriteFunctionLiteralExpression keeps
     // the nested body opaque).
+    /// Issue #5569: binds a speculative literal with its natural type after the target bind failed before its
+    /// body bound (a parameter count or an explicit parameter type that the target does not accept). The body
+    /// binds once.
+    /// @param syntax The function literal.
+    /// @param targetDiagnostics The diagnostics of the failed target bind.
+    /// @param acceptsNaturalType Whether another candidate accepts the natural function type.
+    /// @param discardedTargetDiagnostics Receives the target diagnostics when the natural type is kept.
+    /// @param natural The natural literal, on success.
+    /// @returns `true` when the literal keeps its natural type.
+    private func TryBindNaturalFallback(
+        syntax LambdaExpressionSyntax,
+        targetDiagnostics ImmutableArray[Diagnostic],
+        acceptsNaturalType(TypeSymbol) -> bool,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        @NotNullWhen(true) out natural BoundExpression?
+    ) bool {
+        let mark = Diagnostics.Count
+        let bound = BindLambdaExpression(syntax)
+        if !(bound is BoundErrorExpression) && !Diagnostics.Skip(mark).Any(
+            (diagnostic Diagnostic) -> diagnostic.IsError
+        ) &&
+            acceptsNaturalType(bound.Type) {
+            discardedTargetDiagnostics?.Add(targetDiagnostics)
+            natural = bound
+            return true
+        }
+        Diagnostics.TruncateTo(mark)
+        natural = nil
+        return false
+    }
+
+    /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
+    /// Each such return statement binds its value again with the natural type, so the body can give either
+    /// function type after one bind of its statements.
+    internal class DeferredReturnState {
+        /// Gets or sets a value indicating whether a return value binds its target-typed pass now. A return
+        /// nested in it binds with the target type only.
+        internal prop InTargetPass bool
+
+        /// Gets or sets a value indicating whether a return value binds its natural pass now. A return nested in it
+        /// binds with its natural type only.
+        internal prop InNaturalPass bool
+
+        private let operands List[
+            (
+                Value BoundExpression,
+                Diagnostics ImmutableArray[Diagnostic],
+                NaturalDiagnostics ImmutableArray[Diagnostic]
+            )
+        ] = List[
+            (
+                Value BoundExpression,
+                Diagnostics ImmutableArray[Diagnostic],
+                NaturalDiagnostics ImmutableArray[Diagnostic]
+            )
+        ]()
+
+        // The target-typed value of each held return statement, by syntax identity.
+        private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression] = Dictionary[
+            ReturnStatementSyntax,
+            BoundExpression
+        ](ReferenceEqualityComparer.Instance)
+
+        // The target conversion of each return value, by bound value identity, so each pass's value keeps its own.
+        private let targetConversions Dictionary[
+            BoundExpression,
+            (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ] = Dictionary[BoundExpression, (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])](
+            ReferenceEqualityComparer.Instance
+        )
+
+        // The backward `goto` narrowing uses of the target conversions and their diagnostics, in report order.
+        private let narrowingUses List[
+            (Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+        ] = List[(Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])]()
+
+        /// Records the target-typed value of a return statement and the diagnostics of both passes.
+        /// @param syntax The return statement.
+        /// @param value The target-typed value.
+        /// @param diagnostics The diagnostics of the target pass.
+        /// @param naturalDiagnostics The diagnostics of the natural pass.
+        internal func Hold(
+            syntax ReturnStatementSyntax,
+            value BoundExpression,
+            diagnostics ImmutableArray[Diagnostic],
+            naturalDiagnostics ImmutableArray[Diagnostic]
+        ) {
+            operands.Add((value, diagnostics, naturalDiagnostics))
+            targetValues[syntax] = value
+        }
+
+        /// Gets a value indicating whether a return statement has a held target-typed value.
+        /// @param syntax The return statement.
+        /// @returns `true` when (cref:Hold) recorded a value for it.
+        internal func Holds(syntax ReturnStatementSyntax) bool -> targetValues.ContainsKey(syntax)
+
+        /// Records the conversion of a return value to the target, bound where the return value binds, as an eager
+        /// bind converts it. Narrowing checks (backward `goto` uses) apply there, so the decision after the body
+        /// uses this result and does not convert the value again.
+        /// @param value The return value, before the conversion.
+        /// @param converted The value converted to the target.
+        /// @param diagnostics The diagnostics of the conversion.
+        internal func HoldConversion(
+            value BoundExpression,
+            converted BoundExpression,
+            diagnostics ImmutableArray[Diagnostic]
+        ) {
+            targetConversions[value] = (converted, diagnostics)
+        }
+
+        /// Gets a value indicating whether a return value has a held conversion.
+        /// @param value The return value, before the conversion.
+        /// @returns `true` when (cref:HoldConversion) recorded it.
+        internal func HasConversion(value BoundExpression) bool -> targetConversions.ContainsKey(value)
+
+        /// Gets the held conversion of a return value to the target.
+        /// @param value The return value, before the conversion.
+        /// @param converted The converted value.
+        /// @param diagnostics The diagnostics of the conversion.
+        /// @returns `true` when (cref:HoldConversion) recorded it.
+        internal func TryGetConversion(
+            value BoundExpression,
+            @NotNullWhen(true) out converted BoundExpression?,
+            out diagnostics ImmutableArray[Diagnostic]
+        ) bool {
+            if targetConversions.TryGetValue(value, out var held) {
+                converted = held.Value
+                diagnostics = held.Diagnostics
+                return true
+            }
+            converted = nil
+            diagnostics = ImmutableArray[Diagnostic].Empty
+            return false
+        }
+
+        /// Records a backward `goto` that removes a narrowing which a target conversion of a `return` value
+        /// (cref:HoldConversion) needs, with the diagnostic that the `goto` check reported for it.
+        /// @param access The narrowing use.
+        /// @param diagnostics The diagnostics of the use.
+        internal func HoldNarrowingUse(access BackwardGotoNarrowingAccess, diagnostics ImmutableArray[Diagnostic]) {
+            narrowingUses.Add((access, diagnostics))
+        }
+
+        /// Gets the diagnostics of the held narrowing uses, in report order.
+        /// @returns The diagnostics.
+        internal func NarrowingDiagnostics() ImmutableArray[Diagnostic] {
+            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+            for use in narrowingUses {
+                builder.AddRange(use.Diagnostics)
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Gets a value indicating whether the natural function type needs a narrowing that a held use reports
+        /// as removed: its result type converts the same narrowed reads, under the rule of
+        /// (cref:ConversionClassifier.ConversionNeedsNarrowedSource).
+        /// @param naturalReturnType The natural result type.
+        /// @returns `true` when the natural type cannot take the place of the target.
+        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Count > 0 &&
+            ConversionClassifier.ConversionNeedsNarrowedSource(naturalReturnType)
+
+        /// Captures the held values, conversions and narrowing uses, for a binder that discards a bind (see
+        /// `StatementBinder.CaptureSpeculativeBindState`).
+        /// @returns The captured collections.
+        internal func Capture() DeferredReturnSnapshot -> DeferredReturnSnapshot(
+            operands.ToArray(),
+            targetValues.ToArray(),
+            targetConversions.ToArray(),
+            narrowingUses.ToArray()
+        )
+
+        /// Puts back the collections that (cref:Capture) captured.
+        /// @param snapshot The captured collections.
+        internal func Restore(snapshot DeferredReturnSnapshot) {
+            operands.Clear()
+            operands.AddRange(snapshot.Operands)
+            targetValues.Clear()
+            for entry in snapshot.TargetValues {
+                targetValues.Add(entry.Key, entry.Value)
+            }
+            targetConversions.Clear()
+            for entry in snapshot.TargetConversions {
+                targetConversions.Add(entry.Key, entry.Value)
+            }
+            narrowingUses.Clear()
+            narrowingUses.AddRange(snapshot.NarrowingUses)
+        }
+
+        /// Gets the diagnostics of every held target pass, in source order.
+        /// @returns The diagnostics.
+        internal func OperandDiagnostics() ImmutableArray[Diagnostic] {
+            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+            for operand in operands {
+                builder.AddRange(operand.Diagnostics)
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Gets the diagnostics of every held natural pass, in source order.
+        /// @returns The diagnostics.
+        internal func NaturalDiagnostics() ImmutableArray[Diagnostic] {
+            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
+            for operand in operands {
+                builder.AddRange(operand.NaturalDiagnostics)
+            }
+            return builder.ToImmutable()
+        }
+
+        /// Puts the held target-typed values back into a bound body.
+        /// @param body The bound body with the natural values.
+        /// @returns The body with the target-typed values.
+        internal func WithTargetOperands(body BoundExpression) BoundExpression {
+            if operands.Count == 0 {
+                return body
+            }
+            let rewriter = TargetOperandRewriter(targetValues)
+            if body is BoundBlockExpression block {
+                let statements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
+                for statement in block.Statements {
+                    statements.Add(rewriter.RewriteStatement(statement))
+                }
+                return BoundBlockExpression(
+                    block.Syntax,
+                    statements.ToImmutable(),
+                    rewriter.RewriteTail(block.Expression)
+                )
+            }
+            return rewriter.RewriteTail(body)
+        }
+
+        private class TargetOperandRewriter : BoundTreeRewriter {
+            private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression]
+
+            init(targetValues Dictionary[ReturnStatementSyntax, BoundExpression]) {
+                this.targetValues = targetValues
+            }
+
+            internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+            protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
+                if node.Syntax is ReturnStatementSyntax returnSyntax && targetValues.TryGetValue(
+                    returnSyntax,
+                    out var value
+                ) {
+                    return BoundReturnStatement(node.Syntax, value, node.IsRef)
+                }
+                return base.RewriteReturnStatement(node)
+            }
+        }
+    }
+
+    /// Issue #5569: the collections of a (cref:DeferredReturnState) at one point of a body bind.
+    internal sealed class DeferredReturnSnapshot {
+        internal let Operands[](
+            Value BoundExpression,
+            Diagnostics ImmutableArray[Diagnostic],
+            NaturalDiagnostics ImmutableArray[Diagnostic]
+        )
+        internal let TargetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression]
+        internal let TargetConversions[]KeyValuePair[
+            BoundExpression,
+            (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ]
+        internal let NarrowingUses[](Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+
+        init(
+            operands[](
+                Value BoundExpression,
+                Diagnostics ImmutableArray[Diagnostic],
+                NaturalDiagnostics ImmutableArray[Diagnostic]
+            ),
+            targetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression],
+            targetConversions[]KeyValuePair[
+                BoundExpression,
+                (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+            ],
+            narrowingUses[](Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+        ) {
+            Operands = operands
+            TargetValues = targetValues
+            TargetConversions = targetConversions
+            NarrowingUses = narrowingUses
+        }
+    }
+
     private func ApplyInferredReturnTypeConversion(
         boundBody BoundExpression,
         syntax LambdaExpressionSyntax,
-        returnType TypeSymbol
+        returnType TypeSymbol,
+        atReturnValue bool = false,
+        heldConversions DeferredReturnState? = nil
     ) BoundExpression {
         if returnType == TypeSymbol.Error {
             return boundBody
         }
-        let rewriter = ReturnConversionRewriter(conversions, syntax, returnType)
+        let rewriter = ReturnConversionRewriter(
+            conversions,
+            syntax,
+            returnType,
+            if atReturnValue {
+                Diagnostics
+            } else {
+                default(DiagnosticBag?)
+            },
+            heldConversions
+        )
         if boundBody is BoundBlockExpression block {
             let newStatements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
             for stmt in block.Statements {
@@ -2639,11 +3072,23 @@ internal class LambdaBinder {
         private let conversions ConversionClassifier
         private let syntax LambdaExpressionSyntax
         private let returnType TypeSymbol
+        // Issue #5569: set for a deferred target conversion, which reports as the return statement does.
+        private let deferredDiagnostics DiagnosticBag?
+        // Issue #5569: the target conversions that the return statements bound, for the target trial.
+        private let heldConversions DeferredReturnState?
 
-        init(conversions ConversionClassifier, syntax LambdaExpressionSyntax, returnType TypeSymbol) {
+        init(
+            conversions ConversionClassifier,
+            syntax LambdaExpressionSyntax,
+            returnType TypeSymbol,
+            deferredDiagnostics DiagnosticBag?,
+            heldConversions DeferredReturnState? = nil
+        ) {
             this.conversions = conversions
             this.syntax = syntax
             this.returnType = returnType
+            this.deferredDiagnostics = deferredDiagnostics
+            this.heldConversions = heldConversions
         }
 
         /// Rewrites the returns inside a lambda body's trailing value.
@@ -2656,6 +3101,12 @@ internal class LambdaBinder {
             // narrowing of the member path `node.Expression`.
             let value = node.Expression
             if value == nil {
+                let missingValueDiagnostics = deferredDiagnostics
+                if missingValueDiagnostics != nil &&
+                    returnType != TypeSymbol.Void &&
+                    node.Syntax is ReturnStatementSyntax bareReturn {
+                    missingValueDiagnostics.ReportMissingReturnExpression(bareReturn.ReturnKeyword.Location, returnType)
+                }
                 return node
             }
             // Void return type: a `return expr` carrying a value is invalid;
@@ -2668,6 +3119,21 @@ internal class LambdaBinder {
             // Issue #4965 (ADR-0202): convert any `return` nested inside the
             // operand first (`return if c { return a } else { b }`).
             let operand = RewriteExpression(value)
+            // Issue #5569: a deferred return value converted where it bound, with the eager bind's narrowing checks.
+            // A value whose nested returns changed converts here, as its own conversion does not depend on them.
+            let held = heldConversions
+            if held != nil && object.ReferenceEquals(operand, value) && held.TryGetConversion(
+                value,
+                out var heldValue,
+                out var heldDiagnostics
+            ) {
+                deferredDiagnostics?.AddRange(heldDiagnostics)
+                return if object.ReferenceEquals(heldValue, value) {
+                    cast[BoundStatement](node)
+                } else {
+                    cast[BoundStatement](BoundReturnStatement(node.Syntax, heldValue, node.IsRef))
+                }
+            }
             if operand.Type == returnType {
                 return if object.ReferenceEquals(operand, value) {
                     cast[BoundStatement](node)
@@ -2675,7 +3141,13 @@ internal class LambdaBinder {
                     cast[BoundStatement](BoundReturnStatement(node.Syntax, operand, node.IsRef))
                 }
             }
-            let location = node.Syntax?.Location ?? syntax.Body.Location
+            // Issue #5569: a deferred target conversion reports at the return value, as the return statement does.
+            let returnValue = if deferredDiagnostics != nil {
+                (node.Syntax as ReturnStatementSyntax)?.Expression
+            } else {
+                default(ExpressionSyntax?)
+            }
+            let location = returnValue?.Location ?? node.Syntax?.Location ?? syntax.Body.Location
             let converted = conversions.BindConversion(location, operand, returnType)
             return BoundReturnStatement(node.Syntax, converted, node.IsRef)
         }

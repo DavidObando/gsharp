@@ -891,11 +891,64 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         this.TranslateExpression(targetExpr)
                     }
-                    statements.Add(AssignmentStatement(assignTarget, tempRead))
+                    statements.Add(
+                        AssignmentStatement(assignTarget, this.BridgeDeconstructedElementStore(targetExpr, tempRead))
+                    )
                 }
                 values.Add(tempRead)
             }
             return values
+        }
+
+        // Issue #5561: the store bridge of `target = element` for a variable,
+        // field or property that a deconstruction assigns. The temp holds the
+        // `Deconstruct` element, which G# types from its declaration, so a
+        // widened element stored into a slot that stays non-null is asserted
+        // exactly as `n = entry.Item!!` is. The slot is the input of a
+        // user-defined conversion, as in `ForgiveNullableReferenceValueCore`, or
+        // else the target's storage. A local's storage is what its declaration
+        // emitted (`EmittedLocalStorageAcceptsNil`), and a local with no record
+        // is not bridged; any other target is decided by its declaration, as
+        // for a plain assignment.
+        // An element-access target is #5595.
+        private func BridgeDeconstructedElementStore(target ExpressionSyntax, value GExpression) GExpression? {
+            if !(target is IdentifierNameSyntax || target is MemberAccessExpressionSyntax) {
+                return value
+            }
+            let model = this.context.SemanticModel
+            let element = ObliviousNullabilityAnalyzer.DeconstructedElementDeclaration(
+                target,
+                model,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            )
+            if element == nil || !this.IsTranslatorWidenedDeclaration(element) {
+                return value
+            }
+            var slot ISymbol? = this.GetProjectedAssignmentTarget(target, this.context.GetSymbolInfo(target).Symbol)
+            var slotType ITypeSymbol? = this.GetAssignmentTargetType(target, slot)
+            if ObliviousNullabilityAnalyzer.DeconstructedElementConversionOperator(target, model) is {} conversion {
+                slot = conversion.Parameters[0]
+                slotType = conversion.Parameters[0].Type
+            } else if slot is ILocalSymbol local {
+                // A local whose emitted storage is not recorded (a pattern
+                // variable, for example) keeps the unbridged store: a wrong
+                // `!!` would throw where C# stores the null, and a wrong
+                // omission is a compile error that gsc reports.
+                return if this
+                    .state
+                    .EmittedLocalStorageAcceptsNil
+                    .TryGetValue(local, out var acceptsNil) &&
+                    !acceptsNil {
+                    EnsureNonNullAssertion(value)
+                } else {
+                    value
+                }
+            }
+            return if this.TargetWillRemainNonNullableReference(slotType, slot) {
+                EnsureNonNullAssertion(value)
+            } else {
+                value
+            }
         }
 
         // G# tuple bindings are deliberately flat (ADR-0168; the issue #4300

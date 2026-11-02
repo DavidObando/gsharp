@@ -1601,6 +1601,32 @@ internal partial class ExpressionBinder {
         symbolicTypeArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
         resultTypeOverride TypeSymbol? = nil
     ) bool {
+        let pending = literalTargetDiagnostics.Count
+        let mark = Diagnostics.Count
+        let bound = TryBindClrConstructorFromTypeCore(
+            clrType,
+            syntax,
+            out result,
+            out noApplicableOverload,
+            out boundArgumentsOnFailure,
+            openGenericDefinition,
+            symbolicTypeArgs,
+            resultTypeOverride
+        )
+        ReportDiscardedLiteralTargetDiagnostics(pending, noApplicableOverload || HasErrorDiagnosticSince(mark))
+        return bound
+    }
+
+    private func TryBindClrConstructorFromTypeCore(
+        clrType Type,
+        syntax CallExpressionSyntax,
+        @NotNullWhen(true) out result BoundExpression?,
+        out noApplicableOverload bool,
+        out boundArgumentsOnFailure ImmutableArray[BoundExpression],
+        openGenericDefinition Type? = nil,
+        symbolicTypeArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        resultTypeOverride TypeSymbol? = nil
+    ) bool {
         result = nil
         noApplicableOverload = false
         boundArgumentsOnFailure = default(ImmutableArray[BoundExpression])
@@ -1696,19 +1722,28 @@ internal partial class ExpressionBinder {
                 out var symbolicTarget
             ) &&
                 symbolicTarget is {} resolvedSymbolicTarget {
-                let literal = lambdas.BindLambdaExpression(ctorLambdaSyntax, resolvedSymbolicTarget.FunctionType)
+                // Issue #5569: the same speculative bind as every other candidate target.
+                let slotIndex = i
+                let argumentSyntax = syntax.Arguments[i]
                 boundArguments.Add(
-                    if ShouldConvertToNominalDelegate(resolvedSymbolicTarget.DelegateType) {
-                        conversions.BindConversion(
-                            syntax.Arguments[i].Location,
+                    BindLambdaWithCandidateTarget(
+                        ctorLambdaSyntax,
+                        ctorParameterLists,
+                        (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
+                        resolvedSymbolicTarget.FunctionType,
+                        false,
+                        (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                            argumentSyntax,
                             literal,
                             resolvedSymbolicTarget.DelegateType
-                        )
-                    } else {
-                        literal
-                    }
+                        ),
+                        out var keepsNaturalType
+                    )
                 )
-                symbolicCtorDelegateTargets[i] = resolvedSymbolicTarget.DelegateType
+                // The symbolic delegate shape applies only to a literal that keeps the delegate target.
+                if !keepsNaturalType {
+                    symbolicCtorDelegateTargets[i] = resolvedSymbolicTarget.DelegateType
+                }
                 continue
             }
             if inner is RefArgumentExpressionSyntax refArgument {
@@ -2367,23 +2402,195 @@ internal partial class ExpressionBinder {
             out _,
             out _
         ) {
-            return BindLambdaWithDelegateTarget(argumentSyntax, lambdaSyntax, target!!, nominalTarget)
+            return BindLambdaWithCandidateTarget(
+                lambdaSyntax,
+                candidateParameterLists,
+                (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, paramOffset, sourceArgIndex, argName),
+                target!!,
+                false,
+                (literal BoundExpression) -> ConvertLiteralToNominalDelegate(argumentSyntax, literal, nominalTarget)
+            )
         }
         return BindExpression(inner)
     }
 
-    private func BindLambdaWithDelegateTarget(
-        argumentSyntax ExpressionSyntax,
+    /// Issue #5569: binds a function literal against the delegate target that the delegate candidates agree on.
+    /// When another candidate takes a value at this position that is not a delegate (also as an element of the
+    /// expanded form of a trailing `params` array), the bind is speculative: the
+    /// literal binds once with its return conversions deferred (see `LambdaBinder.BindLambdaExpression`). A
+    /// literal whose `return` value does not convert to the target keeps its natural function type when such a
+    /// candidate accepts that type. The delegate candidates are then not applicable, and overload resolution can
+    /// select the other candidate, as in C#. The target conversion diagnostics are kept until the call ends (see
+    /// (cref:ReportDiscardedLiteralTargetDiagnostics)). With only delegate candidates, the bind is the ordinary
+    /// target bind, so a single delegate candidate reports the same error. The literal binds once in each case,
+    /// so nested literals cost linear work.
+    /// @param lambdaSyntax The function literal.
+    /// @param candidateParameterLists The parameter lists of the candidates.
+    /// @param slotOf Gives the parameter index of the literal in a candidate (past the last parameter for an expanded
+    /// `params` position), or -1.
+    /// @param target The agreed delegate function type.
+    /// @param inferReturnTypeFromBody Whether the target's return slot is only a placeholder.
+    /// @param convertToTarget Converts a target-typed literal to the nominal delegate of the slot.
+    /// @returns The bound literal.
+    private func BindLambdaWithCandidateTarget(
         lambdaSyntax LambdaExpressionSyntax,
+        candidateParameterLists IReadOnlyList[[]ParameterInfo],
+        slotOf([]ParameterInfo) -> int32,
         target FunctionTypeSymbol,
-        nominalTarget TypeSymbol?
+        inferReturnTypeFromBody bool,
+        convertToTarget(BoundExpression) -> BoundExpression
+    ) BoundExpression -> BindLambdaWithCandidateTarget(
+        lambdaSyntax,
+        candidateParameterLists,
+        slotOf,
+        target,
+        inferReturnTypeFromBody,
+        convertToTarget,
+        out _
+    )
+
+    /// Issue #5569: (cref:BindLambdaWithCandidateTarget) that also tells whether the literal keeps its natural type.
+    /// @param lambdaSyntax The function literal.
+    /// @param candidateParameterLists The parameter lists of the candidates.
+    /// @param slotOf Gives the parameter index of the literal in a candidate (past the last parameter for an expanded
+    /// `params` position), or -1.
+    /// @param target The agreed delegate function type.
+    /// @param inferReturnTypeFromBody Whether the target's return slot is only a placeholder.
+    /// @param convertToTarget Converts a target-typed literal to the nominal delegate of the slot.
+    /// @param keepsNaturalType Set when the literal keeps its natural function type.
+    /// @returns The bound literal.
+    private func BindLambdaWithCandidateTarget(
+        lambdaSyntax LambdaExpressionSyntax,
+        candidateParameterLists IReadOnlyList[[]ParameterInfo],
+        slotOf([]ParameterInfo) -> int32,
+        target FunctionTypeSymbol,
+        inferReturnTypeFromBody bool,
+        convertToTarget(BoundExpression) -> BoundExpression,
+        out keepsNaturalType bool
     ) BoundExpression {
-        let literal = lambdas.BindLambdaExpression(lambdaSyntax, target)
-        return if nominalTarget != nil && ShouldConvertToNominalDelegate(nominalTarget) {
-            conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
-        } else {
-            literal
+        keepsNaturalType = false
+        let alternatives = List[Type]()
+        let AddAlternative = func (slotType Type) {
+            // A bare type parameter can take the natural type by inference, if its constraints accept it.
+            if !slotType.IsByRef &&
+                (slotType.IsGenericParameter || !slotType.ContainsGenericParameters) &&
+                !MemberLookup.TryGetLambdaTargetFunctionType(slotType, out _) {
+                alternatives.Add(slotType)
+            }
         }
+        for parameters in candidateParameterLists {
+            let index = slotOf(parameters)
+            if index < 0 {
+                continue
+            }
+            // A trailing `params` array also takes the literal as an element of its expanded form.
+            let last = parameters.Length - 1
+            if last >= 0 && index >= last && ClrOverloadResolution.IsParamsArrayParameter(parameters[last]) {
+                AddAlternative(
+                    Invariant.Required(
+                        parameters[last].ParameterType.GetElementType(),
+                        "a params array has an element type",
+                        expression: "parameters[last].ParameterType.GetElementType()"
+                    )
+                )
+            }
+            if index < parameters.Length {
+                AddAlternative(ConversionClassifier.GetPlainValueClrParameterType(parameters[index]))
+            }
+        }
+        if alternatives.Count == 0 {
+            return convertToTarget(
+                lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: inferReturnTypeFromBody)
+            )
+        }
+        var accepted = false
+        let literal = lambdas.BindLambdaExpression(
+            lambdaSyntax,
+            target,
+            inferReturnTypeFromBody: inferReturnTypeFromBody,
+            acceptsNaturalType: (naturalType TypeSymbol) -> {
+                accepted = GetEffectiveArgumentClrTypeForOverloadResolution(naturalType) is {} naturalClrType &&
+                    alternatives.Any((slotType Type) -> AcceptsNaturalLiteral(slotType, naturalClrType))
+                return accepted
+            },
+            discardedTargetDiagnostics: literalTargetDiagnostics
+        )
+        keepsNaturalType = accepted
+        return if accepted {
+            literal
+        } else {
+            convertToTarget(literal)
+        }
+    }
+
+    // Issue #5569: whether a candidate slot that is not a delegate takes a literal of the natural CLR type.
+    private func AcceptsNaturalLiteral(slotType Type, naturalClrType Type) bool -> if slotType.IsGenericParameter {
+        ClrOverloadResolution.SatisfiesTypeParameterConstraints(slotType, naturalClrType)
+    } else {
+        ClrOverloadResolution.ClassifyImplicit(slotType, naturalClrType) != ClrOverloadResolution
+            .ImplicitConversionKind
+            .None
+    }
+
+    private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.Skip(mark).Any(
+        (diagnostic Diagnostic) -> diagnostic.IsError
+    )
+
+    /// Issue #5569: ends a call bind that (cref:BindLambdaWithCandidateTarget) can make speculative. When the call
+    /// failed, the diagnostics of each discarded literal target bind are reported, as for a call with no other
+    /// candidate. A call that binds keeps none of them.
+    /// @param pending The count of (cref:literalTargetDiagnostics) when the call bind started.
+    /// @param failed Whether the call bind failed.
+    private func ReportDiscardedLiteralTargetDiagnostics(pending int32, failed bool) {
+        if literalTargetDiagnostics.Count <= pending {
+            return
+        }
+        if failed {
+            for var i = pending; i < literalTargetDiagnostics.Count; i++ {
+                Diagnostics.AddRange(literalTargetDiagnostics[i])
+            }
+        }
+        literalTargetDiagnostics.RemoveRange(pending, literalTargetDiagnostics.Count - pending)
+    }
+
+    /// Issue #5569: the parameter index of a source argument in a candidate, by name or by position.
+    /// @param parameters The candidate's parameters.
+    /// @param paramOffset The number of leading parameters that no source argument fills.
+    /// @param sourceArgIndex The source argument index.
+    /// @param argName The argument name, when the argument is named.
+    /// @returns The parameter index, or -1 when no parameter has the name. A positional index can be past the last
+    /// parameter, where only the expanded form of a trailing `params` array takes the argument.
+    private func FindCandidateSlot(
+        parameters[]ParameterInfo,
+        paramOffset int32,
+        sourceArgIndex int32,
+        argName string?
+    ) int32 {
+        if !string.IsNullOrEmpty(argName) {
+            for var p = 0; p < parameters.Length; p++ {
+                if string.Equals(parameters[p].Name, argName, StringComparison.Ordinal) {
+                    return p
+                }
+            }
+            return -1
+        }
+        let index = sourceArgIndex + paramOffset
+        return if index < 0 {
+            -1
+        } else {
+            index
+        }
+    }
+
+    private func ConvertLiteralToNominalDelegate(
+        argumentSyntax ExpressionSyntax,
+        literal BoundExpression,
+        nominalTarget TypeSymbol?
+    ) BoundExpression -> if nominalTarget != nil &&
+        ShouldConvertToNominalDelegate(nominalTarget) {
+        conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
+    } else {
+        literal
     }
 
     /// Issue #569: resolves a nested type constructor call when the call
@@ -2906,10 +3113,8 @@ internal partial class ExpressionBinder {
                         continue
                     }
                 }
-                let parameterType Type? = parameters[paramIndex].ParameterType
-                if parameterType == nil {
-                    continue
-                }
+                // Issue #5543: a literal is a plain value, so an `in` slot targets its pointee.
+                let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
                 sawAnyMatchingSlot = true
                 if parameterType.ContainsGenericParameters {
                     // Open generic delegate parameters are resolved later, once the
@@ -3022,8 +3227,9 @@ internal partial class ExpressionBinder {
                         continue
                     }
                 }
+                // Issue #5543: a lambda is a plain value, so an `in` slot targets its pointee.
                 if !TryBuildSymbolicDelegateTarget(
-                    parameters[paramIndex].ParameterType,
+                    ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex]),
                     openGenericDefinition,
                     symbolicTypeArgs,
                     out var mappedDelegate,
