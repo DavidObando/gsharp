@@ -1182,10 +1182,29 @@ partial class CSharpToGSharpTranslator {
             if IsElementLiteral(value!!) {
                 return this.ObliviousLiteralPositions(value!!, model, flow)
             }
+            // A tuple literal holds each element's positions below the element's index.
+            if value is TupleExpressionSyntax tuple {
+                let tupleInfo = model.GetTypeInfo(tuple)
+                let elements = ObliviousPositionSet()
+                for var i = 0; i < tuple.Arguments.Count && i < 7; i++ {
+                    let elementPositions = this.ObliviousPositionsOf(tuple.Arguments[i].Expression, model, flow)
+                    if elementPositions != nil {
+                        elements.UnionWith(Prefixed(elementPositions, IndexPosition(i)))
+                    }
+                }
+                return Filtered(tupleInfo.Type ?? tupleInfo.ConvertedType, elements)
+            }
+            // `a?.b` has the positions of its bound part, read from `a`; G# keeps the
+            // result's outer `?`.
+            if value is ConditionalAccessExpressionSyntax conditionalAccess {
+                return this.ObliviousPositionsOf(conditionalAccess.WhenNotNull, model, flow)
+            }
             if !(
                 value is IdentifierNameSyntax ||
                     value is MemberAccessExpressionSyntax ||
+                    value is MemberBindingExpressionSyntax ||
                     value is ElementAccessExpressionSyntax ||
+                    value is ElementBindingExpressionSyntax ||
                     value is InvocationExpressionSyntax ||
                     value is BaseObjectCreationExpressionSyntax
             ) {
@@ -1215,9 +1234,21 @@ partial class CSharpToGSharpTranslator {
                     positions.Nullable.Remove("")
                 }
             }
-            if value is ElementAccessExpressionSyntax elementAccess && model.GetTypeInfo(elementAccess.Expression)
-                .Type is IArrayTypeSymbol {
-                positions.UnionWith(Subtree(this.ObliviousPositionsOf(elementAccess.Expression, model, flow), "0"))
+            let arrayReceiver ExpressionSyntax? = if value is ElementAccessExpressionSyntax ||
+                value is ElementBindingExpressionSyntax {
+                MemberReceiver(value)
+            } else {
+                nil
+            }
+            if arrayReceiver != nil && model.GetTypeInfo(arrayReceiver).Type is IArrayTypeSymbol {
+                let receiverPositions = this.ObliviousPositionsOf(arrayReceiver, model, flow)
+                // A `System.Range` slice is an array of the same element; an index reads
+                // the element at position `0`.
+                if IsRangeElementArguments(value!!, model) {
+                    positions.UnionWith(WithoutTopLevel(receiverPositions) ?? ObliviousPositionSet())
+                } else {
+                    positions.UnionWith(Subtree(receiverPositions, "0"))
+                }
             } else if value is BaseObjectCreationExpressionSyntax creation {
                 positions.UnionWith(this.ObliviousCreationPositions(creation, model, flow))
             } else if (symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IMethodSymbol) &&
@@ -1495,8 +1526,9 @@ partial class CSharpToGSharpTranslator {
             let assignedLocals = HashSet[ISymbol](SymbolEqualityComparer.Default)
             let initializedLocals = List[(Local ILocalSymbol, Value ExpressionSyntax, Model SemanticModel)]()
             // Kind 0 stores a value in declared storage, 1 in an inferred local, 2
-            // enumerates a value into a `foreach` variable, and 3 types the lambda
-            // parameters of a call.
+            // enumerates a value into a `foreach` variable, 3 types the lambda
+            // parameters of a call, and 4 deconstructs element `Prefix` of a value
+            // into an inferred local.
             let edges = List[
                 (Destination ISymbol?, Value ExpressionSyntax, Model SemanticModel, Prefix string, Kind int32)
             ]()
@@ -1513,6 +1545,11 @@ partial class CSharpToGSharpTranslator {
                                 assignedLocals.Add(destination)
                             }
                             edges.Add((destination, assignment.Right, model, "", 0))
+                            // An implicitly typed deconstruction local takes the positions of
+                            // its element of the value.
+                            for (local, index) in InferredDeconstructionLocals(assignment, model) {
+                                edges.Add((local, assignment.Right, model, IndexPosition(index), 4))
+                            }
                         }
                     } else if node is VariableDeclaratorSyntax{Initializer: {} declaratorInitializer} declarator {
                         let declared ISymbol? = model.GetDeclaredSymbol(declarator)
@@ -1664,15 +1701,21 @@ partial class CSharpToGSharpTranslator {
                         // A local whose C# type is not annotated gets a `!!` on its
                         // initializer (TranslateValueWithNullForgiveness), so only its
                         // nested positions follow the value.
+                        let source ObliviousPositionSet? = if kind == 4 {
+                            Subtree(positions, prefix)
+                        } else {
+                            positions
+                        }
                         let stored = if kind == 2 {
                             EnumeratedPositions(StoredValueType(value, model), positions, compilation)
-                        } else if destinationType?.NullableAnnotation == Microsoft
+                        } else if kind == 1 &&
+                            destinationType?.NullableAnnotation == Microsoft
                             .CodeAnalysis
                             .NullableAnnotation
                             .Annotated {
-                            positions
+                            source
                         } else {
-                            WithoutTopLevel(positions)
+                            WithoutTopLevel(source)
                         }
                         changed |= AddInferredPositions(flow, original, Filtered(destinationType, stored))
                         // Arms that give different positions have no common G# type,
@@ -2101,8 +2144,13 @@ partial class CSharpToGSharpTranslator {
 
             // The definition of a member. An extension method called on its receiver
             // is its unreduced definition.
+            // The generic definition of a member: an extension method's unreduced form,
+            // and a named tuple element's `ItemN` field, so the element reads its type
+            // parameter as `t.Item1` does.
             private func UnreducedDefinition(symbol ISymbol) ISymbol -> if symbol is IMethodSymbol method {
                 method.ReducedFrom?.OriginalDefinition ?? method.OriginalDefinition
+            } else if symbol is IFieldSymbol{CorrespondingTupleField: {} tupleField} {
+                tupleField.OriginalDefinition
             } else {
                 symbol.OriginalDefinition
             }
@@ -2371,8 +2419,63 @@ partial class CSharpToGSharpTranslator {
                 return results
             }
 
+            // The implicitly typed locals that the deconstruction [`assignment`](paramref)
+            // declares, with the index of the element each one takes: `var (a, b) = v`
+            // and `(var a, var b) = v`. A nested or typed target is not listed.
+            private func InferredDeconstructionLocals(assignment AssignmentExpressionSyntax, model SemanticModel) List[
+                (Local ILocalSymbol, Index int32)
+            ] {
+                let locals = List[(Local ILocalSymbol, Index int32)]()
+                if assignment.Left is DeclarationExpressionSyntax{
+                    Designation: ParenthesizedVariableDesignationSyntax designations
+                } {
+                    for var i = 0; i < designations.Variables.Count; i++ {
+                        if designations.Variables[i] is SingleVariableDesignationSyntax single &&
+                            model.GetDeclaredSymbol(single) is ILocalSymbol local {
+                            locals.Add((local, i))
+                        }
+                    }
+                } else if assignment.Left is TupleExpressionSyntax targets {
+                    for var i = 0; i < targets.Arguments.Count; i++ {
+                        if targets
+                            .Arguments[i]
+                            .Expression is DeclarationExpressionSyntax{
+                            Designation: SingleVariableDesignationSyntax single
+                        } declaration &&
+                            declaration
+                            .Type
+                            .IsVar &&
+                            model.GetDeclaredSymbol(single) is ILocalSymbol local {
+                            locals.Add((local, i))
+                        }
+                    }
+                }
+                return locals
+            }
+
+            // Whether the element access or binding [`access`](paramref) takes one
+            // `System.Range` argument: a slice, not an element.
+            private func IsRangeElementArguments(access ExpressionSyntax, model SemanticModel) bool {
+                let arguments BracketedArgumentListSyntax? = switch access {
+                    case elementAccess is ElementAccessExpressionSyntax: elementAccess.ArgumentList
+                    case elementBinding is ElementBindingExpressionSyntax: elementBinding.ArgumentList
+                    default: default(BracketedArgumentListSyntax?)
+                }
+                let rangeType ITypeSymbol? = model.Compilation.GetTypeByMetadataName("System.Range")
+                return arguments != nil &&
+                    rangeType != nil &&
+                    arguments
+                    .Arguments
+                    .Count == 1 &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(model.GetTypeInfo(arguments.Arguments[0].Expression).Type, rangeType)
+            }
+
             // Only these values can carry positions (see ObliviousPositionsOf).
             private func CanCarryPositions(value ExpressionSyntax) bool -> IsElementLiteral(value) ||
+                value is TupleExpressionSyntax ||
+                value is ConditionalAccessExpressionSyntax ||
                 value is IdentifierNameSyntax ||
                 value is MemberAccessExpressionSyntax ||
                 value is ElementAccessExpressionSyntax ||
@@ -2763,7 +2866,11 @@ partial class CSharpToGSharpTranslator {
                 if containerType is IArrayTypeSymbol {
                     return member == nil && positions.Nullable.Contains("0")
                 }
-                let memberType ITypeSymbol? = StorageType(member?.OriginalDefinition)
+                let memberType ITypeSymbol? = if member != nil {
+                    StorageType(UnreducedDefinition(member))
+                } else {
+                    nil
+                }
                 let owner INamedTypeSymbol? = if member is IParameterSymbol parameter {
                     parameter.ContainingSymbol.ContainingType
                 } else {
@@ -2997,6 +3104,39 @@ partial class CSharpToGSharpTranslator {
                 positions HashSet[string],
                 prefix string
             ) GTypeReference? {
+                // A tuple states each element's positions below the element's index.
+                if type is TupleTypeReference tupleReference &&
+                    declared is INamedTypeSymbol{IsTupleType: true} tupleSymbol &&
+                    tupleReference
+                    .ElementTypes
+                    .Count == tupleSymbol
+                    .TupleElements
+                    .Length &&
+                    tupleSymbol
+                    .TupleElements
+                    .Length <= 7 {
+                    let elementTypes = List[GTypeReference](tupleReference.ElementTypes.Count)
+                    var tupleChanged = false
+                    for var i = 0; i < tupleReference.ElementTypes.Count; i++ {
+                        let elementType = PromoteNestedPosition(
+                            tupleReference.ElementTypes[i],
+                            tupleSymbol.TupleElements[i].Type,
+                            positions,
+                            prefix + IndexPosition(i)
+                        )
+                        tupleChanged |= !object.ReferenceEquals(elementType, tupleReference.ElementTypes[i])
+                        elementTypes.Add(elementType)
+                    }
+                    return if tupleChanged {
+                        cast[GTypeReference](
+                            TupleTypeReference(elementTypes, tupleReference.ElementNames){
+                                IsNullable = tupleReference.IsNullable
+                            }
+                        )
+                    } else {
+                        type
+                    }
+                }
                 if type is ArrayTypeReference array && declared is IArrayTypeSymbol arraySymbol {
                     let element = PromoteNestedPosition(
                         array.ElementType,

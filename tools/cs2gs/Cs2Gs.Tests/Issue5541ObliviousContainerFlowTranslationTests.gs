@@ -730,9 +730,10 @@ public static class Use
     }
 
     /// Final review of #5571: a tuple element goes into the slot of its target. A
-    /// deconstruction into typed declarations or a declared tuple local is proven
-    /// non-null and keeps `!!`; an implicitly typed deconstruction or tuple takes a nil
-    /// element as it is.
+    /// deconstruction into typed declarations is proven non-null and keeps `!!`. A
+    /// tuple local is storage that states its elements' positions, so it takes a nil
+    /// element as it is and its dereference asserts it; an implicitly typed
+    /// deconstruction takes a nil element as it is.
     @Fact
     func A_Tuple_Element_Is_Asserted_Only_For_A_Declared_Target() {
         this.Check("Review22", `using ObLib;
@@ -745,10 +746,37 @@ public static class Use
     public static int Natural(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); return t.Item2 == null ? 1 : 0; }
 }`, []string{
                 "let (a, b) = (lines[0]!!, lines[1]!!)",
-                "let t (a string, b string) = (lines[0]!!, lines[1]!!)",
+                "let t (a string?, b string?) = (lines[0], lines[1])",
+                "return t.b!!.Length",
                 "let (a, b) = (lines[0], lines[1])",
                 "let t = (lines[0], lines[1])"
             }, []string{"Declared", "4", "Local", "2", "Inferred", "1", "Natural", "1"})
+    }
+
+    /// Final review of #5571: a conditional access, a slice and a tuple literal carry
+    /// the positions of what they hold, so each dereference asserts exactly the
+    /// nullable element: `?.` keeps the bound member's nested positions, `[..]` keeps
+    /// the array's element and is itself non-null, and a tuple keeps each element's
+    /// positions in a local.
+    @Fact
+    func Conditional_Access_Slice_And_Tuple_Carry_Nested_Positions() {
+        this.Check("Review23", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) => x;
+    public static int Conditional(string p) { return (new List<string>(Node.Lines(p))?.GetRange(0, 1))![0].Length; }
+    public static int ConditionalNil(string p) { return (new List<string>(Node.Holes(p))?.GetRange(1, 1))![0] == null ? 1 : 0; }
+    public static int Slice(string p) { string[] lines; lines = Node.Holes(p); var s = Id(lines)[..]; return Id(lines)[..].Length + s[0].Length + (s[1] == null ? 10 : 0); }
+    public static int Tuple(string p) { string[] lines; lines = Node.Lines(p); var t = (lines[0], lines[1]); var n = (a: lines[0], b: lines[1]); return t.Item1.Length + n.b.Length; }
+    public static int TupleThrows(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); try { return t.Item2.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "?.GetRange(0, 1))!![0]!!.Length",
+                "return Id(lines)[..].Length + s[0]!!.Length",
+                "return t.Item1!!.Length + n.Item2!!.Length",
+                "return t.Item2!!.Length"
+            }, []string{"Conditional", "2", "ConditionalNil", "1", "Slice", "14", "Tuple", "4", "TupleThrows", "-1"})
     }
 
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
