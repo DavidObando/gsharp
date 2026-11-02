@@ -3617,15 +3617,10 @@ partial class CSharpToGSharpTranslator {
 
         // The loop emitter states the loop variable's type only for a non-identity
         // element conversion (#3935); otherwise G# infers it from the sequence.
-        private func ForEachHasTypeClause(forEach ForEachStatementSyntax) bool -> !forEach
-            .Type
-            .IsVar &&
-            !this
-            .context
-            .SemanticModel
-            .GetForEachStatementInfo(forEach)
-            .ElementConversion
-            .IsIdentity
+        private func ForEachHasTypeClause(forEach ForEachStatementSyntax) bool {
+            let conversion = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementConversion
+            return !forEach.Type.IsVar && !conversion.IsIdentity
+        }
 
         // The array that a loop variable without a type clause iterates.
         private func InferredForEachArray(local ILocalSymbol) ExpressionSyntax? {
