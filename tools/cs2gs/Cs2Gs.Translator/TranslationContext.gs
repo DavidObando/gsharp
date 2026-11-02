@@ -88,6 +88,10 @@ class TranslationContext {
         this.FilePath = filePath
         this.siblingCompilations = siblingCompilations
         this.repositoryCompilations = repositoryCompilations
+        ObliviousNullabilityAnalyzer.RegisterSourceAssemblies(
+            this.Compilation,
+            this.repositoryCompilations ?? this.siblingCompilations
+        )
     }
 
     /// Gets the owning C# compilation.

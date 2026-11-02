@@ -383,11 +383,21 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private class SourceAssemblySet {
-        init(currentAssembly string) {
+        init(current Compilation) {
+            let currentAssembly = current.Assembly.Identity.GetDisplayName()
             this.Names = HashSet[string](StringComparer.Ordinal){currentAssembly}
+            let referenced = HashSet[string](StringComparer.Ordinal){currentAssembly}
+            for assembly in current.SourceModule.ReferencedAssemblySymbols {
+                referenced.Add(assembly.Identity.GetDisplayName())
+            }
+            this.ReferencedNames = referenced
         }
 
         prop Names HashSet[string] {
+            get;
+        }
+
+        prop ReferencedNames HashSet[string] {
             get;
         }
     }
@@ -410,6 +420,11 @@ internal shared class ObliviousNullabilityAnalyzer {
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
     private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
+
+    private let ComputeCounts ConditionalWeakTable[Compilation, StrongBox[int32]] = ConditionalWeakTable[
+        Compilation,
+        StrongBox[int32]
+    ]()
 
     private let SourceAssemblies ConditionalWeakTable[Compilation, SourceAssemblySet] = ConditionalWeakTable[
         Compilation,
@@ -4199,6 +4214,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func Compute(compilation Compilation) TaintResult {
+        let computeCount = ComputeCounts.GetOrCreateValue(compilation)
+        lock computeCount {
+            computeCount.Value += 1
+        }
         let tainted = HashSet[ISymbol](SymbolEqualityComparer.Default)
         var tupleTainted = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
         // Transitive edges: (target <- source). If `source` is tainted then
@@ -5300,7 +5319,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                                 if scalarSource == nil {
                                     continue
                                 }
-                                if scalarSource.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                                if scalarSource
+                                    .DeclaringSyntaxReferences
+                                    .IsDefaultOrEmpty &&
+                                    !IsSourceAssembly(model.Compilation, scalarSource.ContainingAssembly) {
                                     continue
                                 }
                                 tupleScalarEdges.Add((targetKey, scalarSource))
@@ -6776,6 +6798,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    internal func ComputeCount(compilation Compilation?) int32 {
+        if compilation != nil && ComputeCounts.TryGetValue(compilation, out var countBox) {
+            lock countBox {
+                return countBox.Value
+            }
+        }
+        return 0
+    }
+
     private func IsSourceDelegateType(compilation Compilation, delegateType INamedTypeSymbol) bool -> IsSourceAssembly(
         compilation,
         delegateType.ContainingAssembly
@@ -6785,20 +6816,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         if assembly == nil {
             return false
         }
-        let assemblies = SourceAssemblies.GetValue(
-            compilation!!,
-            (current Compilation) -> SourceAssemblySet(current.Assembly.Identity.GetDisplayName())
-        )
+        let assemblies = SourceAssemblies.GetValue(compilation!!, (current Compilation) -> SourceAssemblySet(current))
         lock assemblies.Names {
             return assemblies.Names.Contains(assembly.Identity.GetDisplayName())
         }
     }
 
-    private func RegisterSourceAssemblies(
+    internal func RegisterSourceAssemblies(
         compilation CSharpCompilation?,
         siblingCompilations IReadOnlyList[CSharpCompilation]?
     ) {
-        let compilations = List[CSharpCompilation]{compilation!!}
+        if compilation == nil {
+            return
+        }
+        let compilations = List[CSharpCompilation]{compilation}
         if siblingCompilations != nil {
             compilations.AddRange(siblingCompilations.Where((candidate CSharpCompilation) -> candidate != nil))
         }
@@ -6807,14 +6838,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             .Distinct(StringComparer.Ordinal)
             .ToArray()
         for candidate in compilations {
-            let assemblies = SourceAssemblies.GetValue(
-                candidate,
-                (current Compilation) -> SourceAssemblySet(current.Assembly.Identity.GetDisplayName())
-            )
+            let assemblies = SourceAssemblies.GetValue(candidate, (current Compilation) -> SourceAssemblySet(current))
             var changed = false
             lock assemblies.Names {
                 for name in names {
-                    changed |= assemblies.Names.Add(name)
+                    if assemblies.ReferencedNames.Contains(name) {
+                        changed |= assemblies.Names.Add(name)
+                    }
                 }
             }
             if changed {
