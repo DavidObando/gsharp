@@ -4479,6 +4479,17 @@ partial class CSharpToGSharpTranslator {
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
             }
+            // ADR-0208 R18 (6) and R19 (#5593): the guard's own constant pattern can call the `Equals` of the
+            // tested value, which can run a closure that clears it, so gsc does not narrow on that test.
+            if closureAssigned &&
+                narrowingGuard is IsPatternExpressionSyntax guardTest &&
+                guardTest
+                .Pattern
+                .DescendantNodesAndSelf(OutsideNestedFunctions)
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax]()
+                .Any(this.ConstantPatternMayCallEquals) {
+                return true
+            }
             if $scope.DescendantNodes(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart >= narrowingGuard
                     .Span

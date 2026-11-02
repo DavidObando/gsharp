@@ -978,7 +978,8 @@ Details per row:
   summaries. The fast path of a test's own effects (R18 (6), `RunsNoCode`) treats a literal constant pattern as
   free of code only when its test calls no user `Equals`. A list pattern also kills member paths, as a getter with
   user code does (R14): row y06 was accepted and runs, and is now rejected. Corpus rows y01 to y28. cs2gs mirrors
-  the constant-pattern rule for closure-assigned locals (`ConstantPatternMayCallEquals`); it translates a C# list
+  the constant-pattern rule for closure-assigned locals (`ConstantPatternMayCallEquals`), between the guard and the
+  read and in the guard's own pattern (R18 (6)); it translates a C# list
   pattern to `Length` and indexer reads, not to a G# list pattern. cs2gs does not assert a by-reference read after an
   accessor call (R14, R16, R17), which is #5617. Not in this row: the own-pattern effect of a `switch` case and of an if-expression condition
   (#5545 shape 8) applies to these tests too.
