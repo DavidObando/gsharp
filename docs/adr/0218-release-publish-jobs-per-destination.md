@@ -509,6 +509,14 @@ No question remains open.
   `.nupkg` push passes `--no-symbols` and the explicit `.snupkg` push is the only symbol push of a
   run. A first attempt pushes each symbol package once; only a re-run of `publish-nuget-sdk` pushes
   a `.snupkg` that may already exist (the unverified symbol-server row).
+- nuget.org trusted publishing ([#5535](https://github.com/DavidObando/gsharp/issues/5535)): `publish-nuget-compiler`
+  and `publish-nuget-sdk` no longer read the `NUGET_API_KEY` secret. Each job has `permissions: { contents: read,
+  id-token: write }` and runs `NuGet/login@v1` (user `david-obando`) as the step right before its push. That step
+  exchanges a GitHub OIDC token for a nuget.org API key that is valid for one hour. The push step passes the key to
+  `nuget-push` in the same `NUGET_API_KEY` environment variable, so the script is unchanged. The feed waits after the
+  push use no key. A re-run requests a new key, and `--skip-duplicate` keeps the push idempotent. The nuget.org policy
+  matches the repository and the workflow file `build.yml`, with no environment. Decision 5 ("Repository secrets stay
+  as they are") and decision 7 now apply to `VSCE_PAT` only. The marketplaces and signing stay in #5535.
 
 ### Step 2: the re-run probe
 
