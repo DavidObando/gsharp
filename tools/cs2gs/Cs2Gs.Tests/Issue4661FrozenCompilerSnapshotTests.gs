@@ -4,6 +4,7 @@
 
 package Cs2Gs.Tests
 
+import Cs2Gs.Translator.Loading
 import GSharp.Tests
 import System
 import System.Collections.Generic
@@ -138,17 +139,61 @@ W
 
     @Fact
     async func SelfMigratedSource_DefaultRoot_ReusesCachedProjectAndFileAcrossCalls() {
-        let first = await SelfMigratedCompilerSource.LoadAsync(
-            "tools/cs2gs/Cs2Gs.Translator",
-            preservePartialParts: true,
-            "CSharpTypeMapper"
-        )
-        let second = await SelfMigratedCompilerSource.LoadAsync(
-            "tools/cs2gs/Cs2Gs.Translator",
-            preservePartialParts: true,
-            "CSharpTypeMapper"
-        )
-        Assert.Same(first["CSharpTypeMapper"], second["CSharpTypeMapper"])
+        let root = Path.Combine(AppContext.BaseDirectory, "issue4661-cache-" + Guid.NewGuid().ToString("N"))
+        let parser = Path.Combine(root, "src", "Core", "CodeAnalysis", "Syntax")
+        let project = Path.Combine(root, "tools", "cs2gs", "Demo")
+        Directory.CreateDirectory(parser)
+        Directory.CreateDirectory(project)
+        try {
+            File.WriteAllText(Path.Combine(parser, "Parser.cs"), "namespace GSharp; public class Parser {}")
+            var loads = 0
+            let loader = func (_ string) Task[LoadedCSharpProject] {
+                loads++
+                return Task.FromResult(
+                    CSharpProjectLoader.LoadInMemory(
+                        [](string, string){
+                            ("First.cs", "public class First { public static int X => 1; }"),
+                            ("Second.cs", "public class Second { public static int Y => 2; }")
+                        }
+                    )
+                )
+            }
+            let first = await SelfMigratedCompilerSource.LoadAsync(
+                root,
+                "tools/cs2gs/Demo",
+                preservePartialParts: true,
+                isDefaultRoot: true,
+                loader,
+                "First"
+            )
+            let firstRepeat = await SelfMigratedCompilerSource.LoadAsync(
+                root,
+                "tools/cs2gs/Demo",
+                preservePartialParts: true,
+                isDefaultRoot: true,
+                loader,
+                "First"
+            )
+            let second = await SelfMigratedCompilerSource.LoadAsync(
+                root,
+                "tools/cs2gs/Demo",
+                preservePartialParts: true,
+                isDefaultRoot: true,
+                loader,
+                "Second"
+            )
+            Assert.Equal(1, loads)
+            Assert.Same(first["First"], firstRepeat["First"])
+            Assert.Contains("First", first["First"].Text, StringComparison.Ordinal)
+            Assert.Contains("Second", second["Second"].Text, StringComparison.Ordinal)
+        } finally {
+            try {
+                Directory.Delete(root, recursive: true)
+            } catch (IOException) {
+                // Best-effort cleanup must not mask the test's own result.
+
+            }
+        }
     }
 
     shared {

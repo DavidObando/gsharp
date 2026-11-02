@@ -78,17 +78,25 @@ internal shared class SelfMigratedCompilerSource {
     /// @param preservePartialParts Whether translation preserves partial parts.
     /// @param fileNames File names without extension; empty for every file.
     /// @returns The files by name without extension.
+    internal func LoadAsync(root string, projectDirectory string, preservePartialParts bool, fileNames ...string) Task[
+        IReadOnlyDictionary[string, MigratedFile]
+    ] -> LoadAsync(
+        root,
+        projectDirectory,
+        preservePartialParts,
+        string.Equals(Path.GetFullPath(root), Path.GetFullPath(TestFixtureSource.Root), StringComparison.Ordinal),
+        (projectPath string) -> CSharpProjectLoader.LoadProjectAsync(projectPath),
+        fileNames
+    )
+
     internal async func LoadAsync(
         root string,
         projectDirectory string,
         preservePartialParts bool,
+        isDefaultRoot bool,
+        loadProject Func[string, Task[LoadedCSharpProject]],
         fileNames ...string
     ) IReadOnlyDictionary[string, MigratedFile] {
-        let isDefaultRoot = string.Equals(
-            Path.GetFullPath(root),
-            Path.GetFullPath(TestFixtureSource.Root),
-            StringComparison.Ordinal
-        )
         if CommittedCompilerSource.IsGSharp(root) {
             return ReadCommitted(root, projectDirectory, fileNames, isDefaultRoot)
         }
@@ -98,7 +106,7 @@ internal shared class SelfMigratedCompilerSource {
         if isDefaultRoot && CachedProjects.TryGetValue(projectPath, out var cachedProject) {
             project = cachedProject
         } else {
-            project = await CSharpProjectLoader.LoadProjectAsync(projectPath)
+            project = await loadProject(projectPath)
             if !project.BoundWithoutErrors {
                 throw InvalidOperationException(
                     projectDirectory + " should bind with no C# errors:\n" + string.Join("\n", project.ErrorDiagnostics)
