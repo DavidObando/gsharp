@@ -3231,6 +3231,35 @@ func Run(ref text string?, token DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@7:16")
+            Add("bare-open-auto-property-read-can-run-an-override (R14, #5632)", `package T
+import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+    func Run(ref text string?) int32 {
+        if text == nil { return 0 }
+        var n = 0
+        while text.Length > 0 && n < 3 {
+            n++
+            n = n + Auto * 0
+        }
+        return n
+    }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Main() { Console.WriteLine(Derived().Run(ref Box.G)) }`, "GS0158@13:20")
             return rows
         }
     }
