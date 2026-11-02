@@ -1916,17 +1916,14 @@ internal partial class StatementBinder {
             if name == RegionEffectScanner.IndexMemberName {
                 AddIndexParameterLists(receiver, call, effects, lists)
             } else {
-                // A method of the name that the lists do not show (of a constraint, of a base interface of an
-                // imported interface, or an extension method) is not checked, so the call counts.
+                // A method of the name that the lists do not show (of a base interface of an imported interface, or
+                // an extension method) is not checked, so the call counts.
                 if !AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists) ||
                     lists.Count == 0 &&
+                    !staticAccess &&
                     (
-                    (ReceiverMemberShape(receiver, name) & MemberIsMethod) != 0 ||
-                        !staticAccess &&
-                        (
-                        HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
-                            .CollectImportedExtensionMethods(name).Count > 0
-                    )
+                    HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
+                        .CollectImportedExtensionMethods(name).Count > 0
                 ) {
                     return nil
                 }
@@ -2023,16 +2020,6 @@ internal partial class StatementBinder {
             }
         }
         return false
-    }
-
-    private func ReceiverMemberShape(receiver ReceiverType, name string) int32 {
-        if receiver.Symbol != nil {
-            return MemberShape(receiver.Symbol, name)
-        }
-        if receiver.Clr is {} clr {
-            return ClrTypeShape(clr, name)
-        }
-        return 0
     }
 
     // Adds the parameter lists of the methods of the name on the receiver's type. Returns `false` when the lists
