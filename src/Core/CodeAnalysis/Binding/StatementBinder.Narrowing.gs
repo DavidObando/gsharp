@@ -5247,19 +5247,40 @@ internal partial class StatementBinder {
             )
         )
 
-        /// ADR-0208 R19 (#5593): whether the emitted test of [`pattern`](paramref) loads its input value. A discard
-        /// without a variable loads nothing, and `and`, `or` and `not` load it only through an operand that does.
+        /// ADR-0208 R19 (#5593): whether the emitted test of [`pattern`](paramref) loads its input value, as
+        /// `EmitPattern` decides it. A discard without a variable loads nothing. Nor does `{}` on a value type that
+        /// is not nullable, which `EmitPropertyPattern` emits as nothing (no input local, no null test, no member).
+        /// `and`, `or` and `not` load it only through an operand that does. Every other pattern loads it.
         private func PatternReadsInput(pattern BoundPattern) bool -> switch pattern {
             case BoundDiscardPattern{Variable: nil}: false
+            case property is BoundPropertyPattern: property.InputVariable != nil ||
+                property
+                .Fields
+                .Length > 0 ||
+                property.Type is NullableTypeSymbol ||
+                !GSharp
+                .Core
+                .CodeAnalysis
+                .Emit
+                .ReflectionMetadataEmitter
+                .IsValueTypeSymbol(property.Type)
             case binary is BoundBinaryPattern: PatternReadsInput(binary.Left) || PatternReadsInput(binary.Right)
             case negation is BoundNotPattern: PatternReadsInput(negation.Pattern)
             default: true
         }
 
-        // The default of a reference type or of a nullable type is null. A value type, or a type whose CLR type is
-        // not known yet, does not count.
-        private func IsNullDefault(type TypeSymbol) bool -> type is NullableTypeSymbol ||
-            (type.ClrType is {} clrType && !clrType.IsValueType)
+        // The default of a type is null for every instantiation only for a value-type `Nullable<T>` or a known
+        // reference type. A type parameter (`default(T?)` is zero for `T` = `int32`) or a value type does not count.
+        private func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
+            NullableLifting.IsValueTypeNullable(nullable) || IsKnownReferenceType(nullable.UnderlyingType)
+        } else {
+            IsKnownReferenceType(type)
+        }
+
+        private func IsKnownReferenceType(type TypeSymbol) bool -> type is not TypeParameterSymbol &&
+            type.ClrType is {} clrType &&
+            !clrType.IsValueType &&
+            !clrType.IsGenericParameter
 
         /// ADR-0208 R19 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals`
         /// test (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual

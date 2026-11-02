@@ -411,7 +411,9 @@ open class Adr0208NarrowingCorpusTests {
                 "y20_5593_discard_element_reads_no_element_R19",
                 "y21_5593_list_pattern_element_reads_an_unlisted_indexer_R19",
                 "y22_5593_composite_discard_element_reads_no_element_R19",
-                "y23_5593_reference_default_pattern_on_a_nullable_object_keeps_the_fact_R19"
+                "y23_5593_reference_default_pattern_on_a_nullable_object_keeps_the_fact_R19",
+                "y24_5593_default_of_a_type_parameter_is_not_null_R19",
+                "y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19"
             },
             names
         )
@@ -7711,6 +7713,49 @@ func Run(o object?) int32 {
     return 2
 }
 Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"y24_5593_default_of_a_type_parameter_is_not_null_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run[T](e E) int32 {
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    let o object? = e
+    if x == nil { return 0 }
+    if o is default(T) {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run[int32](E{}))`, "GS0158@20:18", "reject", "", "R19"}
+            yield[]object{"y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    let d = Dictionary[int32, int32]()
+    d[0] = 1
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if d is [{}] {
+        return x.Value
+    }
+    clear()
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R19"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
