@@ -162,20 +162,48 @@ namespace Demo
         Assert.DoesNotContain("Item!!", printed)
     }
 
-    /// The local query reads each link of an alias chain once. Every link asks the query about the
-    /// link before it twice, so without the kept answers the work doubles with each link.
+    /// The local query reads each link of a chain of composed initializers once. Every link names
+    /// the link before it in both arms, so without the kept answers the work doubles with each link.
     @Fact
-    func AliasChain_TranslatesInLinearWork() {
+    func ComposedAliasChain_TranslatesInLinearWork() {
         let body = StringBuilder("var a0 = p; ")
         for var i = 1; i <= 64; i++ {
-            body.Append("var a$i = a${i - 1}; ")
+            body.Append("var a$i = flag ? a${i - 1} : a${i - 1}; ")
         }
         let source = "namespace Demo { public class Node { } public static class Use { " +
-            "public static string Chain(Node p) { " +
+            "public static string Chain(Node p, bool flag) { " +
             body.ToString() + "object o = a64; return o.ToString() + a64.ToString(); } } }"
         let translation = Task.Run(() -> Translate(source).Printed)
-        Assert.True(translation.Wait(TimeSpan.FromMinutes(2)), "The translation of a 64-link alias chain must finish.")
+        Assert.True(translation.Wait(TimeSpan.FromMinutes(2)), "The translation of a 64-link chain must finish.")
         Assert.Contains("let o object = a64\n", translation.Result)
+    }
+
+    /// A composed initializer whose arms G# types non-null (a checked cast `cast[Node](entry.Item)`
+    /// and an un-widened parameter) gives the local non-null storage, so a widened value stored into
+    /// it keeps its bridge, as before. The bridge throws if the value is null, as `n = entry.Item!!`
+    /// does for any non-null local.
+    @Fact
+    func StoreIntoALocalOfNonNullComposedStorage_KeepsItsBridge() {
+        let (printed, compilation) = Translate(`
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Mixed(Entry entry, Node fallback, bool flag)
+        {
+            var n = flag ? (Node)entry.Item : fallback;
+            n = entry.Item;
+            return n.ToString();
+        }
+        public static string Run() => Mixed(new Entry(new Node(), 1), new Node(), false) + " " + Mixed(new Entry(new Node(), 1), new Node(), true);
+    }
+}`)
+        Assert.Equal("node node", RunCSharp(compilation).Trim())
+        Assert.Equal("node node", CompileAndRun(printed).Trim())
+        Assert.Contains("        n = entry.Item!!\n        return n.ToString()\n", printed)
     }
 
     shared {

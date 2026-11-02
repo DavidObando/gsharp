@@ -710,8 +710,8 @@ partial class CSharpToGSharpTranslator {
         /// declared local from its initializer. A local that a deconstruction or an `out` argument
         /// declares holds the widened declaration it receives (#5561).
         private func LocalHoldsPromotedValue(local ILocalSymbol) bool {
-            // The initializer query reads an alias chain twice for each link, so the answers are
-            // kept (`LocalHoldsPromotedValueAnswers`).
+            // A composed initializer can name the same local in more than one arm, so the answers
+            // are kept (`LocalHoldsPromotedValueAnswers`).
             if this.state.LocalHoldsPromotedValueAnswers.TryGetValue(local, out var answer) {
                 return answer
             }
@@ -729,12 +729,36 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInitializer}} {
-                // The receiver rule also reads the arms of a composed initializer (`a ?? b`, `c ? a : b`).
-                return this.IsNullablePromotedValue(localInitializer) || this.ReceiverValueIsPromotedNullable(
-                    localInitializer
-                )
+                return this.InitializerHoldsPromotedValue(localInitializer)
             }
             return this.IsTranslatorWidenedDeclaration(local)
+        }
+
+        // Issue #5602: whether G# infers `T?` from the initializer of a local. A composed initializer
+        // (`a ?? b`, `c ? a : b`, a switch expression) takes the type of its result arms, so each arm
+        // is asked `IsNullablePromotedValue`, which reads its taint. A checked cast arm is `T` in G#
+        // whatever its operand is (#3843).
+        private func InitializerHoldsPromotedValue(initializer ExpressionSyntax) bool {
+            switch initializer {
+                case parenthesized is ParenthesizedExpressionSyntax {
+                    return this.InitializerHoldsPromotedValue(parenthesized.Expression)
+                }
+                case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
+                    return this.InitializerHoldsPromotedValue(coalesce.Right)
+                }
+                case conditional is ConditionalExpressionSyntax {
+                    return this.InitializerHoldsPromotedValue(conditional.WhenTrue) ||
+                        this.InitializerHoldsPromotedValue(conditional.WhenFalse)
+                }
+                case switchExpression is SwitchExpressionSyntax {
+                    return switchExpression.Arms.Any(
+                        (arm SwitchExpressionArmSyntax) -> this.InitializerHoldsPromotedValue(arm.Expression)
+                    )
+                }
+                default {
+                    return this.IsNullablePromotedValue(initializer)
+                }
+            }
         }
 
         /// Issue #5602: whether a store into the existing local [`target`](paramref) takes a `T?` value
