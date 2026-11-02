@@ -1332,7 +1332,13 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   arms merge into the outermost expression, and an expression with more than eight arms is one site that can run
   code. A generic candidate whose type arguments a call without type arguments cannot infer is not applicable, and
   an index in a constant pattern of a variable (`n is xs[key]`) is an index access. A function-literal argument proves no
-  candidate by identity, and a base call (`base.Touch()`) is a call that the walker does not resolve.
+  candidate by identity, and a base call (`base.Touch()`) is a call that the walker does not resolve. A typed
+  binding of `if let`, `guard let` or `while let` (`if let b DateTimeOffset = maybe`) is a conversion site against its
+  type, and the initializers of a `while let` see the enclosing names, not its own bindings, as its binder does. A call
+  through a type name (`Sink.Use(dt)`) takes only the static candidates, and a call through a value only the instance
+  candidates. A loop in the then-branch of a condition removes facts that the else-branch still has, so its entry
+  removals go into the R18 condition journal and come back for the else-branch, as a condition's removals do
+  (`if flag { while flag { } } else { return s.Length }`).
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
