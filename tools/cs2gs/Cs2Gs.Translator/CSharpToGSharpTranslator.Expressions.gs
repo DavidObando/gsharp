@@ -4926,6 +4926,55 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
+            // ADR-0208 (#5629): a `default` section that is not last runs after the case tests and guards of the
+            // later sections, so their effects reach its body.
+            for var enclosing Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = use.Parent;
+                enclosing != nil &&
+                enclosing != $scope;
+                enclosing = enclosing!!
+                .Parent {
+                if enclosing is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchSectionSyntax section &&
+                    !section
+                    .Span
+                    .Contains(narrowingGuard.Span) && section.Labels.Any(
+                    (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .DefaultSwitchLabelSyntax
+                ) &&
+                    section.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchStatementSyntax switchStatement &&
+                    switchStatement
+                    .Sections
+                    .Any(
+                    (
+                        later Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax
+                    ) -> later.SpanStart > section.SpanStart &&
+                        later
+                        .Labels
+                        .Any(
+                        (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label.DescendantNodes(
+                            OutsideNestedFunctions
+                        )
+                            .Any(
+                            (node Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(node) ||
+                                WritesReferenceStorage(node)
+                        )
+                    )
+                ) {
+                    return true
+                }
+            }
             // A construction runs before the initializer that holds the read (`new T { { current } }`).
             for var enclosing Microsoft
                 .CodeAnalysis

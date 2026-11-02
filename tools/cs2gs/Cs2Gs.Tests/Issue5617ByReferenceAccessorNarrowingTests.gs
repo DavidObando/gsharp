@@ -487,6 +487,61 @@ public class Demo
         Assert.Contains("return s.Length + 3", printed)
     }
 
+    /// A `default` section that is not last runs after the tests and guards of the later cases (#5629), so a later
+    /// guard or property case with an accessor removes the fact for the `default` body. A later constant case on
+    /// `int32` keeps it.
+    @Fact
+    func RefParameter_ReadInADefaultBeforeAnAccessorCase_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+public sealed class Box { private int count; public int P => ++count; }
+public class Demo
+{
+    public static int Guard(ref string? s, int n, Lazy<int> lazy)
+    {
+        if (s == null) return 0;
+        switch (n)
+        {
+            default:
+                return s.Length;
+            case 1 when lazy.Value > 0:
+                return 0;
+        }
+    }
+    public static int Property(ref string? s, object o)
+    {
+        if (s == null) return 0;
+        switch (o)
+        {
+            default:
+                return s.Length + 1;
+            case Box { P: 1 }:
+                return 0;
+        }
+    }
+    public static int Constant(ref string? s, int n)
+    {
+        if (s == null) return 0;
+        switch (n)
+        {
+            default:
+                return s.Length + 2;
+            case 1:
+                return 0;
+        }
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Guard(ref text, 2, new Lazy<int>(() => 1)) + "," + Property(ref text, new Box()) + "," +
+            Constant(ref text, 2);
+    }
+}`)
+        Assert.Contains("return s!!.Length\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("return s!!.Length + 1", printed)
+        Assert.Contains("return s.Length + 2", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.
