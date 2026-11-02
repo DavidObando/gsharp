@@ -526,7 +526,7 @@ jobs:
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \
             --banked tools/cs2gs/apps-nightly-banked.json \
-            --expect "$EXPECTED_LEGS" \
+            --expect "${EXPECTED_LEGS,,}" \
             --jobs "$RUNNER_TEMP/jobs.json" \
             --leg-job "oahu=app (oahu)" \
             --leg-job "code-exploder=app (code-exploder)" \

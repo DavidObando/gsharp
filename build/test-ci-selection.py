@@ -576,7 +576,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("legs:", nightly)
         self.assertNotIn("replace(", nightly)
         self.assertNotIn("matrix.app", job(nightly, "app").split("runs-on:")[0].split("if:")[1])
-        self.assertIn('--expect "$EXPECTED_LEGS"', job(nightly, "gate"))
+        self.assertIn('--expect "${EXPECTED_LEGS,,}"', job(nightly, "gate"))
         self.assertNotIn("Build cs2gs (Release)", job(nightly, "csharp-validate"))
         selfmig = (ROOT / "build/selfmig-common.sh").read_text()
         self.assertIn("SELFMIG_PREREQUISITES_RESTORED", selfmig)
