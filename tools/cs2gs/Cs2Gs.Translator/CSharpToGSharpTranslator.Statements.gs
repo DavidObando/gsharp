@@ -3499,6 +3499,11 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
+            // Issue #3865: gsc imports the value of an oblivious indexer from a
+            // prebuilt library as a platform type, which takes a nullable value.
+            if this.IsImportedObliviousNullableTarget(leftSymbol) {
+                return false
+            }
             // An `[AllowNull]` indexer, also one that another project of the run
             // emits (#4356), is promoted, so it takes a nullable value.
             return leftSymbol is not IPropertySymbol indexer || !this.ShouldPromoteToNullableReference(indexer)

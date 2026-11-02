@@ -29,11 +29,14 @@ import Xunit
 /// | `(list[0], i) = entry` into `List<Node>` | `list[0] = listValue`, GS0155 | `list[0] = listValue!!`, as `list[0] = entry.Item!!` |
 /// | a `Node?[]`, `List<Node?>` or a widened array local | no `!!` | unchanged: the element accepts null |
 /// | another project's `[AllowNull]` indexer | no `!!` | unchanged: the indexer is promoted (#4356), so the slot is `T?` |
+/// | an oblivious indexer of a prebuilt library outside the run | plain `h[0] = entry.Item!!` | no `!!` in either form: gsc imports the slot as a platform type (#3865) |
 /// @remarks Mutation witnesses (ADR-0154): the first two tests fail on 21e3f30fa (GS0155) and when the
 /// element arm of `BridgeDeconstructedElementStore` keeps the unbridged store. The nullable-element
 /// test throws `NullReferenceException` when that arm asks `TargetWillRemainNonNullableReference`
 /// instead of the element store query, and when the query does not ask `IsNullableArrayElementAccess`.
-/// The `[AllowNull]` test throws when the query does not ask whether the indexer is promoted.
+/// The `[AllowNull]` test throws when the query does not ask whether the indexer is promoted. The
+/// imported oblivious indexer test throws when the query does not ask
+/// `IsImportedObliviousNullableTarget`.
 open class Issue5595DeconstructedElementStoreTests {
     /// A widened element stored into a `Node[]` element is bridged, as `arr[0] = entry.Item` is.
     @Fact
@@ -203,6 +206,52 @@ namespace Demo.App
         Assert.DoesNotContain("entry.Item!!", appPrinted)
     }
 
+    /// An indexer of a prebuilt nullable-oblivious library outside the run is imported with a platform
+    /// type value, which accepts null, so neither the deconstruction store nor the plain store asserts
+    /// the element, as for an imported oblivious property (#3865), and the null that C# stores is stored.
+    @Fact
+    func StoreThroughAnImportedObliviousIndexer_IsNotBridged() {
+        let library = Compile("Ext", `
+namespace Ext
+{
+    public class Node { }
+    public class Holder
+    {
+        private Node stored;
+        public Node this[int index] { get { return stored; } set { stored = value; } }
+        public bool IsEmpty => stored == null;
+    }
+}`, nil)
+        let app = Compile("App", `
+namespace Demo.App
+{
+    public record Entry(Ext.Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static string Store(Entry entry)
+        {
+            var h = new Ext.Holder();
+            int i;
+            (h[0], i) = entry;
+            return h.IsEmpty + ":" + i;
+        }
+        public static string Plain(Entry entry)
+        {
+            var h = new Ext.Holder();
+            h[0] = entry.Item;
+            return h.IsEmpty.ToString();
+        }
+        public static string Run() => Store(Empty()) + " " + Plain(Empty());
+    }
+}`, Emit(library))
+        let appPrinted = Translate(app, []CSharpCompilation{app})
+        Assert.Equal("True:0 True", CompileAndRun([]string{appPrinted}, "Demo.App.Use.Run()", library).Trim())
+        Assert.Contains("Item Node?", appPrinted)
+        Assert.DoesNotContain("Value!!", appPrinted)
+        Assert.DoesNotContain("entry.Item!!", appPrinted)
+    }
+
     private func Translate(source string) string {
         let compilation = Compile("Snippet", source, nil)
         return Translate(compilation, []CSharpCompilation{compilation})
@@ -251,7 +300,11 @@ namespace Demo.App
         return MetadataReference.CreateFromStream(image)
     }
 
-    private func CompileAndRun(printedFiles IReadOnlyList[string], callExpression string) string {
+    private func CompileAndRun(
+        printedFiles IReadOnlyList[string],
+        callExpression string,
+        importedLibrary CSharpCompilation? = nil
+    ) string {
         let compiler string? = FindCompiler()
         Assert.True(compiler != nil, "gsc.dll must be built before running this test.")
         let workDir = Path.Combine(AppContext.BaseDirectory, "issue-5595-e2e", Guid.NewGuid().ToString("N"))
@@ -259,6 +312,12 @@ namespace Demo.App
         try {
             let dllPath = Path.Combine(workDir, "Snippet.dll")
             let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath"}
+            if importedLibrary != nil {
+                let libraryPath = Path.Combine(workDir, importedLibrary.AssemblyName + ".dll")
+                using let image = File.Create(libraryPath)
+                Assert.True(importedLibrary.Emit(image).Success)
+                arguments.Add("/reference:$libraryPath")
+            }
             for var i = 0; i < printedFiles.Count; i++ {
                 let gsPath = Path.Combine(workDir, "Unit$i.gs")
                 File.WriteAllText(gsPath, printedFiles[i])
