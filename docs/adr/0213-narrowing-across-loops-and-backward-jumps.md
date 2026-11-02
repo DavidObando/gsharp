@@ -1316,13 +1316,19 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   returned value, a by-value argument against the parameters of the callee's candidates) runs a conversion operator
   when the conversion classifier finds one between the types of its value and its target
   (`HasUserDefinedImplicitConversion`); an argument is taken to bind a candidate that takes every argument without a
-  conversion operator, and a call that the walker cannot check runs one (a callee or an argument that does not
+  conversion operator, and a call that the walker cannot check runs one. Among the candidates of a call, one that
+  takes every argument by identity is the one that binds; otherwise a candidate that takes an argument through a
+  conversion operator can be the better one (`Accept(Payload)` over `Accept(object)`, `Consume(ReadOnlySpan[char])`
+  for `"ab"`), so the call runs one. A string concatenation or an interpolated string has the type `string` here.
+  A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
   built-in types can return a value of another type, so its converted result runs one (`n = n + Pick(m)` with a
   generic `Pick`); an index argument is checked the same way against `int32` (or a `System.Index`) for an array, a
   slice or a string and against the indexers of an imported type, an element of an array, a stack allocation or a map
-  literal against its element, key or value type, and an allocation length against `int32`; `nil` runs one when its
+  literal against its element, key or value type (a nested array literal stored into an array element is not,
+  since no conversion operator converts between array types), an allocation length and a range bound or `^`
+  operand against `int32`; `nil` runs one when its
   target or parameter is a non-nullable value type; the parameter types of a candidate have the receiver's type
   arguments substituted (`Add(T)` on `Dictionary[Token, DateTimeOffset]`), a type parameter takes an argument without
   a conversion only when the call infers it (`Keep(dt)`, not `Keep[DateTimeOffset](dt)`), and a type parameter of the
