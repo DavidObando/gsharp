@@ -7,9 +7,10 @@
   },
   "runtime": {
     "owner": "Gsharp.Runtime.Values, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null",
-    "compiler": "published Gsharp.NET.Sdk 0.5.212",
-    "certificate_sha256": "A5AB56A01AD8B7616B8ACB4A28E8C16042F95FB54F4AD51C5C43FC6994075814",
-    "renewal": "F2a adds ClrArrayCopies declarations/references. Independently resolved old/new complete return closures are identical, including by-value signatures, locals, EH, offsets and signed CoreLib10 targets. V1 carrier definitions and slice sources are unchanged. No new method or diagnostic is admitted.",
+    "compiler": "published Gsharp.NET.Sdk 0.5.460-g21e3f30fa3",
+    "certificate_sha256": "53F7DA756296143D0A75614CB77F44F73B041C89228800D21DF7C698256FC931",
+    "renewal": "#5244, after the #5327 renewal (556C811C... to A5AB56A0...): the bootstrap pin moves from 0.5.212 to 0.5.460-g21e3f30fa3 (#5625). The new compiler drops an unused trailing Slice<T> local from ReadOnlySlice`1::AsSpan, so its tiny header changes max stack, init-locals and the local signature. Its token-resolved IL instructions, signature, offsets and targets are unchanged. Slice`1::AsSpan and Slice`1::get_Owner are unchanged. Duplicate MemberRef, TypeSpec and MethodSpec rows are removed; the distinct resolved rows are identical. ILVerify reports the same two ReturnPtrToStack errors at the same offsets. No new method or diagnostic is admitted.",
+    "previous_renewal": "F2a adds ClrArrayCopies declarations/references. Independently resolved old/new complete return closures are identical, including by-value signatures, locals, EH, offsets and signed CoreLib10 targets. V1 carrier definitions and slice sources are unchanged. No new method or diagnostic is admitted.",
     "serialization": "IlVerifyFalsePositives.RuntimeReturnProof",
     "closure": [
       "Gsharp.Values.Slice`1::get_Owner(): T[] = owner ?? Array.Empty<T>()",
