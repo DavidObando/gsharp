@@ -3883,7 +3883,66 @@ partial class CSharpToGSharpTranslator {
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool -> this.GenericResultInfersNilableThroughDroppedByRefSuppression(expression) ||
             this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
-            this.ImportedGenericTupleElementRequiresAssertion(expression)
+            this.ImportedGenericTupleElementRequiresAssertion(expression) ||
+            this.GenericResultInfersNilableFromItsArgument(expression)
+
+        // Issue #5582: a call whose result is its own method type parameter, without explicit type arguments.
+        // G# infers that parameter from the argument (or the reduced extension receiver) that supplies it. When
+        // that value is `T?` only in G#, the emitted result is `T?` too, although C# infers it non-null.
+        private func GenericResultInfersNilableFromItsArgument(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            if Unparenthesize(expression) is not InvocationExpressionSyntax invocation ||
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is not IMethodSymbol method ||
+                !method.IsGenericMethod {
+                return false
+            }
+            var callee = invocation.Expression
+            if callee is MemberAccessExpressionSyntax calleeAccess {
+                callee = calleeAccess.Name
+            } else if callee is MemberBindingExpressionSyntax calleeBinding {
+                callee = calleeBinding.Name
+            }
+            if callee is GenericNameSyntax {
+                return false
+            }
+            let definition = (method.ReducedFrom ?? method).OriginalDefinition
+            if definition.ReturnType is not ITypeParameterSymbol returnParameter ||
+                returnParameter.TypeParameterKind != TypeParameterKind.Method {
+                return false
+            }
+            if method.ReducedFrom != nil && definition.Parameters.Length > 0 && SymbolEqualityComparer.Default.Equals(
+                definition.Parameters[0].Type,
+                returnParameter
+            ) &&
+                invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
+                this.IsNilableOnlyInEmittedGSharp(receiverAccess.Expression) {
+                return true
+            }
+            let offset = if method.ReducedFrom != nil {
+                1
+            } else {
+                0
+            }
+            for argument in invocation.ArgumentList.Arguments {
+                let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
+                if parameter == nil {
+                    continue
+                }
+                let ordinal = parameter.Ordinal + offset
+                if ordinal < definition.Parameters.Length && SymbolEqualityComparer.Default.Equals(
+                    definition.Parameters[ordinal].Type,
+                    returnParameter
+                ) &&
+                    this.IsNilableOnlyInEmittedGSharp(argument.Expression) {
+                    return true
+                }
+            }
+            return false
+        }
 
         /// Issue #5582: finds the value that a `var` pattern capture holds in the emitted G#.
         /// @param local The capture.

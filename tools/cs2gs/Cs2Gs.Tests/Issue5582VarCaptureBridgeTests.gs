@@ -322,6 +322,42 @@ namespace Demo
         RunsAs(printed, "True True True 1 1 1 1")
     }
 
+    /// G# infers a generic result from the argument that supplies it. `Id(Volatile.Read(ref cache!))` and
+    /// `cache.Echo()` over a capture are `Dictionary?` in G#, so a capture of either keeps its `!!` in the
+    /// switch-arm, `case` and `is` forms.
+    @Fact
+    func AVarCaptureOfAnInferredGenericResult_KeepsItsAssertion() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class Ext { public static T Echo<T>(this T value) => value; }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
+        static T Id<T>(T x) => x;
+        static int Arm() => Id(Volatile.Read(ref cache!)) switch { var c => c.Count };
+        static int Case()
+        {
+            switch (Id(Volatile.Read(ref cache!)))
+            {
+                case var c: return c.Count;
+            }
+        }
+        static int Is() => Id(Volatile.Read(ref cache!)) is var c ? c.Count : -1;
+        static int Receiver() => Volatile.Read(ref cache!) is var c ? c.Echo() switch { var e => e.Count } : -1;
+        public static string Run() => Arm() + " " + Case() + " " + Is() + " " + Receiver();
+    }
+}`)
+        Assert.Contains("case var c: c!!.Count", printed)
+        Assert.Contains("return c!!.Count", printed)
+        Assert.Contains("is var c { c!!.Count }", printed)
+        Assert.Contains("case var e: e!!.Count", printed)
+        RunsAs(printed, "1 1 1 1")
+    }
+
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a
     /// local initialized from one. A capture has no recorded storage, so its store is not bridged (#5605).
     /// The taint widens a local that receives the element, so its store is not bridged either. Each form
