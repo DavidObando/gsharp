@@ -114,7 +114,7 @@ class SdkCompileRunner {
                 args,
                 projectDirectory,
                 MirroredBuildTimeout,
-                IsolatedNugetEnvironment(artifactDirectory)
+                IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
             )
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty)
             var diagnostics = GscInvoker.ParseDiagnostics(result.Output)
@@ -954,7 +954,7 @@ class SdkCompileRunner {
                     },
                     projectDirectory,
                     timeout,
-                    MirroredTestEnvironment(artifactDirectory, sourceRoot)
+                    MirroredTestEnvironment(SharedMirroredNugetRoot(artifactDirectory), sourceRoot)
                 )
             } finally {
                 RestoreTemporaryBuildProps(temporaryBuildProps)
@@ -1222,13 +1222,14 @@ class SdkCompileRunner {
             projectNugetConfig string,
             warningsNotAsErrors string? = nil
         ) IReadOnlyList[string] {
+            let nugetRoot = SharedMirroredNugetRoot(artifactDirectory)
             let args = List[string]{
                 "build",
                 generatedProjectPath,
                 "-c",
                 config ?? "Release",
                 "-p:RestoreConfigFile=" + projectNugetConfig,
-                "-p:RestorePackagesPath=" + Path.Combine(artifactDirectory, ".nuget-packages"),
+                "-p:RestorePackagesPath=" + Path.Combine(nugetRoot, ".nuget-packages"),
                 "-p:Cs2GsArtifactRoot=" + artifactDirectory,
                 "-p:GeneratePackageOnBuild=false"
             }
@@ -1236,6 +1237,16 @@ class SdkCompileRunner {
                 args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors)
             }
             return args
+        }
+
+        internal func SharedMirroredNugetRoot(artifactDirectory string) string {
+            let full = Path.GetFullPath(artifactDirectory)
+            let parent string? = Path.GetDirectoryName(full)
+            return if string.IsNullOrEmpty(parent) {
+                full
+            } else {
+                parent!!
+            }
         }
 
         private func ParseRelayedErrors(output string, pattern Regex) IReadOnlyList[GscDiagnostic] {
@@ -1326,7 +1337,7 @@ class SdkCompileRunner {
                 },
                 projectDirectory,
                 TimeSpan.FromMinutes(2),
-                IsolatedNugetEnvironment(artifactDirectory)
+                IsolatedNugetEnvironment(SharedMirroredNugetRoot(artifactDirectory))
             )
             if result.ExitCode != 0 {
                 return nil
