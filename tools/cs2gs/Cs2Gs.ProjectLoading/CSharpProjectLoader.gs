@@ -253,10 +253,17 @@ shared class CSharpProjectLoader {
         return LoadedCSharpProject(compilation, documents, loadDiagnostics)
     }
 
+    private let CachedRuntimeReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[IReadOnlyList[MetadataReference]](
+        BuildRuntimeReferences,
+        LazyThreadSafetyMode.ExecutionAndPublication
+    )
+
     /// Builds the default metadata reference set from the running runtime's
     /// trusted platform assemblies (the shared framework).
     /// @returns The metadata references for the current runtime.
-    func RuntimeReferences() IReadOnlyList[MetadataReference] {
+    func RuntimeReferences() IReadOnlyList[MetadataReference] -> CachedRuntimeReferences.Value
+
+    private func BuildRuntimeReferences() IReadOnlyList[MetadataReference] {
         let tpa string? = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string
         if string.IsNullOrEmpty(tpa) {
             throw InvalidOperationException(

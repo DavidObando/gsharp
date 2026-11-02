@@ -577,6 +577,15 @@ namespace Extra { internal class RootKeep { } }
         )
     }
 
+    @Fact
+    func RuntimeReferences_ReusesCachedMetadataReferencesAcrossCalls() {
+        let first = CSharpProjectLoader.RuntimeReferences()
+        let second = CSharpProjectLoader.RuntimeReferences()
+        Assert.NotEmpty(first)
+        Assert.Same(first, second)
+        Assert.Same(first[0], second[0])
+    }
+
     shared {
         private func RunDotnetBuild(projectPath string) {
             let startInfo = ProcessStartInfo("dotnet", "build \"$projectPath\""){
