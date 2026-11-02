@@ -968,8 +968,8 @@ Details per row:
   does not rely on the lowering of an auto property to its backing field inside its declaring type, which skips an
   override (#5630). Not in this row: a call in an earlier operand does not remove a fact read by a later operand of
   the same expression (#5637, the same for every call), and an auto property that is not `open` but implements an
-  interface is emitted `virtual` without `final`, so another assembly can override it (#5638). Corpus rows z01 to
-  z17. Impact: no new diagnostic in the 18 projects of the repository. cs2gs does not
+  interface is emitted `virtual` without `final`, so another assembly can override it (#5638). A `sealed class` admits subclasses in its package,
+  so it can have an override (row z18). Corpus rows z01 to z18. Impact: no new diagnostic in the 18 projects of the repository. cs2gs does not
   change: it counts every C# property read as code for a closure-assigned local, a member path gets `!!`, and a
   by-reference read after any accessor call is #5617.
 - **R19 (#5593).** The construct table lists `BoundConstantPattern` and `BoundListPattern` as `call` when they

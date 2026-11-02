@@ -433,7 +433,8 @@ open class Adr0208NarrowingCorpusTests {
                 "z14_5599_open_auto_property_read_removes_a_closure_assigned_fact_R14",
                 "z15_5599_initializer_of_a_construction_keeps_the_fact_R14",
                 "z16_5599_property_pattern_on_a_sealed_receiver_keeps_the_fact_R14",
-                "z17_5599_constructor_store_of_a_get_only_auto_override_keeps_the_fact_R14"
+                "z17_5599_constructor_store_of_a_get_only_auto_override_keeps_the_fact_R14",
+                "z18_5599_sealed_hierarchy_receiver_can_have_an_overriding_subclass_R14"
             },
             names
         )
@@ -8224,6 +8225,31 @@ open class Mid : Base {
 var g C? = C{}
 let m = Mid()
 Console.WriteLine(m.P)`, "", "run", "1|1", "R14"}
+            yield[]object{"z18_5599_sealed_hierarchy_receiver_can_have_an_overriding_subclass_R14", `import System
+class Box {
+    shared {
+        var G string? = "x"
+    }
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+sealed class Mid : Base { }
+class Leaf : Mid {
+    override prop Auto int32 {
+        get {
+            Box.G = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Run(ref text string?, m Mid) int32 {
+    if text == nil { return 0 }
+    let n = m.Auto
+    return text.Length + n
+}
+Console.WriteLine(Run(ref Box.G, Leaf()))`, "GS0158@23:17", "reject", "", "R14"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
