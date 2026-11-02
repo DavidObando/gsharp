@@ -1196,10 +1196,13 @@ internal partial class ExpressionBinder {
         if syntax.Expression == nil {
             return BindValuelessBlockExpression(syntax, canBeVoid)
         }
-        // Issue #5613: a block value whose consumer does not decide its narrowed trailing value (no capture and no
-        // target) gives that value its own type, as `let t = s` does, so the use is recorded where it binds.
+        // Issue #5613: a block value without a capture or a target keeps the capture of its narrowed trailing read,
+        // so the conversion of the block decides it (cref:ConversionClassifier.ResolveNarrowedValue).
+        var trailingRead NarrowedBranchValue? = nil
         let capture = if captureValue == nil && targetType == nil {
-            (read NarrowedBranchValue) -> RecordNarrowedValueAtItsType(read)
+            (read NarrowedBranchValue) -> {
+                trailingRead = read
+            }
         } else {
             captureValue
         }
@@ -1207,7 +1210,11 @@ internal partial class ExpressionBinder {
         if syntax.Statements.IsDefaultOrEmpty {
             let expression = BindBranchValue(syntax.Expression!!, nil, targetType, capture, canBeVoid)
             return if preserveEmptyBlock && !(expression is BoundErrorExpression) {
-                cast[BoundExpression](BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression))
+                cast[BoundExpression](
+                    BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression){
+                        TrailingNarrowedRead = trailingRead
+                    }
+                )
             } else {
                 expression
             }
@@ -1230,7 +1237,7 @@ internal partial class ExpressionBinder {
         if boundExpression is BoundErrorExpression {
             return boundExpression
         }
-        return BoundBlockExpression(syntax, boundStatements, boundExpression)
+        return BoundBlockExpression(syntax, boundStatements, boundExpression){TrailingNarrowedRead = trailingRead}
     }
 
     /// Issue #4965 / #4966 (ADR-0202): binds a block expression that has no
@@ -1403,7 +1410,7 @@ internal partial class ExpressionBinder {
         }
         let commonType = Invariant.Required(target, "a conditional branch has a result type", expression: "target")
         let value = if narrowedRead is {} read {
-            ResolveNarrowedBranchValue(branch, read, commonType)
+            conversions.ResolveNarrowedValue(branch, read, commonType)
         } else {
             branch
         }
@@ -1514,74 +1521,6 @@ internal partial class ExpressionBinder {
                 binderCtx.CaptureBackwardGotoNarrowingUse(narrowedPath)
             )
         )
-    }
-
-    /// Issue #5613: decides the backward `goto` check of a narrowed branch value for the common type, with the
-    /// decision of every other conversion (cref:ConversionClassifier.ConversionNeedsNarrowedSource). The declared read
-    /// replaces the narrowed read when the common type takes it (cref:ConversionClassifier.TryRecoverDeclaredMemberRead).
-    /// Otherwise a common type that needs the narrowing records the use from the capture.
-    /// @param branch The bound branch value.
-    /// @param read The narrowed read that the branch yields.
-    /// @param commonType The common type of the branches.
-    /// @returns The branch value, with the declared read when it replaces the narrowed read.
-    private func ResolveNarrowedBranchValue(
-        branch BoundExpression,
-        read NarrowedBranchValue,
-        commonType TypeSymbol
-    ) BoundExpression {
-        if ConversionClassifier.TryRecoverDeclaredMemberRead(
-            read.Value,
-            read.Path,
-            read.NarrowedType,
-            commonType,
-            out var declaredRead
-        ) &&
-            ReplaceBranchLeaf(branch, read.Value, declaredRead!!) is {} recovered {
-            return recovered
-        }
-        if read.Use is {} use && ConversionClassifier.ConversionNeedsNarrowedSource(
-            MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
-            read.NarrowedType,
-            commonType
-        ) {
-            binderCtx.RecordBackwardGotoNarrowingUse(
-                use,
-                read.Location,
-                string.Empty,
-                BackwardGotoNarrowingUseKind.Conversion,
-                commonType
-            )
-        }
-        return branch
-    }
-
-    // Issue #5613: records the use of a captured narrowed read whose value keeps its narrowed type.
-    private func RecordNarrowedValueAtItsType(read NarrowedBranchValue) {
-        if read.Use is {} use {
-            binderCtx.RecordBackwardGotoNarrowingUse(
-                use,
-                read.Location,
-                string.Empty,
-                BackwardGotoNarrowingUseKind.Conversion,
-                read.NarrowedType
-            )
-        }
-    }
-
-    // Issue #5613: replaces the narrowed read that a branch value yields (the value, or a block's trailing value).
-    private func ReplaceBranchLeaf(
-        branch BoundExpression,
-        leaf BoundExpression,
-        replacement BoundExpression
-    ) BoundExpression? {
-        if object.ReferenceEquals(branch, leaf) {
-            return replacement
-        }
-        if branch is BoundBlockExpression block &&
-            ReplaceBranchLeaf(block.Expression, leaf, replacement) is {} trailing {
-            return BoundBlockExpression(block.Syntax, block.Statements, trailing)
-        }
-        return nil
     }
 
     /// Issue #5613: gets the location of the value of a branch: the trailing value of a block, or the branch.

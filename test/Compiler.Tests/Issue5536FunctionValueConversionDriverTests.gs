@@ -1253,8 +1253,8 @@ func Main() {
 
     /// Issue #5613 controls: a branch whose common type is `string?` takes the declared value, so the `goto` that
     /// removes the narrowing gives nil. A `goto` that keeps the narrowing gives a `string`. A branch that proves its
-    /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. Each runs as C#
-    /// runs it.
+    /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. A block value
+    /// converts to its target with the same decision (`let t string? = ({ …; s })`). Each runs as C# runs it.
     @Fact
     func BranchValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1284,6 +1284,13 @@ func Main() {
             ),
             ("if n > 1 { U() } else { ({ s }) }", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
             ("n > 1 ? U() : checked({ s })", "n > 1 ? U() : checked(s)", "s = nil", "t == nil", "t == null"),
+            (
+                "string? = ({\n                n = n + 0\n                s\n            })",
+                "(string?)s",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
             (
                 "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
                 "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
@@ -1331,10 +1338,8 @@ func Main() {
                 .Append(name)
                 .Append("() {\n")
                 .Append(
-                BranchValueBody.Replace("|", "let t = " + form + "\n            Console.Write(" + use + ")").Replace(
-                    "#",
-                    beforeGoto
-                )
+                BranchValueBody.Replace("|", "let t" + Declare(form) + "\n            Console.Write(" + use + ")")
+                    .Replace("#", beforeGoto)
             )
                 .Append("\n}\n")
             oracle
@@ -1352,7 +1357,7 @@ func Main() {
         }
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrue1111111")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111111")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2041,6 +2046,13 @@ class Program {
         for path in OutputPaths(fixture) {
             Assert.False(File.Exists(path))
         }
+    }
+
+    // Issue #5613: gives the declaration of `t` for a form, which can start with a declared type (`string? = …`).
+    private func Declare(form string) string -> if form.StartsWith("string? = ", StringComparison.Ordinal) {
+        " " + form
+    } else {
+        " = " + form
     }
 
     // Issue #5613: compiles a consumer that must fail with GS0155 only, at the value after the `@` marker.

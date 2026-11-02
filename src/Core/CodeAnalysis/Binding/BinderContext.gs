@@ -950,6 +950,17 @@ internal class BinderContext {
         value BoundExpression,
         location TextLocation
     ) {
+        // Issue #5613: a block value holds the use of its narrowed trailing read from the capture where it binds.
+        if value is BoundBlockExpression{TrailingNarrowedRead: {Use: {} trailingUse} trailingRead} {
+            RecordBackwardGotoNarrowingUse(
+                BackwardGotoNarrowingCapture(trailingUse.Path, trailingUse.NarrowedType, trailingUse.Labels, owner),
+                trailingRead.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                trailingRead.NarrowedType
+            )
+            return
+        }
         if !TryGetBackwardGotoNarrowingPath(value, out var path, out var narrowedType) {
             return
         }

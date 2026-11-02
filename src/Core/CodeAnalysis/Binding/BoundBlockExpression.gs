@@ -29,6 +29,14 @@ class BoundBlockExpression : BoundExpression {
         get;
     }
 
+    /// Issue #5613: the narrowed read that the block yields, captured where it binds, when the block has no target
+    /// and no branch capture. The conversion of the block decides its backward `goto` check
+    /// (cref:ConversionClassifier.ResolveNarrowedValue).
+    prop TrailingNarrowedRead NarrowedBranchValue? {
+        get;
+        set;
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
