@@ -414,7 +414,9 @@ open class Adr0208NarrowingCorpusTests {
                 "y23_5593_reference_default_pattern_on_a_nullable_object_keeps_the_fact_R19",
                 "y24_5593_default_of_a_type_parameter_is_not_null_R19",
                 "y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19",
-                "y26_5593_default_of_a_source_class_is_null_R19"
+                "y26_5593_default_of_a_source_class_is_null_R19",
+                "y27_5593_default_of_an_enum_constrained_type_parameter_is_not_null_R19",
+                "y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19"
             },
             names
         )
@@ -7787,6 +7789,54 @@ func Run(o object?) int32 {
     return 2
 }
 Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"y27_5593_default_of_an_enum_constrained_type_parameter_is_not_null_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run[T Enum struct](e E) int32 {
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    let o object? = e
+    if x == nil { return 0 }
+    if o is default(T) {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run[DayOfWeek](E{}))`, "GS0158@20:18", "reject", "", "R19"}
+            yield[]object{"y28_5593_default_of_a_class_constrained_type_parameter_is_null_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run[T class](e E) int32 {
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    let o object? = e
+    if x == nil { return 0 }
+    if o is not default(T) {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run[string](E{}))`, "", "run", "1", "R19"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
