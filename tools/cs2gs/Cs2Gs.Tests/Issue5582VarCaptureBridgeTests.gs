@@ -23,7 +23,8 @@ import Xunit
 /// for a conjunction, `o is Node and var c` emits a redundant `c!!`.
 /// Without the emitted-type check, the by-ref rows do not bind; with it only on the capture's own input, the
 /// composed by-ref row does not bind.
-/// Without `DeclaredSlotAcceptsNil`, the nullable-return row emits `return c!!` and throws.
+/// Without `IsNilableOnlyInEmittedGSharp`, the nullable-return and target rows emit `return c!!` or
+/// `pair = (c!!, 0)` and throw.
 /// The deconstruction row throws `NullReferenceException` when #5598's bridge also asserts a store into a
 /// local with no recorded storage, or records an explicit `Node?` local as non-null.
 open class Issue5582VarCaptureBridgeTests {
@@ -272,6 +273,47 @@ namespace Demo
 }`)
         Assert.DoesNotContain("!!", printed)
         RunsAs(printed, "True True True True")
+    }
+
+    /// A capture of a dropped by-ref suppression is `T?` only in G#, so it takes the target-aware bridge: a
+    /// tuple element, a field and a local that accept nil store the null as C# does, and a non-null parameter
+    /// is asserted in every form.
+    @Fact
+    func ADroppedByRefSuppressionCapture_IsBridgedByItsTarget() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public class Holder { public Dictionary<string, int>? Slot; }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        static int Take(Dictionary<string, int> d) => d.Count;
+        static bool Tuple()
+        {
+            if (Volatile.Read(ref cache!) is var c) { (Dictionary<string, int>? d, int n) pair; pair = (c, 0); return pair.d == null; }
+            return false;
+        }
+        static bool Field(Holder h) { if (Volatile.Read(ref cache!) is var c) { h.Slot = c; } return h.Slot == null; }
+        static bool Local() { if (Volatile.Read(ref cache!) is var c) { Dictionary<string, int>? x; x = c; return x == null; } return false; }
+        static int SinkIs() => Volatile.Read(ref full!) is var c ? Take(c) : -1;
+        static int SinkArm() => Volatile.Read(ref full!) switch { var c => Take(c) };
+        static int SinkCase() { switch (Volatile.Read(ref full!)) { case var c: return Take(c); } }
+        static int SinkLocal() { var d = Volatile.Read(ref full!); return Take(d); }
+        public static string Run() =>
+            Tuple() + " " + Field(new Holder()) + " " + Local() + " " + SinkIs() + " " + SinkArm() + " " + SinkCase() + " " + SinkLocal();
+    }
+}`)
+        Assert.Contains("pair = (c, 0)\n", printed)
+        Assert.Contains("h.Slot = c\n", printed)
+        Assert.Contains("x = c\n", printed)
+        Assert.Contains("is var c { Take(c!!) }", printed)
+        Assert.Contains("case var c: Take(c!!)", printed)
+        Assert.Contains("return Take(d!!)", printed)
+        RunsAs(printed, "True True True 1 1 1 1")
     }
 
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a

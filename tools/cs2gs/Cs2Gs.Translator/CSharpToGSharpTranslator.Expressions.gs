@@ -2887,11 +2887,7 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             if !this.IsPureForwardingPromotedTarget(targetSymbol) && !this.IsActivePatternBinding(value) &&
-                !this.LambdaResultFeedsNullableObservedInvocation(value) && !this.DeclaredSlotAcceptsNil(
-                targetType,
-                targetSymbol,
-                value
-            ) &&
+                !this.LambdaResultFeedsNullableObservedInvocation(value) && !this.IsNilableOnlyInEmittedGSharp(value) &&
                 this
                 .ReceiverNeedsNullForgiveness(value) {
                 return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
@@ -2899,33 +2895,46 @@ partial class CSharpToGSharpTranslator {
             return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol)
         }
 
-        // Issue #5582: a value written into a slot that the C# declares `T?` keeps the nil, as C# stores or
-        // returns it: the return of a declared method, a field, a property, or a parameter. A slot whose type
-        // G# infers from the value (a lambda result, an inferred generic parameter, a local) keeps the
-        // assertion that fixes its type. A slot that cs2gs widens keeps the #2202 assertion of a guarded read.
-        // A dereference is asserted by the receiver bridge, not here.
-        private func DeclaredSlotAcceptsNil(
-            targetType ITypeSymbol?,
-            targetSymbol ISymbol?,
-            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
-        ) bool {
-            let declared = switch targetSymbol {
-                case method is IMethodSymbol: method.MethodKind != MethodKind.AnonymousFunction
-                case parameter is IParameterSymbol: !IsInferredGenericParameterTarget(parameter, value) &&
-                    !this.SinkInfersTypeFromValue(parameter, value)
-                case _ is IFieldSymbol or _ is IPropertySymbol: true
-                default: false
+        // Issue #5582: whether `value` is `T?` only in the emitted G#: C# proves it non-null, but G# gives it
+        // the type of a value that it types `T?`. Such a value is a `var` capture of a maybe-nil input, a
+        // dropped by-ref suppression (`EmittedValueIsNilableBeyondItsCSharpType`), a composed value with such
+        // an operand, or a `var` local that one initializes. It takes the target-aware bridge, so a slot that
+        // accepts nil stores the nil as C# does and a non-null slot is asserted.
+        private func IsNilableOnlyInEmittedGSharp(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
+            var value = value
+            while value is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                value = parenthesized.Expression
             }
-            return declared &&
-                (
-                targetType?.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated ||
-                    targetType
-                    ?.OriginalDefinition
-                    ?.SpecialType == SpecialType.System_Nullable_T
-            )
+            if value == nil {
+                return false
+            }
+            if this.VarCaptureIsNonNull(value) == false || this.EmittedValueIsNilableBeyondItsCSharpType(value) {
+                return true
+            }
+            switch value {
+                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
+                    return this.IsNilableOnlyInEmittedGSharp(conditional.WhenTrue) || this.IsNilableOnlyInEmittedGSharp(
+                        conditional.WhenFalse
+                    )
+                }
+                case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                ) {
+                    return this.IsNilableOnlyInEmittedGSharp(coalesce.Right)
+                }
+            }
+            return this
+                .context
+                .GetSymbolInfo(value)
+                .Symbol is ILocalSymbol local &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{
+                Initializer: {Value: {} initializer},
+                Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax{Type: {IsVar: true}}
+            } &&
+                this.IsNilableOnlyInEmittedGSharp(initializer)
         }
 
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
