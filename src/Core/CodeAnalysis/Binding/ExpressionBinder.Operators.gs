@@ -1431,10 +1431,17 @@ internal partial class ExpressionBinder {
     ) BoundExpression -> BindWithNarrowing(
         narrowing,
         () -> {
-            // A block value, also in parentheses, captures its trailing value in the narrowing of its statements.
+            // A block value, also in parentheses or `checked`/`unchecked`, captures its trailing value in the
+            // narrowing of its statements. These wrappers bind their operand as the value.
             var valueSyntax = syntax
-            while valueSyntax is ParenthesizedExpressionSyntax parenthesized {
-                valueSyntax = parenthesized.Expression
+            while true {
+                if valueSyntax is ParenthesizedExpressionSyntax parenthesized {
+                    valueSyntax = parenthesized.Expression
+                } else if valueSyntax is CheckedExpressionSyntax checkedValue {
+                    valueSyntax = checkedValue.Expression
+                } else {
+                    break
+                }
             }
             let isBlock = valueSyntax is BlockExpressionSyntax
             pendingBlockValueCapture = if isBlock {

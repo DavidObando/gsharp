@@ -1283,6 +1283,7 @@ func Main() {
                 "t == null"
             ),
             ("if n > 1 { U() } else { ({ s }) }", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("n > 1 ? U() : checked({ s })", "n > 1 ? U() : checked(s)", "s = nil", "t == nil", "t == null"),
             (
                 "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
                 "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
@@ -1351,7 +1352,7 @@ func Main() {
         }
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrue1111111")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrue1111111")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2321,7 +2322,8 @@ class Program {
             "n > 1 ? \"t\" : ({\n                n = n + 0\n                @s\n            })",
             "U() ?? {\n                n = n + 0\n                @s\n            }",
             "({\n                n = n + 0\n                @s\n            })",
-            "if n > 1 { \"t\" } else { ({ @s }) }"
+            "if n > 1 { \"t\" } else { ({ @s }) }",
+            "n > 1 ? \"t\" : checked({ @s })"
         }
 
         private const Contract string = `#nullable enable
