@@ -10,9 +10,11 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Threading
 import Xunit
 
 /// Compiles an imported C# contract without migrating its metadata premises.
@@ -35,10 +37,7 @@ internal class CSharpFixture : IDisposable {
             let compilation = CSharpCompilation.Create(
                 Path.GetFileNameWithoutExtension(AssemblyPath),
                 []SyntaxTree{CSharpSyntaxTree.ParseText(source, parseOptions)},
-                ReferenceResolver
-                    .HostTrustedPlatformAssemblyPaths()
-                    .Select((path string) -> MetadataReference.CreateFromFile(path))
-                    .Concat(additionalReferences ?? Array.Empty[MetadataReference]()),
+                HostReferences.Concat(additionalReferences ?? Array.Empty[MetadataReference]()),
                 CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     allowUnsafe: allowUnsafe,
@@ -71,4 +70,18 @@ internal class CSharpFixture : IDisposable {
     )
 
     func Dispose() -> Directory.Delete(DirectoryPath, recursive: true)
+
+    shared {
+        private let CachedHostReferences Lazy[ImmutableArray[MetadataReference]] = Lazy[
+            ImmutableArray[MetadataReference]
+        ](
+            () -> ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .ToImmutableArray(),
+            LazyThreadSafetyMode.ExecutionAndPublication
+        )
+
+        internal prop HostReferences ImmutableArray[MetadataReference] -> CachedHostReferences.Value
+    }
 }

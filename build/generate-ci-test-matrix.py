@@ -103,8 +103,10 @@ SHARDED_PROJECTS = {
 # make the cheapest shard in the matrix.
 GROUPED_PROJECTS = (
     "test/Extensions.Tests/Extensions.Tests.gsproj",
+    "test/Formatting.Tests/Formatting.Tests.gsproj",
     "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj",
     "test/LanguageServer.Tests/LanguageServer.Tests.gsproj",
+    "test/Runtime.Channels.Tests/Runtime.Channels.Tests.gsproj",
     "test/Sdk.Tests/Sdk.Tests.gsproj",
     "tools/gsgen/GSharp.GeneratorHost.Tests/GSharp.GeneratorHost.Tests.gsproj",
 )

@@ -151,6 +151,37 @@ open class ReferenceResolverTests {
     }
 
     @Fact
+    func Default_Dispose_PreservesProcessWideClrCaches_And_ImageResolvers_ShareTypeNameIndex() {
+        let interfacesBefore = ClrTypeUtilities.SafeGetInterfaces(typeof(List[int32]))
+        let methodsBefore = ClrTypeUtilities.SafeGetMethods(typeof(string), BindingFlags.Public | BindingFlags.Instance)
+        let resolver = ReferenceResolver.Default()
+        Assert.True(resolver.ContainsNamespace("System"))
+        Assert.True(resolver.HasTypeNameAtAnyArity("System.Collections.Generic.List"))
+        resolver.Dispose()
+        Assert.Same(interfacesBefore, ClrTypeUtilities.SafeGetInterfaces(typeof(List[int32])))
+        Assert.Same(
+            methodsBefore,
+            ClrTypeUtilities.SafeGetMethods(typeof(string), BindingFlags.Public | BindingFlags.Instance)
+        )
+        let corePath = typeof(ReferenceResolver).Assembly.Location
+        using let firstMlc = ReferenceResolver.WithReferences([]string{corePath})
+        using let secondMlc = ReferenceResolver.WithReferences([]string{corePath})
+        Assert.True(firstMlc.ContainsNamespace("System"))
+        Assert.True(secondMlc.ContainsNamespace("System"))
+        let indexField FieldInfo? = typeof(ReferenceResolver).GetField(
+            "typeNameIndex",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )
+        let valueProperty PropertyInfo? = indexField!!.FieldType.GetProperty("Value")
+        Assert.Same(
+            valueProperty!!.GetValue(indexField!!.GetValue(firstMlc)),
+            valueProperty!!.GetValue(indexField!!.GetValue(secondMlc))
+        )
+        Assert.NotEmpty(CSharpFixture.HostReferences)
+        Assert.Same(CSharpFixture.HostReferences[0], CSharpFixture.HostReferences[0])
+    }
+
+    @Fact
     func WithReferences_Resolves_Type_From_Supplied_Assembly() {
         let corePath = typeof(ReferenceResolver).Assembly.Location
         Assert.False(string.IsNullOrEmpty(corePath))
