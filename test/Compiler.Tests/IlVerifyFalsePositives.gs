@@ -126,7 +126,7 @@ internal shared class IlVerifyFalsePositives {
                 }
             }
             return (
-                RuntimeReturnProof(assemblyPath) == "A5AB56A01AD8B7616B8ACB4A28E8C16042F95FB54F4AD51C5C43FC6994075814",
+                RuntimeReturnProof(assemblyPath) == "53F7DA756296143D0A75614CB77F44F73B041C89228800D21DF7C698256FC931",
                 2
             )
         } catch (BadImageFormatException) {
