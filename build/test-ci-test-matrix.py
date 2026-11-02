@@ -20,9 +20,32 @@ def load(name):
 matrix = load("generate-ci-test-matrix")
 partition = load("verify-ci-test-partition")
 PROJECT = "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.gsproj"
+COMPILER_PROJECT = "test/Compiler.Tests/Compiler.Tests.gsproj"
 
 
 class CiTestMatrixTests(unittest.TestCase):
+    def test_compiler_bands_partition_emit_and_top_level_issues(self):
+        entries = matrix.sharded_entries(
+            COMPILER_PROJECT, matrix.SHARDED_PROJECTS[COMPILER_PROJECT])
+
+        def owner(name):
+            selected = [entry["name"] for entry in entries
+                        if partition.matches(name, entry["filter"])]
+            self.assertEqual(len(selected), 1, (name, selected))
+            return selected[0]
+
+        for name, band in (
+                ("GSharp.Compiler.Tests.Emit.Issue3329Tests.Control", "issue3"),
+                ("GSharp.Compiler.Tests.Emit.Issue4675Tests.Control", "issue4-remainder"),
+                ("GSharp.Compiler.Tests.Emit.Issue4776Tests.Control", "issue47-49"),
+                ("GSharp.Compiler.Tests.Emit.Issue4986Tests.Control", "issue47-49"),
+                ("GSharp.Compiler.Tests.Emit.Adr0208Tests.Control", "emit-remainder"),
+                ("GSharp.Compiler.Tests.Issue3912Tests.Control", "top-issue3-4"),
+                ("GSharp.Compiler.Tests.Issue4056Tests.Control", "top-issue3-4"),
+                ("GSharp.Compiler.Tests.Issue5388Tests.Control", "top-issue5"),
+                ("GSharp.Compiler.Tests.ImportedMemberMatrixTests.Control", "remainder")):
+            self.assertEqual(owner(name), "compiler-" + band)
+
     def test_issue4_is_covered_once_with_issue47_isolated(self):
         entries = matrix.sharded_entries(PROJECT, matrix.SHARDED_PROJECTS[PROJECT])
 
