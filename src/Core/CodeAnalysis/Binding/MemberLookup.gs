@@ -7221,8 +7221,8 @@ internal class MemberLookup {
             isImplicit = false
             if source is not ImportedTypeSymbol sourceImported ||
                 target is not ImportedTypeSymbol targetImported ||
-                sourceImported.OpenDefinition == nil ||
-                targetImported.OpenDefinition == nil ||
+                sourceImported.OpenDefinition is not{} sourceOpenDefinition ||
+                targetImported.OpenDefinition is not{} targetOpenDefinition ||
                 sourceImported
                 .TypeArguments
                 .IsDefaultOrEmpty ||
@@ -7232,9 +7232,9 @@ internal class MemberLookup {
                 return false
             }
             var sourceArguments ImmutableArray[TypeSymbol]
-            if ClrTypeUtilities.AreSame(sourceImported.OpenDefinition, targetImported.OpenDefinition) {
+            if ClrTypeUtilities.AreSame(sourceOpenDefinition, targetOpenDefinition) {
                 sourceArguments = sourceImported.TypeArguments
-            } else if !TryMapThroughImplemented(sourceImported, targetImported.OpenDefinition, out sourceArguments) {
+            } else if !TryMapThroughImplemented(sourceImported, targetOpenDefinition, out sourceArguments) {
                 return false
             }
             if sourceArguments.Length != targetImported.TypeArguments.Length {

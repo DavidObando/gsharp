@@ -849,6 +849,7 @@ compatibility note. "Probe" refers to section 4.
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 | R17 | A write or read of an imported (CLR) property setter or indexer is a `call` too, unless the accessor is on the stable list (`IsStableClrAccessor`): the `List<T>` indexer (get and set) and `List<T>.Capacity` set, the `Span<T>` indexer, the `ReadOnlySpan<T>` indexer get, the `string` indexer get, the `StringBuilder` indexer (get and set) and `StringBuilder.Length` set. The same conditions as R16 apply (core library, not overridable). An index read on a receiver of an erased generic type (`List[T]` over a type parameter) is always a `call`, because it is emitted through the non-generic `IList` or `IDictionary` interface, which a subclass can reimplement; an index write and a `Span[T]` read over a type parameter keep the listed accessor. `Dictionary<K,V>` indexers are not stable: they call `GetHashCode` and `Equals` of the key. `var x C? = C{}; let oc = ObservableCollection[int32](); oc.Add(1); oc.CollectionChanged += (s, e) -> { x = nil }; if x == nil { return 0 }; oc[0] = 5; return x.Value` (bug [#5532](https://github.com/DavidObando/gsharp/issues/5532)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
+| R18 | The effects of the condition of an `if` statement (a call, a getter with user code, an assignment) apply to the narrowing facts before either branch is bound, as section 9 says and as a catch filter already does (R10). `var x C? = C{}; let lazy = Lazy[int32](() -> { x = nil; return 1 }); if x == nil { return 0 }; if lazy.Value > 0 { return x.Value }` (bug [#5534](https://github.com/DavidObando/gsharp/issues/5534); the same with a plain call or a source getter). The facts that the condition proves are added after its effects, so `if Check(h) && x != nil { return x.Value }` still narrows | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact in either branch | less permissive (soundness) |
 
 Details per row:
 
@@ -948,6 +949,53 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
+  bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
+  an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
+  already removed: the old statement check follows the syntax of calls). `ApplyConditionEffectsToNarrowings`
+  runs `InvalidateNarrowingsForAssignedVariables` on the bound condition right after it is bound, for the `if`
+  statement and for `if init; cond`, before the condition's own narrowing is classified. Three consequences
+  keep safe code compiling. (1) The condition was bound before its effects, so a type test of a path whose fact
+  the effects removed (`Check(h) && x is C` after a guard on `x`) is classified against the path's declared type,
+  the type it has after the effects, as a nil test already is. This applies only to a fact that strips `?` or
+  `!` from a reference type, whose read emits no conversion. The operand of a subtype fact is read with a
+  `castclass` and a nullable value with an unwrap, so that test runs on the stale read (an `InvalidCastException`
+  or `InvalidOperationException` when the call changed the value; #5545); those branches stay rejected
+  (rows w18 and w19). (2) The effects are read with the callable aliases
+  from before the condition, as for a statement, and the aliases are updated after them, so a call of an alias
+  that the condition reassigns later (`action() && (action = callback) is {} a`) keeps its classification.
+  (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or
+  lambda: creating a closure runs none of its body, and a call of it is a call. This also applies to a statement
+  (`action = func() { ... }` no longer removes member-path facts). (4) The condition of an `if` statement in a
+  then-branch runs only on that path, so the facts it removed from the enclosing frames are put back while the
+  sibling else-branch is bound and removed again after it, as section 9 binds the else-branch from the state after
+  the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows w20
+  to w22). The then-branch of `if let` and its else-branch are siblings in the same way (rows w31 and w32); its
+  else-branch starts from the state before the header, so a guard's fact does not hide an outer one (row w34). The
+  `if let` header runs on the else path too and its effects are not applied before the branches (#5545 shape 4), so
+  a fact that the header can remove is not put back (row w41). The initializer of `if init; cond` runs before the
+  condition and both branches, so its effects apply first, as for the statement before an `if` in a block (rows w39
+  and w40). The `if let` guard reads the callable aliases at each test as the `if` condition does (row w42), and the
+  pattern check computes the function's closure-assigned names first (row w43). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
+  test does (rows w23 and w24). (6) A pattern runs after its operand is read, so a test whose own pattern can
+  remove the tested path (a getter with user code in a property sub-pattern, `x is Dog { P: 1 }` where `P` sets
+  `x = nil`, or a call in a constant pattern, `x is Read(h)`) narrows neither branch, by the statement rule
+  applied to the test's effects, whether or not a fact was removed before it (rows w25 to w28 and w30); a getter
+  that cannot reach the path keeps the narrowing (row w29). The test reads the callable aliases at its own
+  evaluation point: an earlier operand's reassignment applies (row w35), a later one does not (row w33). The
+  aliases follow a `&&` chain operand by operand on its true path, so an alias gained earlier in the chain reaches
+  the test (row w44); under `||` the walk joins both paths, so a conditional gain does not (row w46). The `if let`
+  header is read from the aliases it started with (row w45). The `Equals` call of a constant pattern and the
+  accessors of a list pattern are not in the effect collector yet (#5593). A
+  later operand that removes it (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
+  decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
+  tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
+  `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
+  and `for` (ADR-0213), and the bindings of `if let`. Which accesses in a condition count as calls is the one statement rule, so R18 applies the
+  static-access rule of R11 and R15 (#5520) and the imported accessor list of R17 to the condition too: a static
+  read of a type with a non-literal `shared` initializer kills before the branches (row w36), a literal-only type
+  keeps the fact (row w37), and a `Dictionary` indexer kills where a `List` indexer keeps it (row w38). Corpus
+  rows w01 to w46.
 - **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
   `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
   `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only

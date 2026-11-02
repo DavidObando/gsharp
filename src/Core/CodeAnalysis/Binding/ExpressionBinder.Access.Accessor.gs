@@ -3795,11 +3795,11 @@ internal partial class ExpressionBinder {
             // left-to-right inference from argument types.
             if method!!.IsGeneric {
                 substitution ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                if ce.TypeArgumentList != nil {
-                    let explicitArgs = ce.TypeArgumentList.Arguments
+                if ce.TypeArgumentList is {} typeArgumentList {
+                    let explicitArgs = typeArgumentList.Arguments
                     if explicitArgs.Count != method!!.TypeParameters.Length {
                         Diagnostics.ReportWrongTypeArgumentCount(
-                            ce.TypeArgumentList.Location,
+                            typeArgumentList.Location,
                             method!!.Name,
                             method!!.TypeParameters.Length,
                             explicitArgs.Count
