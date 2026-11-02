@@ -105,7 +105,7 @@ public func RectangularIndexControl4313(value [,]int32) int32 -> value[0, 0]`
                 .ToArray()
             let call = Assert.Single(calls)
             Assert.Equal(expectedOpcode, call.Item1)
-            Assert.Equal(expectedDeclaringType, call.Item2.DeclaringType)
+            Assert.Equal(expectedDeclaringType, call.Item2?.DeclaringType)
         }
 
         private func GetMethod(assembly Assembly, methodName string) MethodInfo -> assembly
