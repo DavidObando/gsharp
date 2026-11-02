@@ -2249,6 +2249,12 @@ internal partial class StatementBinder {
                         }
                         lists.Add(types)
                     }
+                    // The methods of an imported base interface are not listed, as for an imported interface.
+                    for clrBase in level.BaseClrInterfaces {
+                        if (MemberShape(clrBase, name) & MemberIsMethod) != 0 {
+                            return false
+                        }
+                    }
                 }
             }
             case imported is ImportedTypeSymbol {

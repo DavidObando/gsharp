@@ -3401,6 +3401,24 @@ func Run(ref text string?, d D, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@13:16")
+            Add("receiver-alternative-source-interface-with-an-imported-base-overload-counts (A3)", `package T
+import System
+import System.Collections.Generic
+interface I : IList[DateTimeOffset] { }
+open class A {
+    func Add(d DateTime) { }
+}
+func Run(ref text string?, x I, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if x is A { }
+        x.Add(dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@11:16")
             return rows
         }
     }
