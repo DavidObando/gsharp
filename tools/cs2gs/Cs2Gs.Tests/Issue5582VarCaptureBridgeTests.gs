@@ -21,6 +21,8 @@ import Xunit
 /// native `is` bindings, to the scrutinee, or to a capture outside a conjunction, a control row emits
 /// `Take(m)` or `Take(c)` with a `Node?` capture, which does not bind (GS0154). Without the type-test rule
 /// for a conjunction, `o is Node and var c` emits a redundant `c!!`.
+/// The deconstruction row throws `NullReferenceException` when #5598's bridge also asserts a store into a
+/// local with no recorded storage, or records an explicit `Node?` local as non-null.
 open class Issue5582VarCaptureBridgeTests {
     /// The issue's repro: a `var` capture of a non-null parameter, in the `is`, switch-arm and case-label
     /// forms, takes the null on as C# does.
@@ -173,6 +175,71 @@ namespace Demo
         Assert.Contains("case var c: Items.IndexOf(c!!) + 2", printed)
         Assert.Contains("Items.Add(c!!)", printed)
         RunsAs(printed, "4")
+    }
+
+    /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a
+    /// local initialized from one. A capture has no recorded storage, so its store is not bridged (#5605).
+    /// The taint widens a local that receives the element, so its store is not bridged either. Each form
+    /// stores the null, as C# does, also when the capture's input is non-null.
+    @Fact
+    func ADeconstructionIntoACaptureOrItsLocal_StoresTheNull() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public static class P
+    {
+        static Entry Empty() => new Entry(null, 0);
+        static string IsLocal(Node q)
+        {
+            if (q is var c) { var x = c; int i; (x, i) = Empty(); object o = x; return (o == null) + ":" + i; }
+            return "none";
+        }
+        static string CaseLocal(Node q)
+        {
+            switch (q)
+            {
+                case var c: var x = c; int i; (x, i) = Empty(); object o = x; return (o == null) + ":" + i;
+            }
+        }
+        static string NewInputCaseLocal()
+        {
+            switch (new Node())
+            {
+                case var c: var x = c; int i; (x, i) = Empty(); object o = x; return (o == null) + ":" + i;
+            }
+        }
+        static string MemberLocal(Entry e)
+        {
+            switch (e)
+            {
+                case { Item: var c }: var x = c; int i; (x, i) = Empty(); object o = x; return (o == null) + ":" + i;
+                default: return "none";
+            }
+        }
+        static string IsCapture(Node q)
+        {
+            if (q is var c) { int i; (c, i) = Empty(); object o = c; return (o == null) + ":" + i; }
+            return "none";
+        }
+        static string CaseCapture(Node q)
+        {
+            switch (q)
+            {
+                case var c: int i; (c, i) = Empty(); object o = c; return (o == null) + ":" + i;
+            }
+        }
+        public static string Run()
+        {
+            var n = new Node();
+            return IsLocal(n) + " " + CaseLocal(n) + " " + NewInputCaseLocal() + " " + MemberLocal(new Entry(n, 1)) + " " +
+                IsCapture(n) + " " + CaseCapture(n);
+        }
+    }
+}`)
+        Assert.DoesNotContain("Value!!", printed)
+        RunsAs(printed, "True:0 True:0 True:0 True:0 True:0 True:0")
     }
 
     shared {
