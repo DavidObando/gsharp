@@ -4676,7 +4676,11 @@ partial class CSharpToGSharpTranslator {
             // Issue #5516: G# infers a `var` local from its initializer, so the storage is fixed
             // non-null only when that initializer is not nullable by declaration.
             var inferredStorageIsNonNull = false
-            if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
+            if this.LocalStoreAcceptsNil(assignmentTarget) {
+                assignmentTargetType = assignmentTargetType?.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            } else if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
                 inferredAssignmentLocal
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()

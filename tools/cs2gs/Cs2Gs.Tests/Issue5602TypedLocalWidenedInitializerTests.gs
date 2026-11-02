@@ -94,6 +94,65 @@ namespace Demo
         Assert.DoesNotContain("!!", printed)
     }
 
+    /// A local whose emitted storage G# infers from a widened initializer (`Node n = entry.Item`,
+    /// `var n = entry.Item`) holds `Node?`, so a store into it takes the null as C# does: plain,
+    /// chained and from the widened property. A user-defined conversion still checks its operand.
+    @Fact
+    func StoreIntoALocalOfNullableStorage_IsNotBridged() {
+        let (printed, compilation) = Translate(`
+namespace Demo
+{
+    public class Node { public override string ToString() => "node"; }
+    public class Box
+    {
+        public string Name;
+        public static implicit operator Box(Node node) => new Box { Name = node.ToString() };
+    }
+    public record Entry(Node Item, Box Wrap, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, null, 0);
+        public static bool Typed(Entry entry) { Node n = entry.Item; var item = entry.Item; n = item; return ReferenceEquals(n, item); }
+        public static bool Inferred(Entry entry) { var n = entry.Item; var item = entry.Item; n = item; return ReferenceEquals(n, item); }
+        public static bool TypedProperty(Entry entry) { Node n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
+        public static bool InferredProperty(Entry entry) { var n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
+        public static bool Chained(Entry entry)
+        {
+            Node n = entry.Item;
+            var m = entry.Item;
+            var item = entry.Item;
+            n = m = item;
+            return ReferenceEquals(n, item) && ReferenceEquals(m, item);
+        }
+        public static string Convert(Entry entry)
+        {
+            var b = entry.Wrap;
+            var item = entry.Item;
+            try { b = item; return b.Name; }
+            catch (System.NullReferenceException) { return "nre"; }
+        }
+        public static string Run() =>
+            Typed(Empty()) + " " + Inferred(Empty()) + " " + TypedProperty(Empty()) + " " +
+            InferredProperty(Empty()) + " " + Chained(Empty()) + " " + Convert(Empty()) + " " +
+            Convert(new Entry(new Node(), null, 1));
+    }
+}`)
+        Assert.Equal("True True True True True nre node", RunCSharp(compilation).Trim())
+        Assert.Equal("True True True True True nre node", CompileAndRun(printed).Trim())
+        Assert.Contains(
+            "func Typed(entry Entry) bool {\n        var n = entry.Item\n        let item = entry.Item\n        n = item\n",
+            printed
+        )
+        Assert.Contains(
+            "func TypedProperty(entry Entry) bool {\n        var n = entry.Item\n        n = entry.Item\n",
+            printed
+        )
+        Assert.Contains("n = (m = item)\n", printed)
+        Assert.Contains("b = item!!\n", printed)
+        Assert.Equal(1, printed.Split("item!!").Length - 1)
+        Assert.DoesNotContain("Item!!", printed)
+    }
+
     shared {
         private func Translate(source string)(Printed string, Compilation CSharpCompilation) {
             let tree = CSharpSyntaxTree.ParseText(

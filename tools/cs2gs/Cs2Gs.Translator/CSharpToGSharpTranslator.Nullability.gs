@@ -723,6 +723,14 @@ partial class CSharpToGSharpTranslator {
             return this.IsTranslatorWidenedDeclaration(local)
         }
 
+        /// Issue #5602: whether a store into the existing local [`target`](paramref) takes a `T?` value
+        /// without a bridge. G# types a local by the storage that its declaration emitted, so a local
+        /// that holds a `T?` value (`LocalHoldsPromotedValue`) has `T?` storage. A user-defined
+        /// conversion still bridges the input of its operator.
+        private func LocalStoreAcceptsNil(target ISymbol?) bool -> this.IsObliviousCompilation() &&
+            target is ILocalSymbol local &&
+            this.LocalHoldsPromotedValue(local)
+
         // Issue #3676: whether <paramref name="expression"/> reads a
         // generated-code declaration that direct null evidence promoted to
         // `T?` (see
