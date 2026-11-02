@@ -328,13 +328,6 @@ internal class ConversionClassifier {
         return result
     }
 
-    /// Issue #5613: gets a value indicating whether [`value`](paramref) is a narrowed read
-    /// (cref:BinderContext.TryGetBackwardGotoNarrowingPath). Its conversion to a common type must not be skipped as
-    /// an identity, so the backward `goto` check sees it.
-    /// @param value The bound value.
-    /// @returns `true` when the value is a narrowed read.
-    func IsNarrowedRead(value BoundExpression) bool -> binderCtx.TryGetBackwardGotoNarrowingPath(value, out _, out _)
-
     /// Issue #5613: decides the backward `goto` check of a captured narrowed read that [`value`](paramref) yields
     /// (the value, or the trailing value of a block) for [`target`](paramref), with the decision of every other
     /// conversion (cref:ConversionNeedsNarrowedSource). The declared read replaces the narrowed read when the target
@@ -395,10 +388,6 @@ internal class ConversionClassifier {
             expression.Type != type &&
             expression.Type != TypeSymbol.Error {
             return bindNativeProtocolConversion(diagnosticLocation, expression, type)
-        }
-        // Issue #5613: a block value decides the narrowed read that it yields, from the capture where the read binds.
-        if trackNarrowing && type != nil && expression is BoundBlockExpression{TrailingNarrowedRead: {} trailingRead} {
-            expression = ResolveNarrowedValue(expression, trailingRead, type)
         }
         // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
         // a branch value converts to the common type without it, because the branch decided it where the read binds.

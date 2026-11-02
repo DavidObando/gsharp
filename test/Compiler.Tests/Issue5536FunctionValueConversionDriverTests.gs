@@ -1254,7 +1254,7 @@ func Main() {
     /// Issue #5613 controls: a branch whose common type is `string?` takes the declared value, so the `goto` that
     /// removes the narrowing gives nil. A `goto` that keeps the narrowing gives a `string`. A branch that proves its
     /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. A block value
-    /// converts to its target with the same decision (`let t string? = ({ …; s })`). Each runs as C# runs it.
+    /// that is not a branch keeps its behavior (`let t string? = ({ …; s })`, #5635). Each runs as C# runs it.
     @Fact
     func BranchValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -2319,7 +2319,7 @@ class Program {
 
         // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch. A form assigns
         // `s` in the other branch, after the read binds. The last forms yield the read from a block: in parentheses,
-        // as the right operand of `??`, as the whole value, and as the trailing value of a branch block.
+        // as the right operand of `??`, as the trailing value of a branch block, and in `checked`.
         private let BranchValueForms[]string = []string{
             "n > 1 ? \"t\" : @s",
             "n > 1 ? \"t\" : (n > 2 ? \"u\" : @s)",
@@ -2333,9 +2333,9 @@ class Program {
             "if n > 1 { @s } else { s = nil\n                \"x\" }",
             "n > 1 ? \"t\" : ({\n                n = n + 0\n                @s\n            })",
             "U() ?? {\n                n = n + 0\n                @s\n            }",
-            "({\n                n = n + 0\n                @s\n            })",
             "if n > 1 { \"t\" } else { ({ @s }) }",
-            "n > 1 ? \"t\" : checked({ @s })"
+            "n > 1 ? \"t\" : checked({ @s })",
+            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                ({ @s }) }"
         }
 
         private const Contract string = `#nullable enable
