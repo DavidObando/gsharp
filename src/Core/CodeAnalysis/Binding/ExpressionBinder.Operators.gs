@@ -3812,7 +3812,11 @@ internal partial class ExpressionBinder {
         internal func MakeSymbolicArgumentConversionClassifier(
             boundArguments IReadOnlyList[BoundExpression]?,
             argumentOffset int32 = 0,
-            nativeConversions ConversionClassifier? = nil
+            nativeConversions ConversionClassifier? = nil,
+            receiverType TypeSymbol? = nil,
+            openGenericDefinition Type? = nil,
+            symbolicTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+            explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
         )((int32, Type, ParameterInfo) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             let DeclaresImplicitOperator = func (type TypeSymbol) bool {
                 var type = type
@@ -3831,11 +3835,37 @@ internal partial class ExpressionBinder {
             }
             return (index int32, clrParameterType Type?, parameter ParameterInfo) -> {
                 let argIndex = index - argumentOffset
-                if argIndex < 0 ||
-                    argIndex >= boundArguments.Count ||
-                    clrParameterType == nil ||
-                    clrParameterType.IsByRef {
+                if argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == nil {
                     return nil
+                }
+                if clrParameterType.IsByRef {
+                    // Issue #5558: when a by-reference parameter is substituted from
+                    // symbolic type arguments, compare the argument's storage type
+                    // against the substituted symbolic pointee.
+                    if ByRefStorageMatching.TryGetStorageType(boundArguments[argIndex]) is not{} storageType {
+                        return nil
+                    }
+                    let symbolicPointee = TryResolveSymbolicByRefParameterPointee(
+                        parameter,
+                        receiverType,
+                        openGenericDefinition,
+                        symbolicTypeArguments,
+                        explicitMethodTypeArguments
+                    )
+                    if symbolicPointee == nil || symbolicPointee == TypeSymbol.Error {
+                        return nil
+                    }
+                    return if ByRefStorageMatching.AreSameStorageType(
+                        storageType,
+                        symbolicPointee,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        ClrOverloadResolution.ImplicitConversionKind.Identity
+                    } else {
+                        ClrOverloadResolution.ImplicitConversionKind.None
+                    }
                 }
                 let sourceType = boundArguments[argIndex].Type
                 var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
@@ -3897,6 +3927,135 @@ internal partial class ExpressionBinder {
                     )
                 }
             }
+        }
+
+        internal func TryResolveSymbolicByRefParameterPointee(
+            parameter ParameterInfo,
+            receiverType TypeSymbol?,
+            openGenericDefinition Type? = nil,
+            symbolicTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+            explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        ) TypeSymbol? {
+            var openDef = openGenericDefinition
+            var declaringTypeArgs = symbolicTypeArguments
+            if (openDef == nil || declaringTypeArgs.IsDefaultOrEmpty) &&
+                receiverType != nil &&
+                MemberLookup.GetProjectionReceiverImportedType(receiverType) is ImportedTypeSymbol importedReceiver &&
+                importedReceiver.OpenDefinition != nil &&
+                !importedReceiver
+                .TypeArguments
+                .IsDefaultOrEmpty {
+                if parameter.Member?.DeclaringType is {} declaringType && MemberLookup.TryGetSymbolicDeclaringContext(
+                    importedReceiver,
+                    declaringType,
+                    out var resolvedOpenDef,
+                    out var resolvedDeclaringArgs
+                ) &&
+                    resolvedOpenDef != nil &&
+                    !resolvedDeclaringArgs.IsDefaultOrEmpty {
+                    openDef = resolvedOpenDef
+                    declaringTypeArgs = resolvedDeclaringArgs
+                } else {
+                    openDef = importedReceiver.OpenDefinition
+                    declaringTypeArgs = importedReceiver.TypeArguments
+                }
+            }
+            if parameter.Member is ConstructorInfo ctor {
+                return ResolveConstructorParameterPointeeType(ctor, parameter.Position, openDef, declaringTypeArgs)
+            }
+            if parameter.Member is not MethodInfo method {
+                return nil
+            }
+            let nullableMethodTypeArgs = if explicitMethodTypeArguments.IsDefaultOrEmpty {
+                default(ImmutableArray[TypeSymbol?])
+            } else {
+                ImmutableArray.CreateRange[TypeSymbol?](explicitMethodTypeArguments)
+            }
+            if openDef != nil && !declaringTypeArgs.IsDefaultOrEmpty {
+                var openMethod MethodInfo? = nil
+                for candidate in openDef.GetMethods(
+                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
+                ) {
+                    if candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module {
+                        openMethod = candidate
+                        break
+                    }
+                }
+                if openMethod == nil {
+                    return nil
+                }
+                let openParams = openMethod.GetParameters()
+                if uint32(parameter.Position) >= uint32(openParams.Length) ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .IsByRef {
+                    return nil
+                }
+                if nullableMethodTypeArgs.IsDefaultOrEmpty &&
+                    MentionsMethodGenericParameter(openParams[parameter.Position].ParameterType) {
+                    return nil
+                }
+                if !nullableMethodTypeArgs.IsDefaultOrEmpty && openMethod.GetGenericArguments()
+                    .Length != nullableMethodTypeArgs.Length {
+                    return nil
+                }
+                return MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                    openParams[parameter.Position],
+                    openDef,
+                    declaringTypeArgs,
+                    if nullableMethodTypeArgs.IsDefaultOrEmpty {
+                        default(MethodInfo?)
+                    } else {
+                        openMethod
+                    },
+                    nullableMethodTypeArgs
+                )
+            }
+            if !nullableMethodTypeArgs.IsDefaultOrEmpty && method.IsGenericMethod {
+                let openMethod = if method.IsGenericMethodDefinition {
+                    method
+                } else {
+                    method.GetGenericMethodDefinition()
+                }
+                if openMethod.GetGenericArguments().Length != nullableMethodTypeArgs.Length {
+                    return nil
+                }
+                let openParams = openMethod.GetParameters()
+                if uint32(parameter.Position) >= uint32(openParams.Length) ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .IsByRef {
+                    return nil
+                }
+                return MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                    openParams[parameter.Position],
+                    openDefinition: nil,
+                    ImmutableArray[TypeSymbol].Empty,
+                    openMethod,
+                    nullableMethodTypeArgs
+                )
+            }
+            return nil
+        }
+
+        private func MentionsMethodGenericParameter(type Type?) bool {
+            if type == nil {
+                return false
+            }
+            if type.IsGenericParameter {
+                return type.DeclaringMethod != nil
+            }
+            if type.HasElementType {
+                return MentionsMethodGenericParameter(type.GetElementType())
+            }
+            if type.IsGenericType {
+                for argument in type.GetGenericArguments() {
+                    if MentionsMethodGenericParameter(argument) {
+                        return true
+                    }
+                }
+            }
+            return false
         }
 
         // ADR-0148: imported overload resolution works on CLR Type surrogates and

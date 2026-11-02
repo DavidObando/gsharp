@@ -743,7 +743,9 @@ internal partial class ExpressionBinder {
                 symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                     boundArgs,
                     argumentOffset: offset,
-                    nativeConversions: conversions
+                    nativeConversions: conversions,
+                    receiverType: receiverType,
+                    explicitMethodTypeArguments: explicitTypeArgSymbols
                 )
             )
             if resolution.Outcome != ClrOverloadResolution
@@ -2158,7 +2160,14 @@ internal partial class ExpressionBinder {
             ) {
                 return BoundErrorExpression(ce)
             }
-            if TryReportValueNullableByRefArgument(ce, arguments, classSymbol.ClassType, methodName) {
+            if TryReportValueNullableByRefArgument(
+                ce,
+                arguments,
+                classSymbol.ClassType,
+                methodName,
+                classSymbol.ConstructedReceiver ?? classSymbol.SymbolicReceiver ?? receiver?.Type,
+                typeArgSymbols
+            ) {
                 return BoundErrorExpression(nil)
             }
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
@@ -2554,7 +2563,14 @@ internal partial class ExpressionBinder {
                     methodName,
                     DescribeCallReceiver(receiver!!, effectiveReceiverSyntax, receiverStart)
                 )
-            } else if !TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName) {
+            } else if !TryReportValueNullableByRefArgument(
+                ce,
+                arguments,
+                receiver?.Type?.ClrType,
+                methodName,
+                effectiveReceiverType,
+                typeArgSymbols
+            ) {
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
             }
             return BoundErrorExpression(nil)
@@ -2925,7 +2941,9 @@ internal partial class ExpressionBinder {
                     symbolicArgTypes: preResolutionSymbolicArgs,
                     symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                         arguments,
-                        nativeConversions: conversions
+                        nativeConversions: conversions,
+                        receiverType: effectiveReceiverType,
+                        explicitMethodTypeArguments: typeArgSymbols
                     )
                 )
                 // Issue #3745: a user-declared class argument erases to
@@ -2978,7 +2996,9 @@ internal partial class ExpressionBinder {
                             symbolicArgTypes: preResolutionSymbolicArgs,
                             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                                 arguments,
-                                nativeConversions: conversions
+                                nativeConversions: conversions,
+                                receiverType: effectiveReceiverType,
+                                explicitMethodTypeArguments: typeArgSymbols
                             )
                         )
                         if projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -3344,7 +3364,14 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        if TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName) {
+        if TryReportValueNullableByRefArgument(
+            ce,
+            arguments,
+            receiver?.Type?.ClrType,
+            methodName,
+            effectiveReceiverType,
+            typeArgSymbols
+        ) {
             return BoundErrorExpression(nil)
         }
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
@@ -3366,7 +3393,9 @@ internal partial class ExpressionBinder {
         ce CallExpressionSyntax,
         arguments ImmutableArray[BoundExpression],
         declaringType Type?,
-        methodName string
+        methodName string,
+        receiverType TypeSymbol? = nil,
+        explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) bool {
         if declaringType == nil {
             return false
@@ -3446,12 +3475,20 @@ internal partial class ExpressionBinder {
                     !parameters[paramIndex]
                     .ParameterType
                     .IsByRef ||
+                    (
                     parameters[paramIndex]
-                    .ParameterType
-                    .ContainsGenericParameters {
+                        .ParameterType
+                        .ContainsGenericParameters &&
+                        explicitMethodTypeArguments.IsDefaultOrEmpty
+                ) {
                     continue
                 }
-                let parameterType = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                let parameterType = TryResolveSymbolicByRefParameterPointee(
+                    parameters[paramIndex],
+                    receiverType,
+                    explicitMethodTypeArguments: explicitMethodTypeArguments
+                ) ??
+                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
                 if ByRefStorageMatching.AreSameStorageType(storage, parameterType, out _, out _, out _) {
                     continue
                 }

@@ -345,6 +345,7 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
     @InlineData("var h int32 = 1\nConsole.Write(S.I(in h))", "x")
     @InlineData("var f () -> int32 = () -> 1\nConsole.Write(S.F(&f))", "f")
     @InlineData("var h Func[int32] = () -> 1\nConsole.Write(S.In(&h, 1))", "f")
+    @InlineData("enum E { A = 1 }\nvar h int32 = 1\nConsole.Write(Holder[E](&h).Value)", "value")
     func ClrCallee_DifferentStorageTypeAtByRefParameter_IsGS0154(body string, parameterName string) {
         using let fixture = CSharpFixture(`namespace Storage {
     public static class S {
@@ -354,11 +355,33 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
     }
+    public class Holder<T> {
+        public T Value;
+        public Holder(ref T value) { Value = value; }
+    }
 }`)
         let result = EmittedOracle.Evaluate("import System\nimport Storage\n" + body, []string{fixture.AssemblyPath})
         let error = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
         Assert.Equal("GS0154", error.Id)
         Assert.Contains("'" + parameterName + "'", error.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ClrGenericConstructor_WithSourceEnumByRefStorage_CompilesAndRuns() {
+        using let fixture = CSharpFixture(`namespace Storage {
+    public class Holder<T> {
+        public T Value;
+        public Holder(ref T value) { Value = value; }
+    }
+}`)
+        let result = EmittedOracle.Evaluate(`import System
+import Storage
+enum E { A = 1, B = 2 }
+var e = E.B
+let h = Holder[E](&e)
+Console.WriteLine(int32(h.Value))`, []string{fixture.AssemblyPath})
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("2", result.Output.Trim())
     }
 
     shared {

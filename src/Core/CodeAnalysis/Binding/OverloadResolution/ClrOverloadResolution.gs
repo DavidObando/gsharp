@@ -5703,9 +5703,12 @@ internal shared class ClrOverloadResolution {
                     isExpanded: false,
                     resolvedTypeArgSymbols: resolvedTypeArgSymbols
                 )
-                if !(
-                    conv == ImplicitConversionKind.Identity &&
-                        IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
+                if (
+                    paramTypes[i].IsByRef ||
+                        !(
+                        conv == ImplicitConversionKind.Identity &&
+                            IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
+                    )
                 ) &&
                     symbolicArgumentConversionClassifier?(
                     i,
@@ -6230,9 +6233,12 @@ internal shared class ClrOverloadResolution {
                 isExpanded: true,
                 resolvedTypeArgSymbols: resolvedTypeArgSymbols
             )
-            if !(
-                conv == ImplicitConversionKind.Identity &&
-                    IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
+            if (
+                target.IsByRef ||
+                    !(
+                    conv == ImplicitConversionKind.Identity &&
+                        IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
+                )
             ) &&
                 symbolicArgumentConversionClassifier?(i, target, parameters[slot]) is {} symbolicConversion {
                 conv = symbolicConversion

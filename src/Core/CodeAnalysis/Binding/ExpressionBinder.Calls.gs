@@ -1851,7 +1851,13 @@ internal partial class ExpressionBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments)
+                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments),
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    openGenericDefinition: openGenericDefinition,
+                    symbolicTypeArguments: symbolicTypeArgs
+                )
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {

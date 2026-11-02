@@ -260,7 +260,7 @@ internal partial class DeclarationBinder {
             }
         }
         let ctors = visibleConstructors.ToArray()
-        RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments)
+        RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments, importedBaseType)
         let argTypes = [boundArguments.Count]Type?
         var argsAllTyped = true
         for var i = 0; i < boundArguments.Count; i++ {
@@ -297,7 +297,12 @@ internal partial class DeclarationBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(boundArguments)
+                delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(boundArguments),
+                symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    receiverType: importedBaseType
+                )
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -656,7 +661,8 @@ internal partial class DeclarationBinder {
 
     private func RebindDeferredArgumentsWithCommonClrTargets(
         constructors[]ConstructorInfo,
-        boundArguments ImmutableArray[BoundExpression].Builder
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        importedBaseType TypeSymbol? = nil
     ) {
         let deferred = List[int32]()
         for var i = 0; i < boundArguments.Count; i++ {
@@ -723,7 +729,12 @@ internal partial class DeclarationBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: delegateCheck
+                delegateArgumentCheck: delegateCheck,
+                symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    receiverType: importedBaseType
+                )
             )
             if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved {
                 compatible.Add((constructor, parameters))

@@ -2047,31 +2047,79 @@ class Program {
     }
 }
 `, "CS1503", line: 6, column: 23, length: 2, diagnostic: "GS0154")
-        Check(fixture, `import System
+        Reject(fixture, `import System
+import FunctionControl
+enum E { A = 1, B = 2 }
+func Main() {
+    var h int32 = 1
+    Console.Write(RefHolder[E](&h).Value)
+}
+`, `using System;
+using FunctionControl;
+enum E { A = 1, B = 2 }
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(new RefHolder<E>(ref h).Value);
+    }
+}
+`, "CS1503", line: 6, column: 32, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
 import FunctionControl
 func Main() {
-    var h int64 = 3
-    var f () -> int64 = () -> 4
-    Console.Write(S.R(&h))
-    Console.Write(S.I(&h))
-    Console.Write(S.I(in h))
-    Console.Write(S.F(&f))
-    Console.Write(S.F(in f))
+    var h int32 = 1
+    Console.Write(RefHolder[int64](&h).Value)
 }
 `, `using System;
 using FunctionControl;
 class Program {
     static void Main() {
+        int h = 1;
+        Console.Write(new RefHolder<long>(ref h).Value);
+    }
+}
+`, "CS1503", line: 5, column: 36, length: 2, diagnostic: "GS0154")
+        Check(fixture, `import System
+import FunctionControl
+enum E { A = 1, B = 2 }
+func Main() {
+    var h int64 = 3
+    var f () -> int64 = () -> 4
+    var e = E.B
+    var next = E.A
+    let holder = RefHolder[E](&e)
+    Console.Write(S.R(&h))
+    Console.Write(S.I(&h))
+    Console.Write(S.I(in h))
+    Console.Write(S.F(&f))
+    Console.Write(S.F(in f))
+    Console.Write(int32(holder.Value))
+    Console.Write(int32(holder.Swap(&next)))
+    Console.Write(int32(holder.Value))
+    Console.Write(int32(RefHolder[E].Echo(&next)))
+}
+`, `using System;
+using FunctionControl;
+enum E { A = 1, B = 2 }
+class Program {
+    static void Main() {
         long h = 3;
         Func<long> f = () => 4;
+        var e = E.B;
+        var next = E.A;
+        var holder = new RefHolder<E>(ref e);
         Console.Write(S.R(ref h));
         Console.Write(S.I(in h));
         Console.Write(S.I(in h));
         Console.Write(S.F(in f));
         Console.Write(S.F(in f));
+        Console.Write((int)holder.Value);
+        Console.Write((int)holder.Swap(ref next));
+        Console.Write((int)holder.Value);
+        Console.Write((int)RefHolder<E>.Echo(ref next));
     }
 }
-`, "33344")
+`, "333442211")
     }
 
     /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
@@ -3028,6 +3076,12 @@ namespace FunctionControl {
         public static long I(in long x) => x;
         public static long F(in System.Func<long> f) => f();
         public static string B(in B b) => "B";
+    }
+    public class RefHolder<T> {
+        public T Value;
+        public RefHolder(ref T value) { Value = value; }
+        public T Swap(ref T next) { var prev = Value; Value = next; return prev; }
+        public static T Echo(ref T value) => value;
     }
 }
 `
