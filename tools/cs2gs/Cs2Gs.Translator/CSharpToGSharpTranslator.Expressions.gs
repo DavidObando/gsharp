@@ -3989,18 +3989,109 @@ partial class CSharpToGSharpTranslator {
         // `list[i]`), `await`, or a composed value. The search fails closed: it does not decide which
         // argument supplies a type parameter.
         private func FlowsValueNilableOnlyInEmittedGSharp(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) bool -> expression
-            .DescendantNodesAndSelf((node Microsoft.CodeAnalysis.SyntaxNode) -> this.CarriesItsOperandsValue(node))
-            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            if expression == nil {
+                return false
+            }
+            if this.IsNilableOnlyInEmittedGSharp(expression) {
+                return true
+            }
+            switch expression {
+                case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
+                    return this.FlowsValueNilableOnlyInEmittedGSharp(parenthesized.Expression)
+                }
+                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
+                    return this.FlowsValueNilableOnlyInEmittedGSharp(conditional.WhenTrue) ||
+                        this.FlowsValueNilableOnlyInEmittedGSharp(conditional.WhenFalse)
+                }
+                case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
+                    // The governing expression is matched, not returned.
+                    for arm in switchExpression.Arms {
+                        if this.FlowsValueNilableOnlyInEmittedGSharp(arm.Expression) {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                ) {
+                    // `??` removes the nil of its left operand.
+                    return this.FlowsValueNilableOnlyInEmittedGSharp(coalesce.Right)
+                }
+                case awaited is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax {
+                    return this.FlowsValueNilableOnlyInEmittedGSharp(awaited.Expression)
+                }
+                case lambda is AnonymousFunctionExpressionSyntax {
+                    return GetLambdaResultExpressions(lambda).Any(
+                        (
+                            result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                        ) -> this.FlowsValueNilableOnlyInEmittedGSharp(result)
+                    )
+                }
+                case array is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax {
+                    return array.Initializer is {} initializer && this.AnyFlowsValueNilableOnlyInEmittedGSharp(
+                        initializer.Expressions
+                    )
+                }
+                case implicitArray is ImplicitArrayCreationExpressionSyntax {
+                    return this.AnyFlowsValueNilableOnlyInEmittedGSharp(implicitArray.Initializer.Expressions)
+                }
+                case collection is Microsoft.CodeAnalysis.CSharp.Syntax.CollectionExpressionSyntax {
+                    return collection
+                        .Elements
+                        .OfType[ExpressionElementSyntax]()
+                        .Any(
+                        (element ExpressionElementSyntax) -> this.FlowsValueNilableOnlyInEmittedGSharp(
+                            element.Expression
+                        )
+                    )
+                }
+                case access is MemberAccessExpressionSyntax {
+                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(access).Symbol) &&
+                        this.FlowsValueNilableOnlyInEmittedGSharp(access.Expression)
+                }
+                case element is ElementAccessExpressionSyntax {
+                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(element).Symbol) &&
+                        this.FlowsValueNilableOnlyInEmittedGSharp(element.Expression)
+                }
+                case invocation is InvocationExpressionSyntax {
+                    // A generic result follows its arguments; a result typed by the receiver's type arguments
+                    // (`box.Get()`, `awaiter.GetResult()`) follows the receiver.
+                    if this.InvocationInfersItsResultType(invocation) && this.AnyFlowsValueNilableOnlyInEmittedGSharp(
+                        invocation.ArgumentList.Arguments.Select((argument ArgumentSyntax) -> argument.Expression)
+                    ) {
+                        return true
+                    }
+                    return invocation.Expression is MemberAccessExpressionSyntax callee &&
+                        this
+                        .context
+                        .GetSymbolInfo(invocation)
+                        .Symbol is IMethodSymbol method &&
+                        this.TypeMentionsAnyTypeParameter(
+                        (method.ReducedFrom ?? method).OriginalDefinition.ReturnType
+                    ) &&
+                        this.FlowsValueNilableOnlyInEmittedGSharp(callee.Expression)
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        private func AnyFlowsValueNilableOnlyInEmittedGSharp(
+            expressions IEnumerable[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]
+        ) bool -> expressions
             .Any(
-            (candidate Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> this.IsNilableOnlyInEmittedGSharp(
-                candidate
-            )
+            (
+                candidate Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            ) -> this.FlowsValueNilableOnlyInEmittedGSharp(candidate)
         )
 
         // Issue #5582: whether `expression` mentions anywhere (an operand, an argument, a lambda body at any
-        // depth, or the initializer of a `var` local that it reads) a value that is `T?` only in G#.
+        // depth, the initializer of a local that it reads, or the scrutinee of a pattern variable that it reads)
+        // a value that is `T?` only in G#.
         private func MentionsValueNilableOnlyInEmittedGSharp(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
@@ -4026,91 +4117,22 @@ partial class CSharpToGSharpTranslator {
                 return decided
             }
             this.state.LocalsMentioningNilableOnlyValues[local] = false
-            let answer = local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
-                this.MentionsValueNilableOnlyInEmittedGSharp(initializer)
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let source Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                initializer
+            } else if declaration is SingleVariableDesignationSyntax {
+                // A pattern variable holds a value of its pattern's scrutinee.
+                this.PatternScrutinee(local)
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            let answer = source != nil && this.MentionsValueNilableOnlyInEmittedGSharp(source)
             this.state.LocalsMentioningNilableOnlyValues[local] = answer
             return answer
-        }
-
-        // Whether the value of `node` can carry the type of a value inside it.
-        private func CarriesItsOperandsValue(node Microsoft.CodeAnalysis.SyntaxNode) bool {
-            switch node {
-                case Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ParenthesizedExpressionSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ConditionalExpressionSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .SwitchExpressionSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .SwitchExpressionArmSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .AwaitExpressionSyntax,
-                AnonymousFunctionExpressionSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .BlockSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ReturnStatementSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArgumentListSyntax,
-                ArgumentSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArrayCreationExpressionSyntax,
-                ImplicitArrayCreationExpressionSyntax,
-                InitializerExpressionSyntax,
-                Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .CollectionExpressionSyntax,
-                ExpressionElementSyntax {
-                    return true
-                }
-                case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax {
-                    return binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression)
-                }
-                case invocation is InvocationExpressionSyntax {
-                    return this.InvocationInfersItsResultType(invocation)
-                }
-                case access is MemberAccessExpressionSyntax {
-                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(access).Symbol)
-                }
-                case element is ElementAccessExpressionSyntax {
-                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(element).Symbol)
-                }
-                default {
-                    return false
-                }
-            }
         }
 
         // A generic call without type arguments whose result type mentions one of its method type parameters.

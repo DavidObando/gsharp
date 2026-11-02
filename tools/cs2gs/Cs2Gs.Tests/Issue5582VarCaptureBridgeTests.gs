@@ -456,6 +456,8 @@ namespace Demo
         static int BlockCallback(bool flag) =>
             Call(() => { if (flag) { return Volatile.Read(ref cache!); } else { return Volatile.Read(ref cache!); } }) switch { var k => k.Count };
         static int ReceiverGet() => Wrap(Volatile.Read(ref cache!)).Get() switch { var g => g.Count };
+        static int CapturedTask() =>
+            Task.FromResult(Volatile.Read(ref cache!)) is var task ? task.Result switch { var t => t.Count } : -1;
         static int Awaiter() => Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() switch { var w => w.Count };
         static int ResultArm() => Task.FromResult(Volatile.Read(ref cache!)).Result switch { var r => r.Count };
         static int ResultCase()
@@ -470,7 +472,7 @@ namespace Demo
         static int Nested() => ` + nested + ` switch { var n => n.Count };
         public static string Run() =>
             ResultArm() + " " + ResultCase() + " " + AwaitArm().Result + " " + BoxArm() + " " + Nested() + " " +
-            LocalResult() + " " + BlockCallback(true) + " " + ReceiverGet() + " " + Awaiter();
+            LocalResult() + " " + BlockCallback(true) + " " + ReceiverGet() + " " + Awaiter() + " " + CapturedTask();
     }
 }`)
         Assert.Contains("case var r: r!!.Count", printed)
@@ -482,7 +484,8 @@ namespace Demo
         Assert.Contains("case var k: k!!.Count", printed)
         Assert.Contains("case var g: g!!.Count", printed)
         Assert.Contains("case var w: w!!.Count", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1 1 1")
+        Assert.Contains("case var t: t!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 1 1 1")
     }
 
     /// A subpattern member whose declared type does not follow the scrutinee's type arguments (`Node Child` of
@@ -516,9 +519,39 @@ namespace Demo
         RunsAs(printed, "taken")
     }
 
+    /// `??` removes the nil of its left operand, and a switch expression returns its arms, not its governing
+    /// expression. So `Id(Volatile.Read(ref cache!) ?? fallback)` and `Id(Volatile.Read(ref cache!) switch
+    /// { _ => fallback })` are not `T?` only in G#, and their `is var` captures pass a null `fallback` on.
+    @Fact
+    func AVarCaptureOfACoalescedOrSwitchedGenericFlow_PassesTheNullOn() {
+        let printed = Translate(`
+#nullable enable
+using System.Threading;
+namespace Demo
+{
+    public class Bag { }
+    public class Sink { public virtual string Take(Bag b) => "taken"; }
+    public static class P
+    {
+        private static Bag? cache;
+        static T Id<T>(T x) => x;
+        static string Coalesce(Bag fallback) =>
+            Id(Volatile.Read(ref cache!) ?? fallback) is var c ? new Sink().Take(c) : "none";
+        static string Switched(Bag fallback) =>
+            Id(Volatile.Read(ref cache!) switch { _ => fallback }) is var d ? new Sink().Take(d) : "none";
+        public static string Run() => Coalesce(null!) + " " + Switched(null!);
+    }
+}`)
+        Assert.Contains("Sink().Take(c)", printed)
+        Assert.Contains("Sink().Take(d)", printed)
+        Assert.DoesNotContain("Take(c!!)", printed)
+        Assert.DoesNotContain("Take(d!!)", printed)
+        RunsAs(printed, "taken taken")
+    }
+
     /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
-    /// value translates without asking each inner call again at each level, and the capture needs no `!!`. Translation only: gsc binds such a nest in exponential time
-    /// (#5652).
+    /// value translates without asking each inner call again at each level, and the capture needs no `!!`.
+    /// Translation only: gsc binds such a nest in exponential time (#5652).
     @Fact
     func ADeepNestOfGenericCalls_IsDecidedOncePerCall() {
         let printed = TranslateOnly(`
