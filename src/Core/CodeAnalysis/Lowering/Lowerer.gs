@@ -1271,8 +1271,8 @@ class Lowerer : BoundTreeRewriter {
         /// Otherwise a subclass of the owner can override it, so the dispatch is exact
         /// only when the owner has no subclass. A value type has no subclass. A class
         /// has a subclass only when it is `open` (ADR-0017) or `sealed` (ADR-0078).
-        /// The static receiver type does not decide this: a smart cast can narrow it to
-        /// a subclass that overrides the property.
+        /// The rule reads the owner and not the static receiver type, so it does not
+        /// depend on how the binder typed or narrowed the receiver.
         /// @param prop The accessed property.
         /// @param owner The type that directly declares [`prop`](paramref).
         /// @returns `true` when the dispatch is exact.
