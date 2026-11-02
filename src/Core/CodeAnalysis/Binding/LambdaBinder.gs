@@ -1369,11 +1369,6 @@ internal class LambdaBinder {
         } else {
             default(DeferredReturnState?)
         }
-        placeholder.InferredReturnNarrowings = if placeholder.IsReturnTypeInferred || defersReturnConversion {
-            DeferredReturnState()
-        } else {
-            default(DeferredReturnState?)
-        }
         let outerScope = Scope
         let outerFunction = getCurrentFunction()
         Scope = BoundScope(outerScope)
@@ -1526,18 +1521,11 @@ internal class LambdaBinder {
             } else {
                 TypeSymbol.Error
             }
-            // The natural type is not used when its result also needs a narrowing that a held use reports. Issue
-            // #5603: the uses of the natural values count too, because a target conversion can read a declared value
-            // and record no use.
+            // The natural type is not used when its result also needs a narrowing that a held use reports.
             if naturalReturnType != TypeSymbol.Error && !Diagnostics.Skip(startMark).Any(
                 (diagnostic Diagnostic) -> diagnostic.IsError
             ) &&
-                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) && !Invariant.Required(
-                placeholder.InferredReturnNarrowings,
-                "a deferred return conversion has natural narrowing uses",
-                expression: "placeholder.InferredReturnNarrowings"
-            )
-                .NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
+                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
                 acceptsNaturalType!!(
                 FunctionTypeSymbol.Get(
                     parameterTypes.ToImmutable(),
@@ -1589,11 +1577,6 @@ internal class LambdaBinder {
         // ADR-0076 / issue #716: rewrite the bound body so every return
         // statement's expression is converted to the inferred return type.
         // We deferred the conversion in BindReturnStatement; apply it now.
-        // Issue #5603: the backward `goto` checks of the `return` values ran where they bound, with the narrowings
-        // in scope. Report the uses that the inferred result needs.
-        if placeholder.IsReturnTypeInferred {
-            placeholder.InferredReturnNarrowings?.ReportInferredResultNarrowings(Diagnostics, returnType)
-        }
         boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
@@ -2568,8 +2551,7 @@ internal class LambdaBinder {
 
     /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
     /// Each such return statement binds its value again with the natural type, so the body can give either
-    /// function type after one bind of its statements. Issue #5603: a lambda body whose result type the lambda binder
-    /// chooses after the body also uses one only for the held narrowing uses of its `return` values.
+    /// function type after one bind of its statements.
     internal class DeferredReturnState {
         /// Gets or sets a value indicating whether a return value binds its target-typed pass now. A return
         /// nested in it binds with the target type only.
@@ -2689,43 +2671,13 @@ internal class LambdaBinder {
             return builder.ToImmutable()
         }
 
-        /// Issue #5603: reports each held narrowing use of a lambda body with an inferred result that the result
-        /// needs (cref:ConversionClassifier.ConversionNeedsNarrowedSource). The `return` value then does not convert
-        /// to the result without the narrowing, as at a declared result. For another use, the result conversion reads
-        /// the declared value (see `ReturnConversionRewriter`).
-        /// @param diagnostics The bag that receives the diagnostics.
-        /// @param resultType The inferred result type.
-        internal func ReportInferredResultNarrowings(diagnostics DiagnosticBag, resultType TypeSymbol) {
-            if resultType == TypeSymbol.Error || resultType == TypeSymbol.Void {
-                return
-            }
-            for use in narrowingUses {
-                if NeedsNarrowing(use.Access, resultType) {
-                    diagnostics.ReportCannotConvert(use.Access.Location, use.Access.DeclaredType, resultType)
-                }
-            }
-        }
-
         /// Gets a value indicating whether the natural function type needs a narrowing that a held use reports
         /// as removed: its result type converts the same narrowed reads, under the rule of
         /// (cref:ConversionClassifier.ConversionNeedsNarrowedSource).
         /// @param naturalReturnType The natural result type.
         /// @returns `true` when the natural type cannot take the place of the target.
-        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Any(
-            (use(Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])) -> NeedsNarrowing(
-                use.Access,
-                naturalReturnType
-            )
-        )
-
-        private func NeedsNarrowing(
-            access BackwardGotoNarrowingAccess,
-            resultType TypeSymbol
-        ) bool -> ConversionClassifier.ConversionNeedsNarrowedSource(
-            access.DeclaredType,
-            access.RequiredType,
-            resultType
-        )
+        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Count > 0 &&
+            ConversionClassifier.ConversionNeedsNarrowedSource(naturalReturnType)
 
         /// Captures the held values, conversions and narrowing uses, for a binder that discards a bind (see
         /// `StatementBinder.CaptureSpeculativeBindState`).
@@ -3166,7 +3118,7 @@ internal class LambdaBinder {
             }
             // Issue #4965 (ADR-0202): convert any `return` nested inside the
             // operand first (`return if c { return a } else { b }`).
-            var operand = RewriteExpression(value)
+            let operand = RewriteExpression(value)
             // Issue #5569: a deferred return value converted where it bound, with the eager bind's narrowing checks.
             // A value whose nested returns changed converts here, as its own conversion does not depend on them.
             let held = heldConversions
@@ -3181,19 +3133,6 @@ internal class LambdaBinder {
                 } else {
                     cast[BoundStatement](BoundReturnStatement(node.Syntax, heldValue, node.IsRef))
                 }
-            }
-            // Issue #5603: the conversion runs outside the narrowing scope, so the stable member path of a narrowed
-            // read comes from the read itself. The read takes its declared value when the result does not need the
-            // narrowing, as an eager conversion does.
-            let storedRead = if operand is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
-                unwrap.Operand
-            } else {
-                operand
-            }
-            if SmartCastStability.TryGetStableMemberPath(storedRead, out var path, out _) &&
-                ConversionClassifier
-                .TryRecoverDeclaredMemberRead(operand, path!!, operand.Type, returnType, out var declaredRead) {
-                operand = declaredRead!!
             }
             if operand.Type == returnType {
                 return if object.ReferenceEquals(operand, value) {

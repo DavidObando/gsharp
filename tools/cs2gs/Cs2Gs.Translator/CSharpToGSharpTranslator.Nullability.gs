@@ -1252,19 +1252,22 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
-            let declared ITypeSymbol? = switch symbol {
-                case m is IMethodSymbol: m.ReturnType
-                case f is IFieldSymbol: f.Type
-                case pr is IPropertySymbol: pr.Type
-                case l is ILocalSymbol: l.Type
-                case p is IParameterSymbol: p.Type
-                default: default(ITypeSymbol?)
-            }
+            let declared ITypeSymbol? = PromotableDeclaredType(symbol)
             if !(declared != nil && declared.IsReferenceType == true) ||
                 declared.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated {
+                return false
+            }
+            // Issue #5601: the answer is about the declaration the translator
+            // emits, and it emits the original definition. A member of a
+            // constructed type or method (`Box<Node>.Value`) is promoted only if
+            // its original declaration can be: a slot typed by a type parameter
+            // that is not constrained to a class (`T Value`) stays `T`, whatever
+            // reference type the type argument substitutes, so a maybe-null
+            // value stored into it keeps its bridge.
+            if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
                 return false
             }
             // Issue #4356 follow-up: a field or property declared in ANOTHER
@@ -2026,6 +2029,16 @@ partial class CSharpToGSharpTranslator {
                     case paren is ParenthesizedExpressionSyntax: IsNullOrDefaultLiteral(paren.Expression)
                     default: false
                 }
+            }
+
+            // The declared type that `ShouldPromoteToNullableReference` would render `T?`.
+            private func PromotableDeclaredType(symbol ISymbol?) ITypeSymbol? -> switch symbol {
+                case m is IMethodSymbol: m.ReturnType
+                case f is IFieldSymbol: f.Type
+                case pr is IPropertySymbol: pr.Type
+                case l is ILocalSymbol: l.Type
+                case p is IParameterSymbol: p.Type
+                default: default(ITypeSymbol?)
             }
 
             /// Issue #3501: maps a positional record's synthesized property back to

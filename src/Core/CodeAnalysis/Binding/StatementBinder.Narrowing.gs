@@ -1120,8 +1120,7 @@ internal partial class StatementBinder {
                             }
                         }
                         // Issue #5569: a use of a speculative lambda's `return` conversion to its delegate result
-                        // waits for the lambda binder's choice of the function type. Issue #5603: a use of a
-                        // `return` value of a lambda with an inferred result waits for that result type.
+                        // waits for the lambda binder's choice of the function type.
                         if access.HeldBy is {} owner {
                             owner.HoldNarrowingUse(access, Diagnostics.Skip(accessMark).ToImmutableArray())
                             Diagnostics.TruncateTo(accessMark)

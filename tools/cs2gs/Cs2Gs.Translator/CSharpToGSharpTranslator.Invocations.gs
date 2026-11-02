@@ -1992,24 +1992,21 @@ partial class CSharpToGSharpTranslator {
             out targetParameter IParameterSymbol?
         ) bool {
             targetType = nil
-            // Issue #5563: the property reads in the condition kill a fact on the `out` parameter (ADR-0208 R16).
-            // A local keeps the fact.
-            let parameter IParameterSymbol? = if index < projectedMethod!!.Parameters.Length {
+            targetParameter = if index < projectedMethod!!.Parameters.Length {
                 projectedMethod!!.Parameters[index]
             } else {
                 projectedMethod!!.Parameters.LastOrDefault()
             }
-            targetParameter = parameter
-            if parameter == nil || (index >= projectedMethod!!.Parameters.Length && !parameter.IsParams) {
+            if targetParameter == nil || (index >= projectedMethod!!.Parameters.Length && !targetParameter.IsParams) {
                 return false
             }
-            targetType = parameter.Type
+            targetType = targetParameter.Type
             let boundParameter IParameterSymbol? = if index < boundMethod!!.Parameters.Length {
                 boundMethod!!.Parameters[index]
             } else {
                 boundMethod!!.Parameters.LastOrDefault()
             }
-            let paramsElementType ITypeSymbol? = GetParamsElementType(parameter)
+            let paramsElementType ITypeSymbol? = GetParamsElementType(targetParameter)
             let valueType = this.context.GetTypeInfo(value)
             let sourceType ITypeSymbol? = valueType.Type ?? valueType.ConvertedType
             let directCollectionForm = sourceType != nil &&
