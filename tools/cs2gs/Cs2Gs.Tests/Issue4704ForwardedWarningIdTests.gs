@@ -26,10 +26,10 @@ open class Issue4704ForwardedWarningIdTests {
     @Fact
     async func TranslateStageSelfMigration_DoesNotAssertDiagnosticId() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        let pipeline = await CSharpProjectLoader.LoadProjectAsync(
+        let pipeline = await SelfMigratedCompilerSource.LoadProjectAsync(
             Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Pipeline", "Cs2Gs.Pipeline.csproj")
         )
-        let translator = await CSharpProjectLoader.LoadProjectAsync(
+        let translator = await SelfMigratedCompilerSource.LoadProjectAsync(
             Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Translator", "Cs2Gs.Translator.csproj")
         )
         Assert.True(
