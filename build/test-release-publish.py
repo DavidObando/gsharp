@@ -53,19 +53,40 @@ def vsix_manifest(version: str, marker: bool = False) -> str:
             f"<Properties>{prop}</Properties></Metadata></PackageManifest>")
 
 
+METADATA = {
+    "license": '<license type="expression">MIT</license>',
+    "projectUrl": "<projectUrl>https://github.com/DavidObando/gsharp</projectUrl>",
+    "readme": "<readme>README.md</readme>",
+    "icon": "<icon>icon.png</icon>",
+}
+
+
+def write_package(folder: Path, name: str, version: str, drop: tuple[str, ...] = (),
+                  files: dict[str, str | bytes] | None = None, replace: dict[str, str] | None = None) -> None:
+    """A .nupkg with a nuspec in the layout that `dotnet pack` writes, and the readme and icon files it names."""
+    fields = {**METADATA, **(replace or {})}
+    metadata = "".join(text for field, text in fields.items() if field not in drop)
+    nuspec = ('<?xml version="1.0" encoding="utf-8"?>'
+              '<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">'
+              f"<metadata><id>{name}</id><version>{version}</version>{metadata}</metadata></package>")
+    contents: dict[str, str | bytes] = {f"{name}.nuspec": nuspec, "README.md": "# readme", "icon.png": b"png"}
+    contents.update(files or {})
+    write_zip(folder / f"{name}.{version}.nupkg", contents)
+
+
 def make_packages(folder: Path, version: str = "0.5.212", skip: tuple[str, ...] = (), props: str = PROPS) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     for rid in RIDS:
         name = f"Gsharp.NET.Sdk.Compiler.{rid}"
         if name not in skip:
-            (folder / f"{name}.{version}.nupkg").write_bytes(b"x")
+            write_package(folder, name, version)
     for name in OTHERS:
         if name in skip:
             continue
         if name == "Gsharp.NET.Sdk":
-            write_zip(folder / f"{name}.{version}.nupkg", {"build/Gsharp.NET.Sdk.props": props})
+            write_package(folder, name, version, files={"build/Gsharp.NET.Sdk.props": props})
         else:
-            (folder / f"{name}.{version}.nupkg").write_bytes(b"x")
+            write_package(folder, name, version)
         if name != "Gsharp.Templates":
             (folder / f"{name}.{version}.snupkg").write_bytes(b"x")
 
@@ -172,6 +193,53 @@ class VerifyNugetTests(unittest.TestCase):
 
     def test_missing_directory_fails(self) -> None:
         self.assertEqual(self.verify().returncode, 1)
+
+    def test_each_missing_metadata_field_fails_in_every_package(self) -> None:
+        # Issue #5621: the RID packages had no readme or icon, and Gsharp.Templates had no license or project URL.
+        names = [f"Gsharp.NET.Sdk.Compiler.{rid}" for rid in RIDS] + list(OTHERS)
+        self.assertEqual(len(names), 12)
+        for field in METADATA:
+            for name in names:
+                with self.subTest(field=field, package=name):
+                    make_packages(self.nupkgs)
+                    files = {"build/Gsharp.NET.Sdk.props": PROPS} if name == SDK else None
+                    write_package(self.nupkgs, name, "0.5.212", drop=(field,), files=files)
+                    result = self.verify()
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"error: {name}.0.5.212.nupkg: the .nuspec has no <{field}>", result.stderr)
+
+    def test_empty_metadata_field_fails(self) -> None:
+        make_packages(self.nupkgs)
+        write_package(self.nupkgs, "Gsharp.Templates", "0.5.212", replace={"projectUrl": "<projectUrl> </projectUrl>"})
+        self.assertIn("Gsharp.Templates.0.5.212.nupkg: the .nuspec has no <projectUrl>", self.verify().stderr)
+
+    def test_readme_icon_and_license_file_must_be_in_the_package(self) -> None:
+        name = "Gsharp.NET.Sdk.Compiler.win-arm64"
+        for field, replace, missing in (
+                ("readme", "<readme>docs\\README.md</readme>", "docs\\README.md"),
+                ("icon", "<icon>images/icon.png</icon>", "images/icon.png"),
+                ("license", '<license type="file">LICENSE.txt</license>', "LICENSE.txt")):
+            with self.subTest(field=field):
+                make_packages(self.nupkgs)
+                write_package(self.nupkgs, name, "0.5.212", replace={field: replace})
+                result = self.verify()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"{name}.0.5.212.nupkg: <{field}> names {missing}, which is not in the package",
+                              result.stderr)
+
+    def test_files_named_with_a_folder_or_a_backslash_pass(self) -> None:
+        make_packages(self.nupkgs)
+        write_package(self.nupkgs, "Gsharp.Repl", "0.5.212",
+                      replace={"readme": "<readme>docs\\README.md</readme>",
+                               "license": '<license type="file">LICENSE.txt</license>'},
+                      files={"docs/README.md": "# readme", "LICENSE.txt": "MIT"})
+        result = self.verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_package_that_is_not_a_zip_fails(self) -> None:
+        make_packages(self.nupkgs)
+        (self.nupkgs / "Gsharp.Templates.0.5.212.nupkg").write_bytes(b"x")
+        self.assertIn("Gsharp.Templates.0.5.212.nupkg: cannot read the .nuspec", self.verify().stderr)
 
     def test_sdk_props_with_a_different_literal_version_fail(self) -> None:
         make_packages(self.nupkgs, props=PROPS.replace("$(GsharpSdkVersion)", "0.5.1"))
