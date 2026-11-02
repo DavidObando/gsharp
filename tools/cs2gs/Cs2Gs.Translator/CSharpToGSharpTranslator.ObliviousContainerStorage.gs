@@ -604,18 +604,7 @@ partial class CSharpToGSharpTranslator {
                     let memberType ITypeSymbol? = StorageType(member?.OriginalDefinition)
                     return memberType != nil && this.SlotTypeProvesNonNull(memberCreation, memberType)
                 }
-                // An element or member of a receiver: its type parameter is bound by the
-                // receiver's storage.
-                let receiver ExpressionSyntax? = switch assignment.Left {
-                    case access is ElementAccessExpressionSyntax: access.Expression
-                    case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
-                    default: default(ExpressionSyntax?)
-                }
-                if receiver != nil &&
-                    StorageType(member?.OriginalDefinition) is ITypeParameterSymbol receiverParameter {
-                    return this.SlotTypeProvesNonNull(assignment.Left, receiverParameter)
-                }
-                return true
+                return this.StoreTargetProvesNonNull(assignment.Left)
             }
             if parent is ReturnStatementSyntax ||
                 parent is YieldStatementSyntax ||
@@ -653,6 +642,35 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        // Whether a store into [`target`](paramref), the left of `target = value` or a
+        // target of a deconstruction, is proven non-null. The plain store and the
+        // deconstruction ask this one question. An element access asks the element-store
+        // query that both forms share (#2259, #5595): a slot that accepts nil and
+        // oblivious container storage (#5537) are not proven. As in
+        // `BridgeDeconstructedElementStore`, a deconstructed array element whose storage
+        // is not a declaration is not proven either (#5598); the plain store keeps its
+        // #2259 decision there. A type parameter of the receiver is bound by the
+        // receiver's storage. A discard and storage that the analysis widens are not
+        // proven; any other declared target is.
+        private func StoreTargetProvesNonNull(target ExpressionSyntax, deconstructed bool = false) bool {
+            if this.StoreTargetIsObliviousContainerElement(target) {
+                return false
+            }
+            let member ISymbol? = this.context.GetSymbolInfo(target).Symbol
+            if member is IDiscardSymbol || this.ObliviousContainerPositions(member)?.Contains("") == true {
+                return false
+            }
+            if (target is ElementAccessExpressionSyntax || target is MemberAccessExpressionSyntax) &&
+                StorageType(member?.OriginalDefinition) is ITypeParameterSymbol receiverParameter {
+                return this.SlotTypeProvesNonNull(target, receiverParameter)
+            }
+            if target is ElementAccessExpressionSyntax access {
+                return !(deconstructed && member == nil && this.ArrayElementStorage(access).Root == nil) &&
+                    this.ElementAccessStoreRequiresNonNullReference(target)
+            }
+            return true
+        }
+
         // Whether element [`index`](paramref) of a tuple literal goes into a slot
         // that is proven non-null: an element of a declared tuple local, field,
         // parameter or return, or a deconstruction target that is declared with a
@@ -678,22 +696,21 @@ partial class CSharpToGSharpTranslator {
                             return false
                         }
                         let target = targets.Arguments[index].Expression
-                        if target is DeclarationExpressionSyntax declaration {
-                            if declaration
-                                .Type
-                                .IsVar ||
-                                declaration.Designation is not SingleVariableDesignationSyntax designation {
-                                return false
-                            }
-                            storage = model.GetDeclaredSymbol(designation)
-                        } else if target is TupleExpressionSyntax {
-                            return false
-                        } else {
-                            storage = model.GetSymbolInfo(target).Symbol
-                            if storage is IDiscardSymbol {
-                                return false
-                            }
+                        if target is not DeclarationExpressionSyntax declaration {
+                            // Existing storage, an element or a member is the target of a
+                            // plain store (`target = value`) and is decided as one.
+                            return !(target is TupleExpressionSyntax) && this.StoreTargetProvesNonNull(
+                                target,
+                                deconstructed: true
+                            )
                         }
+                        if declaration
+                            .Type
+                            .IsVar ||
+                            declaration.Designation is not SingleVariableDesignationSyntax designation {
+                            return false
+                        }
+                        storage = model.GetDeclaredSymbol(designation)
                         slotType = StorageType(storage?.OriginalDefinition)
                         position = ""
                     } else if assignment.Left is DeclarationExpressionSyntax {
