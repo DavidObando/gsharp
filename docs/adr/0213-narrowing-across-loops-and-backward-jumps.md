@@ -1339,6 +1339,14 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   candidates. A loop in the then-branch of a condition removes facts that the else-branch still has, so its entry
   removals go into the R18 condition journal and come back for the else-branch, as a condition's removals do
   (`if flag { while flag { } } else { return s.Length }`).
+  The pattern tests of ADR-0208 R19 (#5593) keep their straight-line meaning inside a loop. A constant pattern that
+  calls a user `Equals` is a plain call (A3), so it keeps the fact of a `ref` or `out` parameter, as on main. The
+  facts that such a call removes (captured locals, member paths and package variables) cannot be read in a loop
+  without a member read, a call or a conversion, and each of those already removes them at the loop entry
+  (R7 (c), R7 (e)). The body is bound by the straight-line pass, which applies R19 itself. The walker counts every
+  list pattern as a read that can run user code, including a read of a `ref` or `out` fact. This is a superset of R19, whose
+  getter and indexer rule (R16, R17) keeps the fact for `List[T]`, arrays and spans. The difference is listed
+  in the PR with its row; a syntax-level copy of the binder's indexable lookup would be a second calculation.
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
