@@ -7207,7 +7207,7 @@ class E {
     var Clear () -> void = func() { }
     override func Equals(o object?) bool {
         Clear()
-        return true
+        return false
     }
     override func GetHashCode() int32 -> 1
 }
@@ -7218,12 +7218,12 @@ func Run() int32 {
     e.Clear = func() { x = nil }
     if x == nil { return 0 }
     switch o {
-        default { }
-        case 1 { return x.Value }
+        default { return x.Value }
+        case 1 { }
     }
     return 2
 }
-Console.WriteLine(Run())`, "GS0158@22:27", "reject", "", "R19"}
+Console.WriteLine(Run())`, "GS0158@21:28", "reject", "", "R19"}
             yield[]object{"a04_5629_earlier_case_test_reaches_a_later_case_body_R19", `import System
 
 class C {
