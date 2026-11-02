@@ -97,6 +97,12 @@ internal partial class StatementBinder {
             set;
         }
 
+        /// Whether a constant pattern of the region can call a user `Equals` (ADR-0208 R19), a plain call (A3).
+        prop PatternTestsCallEquals bool {
+            get;
+            set;
+        }
+
         /// Whether a bare name that the region reads binds to a property of the enclosing type (rule W5).
         prop ReadsProperty bool {
             get;
@@ -212,6 +218,12 @@ internal partial class StatementBinder {
                 } else {
                     resolved.RunsUserOperator = true
                 }
+            }
+        }
+        for test in effects.PatternTests {
+            if PatternTestRunsUserCode(test, effects) {
+                resolved.PatternTestsCallEquals = true
+                break
             }
         }
         for name in effects.NilCompareOperandNames {
@@ -523,7 +535,28 @@ internal partial class StatementBinder {
     }
 
     // The types that the receiver can have at the call site, or `nil` when a part does not resolve.
-    private func ResolveReceiverPath(path RegionReceiverPath, effects RegionEffects) List[ReceiverType]? {
+    private func ResolveReceiverPath(
+        path RegionReceiverPath,
+        effects RegionEffects,
+        keepNullableValueAtEnd bool = false
+    ) List[ReceiverType]? {
+        let saved = keepNullableValueTypes
+        try {
+            keepNullableValueTypes = keepNullableValueAtEnd && path.Steps.Length == 0
+            return ResolveReceiverPathCore(path, effects, keepNullableValueAtEnd)
+        } finally {
+            keepNullableValueTypes = saved
+        }
+    }
+
+    // Whether (cref:AddSymbolType) keeps a nullable value type: only for the last type of a conversion site's path.
+    private var keepNullableValueTypes bool = false
+
+    private func ResolveReceiverPathCore(
+        path RegionReceiverPath,
+        effects RegionEffects,
+        keepNullableValueAtEnd bool
+    ) List[ReceiverType]? {
         var types = List[ReceiverType]()
         if path.RootType != nil {
             if ResolveTypeClause(path.RootType) is not{} declared {
@@ -542,7 +575,9 @@ internal partial class StatementBinder {
         } else {
             return nil
         }
-        for step in path.Steps {
+        for var stepIndex = 0; stepIndex < path.Steps.Length; stepIndex++ {
+            let step = path.Steps[stepIndex]
+            keepNullableValueTypes = keepNullableValueAtEnd && stepIndex == path.Steps.Length - 1
             let next = List[ReceiverType]()
             for type in types {
                 let outcome = AddStepTypes(type, step, next)
@@ -637,10 +672,15 @@ internal partial class StatementBinder {
         }
         let symbol = $scope.TryLookupSymbol(root)
         if symbol is VariableSymbol variable {
-            if !AddSymbolType(variable.Type, types) {
+            let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
+            // A narrowed variable keeps its declared type without `?`; the narrowed type stands for the value.
+            let keep = keepNullableValueTypes
+            keepNullableValueTypes = keep && narrowed == nil
+            let declaredAdded = AddSymbolType(variable.Type, types)
+            keepNullableValueTypes = keep
+            if !declaredAdded {
                 return false
             }
-            let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
             if narrowed != nil && !AddSymbolType(narrowed, types) {
                 return false
             }
@@ -666,7 +706,11 @@ internal partial class StatementBinder {
     // Adds a type symbol without its nullability. A type parameter that a member returns is substituted by the
     // binder, which the walker does not do, so it does not resolve.
     private func AddSymbolType(type TypeSymbol?, types List[ReceiverType]) bool {
-        let stripped = StripAllNullability(type)
+        let stripped = if keepNullableValueTypes {
+            StripReferenceNullability(type)
+        } else {
+            StripAllNullability(type)
+        }
         if stripped == nil || stripped is TypeParameterSymbol {
             return false
         }
@@ -1223,7 +1267,7 @@ internal partial class StatementBinder {
                         (MetadataTypeKeys.IsBuiltIn(source) && MetadataTypeKeys.IsBuiltIn(target)) {
                         continue
                     }
-                    if conversions.HasUserDefinedImplicitConversion(source, target) {
+                    if ConversionOperatorReaches(source, target) {
                         return true
                     }
                 }
@@ -1275,6 +1319,7 @@ internal partial class StatementBinder {
     private const ArgumentNil int32 = 3
     private const ArgumentByReference int32 = 4
     private const ArgumentFunction int32 = 5
+    private const ArgumentInlineDeclaration int32 = 6
 
     private func CallArgumentsRunUserConversion(
         call RegionCall,
@@ -1312,7 +1357,11 @@ internal partial class StatementBinder {
                 // candidate's delegate type it fits, so it proves no candidate by identity.
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentFunction)
-            } else if form == RegionArgumentForm.InlineDeclaration || form == RegionArgumentForm.Range {
+            } else if form == RegionArgumentForm.InlineDeclaration {
+                // `out var v` takes only a by-reference parameter, of any type.
+                argumentTypes.Add(nil)
+                kinds.Add(ArgumentInlineDeclaration)
+            } else if form == RegionArgumentForm.Range {
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentSkipped)
             } else if form == RegionArgumentForm.StringByForm {
@@ -1375,7 +1424,10 @@ internal partial class StatementBinder {
         kinds List[int32]
     ) bool {
         for var index = 0; index < parameters.Count; index++ {
-            if kinds[index] == ArgumentSkipped {
+            if !PassingModeMatches(parameters[index], kinds[index]) {
+                return false
+            }
+            if kinds[index] == ArgumentSkipped || kinds[index] == ArgumentInlineDeclaration {
                 continue
             }
             if (kinds[index] != ArgumentTyped && kinds[index] != ArgumentByReference) ||
@@ -1407,11 +1459,14 @@ internal partial class StatementBinder {
         var result = CandidateExact
         for var index = 0; index < parameters.Count; index++ {
             let kind = kinds[index]
-            if kind == ArgumentSkipped {
+            let parameter = parameters[index]
+            if !PassingModeMatches(parameter, kind) {
+                return CandidateNotApplicable
+            }
+            if kind == ArgumentSkipped || kind == ArgumentInlineDeclaration {
                 continue
             }
-            let parameter = parameters[index]
-            let stripped = StripAllNullability(parameter) ?? parameter
+            let stripped = StripReferenceNullability(parameter) ?? parameter
             var argument = CandidateExact
             if kind == ArgumentFunction {
                 argument = CandidateFree
@@ -1433,11 +1488,12 @@ internal partial class StatementBinder {
                 }
             } else if argumentTypes[index] is {} types {
                 argument = ClassifyArgument(types, parameter, stripped, explicitTypeArguments)
-            } else if MetadataTypeKeys.IsBuiltIn(stripped) || object.Equals(stripped, TypeSymbol.Object) ||
+            } else if MetadataTypeKeys.IsBuiltIn(StripNullableValue(stripped)) ||
+                object.Equals(stripped, TypeSymbol.Object) ||
                 TypeParameterTakesArgument(stripped, explicitTypeArguments) {
                 // A value of some built-in type.
                 argument = CandidateFree
-            } else if BuiltInReachesThroughOperator(stripped) {
+            } else if BuiltInReachesThroughOperator(StripNullableValue(stripped)) {
                 // A value of some built-in type reaches another type only through a conversion operator.
                 argument = CandidateUser
             } else {
@@ -1447,6 +1503,11 @@ internal partial class StatementBinder {
         }
         return result
     }
+
+    // A `ref` or `out` argument (an inline declaration included) takes only a `ref` or `out` parameter, and any other
+    // argument only a parameter that is not one (an `in` parameter is listed by value).
+    private func PassingModeMatches(parameter TypeSymbol, kind int32) bool -> (parameter is ByRefTypeSymbol) ==
+        (kind == ArgumentByReference || kind == ArgumentInlineDeclaration)
 
     private func CandidateIsExactReference(types List[TypeSymbol], parameter TypeSymbol) bool {
         for argumentType in types {
@@ -1464,7 +1525,7 @@ internal partial class StatementBinder {
         } else {
             parameter
         }
-        return StripAllNullability(referenced) ?? referenced
+        return StripReferenceNullability(referenced) ?? referenced
     }
 
     // The worst way that one argument, of any of its possible types, reaches the parameter. A conversion operator
@@ -1493,7 +1554,7 @@ internal partial class StatementBinder {
                 } else {
                     result = Math.Min(result, compound)
                 }
-            } else if conversions.HasUserDefinedImplicitConversion(argumentType, stripped) {
+            } else if ConversionOperatorReaches(argumentType, stripped) {
                 return CandidateUser
             } else if explicitTypeArguments && TypeParameterTakesArgument(stripped, false) {
                 // A type argument that the call names can take the argument through a conversion operator.
@@ -1533,13 +1594,36 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func SameClrType(argument TypeSymbol, parameter TypeSymbol) bool -> argument.ClrType is {} argumentClr &&
-        parameter.ClrType is {} parameterClr &&
+    // The effective CLR types: a nullable value type is `Nullable<T>`, while its (cref:TypeSymbol.ClrType) is `T`.
+    private func SameClrType(argument TypeSymbol, parameter TypeSymbol) bool -> NullableLifting.GetEffectiveClrType(
+        argument
+    ) is {} argumentClr &&
+        NullableLifting.GetEffectiveClrType(parameter) is {} parameterClr &&
         !parameterClr.ContainsGenericParameters &&
         ClrTypeUtilities.AreSame(argumentClr, parameterClr)
 
+    // A conversion operator converts the value to the target, directly or between their value types (a lifted
+    // conversion). Every check without the `?` of a nullable value type is kept, so no operator is missed.
+    private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol) bool {
+        let sourceValue = StripNullableValue(source)
+        return conversions.HasUserDefinedImplicitConversion(source, target) ||
+            conversions.HasUserDefinedImplicitConversion(sourceValue, target) ||
+            conversions.HasUserDefinedImplicitConversion(sourceValue, StripNullableValue(target))
+    }
+
+    private func StripNullableValue(type TypeSymbol) TypeSymbol -> if IsNullableValueType(type) {
+        (type as NullableTypeSymbol)!!.UnderlyingType
+    } else {
+        type
+    }
+
     private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol, explicitTypeArguments bool) bool {
-        let stripped = StripAllNullability(parameter) ?? parameter
+        let stripped = StripReferenceNullability(parameter) ?? parameter
+        // A nullable value parameter takes a value of its value type, or of another nullable value type, as that
+        // value type takes the value (a wrapping or a lifted conversion is predefined).
+        if IsNullableValueType(stripped) && !object.Equals(argument, stripped) && !SameClrType(argument, stripped) {
+            return ArgumentFits(StripNullableValue(argument), (stripped as NullableTypeSymbol)!!.UnderlyingType, explicitTypeArguments)
+        }
         if object.Equals(argument, stripped) || object.Equals(stripped, TypeSymbol.Object) {
             return true
         }
@@ -1756,9 +1840,18 @@ internal partial class StatementBinder {
     private func ParameterTypes(function FunctionSymbol) List[TypeSymbol] {
         let types = List[TypeSymbol]()
         for parameter in function.Parameters {
-            types.Add(parameter.Type)
+            types.Add(PassedType(parameter, parameter.Type))
         }
         return types
+    }
+
+    // A `ref` or `out` parameter is listed as a by-reference type, so that the passing mode of an argument is
+    // checked (`Use(out var v, dt)` does not take `Use(v int32, d DateTime)`).
+    private func PassedType(parameter ParameterSymbol, type TypeSymbol) TypeSymbol ->
+        if parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out {
+        ByRefTypeSymbol.Get(type)
+    } else {
+        type
     }
 
     // The parameter types of the methods of a name on a receiver, with the receiver's type arguments substituted
@@ -1837,7 +1930,7 @@ internal partial class StatementBinder {
                             (explicitTypeArguments || TypeParametersInferable(function)) {
                             let types = List[TypeSymbol]()
                             for parameter in function.Parameters {
-                                types.Add(level.SubstituteMemberType(parameter.Type) ?? parameter.Type)
+                                types.Add(PassedType(parameter, level.SubstituteMemberType(parameter.Type) ?? parameter.Type))
                             }
                             lists.Add(types)
                         }
@@ -1856,7 +1949,7 @@ internal partial class StatementBinder {
                         }
                         let types = List[TypeSymbol]()
                         for parameter in function.Parameters {
-                            types.Add(level.SubstituteMemberType(parameter.Type))
+                            types.Add(PassedType(parameter, level.SubstituteMemberType(parameter.Type)))
                         }
                         lists.Add(types)
                     }
@@ -1893,11 +1986,22 @@ internal partial class StatementBinder {
     ] {
         let types = List[TypeSymbol]()
         for var index = 0; index < parameters.Length; index++ {
+            let type = if symbolic != nil {
+                MemberLookup.GetClrMethodParameterTypeSymbol(symbolic, method, index)
+            } else {
+                ClrNullability.GetParameterTypeSymbol(parameters[index])
+            }
+            let pointee = if type is ByRefTypeSymbol byReference {
+                byReference.PointeeType
+            } else {
+                type
+            }
+            // A `ref` or `out` parameter is by reference; an `in` parameter takes a value.
             types.Add(
-                if symbolic != nil {
-                    MemberLookup.GetClrMethodParameterTypeSymbol(symbolic, method, index)
+                if parameters[index].ParameterType.IsByRef && !parameters[index].IsIn {
+                    ByRefTypeSymbol.Get(pointee)
                 } else {
-                    ClrNullability.GetParameterTypeSymbol(parameters[index])
+                    pointee
                 }
             )
         }
@@ -2009,8 +2113,44 @@ internal partial class StatementBinder {
         } catch (ex NotSupportedException) { }
     }
 
+    // ADR-0208 R19 (#5593) inside a loop: a constant pattern calls the `Equals` of its input when the shared R19
+    // decision says so for a type that the walker resolves for the subject and the value. A name that is a type
+    // tests the type (`o is Kind`); a subject that does not resolve can call it.
+    private func PatternTestRunsUserCode(test RegionPatternTest, effects RegionEffects) bool {
+        if test.Candidate is {} candidate && TestedType(candidate, out _) != nil {
+            return false
+        }
+        if test.Subject is not{} subject || ConversionTypes(subject, effects) is not{} inputs || inputs.Count == 0 {
+            return true
+        }
+        let values = if test.Value is {} value {
+            ConversionTypes(value, effects)
+        } else {
+            default(List[TypeSymbol]?)
+        }
+        for input in inputs {
+            if values == nil || values.Count == 0 {
+                if PatternTestOfTypesRunsUserCode(input, test.ValueIsNull, nil) {
+                    return true
+                }
+                continue
+            }
+            for valueType in values {
+                if PatternTestOfTypesRunsUserCode(input, test.ValueIsNull, valueType) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func PatternTestOfTypesRunsUserCode(input TypeSymbol, valueIsNull bool, valueType TypeSymbol?) bool ->
+        ConstantPatternTestRunsUserCode(BoundConstantPattern.ClassifyTestOf(input, valueIsNull, valueType), input, valueIsNull)
+
+    // The types of a value at a conversion site. A nullable value type keeps its `?` (`DateTime?` and `DateTime`
+    // take different conversions); reference nullability does not change one.
     private func ConversionTypes(path RegionReceiverPath, effects RegionEffects) List[TypeSymbol]? {
-        if ResolveReceiverPath(path, effects) is not{} types {
+        if ResolveReceiverPath(path, effects, keepNullableValueAtEnd: true) is not{} types {
             return nil
         }
         let result = List[TypeSymbol]()
@@ -2467,6 +2607,25 @@ internal partial class StatementBinder {
 
     private func StripAllNullability(type TypeSymbol?) TypeSymbol? -> StripNullability(type)
 
+    // The type without reference nullability and platform layers; a nullable value type keeps its `?`.
+    private func StripReferenceNullability(type TypeSymbol?) TypeSymbol? {
+        var current = type
+        while current is NullableTypeSymbol or PlatformTypeSymbol {
+            if current is NullableTypeSymbol nullable {
+                if NullableLifting.IsValueTypeNullable(nullable) {
+                    return current
+                }
+                current = nullable.UnderlyingType
+            } else {
+                current = (current as PlatformTypeSymbol)!!.UnderlyingType
+            }
+        }
+        return current
+    }
+
+    private func IsNullableValueType(type TypeSymbol) bool -> type is NullableTypeSymbol nullable &&
+        NullableLifting.IsValueTypeNullable(nullable)
+
     /// Whether the fact at [`path`](paramref) is a type-test fact: the narrowed type differs from
     /// the declared type with one nullable layer removed. A member path is never one here.
     private func FactKind(path AccessPath, narrowedType TypeSymbol) string {
@@ -2688,7 +2847,8 @@ internal partial class StatementBinder {
             effects.ContainsSuspension ||
             effects.ContainsIteration ||
             resolved.RunsUserOperator ||
-            resolved.RunsUserCodeOnWrite
+            resolved.RunsUserCodeOnWrite ||
+            resolved.PatternTestsCallEquals
         // Rule W5: every member or index read is an unknown getter, which is a call.
         let readLike = effects.ContainsMemberRead || resolved.ReadsProperty
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite

@@ -614,12 +614,13 @@ internal partial class StatementBinder {
     }
 
     // ADR-0213 table T5: the prelude of a `for ... in` runs before every body run. A tuple element, a field and
-    // the element itself are read without user code; the conversion of a typed loop variable, a `Deconstruct`
-    // call and a property getter can run it.
+    // the element itself are read without user code; a `Deconstruct` call, a property getter and a user-defined
+    // conversion of a typed loop variable (bound as a call) can run it. A (cref:BoundConversionExpression) is a
+    // predefined conversion, which main's collector also walks through (`for n int64 in values`).
     private func LoopPreludeRunsUserCode(prelude ImmutableArray[BoundStatement]) bool {
         for statement in prelude {
             if statement is BoundVariableDeclaration declaration &&
-                declaration.Initializer is BoundTupleElementAccessExpression or
+                WithoutPredefinedConversions(declaration.Initializer) is BoundTupleElementAccessExpression or
                 BoundFieldAccessExpression or
                 BoundVariableExpression {
                 continue
@@ -627,6 +628,14 @@ internal partial class StatementBinder {
             return true
         }
         return false
+    }
+
+    private func WithoutPredefinedConversions(expression BoundExpression?) BoundExpression? {
+        var current = expression
+        while current is BoundConversionExpression conversion {
+            current = conversion.Expression
+        }
+        return current
     }
 
     private func BindConditionedLoopBody(

@@ -240,6 +240,37 @@ internal sealed class RegionMemberRead {
     }
 }
 
+/// A constant pattern test (ADR-0208 R19, #5593). The consumer decides with the shared R19 classification whether
+/// the test calls the `Equals` of its input, which is a plain call (amendment A3).
+internal sealed class RegionPatternTest {
+    init(subject RegionReceiverPath?, value RegionReceiverPath?, valueIsNull bool, candidate RegionTypeTest?) {
+        Subject = subject
+        Value = value
+        ValueIsNull = valueIsNull
+        Candidate = candidate
+    }
+
+    /// Gets the path of the tested value, or `nil` when the walker cannot follow it.
+    prop Subject RegionReceiverPath? {
+        get;
+    }
+
+    /// Gets the path of the pattern value, or `nil` when the walker cannot type it.
+    prop Value RegionReceiverPath? {
+        get;
+    }
+
+    /// Whether the pattern value is the `nil` literal.
+    prop ValueIsNull bool {
+        get;
+    }
+
+    /// Gets the type that a name-shaped pattern tests instead, when the name is a type (`o is Kind`).
+    prop Candidate RegionTypeTest? {
+        get;
+    }
+}
+
 /// An operator whose operands are names or literals; the consumer decides whether it is predefined
 /// (ADR-0208 construct table: a user-defined operator is a call).
 internal sealed class RegionOperator {
@@ -427,6 +458,7 @@ internal sealed class RegionEffects {
         IndexAccesses = List[RegionCall]()
         PatternIndexAccesses = List[RegionCall]()
         PatternReads = List[RegionMemberRead]()
+        PatternTests = List[RegionPatternTest]()
         NilCompareOperandPaths = List[RegionReceiverPath?]()
         Declared = List[string]()
         BareReads = List[string]()
@@ -463,6 +495,11 @@ internal sealed class RegionEffects {
 
     /// Gets the reads of a constant pattern (`key is holder.P`), which can name a type or a constant instead.
     prop PatternReads List[RegionMemberRead] {
+        get;
+    }
+
+    /// Gets the constant pattern tests (`o is 1`, `case 1`), in source order of the walk.
+    prop PatternTests List[RegionPatternTest] {
         get;
     }
 
@@ -654,6 +691,7 @@ internal sealed class RegionEffects {
         IndexAccesses.AddRange(other.IndexAccesses)
         PatternIndexAccesses.AddRange(other.PatternIndexAccesses)
         PatternReads.AddRange(other.PatternReads)
+        PatternTests.AddRange(other.PatternTests)
         NilCompareOperandPaths.AddRange(other.NilCompareOperandPaths)
         MemberReads.AddRange(other.MemberReads)
         Operators.AddRange(other.Operators)

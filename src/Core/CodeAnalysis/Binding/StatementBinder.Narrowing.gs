@@ -5184,15 +5184,27 @@ internal partial class StatementBinder {
         /// of a reference or nullable type) never reaches it. A nullable value input holds its underlying type,
         /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
         internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
-            if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
-                return false
-            }
             let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
-            if value is BoundLiteralExpression{Value: nil} ||
-                (value is BoundDefaultExpression && IsNullDefault(value.Type)) {
+            return ConstantPatternTestRunsUserCode(
+                BoundConstantPattern.ClassifyTest(node.Type, node.Value),
+                node.Type,
+                value is BoundLiteralExpression{Value: nil} ||
+                    (value is BoundDefaultExpression && IsNullDefault(value.Type))
+            )
+        }
+
+        /// The one R19 decision for a constant pattern's test of an input of type [`inputType`](paramref), which the
+        /// bound pattern and the loop walker (ADR-0213) both use. `valueIsNull` is whether the pattern value is null
+        /// for every instantiation.
+        internal func ConstantPatternTestRunsUserCode(
+            test ConstantPatternTestKind,
+            inputType TypeSymbol,
+            valueIsNull bool
+        ) bool {
+            if test != ConstantPatternTestKind.ObjectEquals || valueIsNull {
                 return false
             }
-            if node.Type is not NullableTypeSymbol nullable {
+            if inputType is not NullableTypeSymbol nullable {
                 return true
             }
             let underlying = nullable.UnderlyingType

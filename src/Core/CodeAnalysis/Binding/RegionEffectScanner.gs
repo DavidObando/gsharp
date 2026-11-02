@@ -351,9 +351,17 @@ internal sealed class RegionEffectScanner {
                 Pop()
             }
             case SyntaxKind.ListPattern {
-                // A list pattern reads the length and the elements of its subject (rule W5).
+                // A list pattern reads the length and the elements of its subject (rule W5). Its elements test
+                // elements, which have no path.
                 RecordMemberRead()
                 RecordRead(nil, nil)
+                let outer = patternSubject
+                patternSubject = nil
+                VisitChildren(node)
+                patternSubject = outer
+            }
+            case SyntaxKind.ConstantPattern {
+                RecordPatternTest(cast[ConstantPatternSyntax](node).Expression, nil)
                 VisitChildren(node)
             }
             case SyntaxKind.IfStatement {
@@ -457,6 +465,7 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.TypeOrConstantPattern {
                 let pattern = cast[TypeOrConstantPatternSyntax](node)
+                RecordPatternTest(pattern.Expression, TypeTest("", pattern.CandidateType, true))
                 constantPatternDepth++
                 Visit(pattern.Expression)
                 constantPatternDepth--
@@ -1165,6 +1174,7 @@ internal sealed class RegionEffectScanner {
         let patternIndexAccessesBefore = current.PatternIndexAccesses.Count
         let readsBefore = current.MemberReads.Count
         let patternReadsBefore = current.PatternReads.Count
+        let patternTestsBefore = current.PatternTests.Count
         let nilComparesBefore = current.NilCompareOperandPaths.Count
         let operatorsBefore = current.Operators.Count
         let conversionsBefore = current.Conversions.Count
@@ -1269,6 +1279,23 @@ internal sealed class RegionEffectScanner {
             if read.Receiver != nil {
                 current.PatternReads[i] = RegionMemberRead(Rebase(read.Receiver), read.Member)
             }
+        }
+        for var i = patternTestsBefore; i < current.PatternTests.Count; i++ {
+            let test = current.PatternTests[i]
+            current.PatternTests[i] = RegionPatternTest(
+                if test.Subject == nil {
+                    default(RegionReceiverPath?)
+                } else {
+                    Rebase(test.Subject)
+                },
+                if test.Value == nil {
+                    default(RegionReceiverPath?)
+                } else {
+                    Rebase(test.Value)
+                },
+                test.ValueIsNull,
+                test.Candidate
+            )
         }
         for var i = nilComparesBefore; i < current.NilCompareOperandPaths.Count; i++ {
             if current.NilCompareOperandPaths[i] is {} compared {
@@ -2671,6 +2698,28 @@ internal sealed class RegionEffectScanner {
                 current.TypeTests.Add(TypeTest(name, candidate.CandidateType, true))
             }
         }
+    }
+
+    // ADR-0208 R19 (#5593): a constant pattern can call the `Equals` of the tested value; the consumer decides it
+    // from the types of the subject and the value.
+    private func RecordPatternTest(value ExpressionSyntax, candidate RegionTypeTest?) {
+        if !Active() {
+            return
+        }
+        let unwrapped = UnwrapParentheses(value)
+        let isNull = unwrapped is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.NilKeyword
+        current.PatternTests.Add(
+            RegionPatternTest(
+                patternSubject,
+                if isNull {
+                    default(RegionReceiverPath?)
+                } else {
+                    BuildPath(unwrapped)
+                },
+                isNull,
+                candidate
+            )
+        )
     }
 
     // The type patterns that test the subject itself, through parentheses, `not`, `and` and `or`.
