@@ -3218,6 +3218,19 @@ func Run(ref text string?, x int32) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("comparison-with-an-unresolved-operand-counts (A3)", `package T
+import System
+func Pick[T](v T) T -> v
+func Run(ref text string?, token DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if Pick(token) == Pick(token) { n++ }
+    }
+    return n
+}
+func Main() { }`, "GS0158@7:16")
             return rows
         }
     }

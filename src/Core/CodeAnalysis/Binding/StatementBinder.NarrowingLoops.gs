@@ -1146,11 +1146,11 @@ internal partial class StatementBinder {
     }
 
     // Whether an operand resolves to an imported type that is not built in, whose operators are imported methods. An
-    // operand that does not resolve is not counted here (the walker cannot type a call result such as an extension
-    // method's).
+    // operand that does not resolve (a generic call result such as `Pick(token)`) can have such a type, so it counts
+    // (coordinator decision 2026-11-01: what the walker cannot resolve can run user code).
     private func OperandIsImportedType(operand RegionReceiverPath, effects RegionEffects) bool {
         if ResolveReceiverPath(operand, effects) is not{} types {
-            return false
+            return true
         }
         for type in types {
             let symbol = if type.Clr is {} clr {
