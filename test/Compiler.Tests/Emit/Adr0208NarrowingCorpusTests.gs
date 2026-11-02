@@ -413,7 +413,8 @@ open class Adr0208NarrowingCorpusTests {
                 "y22_5593_composite_discard_element_reads_no_element_R19",
                 "y23_5593_reference_default_pattern_on_a_nullable_object_keeps_the_fact_R19",
                 "y24_5593_default_of_a_type_parameter_is_not_null_R19",
-                "y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19"
+                "y25_5593_empty_property_pattern_on_a_value_element_reads_no_element_R19",
+                "y26_5593_default_of_a_source_class_is_null_R19"
             },
             names
         )
@@ -7756,6 +7757,36 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "1", "R19"}
+            yield[]object{"y26_5593_default_of_a_source_class_is_null_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+class Box {
+    var Id int32 = 0
+}
+struct Pair {
+    var A int32
+}
+func Run(o object?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if o is not default(Box) {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

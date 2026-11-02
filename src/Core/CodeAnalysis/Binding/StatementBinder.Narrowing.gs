@@ -5269,18 +5269,17 @@ internal partial class StatementBinder {
             default: true
         }
 
-        // The default of a type is null for every instantiation only for a value-type `Nullable<T>` or a known
-        // reference type. A type parameter (`default(T?)` is zero for `T` = `int32`) or a value type does not count.
+        // The default of a type is null for every instantiation only for a value-type `Nullable<T>` (BCL or source) or
+        // a reference type (`Binder.IsReferenceTypeForConstraint`: a source class counts, and so does a type parameter
+        // with a `class` constraint). An unconstrained type parameter (`default(T)` is zero for `T` = `int32`) or a value
+        // type does not count.
         private func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
-            NullableLifting.IsValueTypeNullable(nullable) || IsKnownReferenceType(nullable.UnderlyingType)
+            NullableLifting.IsAnyValueTypeNullable(nullable) || Binder.IsReferenceTypeForConstraint(
+                nullable.UnderlyingType
+            )
         } else {
-            IsKnownReferenceType(type)
+            Binder.IsReferenceTypeForConstraint(type)
         }
-
-        private func IsKnownReferenceType(type TypeSymbol) bool -> type is not TypeParameterSymbol &&
-            type.ClrType is {} clrType &&
-            !clrType.IsValueType &&
-            !clrType.IsGenericParameter
 
         /// ADR-0208 R19 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals`
         /// test (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual
