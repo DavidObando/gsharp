@@ -47,6 +47,8 @@ partial class CSharpToGSharpTranslator {
             let hasExplicitType = !declaration!!.Type.IsVar
             for declarator in declaration!!.Variables {
                 var localAcceptsNil = false
+                var bridgeTarget ILocalSymbol? = nil
+                var bridgeTargetType ITypeSymbol? = nil
                 var initializer GExpression?
                 if declarator.Initializer == nil {
                     initializer = nil
@@ -116,12 +118,8 @@ partial class CSharpToGSharpTranslator {
                             )
                         }
                     }
-                    initializer = this.ForgiveNullableReferenceValue(
-                        initializerSyntax,
-                        initializer,
-                        targetType,
-                        localTarget
-                    )
+                    bridgeTarget = localTarget
+                    bridgeTargetType = targetType
                 }
                 var binding BindingKind
                 if isConst {
@@ -352,6 +350,19 @@ partial class CSharpToGSharpTranslator {
                         namedDelegateLocalType,
                         this.context,
                         declaration!!.Type.GetLocation()
+                    )
+                }
+                // Issue #5602: the initializer is a store into the storage that the
+                // declaration emits. A type clause fixes that storage, so a promoted
+                // value gets the bridge that an assignment to the local gets. Without
+                // a clause, G# infers the storage from the initializer.
+                if bridgeTarget != nil {
+                    initializer = this.ForgiveNullableReferenceValue(
+                        declarator.Initializer!!.Value,
+                        initializer,
+                        bridgeTargetType,
+                        bridgeTarget,
+                        includePromotedValue: type != nil
                     )
                 }
                 // Issue #5561: record whether the emitted storage accepts nil.

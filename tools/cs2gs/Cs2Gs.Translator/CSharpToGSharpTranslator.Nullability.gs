@@ -693,23 +693,34 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-            if symbol is ILocalSymbol local && !this.ShouldPromoteToNullableReference(local) &&
-                local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInitializer}} {
-                return this.IsNullablePromotedValue(localInitializer)
-            }
             return switch symbol {
-                // Issue #5561: a local that a deconstruction or an `out` argument declares holds
-                // the widened declaration it receives.
-                case local is ILocalSymbol: this.IsTranslatorWidenedDeclaration(local)
+                case local is ILocalSymbol: this.LocalHoldsPromotedValue(local)
                 case _ is IFieldSymbol or
                     _ is IPropertySymbol or
                     _ is IParameterSymbol or
                     _ is IMethodSymbol: this.ShouldPromoteToNullableReference(symbol)
                 default: false
             }
+        }
+
+        /// Issue #5602: whether [`local`](paramref) holds a value that G# types `T?` in an oblivious
+        /// compilation. The receiver rule, the value rules and the store bridge ask this one question.
+        /// @remarks A local whose declaration emitted non-null storage (`EmittedLocalStorageAcceptsNil`)
+        /// holds a non-null value: the declaration bridged its initializer. G# infers any other
+        /// declared local from its initializer. A local that a deconstruction or an `out` argument
+        /// declares holds the widened declaration it receives (#5561).
+        private func LocalHoldsPromotedValue(local ILocalSymbol) bool {
+            if this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) && !acceptsNil {
+                return false
+            }
+            if !this.ShouldPromoteToNullableReference(local) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInitializer}} {
+                return this.IsNullablePromotedValue(localInitializer)
+            }
+            return this.IsTranslatorWidenedDeclaration(local)
         }
 
         // Issue #3676: whether <paramref name="expression"/> reads a
