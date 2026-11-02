@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System.Collections.Generic
 
 /// ```xmldoc
 /// <content>
@@ -64,6 +65,8 @@ internal partial class ExpressionBinder {
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
+        // Issue #5613: the then-block value converts to the common type in the narrowing that the header proves.
+        var thenNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -75,7 +78,13 @@ internal partial class ExpressionBinder {
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
             (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
-            () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+            () -> {
+                let value = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+                thenNarrowing = Dictionary[AccessPath, TypeSymbol](
+                    binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1].Entries
+                )
+                return value
+            }
         )
         var whenTrue = whenTrueBound
         var anyInvalid = false
@@ -119,7 +128,12 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(BranchValueLocation(syntax.ThenBlock), whenTrue, resultType)
+        let convertedTrue = ConvertConditionalBranch(
+            BranchValueLocation(syntax.ThenBlock),
+            whenTrue,
+            resultType,
+            thenNarrowing
+        )
         let convertedFalse = ConvertConditionalBranch(
             BranchValueLocation(syntax.ElseExpression!!),
             whenFalse,

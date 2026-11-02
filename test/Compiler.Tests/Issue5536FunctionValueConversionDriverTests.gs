@@ -1251,7 +1251,8 @@ func Main() {
 
     /// Issue #5613 controls: a branch whose common type is `string?` takes the declared value, so the `goto` that
     /// removes the narrowing gives nil. A `goto` that keeps the narrowing gives a `string`. A branch that proves its
-    /// own narrowing (`s != nil ? s : "x"`) does not need the outer narrowing. Each runs as C# runs it.
+    /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. Each runs as C#
+    /// runs it.
     @Fact
     func BranchValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1295,7 +1296,14 @@ func Main() {
             ),
             ("U() ?? s", "U() ?? s", "n = n + 0", "Len(t)", "Len(t)"),
             ("s != nil ? s : \"x\"", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)"),
-            ("if s != nil { s } else { \"x\" }", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)")
+            ("if s != nil { s } else { \"x\" }", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)"),
+            (
+                "if let q = U() && s != nil { s } else { \"x\" }",
+                "U() is {} q && s != null ? s : \"x\"",
+                "s = nil",
+                "Len(t)",
+                "Len(t)"
+            )
         }
         let source = StringBuilder(BranchValuePrelude)
         let oracle = StringBuilder(
@@ -1333,7 +1341,7 @@ func Main() {
         }
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrue111111")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrue1111111")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2288,6 +2296,7 @@ class Program {
             "if n > 1 { \"t\" } else { @s }",
             "if n > 1 { \"t\" } else if n > 2 { \"u\" } else { n = n + 1\n                @s }",
             "if let q = U() { q } else { @s }",
+            "if let q = U() { @s } else { \"x\" }",
             "switch n { case 5: \"t\" default: @s }",
             "U() ?? @s",
             "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                @s }"

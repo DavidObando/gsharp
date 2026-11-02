@@ -1108,7 +1108,7 @@ internal partial class ExpressionBinder {
             // Issue #5613: the result local takes the type of the value, as `let t = s` does. A narrowed read converts
             // to it with the backward `goto` check, where the narrowing frames of the block still hold.
             if conversions.IsNarrowedBranchValue(value) {
-                value = conversions.BindConversion(valueSyntax.Location, value, value.Type)
+                value = conversions.BindBranchConversion(valueSyntax.Location, value, value.Type)
             }
             let resultVariable = LocalVariableSymbol(
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
