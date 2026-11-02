@@ -33,7 +33,7 @@ open class Issue4681ChannelsNullPassThroughTests {
     @Fact
     async func ChannelsRuntimeSelfMigration_NeverAssertsAnElementValue() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        let project = await CSharpProjectLoader.LoadProjectAsync(
+        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
             Path.Combine(repoRoot, "src", "Sdk", "Gsharp.Runtime.Channels", "Gsharp.Runtime.Channels.csproj")
         )
         Assert.True(
@@ -81,7 +81,7 @@ open class Issue4681ChannelsNullPassThroughTests {
     @Fact
     async func NilElementTests_MigrateWithoutTupleMemberReadsOrNilTupleLiterals() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        let project = await CSharpProjectLoader.LoadProjectAsync(
+        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
             Path.Combine(repoRoot, "test", "Runtime.Channels.Tests", "Runtime.Channels.Tests.csproj")
         )
         let document = Enumerable.Single(
