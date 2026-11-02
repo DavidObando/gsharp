@@ -70,6 +70,7 @@ internal class DocumentTranslationState {
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        LocalHoldsPromotedValueAnswers = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
@@ -424,6 +425,12 @@ internal class DocumentTranslationState {
     // A deconstruction into the local stores its element as is when it does,
     // and bridges it when it does not.
     prop EmittedLocalStorageAcceptsNil Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5602: the answers of `LocalHoldsPromotedValue`. An answer depends only on the
+    // emitted-storage records and on the declarations, so a new record clears the answers.
+    prop LocalHoldsPromotedValueAnswers Dictionary[ILocalSymbol, bool] {
         get;
     }
 

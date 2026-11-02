@@ -368,6 +368,7 @@ partial class CSharpToGSharpTranslator {
                 // Issue #5561: record whether the emitted storage accepts nil.
                 if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
                     (type != nil || initializer != nil) {
+                    this.state.LocalHoldsPromotedValueAnswers.Clear()
                     this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
                         type.IsNullable
                     } else {

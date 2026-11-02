@@ -710,6 +710,17 @@ partial class CSharpToGSharpTranslator {
         /// declared local from its initializer. A local that a deconstruction or an `out` argument
         /// declares holds the widened declaration it receives (#5561).
         private func LocalHoldsPromotedValue(local ILocalSymbol) bool {
+            // The initializer query reads an alias chain twice for each link, so the answers are
+            // kept (`LocalHoldsPromotedValueAnswers`).
+            if this.state.LocalHoldsPromotedValueAnswers.TryGetValue(local, out var answer) {
+                return answer
+            }
+            let result = this.LocalHoldsPromotedValueCore(local)
+            this.state.LocalHoldsPromotedValueAnswers[local] = result
+            return result
+        }
+
+        private func LocalHoldsPromotedValueCore(local ILocalSymbol) bool {
             if this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) && !acceptsNil {
                 return false
             }
