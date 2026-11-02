@@ -146,6 +146,8 @@ class Derived : Base {
 }
 ```
 
+Inside its declaring type, an auto-property access lowers to the private backing field only when the dispatch is exact (issue #5630): the property is not `open` and not `override`, or the declaring type has no subclass (a struct, or a class that is neither `open` nor `sealed`). Otherwise the access calls the accessor, so a `Base` member that reads `Label` above runs the `Derived` override, as in C#. A constructor store to a get-only auto-property has no setter, so it always writes the backing field.
+
 ### 4. Accessibility
 
 Explicit abstract class properties use `abstract prop`, optionally
