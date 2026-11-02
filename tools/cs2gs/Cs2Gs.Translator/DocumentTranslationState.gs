@@ -69,6 +69,7 @@ internal class DocumentTranslationState {
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
@@ -414,6 +415,15 @@ internal class DocumentTranslationState {
     // side (RoslynAnalyzerApiMap.IsGSharpNullableCapableType), so a miss costs a
     // redundant `!!`, never a bare dereference of a `T?`.
     prop EmittedLocalGSharpNullability Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5561: for each local cs2gs EMITTED, whether its G# storage accepts
+    // nil: its type clause, or else whether the initializer that was actually
+    // emitted is not certainly non-null (`GSharpExpressionIsStaticallyNonNull`).
+    // A deconstruction into the local stores its element as is when it does,
+    // and bridges it when it does not.
+    prop EmittedLocalStorageAcceptsNil Dictionary[ILocalSymbol, bool] {
         get;
     }
 

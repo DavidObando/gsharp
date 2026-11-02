@@ -97,10 +97,15 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 plan = selection(path)
                 self.assertEqual(set(plan["projects"].split()), all_tests)
-                self.assertTrue(ci.BUILD_JOBS.issubset(plan["jobs"]))
+                self.assertTrue(ci.COMPILER_JOBS.issubset(plan["jobs"]))
+                self.assertFalse(ci.EDITOR_JOBS.intersection(plan["jobs"]))
+                self.assertEqual(plan["docs_jobs"], [])
+                self.assertEqual(plan["harness_matrix"], {"name": ["comment-checker"]})
         for path in ("global.json", "Directory.Build.props", "new/unknown.input",
                      ".github/workflows/build.yml", "build/ci-selection.py", "GSharp.slnx"):
-            self.assertTrue(selection(path)["full"], path)
+            plan = selection(path)
+            self.assertTrue(plan["full"], path)
+            self.assertFalse(ci.GO_JOBS.intersection(plan["jobs"]), path)
 
     def test_owning_suites_and_downstream_consumers(self):
         for path, suites, jobs in (
@@ -439,10 +444,35 @@ class PublishJobTests(unittest.TestCase):
             writes = "contents: write" in block
             self.assertEqual(writes, name in {"publish-github-release", "publish-finalize"}, name)
             self.assertNotIn("environment:", block)
-        for secret, owner in (("NUGET_API_KEY", {"publish-nuget-compiler", "publish-nuget-sdk"}),
+        for secret, owner in (("NUGET_API_KEY", set()),
                               ("VSCE_PAT", {"publish-vscode-marketplace", "publish-visual-studio-marketplace"})):
             self.assertEqual({n for n in self.JOBS if f"secrets.{secret}" in job(self.text, n)}, owner)
         self.assertIn("runs-on: windows-latest", job(self.text, "publish-visual-studio-marketplace"))
+
+    def test_the_nuget_jobs_use_trusted_publishing(self):
+        # #5535: nuget.org trusted publishing. Only the two NuGet jobs get id-token: write, and no job reads the
+        # long-lived secret. Each job requests its own short-lived key right before its push.
+        self.assertNotIn("secrets.NUGET_API_KEY", self.text)
+        oidc = {n for n in self.JOBS if re.search(r"(?m)^    permissions:\n(?:\s+#.*\n)*(?:      [\w-]+: \w+\n)*"
+                                                   r"      id-token: write$", job(self.text, n))}
+        self.assertEqual(oidc, {"publish-nuget-compiler", "publish-nuget-sdk"})
+        for name, group, after in (("publish-nuget-compiler", "compiler", "--wait-minutes 30"),
+                                   ("publish-nuget-sdk", "sdk", "--wait-minutes 15 --require-sdk")):
+            with self.subTest(job=name):
+                block = job(self.text, name)
+                self.assertRegex(block, r"(?m)^      contents: read$")
+                login = block.index("uses: NuGet/login@v1")
+                self.assertIn("id: nuget-login\n        uses: NuGet/login@v1\n        with:\n          user: david-obando\n",
+                              block)
+                key = "NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}\n"
+                self.assertEqual(block.count("steps.nuget-login.outputs"), 1)
+                push = block.index(f"nuget-push --group {group}")
+                self.assertLess(login, block.index(key))
+                self.assertLess(block.index(key), push)
+                # Only the feed checks follow the push; they need no key, so a long wait cannot outlive it.
+                self.assertLess(push, block.index(after))
+                # The push step is the next step after the login step.
+                self.assertEqual(block[login:push].count("      - name:"), 1)
 
     def test_scripts_vsce_pin_draft_and_artifacts(self):
         self.assertIn("nuget-push --group compiler", job(self.text, "publish-nuget-compiler"))
@@ -527,11 +557,30 @@ class WorkflowTests(unittest.TestCase):
 
     def test_official_commands_artifacts_and_publication_dependencies_stay(self):
         text = (ROOT / ".github/workflows/build.yml").read_text()
-        for name in ("build", "tests", "test-partition"):
+        for name in ("build", "test-partition"):
             block = job(text, name)
             self.assertIn("dotnet restore GSharp.slnx --locked-mode", block)
             self.assertIn("dotnet build GSharp.slnx --configuration Release --no-restore -graph", block)
             self.assertIn("if: github.event_name != 'pull_request'", block)
+        self.assertEqual(job(text, "build").count("gsfmt.dll --check ."), 1)
+        self.assertIn("name: test-build-outputs", job(text, "test-partition"))
+        tests_block = job(text, "tests")
+        self.assertIn("needs: [select, discover-tests, test-partition]", tests_block)
+        self.assertIn("dotnet restore GSharp.slnx --locked-mode", tests_block)
+        self.assertIn("name: test-build-outputs", tests_block)
+        self.assertNotIn("dotnet build GSharp.slnx", tests_block)
+        self.assertNotIn("ci-projects.py build", tests_block)
+        self.assertNotIn("dotnet build csharp-source/GSharp.sln", tests_block)
+        nightly = (ROOT / ".github/workflows/cs2gs-apps-nightly.yml").read_text()
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", nightly)
+        self.assertIn("legs:", nightly)
+        self.assertNotIn("replace(", nightly)
+        self.assertNotIn("matrix.app", job(nightly, "app").split("runs-on:")[0].split("if:")[1])
+        self.assertIn('--expect "${EXPECTED_LEGS,,}"', job(nightly, "gate"))
+        self.assertNotIn("Build cs2gs (Release)", job(nightly, "csharp-validate"))
+        selfmig = (ROOT / "build/selfmig-common.sh").read_text()
+        self.assertIn("SELFMIG_PREREQUISITES_RESTORED", selfmig)
+        self.assertIn("SELFMIG_CORPUS_RESTORED", selfmig)
         # The publish jobs are covered by PublishJobTests (ADR-0218).
         for artifact in ("nuget-packages", "vscode-gsharp-vsix", "visual-studio-gsharp-vsix"):
             self.assertIn(f"name: {artifact}", job(text, "publish-verify"))

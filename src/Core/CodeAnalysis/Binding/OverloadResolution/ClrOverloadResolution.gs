@@ -4005,10 +4005,7 @@ internal shared class ClrOverloadResolution {
             var invoke MethodInfo?
             var invokeParams[]ParameterInfo
             try {
-                var delegateType Type? = parameters[paramIndex].ParameterType
-                if delegateType == nil {
-                    return false
-                }
+                var delegateType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
                 // Issue #2375: mirror UnifyForInference's #2142 unwrap — a
                 // deferred lambda slot whose delegate parameter is
                 // `Expression<TDelegate>` (e.g. `HasOne<TRelated>(Expression<Func<TEntity, TRelated>>)`)
@@ -7457,6 +7454,22 @@ internal shared class ClrOverloadResolution {
         }
         return SatisfiesDeclaredConstraints(typeParams, typeArgs, typeArgSymbols, out _, out _)
     }
+
+    /// Issue #5569: whether a closed type argument satisfies the declared constraints of one method or type
+    /// parameter, by the rules that a candidate's inferred type arguments use.
+    /// @param typeParameter The generic parameter.
+    /// @param typeArgument The closed type argument.
+    /// @returns `true` when every declared constraint holds.
+    internal func SatisfiesTypeParameterConstraints(
+        typeParameter Type,
+        typeArgument Type
+    ) bool -> SatisfiesDeclaredConstraints(
+        []Type{typeParameter},
+        []Type{typeArgument},
+        default(ImmutableArray[TypeSymbol?]),
+        out _,
+        out _
+    )
 
     private func SatisfiesDeclaredConstraints(
         typeParams[]Type,

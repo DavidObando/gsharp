@@ -701,9 +701,11 @@ partial class CSharpToGSharpTranslator {
                 return this.IsNullablePromotedValue(localInitializer)
             }
             return switch symbol {
+                // Issue #5561: a local that a deconstruction or an `out` argument declares holds
+                // the widened declaration it receives.
+                case local is ILocalSymbol: this.IsTranslatorWidenedDeclaration(local)
                 case _ is IFieldSymbol or
                     _ is IPropertySymbol or
-                    _ is ILocalSymbol or
                     _ is IParameterSymbol or
                     _ is IMethodSymbol: this.ShouldPromoteToNullableReference(symbol)
                 default: false
@@ -1211,78 +1213,22 @@ partial class CSharpToGSharpTranslator {
             return element != nil && this.IsTranslatorWidenedDeclaration(element)
         }
 
-        // Issue #5508: the declaration whose value a deconstructed local receives:
-        // the `Deconstruct` out parameter at the local's position or, for a
-        // record's synthesized `Deconstruct`, the positional property that the
-        // emitted G# record deconstructs. A tuple deconstruction has no such
-        // declaration and gives null.
+        // Issue #5508: the declaration whose value a deconstructed local receives
+        // (see `ObliviousNullabilityAnalyzer.DeconstructedElementDeclaration`,
+        // which also gives the oblivious taint its deconstruction edges, #5561).
         private func DeconstructedElementDeclaration(local ILocalSymbol) ISymbol? {
-            if local
+            return if local
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
-                ?.GetSyntax() is not SingleVariableDesignationSyntax designation {
-                return nil
-            }
-            // Climb to the deconstruction root and record the element index at each level.
-            let indexes = List[int32]()
-            var current SyntaxNode = designation
-            var climbing = true
-            while climbing {
-                switch current.Parent {
-                    case nested is ParenthesizedVariableDesignationSyntax when current is VariableDesignationSyntax variable {
-                        indexes.Insert(0, nested.Variables.IndexOf(variable))
-                        current = nested
-                    }
-                    case declaration is DeclarationExpressionSyntax {
-                        current = declaration
-                    }
-                    case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
-                        indexes.Insert(0, tuple.Arguments.IndexOf(argument))
-                        current = tuple
-                    }
-                    default {
-                        climbing = false
-                    }
-                }
-            }
-            let model = this.context.SemanticModel
-            var info DeconstructionInfo
-            if current.Parent is AssignmentExpressionSyntax assignment && assignment.Left == current {
-                info = model.GetDeconstructionInfo(assignment)
-            } else if current.Parent is ForEachVariableStatementSyntax forEach && forEach.Variable == current {
-                info = model.GetDeconstructionInfo(forEach)
+                ?.GetSyntax() is SingleVariableDesignationSyntax designation {
+                ObliviousNullabilityAnalyzer.DeconstructedElementDeclaration(
+                    designation,
+                    this.context.SemanticModel,
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                )
             } else {
-                return nil
+                default(ISymbol?)
             }
-            for var level = 0; level < indexes.Count; level++ {
-                let index = indexes[level]
-                let nested = info.Nested
-                if index < 0 || index >= nested.Length {
-                    return nil
-                }
-                if level < indexes.Count - 1 {
-                    info = nested[index]
-                    continue
-                }
-                if info.Method is not IMethodSymbol deconstruct {
-                    return nil
-                }
-                // An unreduced extension `Deconstruct(this T value, out …)` starts its outputs at ordinal 1.
-                let ordinal = if deconstruct.IsExtensionMethod && deconstruct.ReducedFrom == nil {
-                    index + 1
-                } else {
-                    index
-                }
-                if ordinal >= deconstruct.Parameters.Length {
-                    return nil
-                }
-                let parameter = deconstruct.Parameters[ordinal]
-                if deconstruct.IsImplicitlyDeclared && deconstruct.ContainingType is {IsRecord: true} record {
-                    return record.GetMembers(parameter.Name).OfType[IPropertySymbol]().FirstOrDefault() ?? parameter
-                }
-                return parameter.OriginalDefinition
-            }
-            return nil
         }
 
         /// Issue #5254: whether G# infers the type of the sink from [`value`](paramref). That holds

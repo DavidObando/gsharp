@@ -69,6 +69,9 @@ internal partial class ExpressionBinder {
     private let bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
     private let bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
 
+    // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
+    private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
+
     // ADR-0151: declares the local a value-position `if let` binding
     // introduces, routed through the same
     // `DeclarationBinder.BindVariableDeclaration` the statement forms use so
