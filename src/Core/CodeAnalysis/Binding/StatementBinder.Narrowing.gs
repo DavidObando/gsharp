@@ -37,6 +37,8 @@ internal partial class StatementBinder {
     // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
     // so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
+    // #5629: the facts that statements remove while the headers after a `default` are bound early.
+    private var laterArmStatementKills List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
     // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
     // `nil` otherwise, and the current aliases apply.
     private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
@@ -498,6 +500,8 @@ internal partial class StatementBinder {
                     }
                     if removedFacts != nil {
                         conditionKillJournal?.Add((frame, key, frame[key]))
+                    } else {
+                        laterArmStatementKills?.Add((frame, key, frame[key]))
                     }
                     frame.Remove(key)
                 }
@@ -866,9 +870,10 @@ internal partial class StatementBinder {
             if reachesBackEdge.Contains(hidden.Block) {
                 continue
             }
-            for var index = 0; index <= hidden.Index; index++ {
+            for var index = 0; index < hidden.Index; index++ {
                 collector.Visit(hidden.Block.Statements[index])
             }
+            VisitPathsToHiddenJump(collector, hidden.Block.Statements[hidden.Index], continueTargets)
         }
         if hiddenContinue && markerBlock == nil {
             collector.Visit(backEdgeTail)
@@ -877,6 +882,68 @@ internal partial class StatementBinder {
             }
         }
         return collector
+    }
+
+    // The parts of a statement with a hidden jump that run on the paths to the jump (#5629). Of a `switch`: the
+    // discriminant, every header, and the bodies of the arms that reach the jump directly or by falling through into
+    // such an arm. The body of an arm that only leaves the loop adds nothing to the back edge.
+    private func VisitPathsToHiddenJump(
+        collector AssignedRootsCollector,
+        statement BoundStatement,
+        targets HashSet[BoundLabel]
+    ) {
+        if !(statement is BoundPatternSwitchStatement switchStatement) {
+            collector.Visit(statement)
+            return
+        }
+        let labels = HashSet[BoundLabel](targets)
+        let reaches = HashSet[BoundPatternSwitchArm]()
+        var changed = true
+        while changed {
+            changed = false
+            for arm in switchStatement.Arms {
+                if reaches.Contains(arm) {
+                    continue
+                }
+                let finder = JumpToLabelsFinder(labels)
+                finder.VisitArm(arm)
+                if finder.Found {
+                    reaches.Add(arm)
+                    changed = true
+                    // A fallthrough into this arm jumps to the label its body starts with.
+                    if arm.Body is BoundBlockStatement entryBlock &&
+                        entryBlock
+                        .Statements
+                        .Length > 0 &&
+                        entryBlock.Statements[0] is BoundLabelStatement entry {
+                        labels.Add(entry.Label)
+                    }
+                }
+            }
+        }
+        let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](switchStatement.Arms.Length)
+        for arm in switchStatement.Arms {
+            arms.Add(
+                if reaches.Contains(arm) {
+                    arm
+                } else {
+                    BoundPatternSwitchArm(
+                        arm.Syntax,
+                        arm.Pattern,
+                        arm.Guard,
+                        BoundBlockStatement(arm.Body.Syntax, ImmutableArray[BoundStatement].Empty)
+                    )
+                }
+            )
+        }
+        collector.Visit(
+            BoundPatternSwitchStatement(
+                switchStatement.Syntax,
+                switchStatement.Discriminant,
+                arms.MoveToImmutable(),
+                switchStatement.IsExhaustive
+            )
+        )
     }
 
     // Whether a statement contains a jump to one of a set of labels (#5629).
@@ -906,21 +973,23 @@ internal partial class StatementBinder {
             if node is BoundPatternSwitchStatement switchStatement {
                 VisitExpression(switchStatement.Discriminant)
                 for arm in switchStatement.Arms {
-                    if arm.Pattern != nil {
-                        VisitPattern(arm.Pattern)
-                    }
-                    VisitExpression(arm.Guard)
-                    if !(
-                        arm.Guard is BoundLiteralExpression literalGuard &&
-                            literalGuard.Value is bool guardValue &&
-                            !guardValue
-                    ) {
-                        VisitStatement(arm.Body)
-                    }
+                    VisitArm(arm)
                 }
                 return
             }
             base.VisitStatement(node)
+        }
+
+        func VisitArm(arm BoundPatternSwitchArm) {
+            if arm.Pattern != nil {
+                VisitPattern(arm.Pattern)
+            }
+            VisitExpression(arm.Guard)
+            if !(
+                arm.Guard is BoundLiteralExpression literalGuard && literalGuard.Value is bool guardValue && !guardValue
+            ) {
+                VisitStatement(arm.Body)
+            }
         }
     }
 
@@ -2186,7 +2255,12 @@ internal partial class StatementBinder {
         let outer = BeginThenBranchConditionKills()
         let entry = binderCtx.Narrowing
         let entryAliases = CaptureExternalCallableAliases()
+        let outerStatementKills = laterArmStatementKills
+        let statementKills = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        laterArmStatementKills = statementKills
         bindLaterTests()
+        laterArmStatementKills = outerStatementKills
+        outerStatementKills?.AddRange(statementKills)
         let bound = bind()
         if !fallsThrough {
             RestoreExternalCallableAliases(entryAliases)
@@ -2197,6 +2271,16 @@ internal partial class StatementBinder {
             outer?.AddRange(kills)
         } else {
             RestoreThenBranchConditionKills(outer, entry)
+            // A statement in a header (a block in a guard) is not a condition, so its kills are not in the journal.
+            // Each of those arms removes them again where it is dispatched.
+            for kill in statementKills {
+                if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
+                    entry.NarrowedType(kill.Path),
+                    kill.Type
+                ) {
+                    kill.Frame[kill.Path] = kill.Type
+                }
+            }
         }
         return bound
     }

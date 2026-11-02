@@ -143,6 +143,12 @@ open class Adr0208NarrowingCorpusTests {
                 "a28_5629_earlier_guard_effects_make_a_later_arm_proof_stale_R18",
                 "a29_5629_alias_replaced_in_a_guard_is_not_external_for_later_cases",
                 "a30_5629_alias_replaced_in_a_guard_is_not_external_for_later_arms",
+                "a31_5629_alias_replaced_in_a_pattern_is_not_external_for_later_cases",
+                "a32_5629_an_arm_that_leaves_the_loop_adds_nothing_to_a_hidden_back_edge",
+                "a33_5629_an_arm_that_falls_through_to_a_hidden_continue_is_on_the_back_edge",
+                "a34_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_case",
+                "a35_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_arm",
+                "a36_5629_a_guard_block_before_a_default_reaches_the_cases_after_it",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7889,6 +7895,119 @@ func Run(action () -> bool, k int32) int32 {
     }
 }
 Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@16:19", "reject", "", ""}
+            yield[]object{"a31_5629_alias_replaced_in_a_pattern_is_not_external_for_later_cases", `import System
+
+func Run(action () -> bool, k int32) int32 {
+    var a = action
+    var x string? = "ab"
+    if x == nil { return 0 }
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    switch k {
+        case 0 + ({
+            a = clear
+            2
+        }) { }
+        case 1 {
+            a()
+            return x.Length
+        }
+        default { }
+    }
+    return 0
+}
+Console.WriteLine(Run(func() bool { return false }, 1))`, "GS0158@18:22", "reject", "", ""}
+            yield[]object{"a32_5629_an_arm_that_leaves_the_loop_adds_nothing_to_a_hidden_back_edge", `import System
+
+func Run(s string?, start int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var k = start
+    while true {
+        Console.WriteLine(t.Length)
+        k++
+        switch k {
+            case 1 { continue }
+            default {
+                t = nil
+            }
+        }
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 0))`, "", "run", "1|1|1", ""}
+            yield[]object{"a33_5629_an_arm_that_falls_through_to_a_hidden_continue_is_on_the_back_edge", `import System
+
+func Run(s string?, start int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var k = start
+    while true {
+        Console.WriteLine(t.Length)
+        k++
+        switch k {
+            case 1 {
+                t = nil
+                fallthrough
+            }
+            case 2 { continue }
+            default { }
+        }
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 0))`, "GS0158@8:29", "reject", "", ""}
+            yield[]object{"a34_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_case", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    switch k {
+        default { }
+        case 0 { return t.Length }
+        case 1 when ({
+            t = nil
+            false
+        }) { }
+    }
+    return 0
+}
+Console.WriteLine(Run("ab", 0))`, "", "run", "2", ""}
+            yield[]object{"a35_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_arm", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    return switch k {
+        default: 0
+        case 0: t.Length
+        case 1 when ({
+            t = nil
+            false
+        }): 0
+    }
+}
+Console.WriteLine(Run("ab", 0))`, "", "run", "2", ""}
+            yield[]object{"a36_5629_a_guard_block_before_a_default_reaches_the_cases_after_it", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    switch k {
+        default { }
+        case 1 when ({
+            t = nil
+            false
+        }) { }
+        case 1 { return t.Length }
+    }
+    return 0
+}
+Console.WriteLine(Run("ab", 1))`, "GS0158@12:27", "reject", "", ""}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {

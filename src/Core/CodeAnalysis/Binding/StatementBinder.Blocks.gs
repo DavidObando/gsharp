@@ -209,8 +209,11 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                 }
+                // The pattern can replace an alias too, so the later arms do not start from it either.
+                if removedAliases != nil {
+                    callableEntry.ExceptWith(removedAliases)
+                }
                 if guard_ is {} boundGuard {
-                    callableEntry.ExceptWith(removedAliases ?? HashSet[VariableSymbol]())
                     ShadowAddGuard(shadowFlow, boundGuard)
                 }
                 // ADR-0166: the arm body runs only when the guard was true, so the
