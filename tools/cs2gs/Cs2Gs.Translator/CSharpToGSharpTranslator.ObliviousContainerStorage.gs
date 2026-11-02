@@ -228,19 +228,8 @@ partial class CSharpToGSharpTranslator {
                 SyntaxKind.SimpleAssignmentExpression
             ) &&
                 assignment.Right == written {
-                // `items[0] = value`, `lines[0] = value`, `map[key] = value`.
-                if assignment.Left is ElementAccessExpressionSyntax access {
-                    return this.ElementPositionIsPromoted(
-                        this.context.GetSymbolInfo(access.Expression).Symbol,
-                        this.context.GetSymbolInfo(access).Symbol
-                    )
-                }
-                // `box.Value = value`.
-                if assignment.Left is MemberAccessExpressionSyntax memberAccess {
-                    return this.ElementPositionIsPromoted(
-                        this.context.GetSymbolInfo(memberAccess.Expression).Symbol,
-                        this.context.GetSymbolInfo(memberAccess).Symbol
-                    )
+                if assignment.Left is ElementAccessExpressionSyntax || assignment.Left is MemberAccessExpressionSyntax {
+                    return this.StoreTargetIsObliviousContainerElement(assignment.Left)
                 }
             }
             // `new List<T> { value }`, `new Dictionary<K, V> { { key, value } }`,
@@ -305,6 +294,27 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return -1
+        }
+
+        /// Issue #5595: whether the store target [`target`](paramref) is a position that
+        /// oblivious container storage keeps nullable. A plain assignment and a
+        /// deconstruction into the same target ask this one question.
+        /// @param target The C# store target.
+        /// @returns True when the target is `T?` in G#.
+        private func StoreTargetIsObliviousContainerElement(target ExpressionSyntax?) bool {
+            return switch target {
+                // `items[0] = value`, `lines[0] = value`, `map[key] = value`.
+                case access is ElementAccessExpressionSyntax: this.ElementPositionIsPromoted(
+                    this.context.GetSymbolInfo(access.Expression).Symbol,
+                    this.context.GetSymbolInfo(access).Symbol
+                )
+                // `box.Value = value`.
+                case memberAccess is MemberAccessExpressionSyntax: this.ElementPositionIsPromoted(
+                    this.context.GetSymbolInfo(memberAccess.Expression).Symbol,
+                    this.context.GetSymbolInfo(memberAccess).Symbol
+                )
+                default: false
+            }
         }
 
         // The whole value that a write stores: an arm of a conditional or switch

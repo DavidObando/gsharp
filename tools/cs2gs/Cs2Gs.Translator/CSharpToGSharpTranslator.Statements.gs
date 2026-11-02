@@ -3473,19 +3473,25 @@ partial class CSharpToGSharpTranslator {
         // indexer (arrays resolve to no symbol at all) is not itself promoted to
         // `T?` by the taint fixpoint. An already-nullable sink has nothing to
         // forgive, and a compound assignment is a different shape entirely.
-        private func ElementAccessAssignmentRequiresNonNullReference(assignment AssignmentExpressionSyntax?) bool {
-            if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
-                !(assignment!!.Left is ElementAccessExpressionSyntax) ||
-                this.IsNullableArrayElementAccess(assignment!!.Left) ||
+        private func ElementAccessAssignmentRequiresNonNullReference(
+            assignment AssignmentExpressionSyntax?
+        ) bool -> assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+            this.ElementAccessStoreRequiresNonNullReference(assignment!!.Left)
+
+        // Issue #5595: the target half of the rule above. A deconstruction into an
+        // element-access target (`(arr[0], i) = entry`) has no right-hand side per
+        // element, so its store bridge asks this with the target alone.
+        private func ElementAccessStoreRequiresNonNullReference(target ExpressionSyntax) bool {
+            if !(target is ElementAccessExpressionSyntax) || this.ElementStoreSlotAcceptsNil(target) ||
                 // Issue #5537: the element of oblivious container storage is `T?`.
-            this.WritesObliviousContainerStorageElement(assignment!!.Right) {
+            this.StoreTargetIsObliviousContainerElement(target) {
                 return false
             }
             let leftSymbol ISymbol? = this.GetProjectedAssignmentTarget(
-                assignment!!.Left,
-                this.context.GetSymbolInfo(assignment!!.Left).Symbol
+                target,
+                this.context.GetSymbolInfo(target).Symbol
             )
-            let leftType ITypeSymbol? = this.GetAssignmentTargetType(assignment!!.Left, leftSymbol)
+            let leftType ITypeSymbol? = this.GetAssignmentTargetType(target, leftSymbol)
             if !(leftType != nil && leftType.IsReferenceType == true) ||
                 leftType.NullableAnnotation == Microsoft
                 .CodeAnalysis
@@ -3493,7 +3499,69 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
+            // An `[AllowNull]` indexer, also one that another project of the run
+            // emits (#4356), is promoted, so it takes a nullable value.
             return leftSymbol is not IPropertySymbol indexer || !this.ShouldPromoteToNullableReference(indexer)
+        }
+
+        // Issues #4500, #4525 and #5595: whether the slot that an element-access
+        // store target writes accepts nil: an array element that cs2gs emits `T?`,
+        // or a slot that a prebuilt oblivious library declares. No bridge asserts a
+        // value stored there, in a plain assignment or in a deconstruction.
+        private func ElementStoreSlotAcceptsNil(target ExpressionSyntax?) bool {
+            if this.IsNullableArrayElementAccess(target) {
+                return true
+            }
+            if target is not ElementAccessExpressionSyntax access {
+                return false
+            }
+            return this.ElementStoreSlotIsImportedOblivious(
+                access,
+                this.GetProjectedAssignmentTarget(access, this.context.GetSymbolInfo(access).Symbol)
+            )
+        }
+
+        // Issue #3865: gsc imports the value of an oblivious indexer, and the
+        // element of an oblivious array, that a prebuilt library declares as a
+        // platform type, which takes a nullable value. An array element has no
+        // symbol: its contract is the element position of the receiver's
+        // declaration, read before type-argument substitution, so a `T[]` whose
+        // `T` the consumer substitutes keeps that type argument's contract. A
+        // `var` local without a type clause has the type of its initializer, so
+        // it is followed to the declaration of that initializer.
+        private func ElementStoreSlotIsImportedOblivious(target ElementAccessExpressionSyntax, slot ISymbol?) bool {
+            if slot != nil {
+                return this.IsImportedObliviousNullableTarget(slot)
+            }
+            var receiver ISymbol? = this.context.GetSymbolInfo(target.Expression).Symbol
+            for var depth = 0; depth < 8 && receiver is ILocalSymbol; depth++ {
+                receiver = this.InferredLocalInitializerSymbol(cast[ILocalSymbol](receiver))
+            }
+            let declared ITypeSymbol? = switch receiver?.OriginalDefinition {
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                case method is IMethodSymbol: method.ReturnType
+                default: default(ITypeSymbol?)
+            }
+            return declared is IArrayTypeSymbol array && this.TargetContractIsFrozenInMetadata(receiver) &&
+                ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(array.ElementType)
+        }
+
+        // The declaration that the initializer of a `var` local reads, when the
+        // local's emitted declaration has no type clause (see
+        // `InferredLocalDeclarationIsNullable`), so G# infers it from that initializer.
+        private func InferredLocalInitializerSymbol(local ILocalSymbol) ISymbol? {
+            if this.InferredLocalDeclarationIsNullable(local) {
+                return nil
+            }
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} declarator &&
+                declarator.Parent is VariableDeclarationSyntax{Type: {IsVar: true}} {
+                return this.context.GetSymbolInfo(initializer).Symbol
+            }
+            return nil
         }
 
         // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
@@ -4436,8 +4504,17 @@ partial class CSharpToGSharpTranslator {
             // Issues #4500 and #4525: a write into an element of an array
             // cs2gs emits as `T?` accepts nil, so none of the null-forgiveness
             // bridges below may assert the value. The coercions above still apply.
-            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && this.IsNullableArrayElementAccess(
-                assignment.Left
+            // Issue #5595: the same holds for a slot of a prebuilt oblivious library,
+            // unless a user-defined conversion converts the value: the bridges below
+            // decide the operator's input.
+            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                (
+                this.IsNullableArrayElementAccess(assignment.Left) ||
+                    (
+                    this.ElementStoreSlotAcceptsNil(assignment.Left) && !this.FlowsThroughUserDefinedConversion(
+                        assignment.Right
+                    )
+                )
             ) {
                 return value
             }
