@@ -528,7 +528,9 @@ partial class Binder {
             bindRichAnonymousObject: BindRichAnonymousObject,
             bindStructuralAdaptation: BindStructuralAdaptation,
             bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
-            BindNativeProtocolConversion(location, source, target, testOnly: true)
+            BindNativeProtocolConversion(location, source, target, testOnly: true),
+            applySwitchArmTestEffects: (syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) ->
+            Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

@@ -795,12 +795,37 @@ internal partial class StatementBinder {
             AssignmentPreservesNarrowing,
             (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
         )
-        if markerBlock == nil {
+        // #5629: a switch, `try` or `fixed` statement is one statement of the graph, so a `continue` inside it adds no
+        // edge. Its block reaches the back edge through that jump, as the marker's does, and so do the blocks before
+        // it; the jump also runs the tail and the condition, which have no reachable block when it is the only one.
+        let seeds = List[ControlFlowGraph.BasicBlock]()
+        if markerBlock != nil {
+            seeds.Add(markerBlock)
+        }
+        let continueTargets = HashSet[BoundLabel]()
+        continueTargets.Add(continueLabel)
+        var hiddenContinue = false
+        for block in graph.Blocks {
+            for statement in block.Statements {
+                if statement is BoundPatternSwitchStatement or BoundTryStatement or BoundFixedStatement {
+                    let finder = JumpToLabelsFinder(continueTargets)
+                    finder.VisitStatement(statement)
+                    if finder.Found {
+                        seeds.Add(block)
+                        hiddenContinue = true
+                        break
+                    }
+                }
+            }
+        }
+        if seeds.Count == 0 {
             return collector
         }
         let reachesBackEdge = HashSet[ControlFlowGraph.BasicBlock]()
         let pending = Stack[ControlFlowGraph.BasicBlock]()
-        pending.Push(markerBlock)
+        for seed in seeds {
+            pending.Push(seed)
+        }
         while pending.Count > 0 {
             let block = pending.Pop()
             if !reachesBackEdge.Add(block) {
@@ -815,7 +840,39 @@ internal partial class StatementBinder {
                 collector.Visit(statement)
             }
         }
+        if hiddenContinue && markerBlock == nil {
+            collector.Visit(backEdgeTail)
+            if backEdgeCondition != nil {
+                collector.Visit(BoundExpressionStatement(nil, backEdgeCondition))
+            }
+        }
         return collector
+    }
+
+    // Whether a statement contains a jump to one of a set of labels (#5629).
+    private sealed class JumpToLabelsFinder : BoundTreeWalker {
+        private let labels HashSet[BoundLabel]
+
+        init(labels HashSet[BoundLabel]) {
+            this.labels = labels
+        }
+
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        override func VisitStatement(node BoundStatement?) {
+            if Found {
+                return
+            }
+            if (node is BoundGotoStatement jump && labels.Contains(jump.Label)) ||
+                (node is BoundConditionalGotoStatement conditional && labels.Contains(conditional.Label)) {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
+        }
     }
 
     /// ADR-0069 / issue #700: when the bound statement is an
@@ -1942,6 +1999,18 @@ internal partial class StatementBinder {
         } else {
             removedFacts
         }
+    }
+
+    /// ADR-0208 R18 and R19 (#5629): a switch arm's test runs before its guard and its body or result, so its effects
+    /// apply to the narrowing facts first, as a condition's do. The test is the `is` test of the arm's pattern on the
+    /// value that the switch evaluated once, so the one collector classifies it as it classifies `if x is 1`. The
+    /// discriminant's own evaluation is not part of the test.
+    internal func ApplySwitchArmTestEffects(syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) {
+        let evaluated = LocalVariableSymbol("<switch-value>", true, discriminantType)
+        ApplyConditionEffectsToNarrowings(
+            syntax,
+            BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern)
+        )
     }
 
     private func EnsureClosureAssignedNames(anchor SyntaxNode) -> binderCtx.EnsureClosureAssignedNames(

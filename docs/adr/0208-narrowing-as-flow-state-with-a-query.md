@@ -981,8 +981,14 @@ Details per row:
   the constant-pattern rule for closure-assigned locals (`ConstantPatternMayCallEquals`), between the guard and the
   read and in the guard's own pattern (R18 (6)); it translates a C# list
   pattern to `Length` and indexer reads, not to a G# list pattern. cs2gs does not assert a by-reference read after an
-  accessor call (R14, R16, R17), which is #5617. Not in this row: the own-pattern effect of a `switch` case and of an if-expression condition
-  (#5545 shape 8) applies to these tests too.
+  accessor call (R14, R16, R17), which is #5617. A `switch` case or arm runs its test before its guard and its body or result, so the test's effects apply first,
+  as a condition's do (R18): `StatementBinder.ApplySwitchArmTestEffects` gives the collector the `is` test of the
+  arm's pattern on the evaluated value, so a constant pattern, a list pattern and a property pattern of a case are
+  classified as in `if x is P` (#5629, rows a01 to a05 and a10). Each case's body also sees the tests of the cases
+  before it, and a `default` that is not last sees the tests of the cases after it, which run before it (row a03).
+  A loop's back edge includes a `switch`, `try` or `fixed` statement with a `continue` inside it: the control-flow
+  graph keeps such a statement as one statement, so the jump adds no edge, and its block and the blocks before it
+  now reach the back edge (rows a06 to a09). The if-expression condition of #5545 shape 8 is not in this change.
 - **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
   bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
   an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were

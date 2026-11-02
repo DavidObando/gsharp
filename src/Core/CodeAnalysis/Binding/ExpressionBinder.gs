@@ -68,6 +68,7 @@ internal partial class ExpressionBinder {
     private let bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression
     private let bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
     private let bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
+    private let applySwitchArmTestEffects(SyntaxNode, TypeSymbol, BoundPattern) -> void
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -108,7 +109,8 @@ internal partial class ExpressionBinder {
         bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
         bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression,
         bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression,
-        bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
+        bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
+        applySwitchArmTestEffects(SyntaxNode, TypeSymbol, BoundPattern) -> void
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -131,6 +133,7 @@ internal partial class ExpressionBinder {
         this.bindRichAnonymousObject = bindRichAnonymousObject
         this.bindStructuralAdaptation = bindStructuralAdaptation
         this.bindNativeProtocolProbe = bindNativeProtocolProbe
+        this.applySwitchArmTestEffects = applySwitchArmTestEffects
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

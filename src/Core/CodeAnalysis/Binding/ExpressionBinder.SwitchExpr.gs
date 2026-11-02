@@ -23,6 +23,21 @@ internal partial class ExpressionBinder {
         targetType: nil
     )
 
+    // Binds an arm's pattern in the current (arm) scope and applies its test's effects to the narrowing facts, as the
+    // statement form does (ADR-0208 R19, #5629).
+    private func BindSwitchArmPattern(armSyntax SwitchExpressionArmSyntax, switchType TypeSymbol) BoundPattern {
+        let pattern = patterns.BindPattern(
+            Invariant.Required(
+                armSyntax.Value,
+                "a non-default switch arm has a pattern value",
+                expression: "armSyntax.Value"
+            ),
+            switchType
+        )
+        applySwitchArmTestEffects(armSyntax, switchType, pattern)
+        return pattern
+    }
+
     /// @param canBeVoid Issue #4966 §2 (ADR-0202): the switch is in a position
     /// whose value is discarded (an expression statement, a void arrow body, a
     /// lambda body). When an arm is then void, the whole switch is the void
@@ -72,13 +87,29 @@ internal partial class ExpressionBinder {
             .CreateBuilder[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
         ]()
-        for armSyntax in syntax.Arms {
+        // #5629: the patterns of the arms after a `default` that is not last bind before its result, which is evaluated
+        // only after their tests fail; each arm reuses its pattern and scope.
+        let earlyPatterns = [syntax.Arms.Length]BoundPattern?
+        let earlyScopes = [syntax.Arms.Length]BoundScope?
+        for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
+            let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
             if armSyntax.IsDefault {
                 if hasDefault {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
+                for var later = armIndex + 1; later < syntax.Arms.Length; later++ {
+                    let laterSyntax = syntax.Arms[later]
+                    if laterSyntax.IsDefault {
+                        continue
+                    }
+                    $scope = BoundScope($scope)
+                    let laterPattern = BindSwitchArmPattern(laterSyntax, switchType)
+                    earlyPatterns[later] = laterPattern
+                    earlyScopes[later] = $scope
+                    $scope = $scope.Pop()
+                }
                 let result = if targetType == nil {
                     BindExpression(armSyntax.Result, canBeVoid)
                 } else {
@@ -87,13 +118,18 @@ internal partial class ExpressionBinder {
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
             }
-            $scope = BoundScope($scope)
             let patternSyntax = Invariant.Required(
                 armSyntax.Value,
                 "a non-default switch arm has a pattern value",
                 expression: "armSyntax.Value"
             )
-            pattern = patterns.BindPattern(patternSyntax, switchType)
+            pattern = if earlyPatterns[armIndex] is {} early {
+                $scope = earlyScopes[armIndex]!!
+                early
+            } else {
+                $scope = BoundScope($scope)
+                BindSwitchArmPattern(armSyntax, switchType)
+            }
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so it never contributes to exhaustiveness — in
             // particular a guarded discard `case _ when …` does NOT act as a

@@ -17,6 +17,21 @@ import System.Reflection
 import System.Threading
 
 internal partial class StatementBinder {
+    // Binds a case's pattern in the current (arm) scope and applies its test's effects to the narrowing facts
+    // (ADR-0208 R19, #5629).
+    private func BindSwitchCasePattern(caseSyntax SwitchCaseSyntax, discriminant BoundExpression) BoundPattern {
+        let pattern = patterns.BindPattern(
+            Invariant.Required(
+                caseSyntax.Value,
+                "a non-default switch case has a pattern value",
+                expression: "caseSyntax.Value"
+            ),
+            discriminant.Type
+        )
+        ApplySwitchArmTestEffects(caseSyntax, discriminant.Type, pattern)
+        return pattern
+    }
+
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
         let discriminant = bindExpression(syntax.Expression, false)
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
@@ -59,6 +74,10 @@ internal partial class StatementBinder {
         let armEntryLabels = [syntax.Cases.Length]BoundLabel?
         let savedFallthroughTarget = binderCtx.CurrentFallthroughTarget
         let savedFallthroughAnchor = binderCtx.CurrentFallthroughAnchor
+        // #5629: the patterns of the cases after a `default` that is not last bind before its body, which runs only
+        // after their tests fail; each case reuses its pattern and scope.
+        let earlyPatterns = [syntax.Cases.Length]BoundPattern?
+        let earlyScopes = [syntax.Cases.Length]BoundScope?
         binderCtx.LoopStack.Push((nil, switchBreakLabel, nil))
         try {
             for var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++ {
@@ -98,6 +117,17 @@ internal partial class StatementBinder {
                         Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Keyword.Location)
                     }
                     hasDefault = true
+                    for var later = caseIndex + 1; later < syntax.Cases.Length; later++ {
+                        let laterSyntax = syntax.Cases[later]
+                        if laterSyntax.IsDefault {
+                            continue
+                        }
+                        $scope = BoundScope($scope)
+                        let laterPattern = BindSwitchCasePattern(laterSyntax, discriminant)
+                        earlyPatterns[later] = laterPattern
+                        earlyScopes[later] = $scope
+                        $scope = $scope.Pop()
+                    }
                     var defaultBody = BindBlockStatement(caseSyntax.Body)
                     ShadowAddBranch(shadowFlow, nil, defaultBody, true)
                     shadowApproximate = shadowApproximate || endsInFallthrough
@@ -121,13 +151,18 @@ internal partial class StatementBinder {
                     }
                     continue
                 }
-                $scope = BoundScope($scope)
                 let caseValue = Invariant.Required(
                     caseSyntax.Value,
                     "a non-default switch case has a pattern value",
                     expression: "caseSyntax.Value"
                 )
-                let pattern = patterns.BindPattern(caseValue, switchType)
+                let pattern = if earlyPatterns[caseIndex] is {} early {
+                    $scope = earlyScopes[caseIndex]!!
+                    early
+                } else {
+                    $scope = BoundScope($scope)
+                    BindSwitchCasePattern(caseSyntax, discriminant)
+                }
                 // Issue #3501 A3: a fallthrough INTO this arm skips its pattern
                 // test — pattern bindings and guards would run unassigned/
                 // unevaluated, so such targets are rejected. Pattern-declared

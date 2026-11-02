@@ -113,6 +113,16 @@ open class Adr0208NarrowingCorpusTests {
         Assert.Equal(names.Length, names.Distinct().Count())
         Assert.Equal(
             []string{
+                "a01_5629_switch_case_equals_removes_the_fact_in_its_body_R19",
+                "a02_5629_switch_expression_arm_equals_removes_the_fact_R19",
+                "a03_5629_default_before_a_case_sees_the_case_test_R19",
+                "a04_5629_earlier_case_test_reaches_a_later_case_body_R19",
+                "a05_5629_int_constant_case_on_int32_keeps_the_fact_R19",
+                "a06_5629_loop_continue_in_a_case_after_a_user_equals_R19",
+                "a07_5629_loop_write_before_continue_in_a_case",
+                "a08_5629_loop_write_before_continue_in_a_try",
+                "a09_5629_loop_continue_in_an_int_case_keeps_the_fact_R19",
+                "a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7136,6 +7146,301 @@ func Run(b Box) string {
     return b.Pet.Name
 }
 func Main() { Console.WriteLine(Run(Box(Animal()))) }`, "", "run", "a", "R14"}
+            yield[]object{"a01_5629_switch_case_equals_removes_the_fact_in_its_body_R19", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    switch o { case 1 { return g.Value } default { } }
+    return 0
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@23:34", "reject", "", "R19"}
+            yield[]object{"a02_5629_switch_expression_arm_equals_removes_the_fact_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    return switch o {
+        case 1: x.Value
+        default: 2
+    }
+}
+Console.WriteLine(Run())`, "GS0158@21:19", "reject", "", "R19"}
+            yield[]object{"a03_5629_default_before_a_case_sees_the_case_test_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        default { }
+        case 1 { return x.Value }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:27", "reject", "", "R19"}
+            yield[]object{"a04_5629_earlier_case_test_reaches_a_later_case_body_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        case 2 { }
+        case 1 { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:27", "reject", "", "R19"}
+            yield[]object{"a05_5629_int_constant_case_on_int32_keeps_the_fact_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    let n int32 = 1
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch n {
+        case 1 { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R19"}
+            yield[]object{"a06_5629_loop_continue_in_a_case_after_a_user_equals_R19", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch o { case 1 { continue } default { } }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", "R19"}
+            yield[]object{"a07_5629_loop_write_before_continue_in_a_case", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch k { case 1 { g = nil
+            continue } default { } }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", ""}
+            yield[]object{"a08_5629_loop_write_before_continue_in_a_try", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        try {
+            g = nil
+            continue
+        } catch (e Exception) { }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", ""}
+            yield[]object{"a09_5629_loop_continue_in_an_int_case_keeps_the_fact_R19", `import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class C {
+    var Value int32 = 1
+    var Go bool = true
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run() int32 {
+    let e = E{}
+    let o object = e
+    e.Clear = func() { g = nil }
+    if g == nil { return 0 }
+    var k = 0
+    while true {
+        k = k + g.Value
+        if k > 3 { break }
+        switch k { case 1 { continue } default { } }
+        break
+    }
+    return k
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "", "run", "2", "R19"}
+            yield[]object{"a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Dog {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    let o object = d
+    var x C? = C{}
+    d.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    switch o {
+        case Dog { P: 1 } { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@22:38", "reject", "", "R14"}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {
