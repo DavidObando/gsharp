@@ -464,7 +464,7 @@ class ProvenanceTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(dir=work)
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        self.package = self.root / "packages/gsharp.net.sdk/0.5.212"
+        self.package = self.root / "packages/gsharp.net.sdk/0.5.460-g21e3f30fa3"
         self.compiler = self.file(self.package / "tools/compiler/gsc.dll")
         self.task = self.file(self.package / "tools/task/Gsharp.NET.Sdk.dll")
         (self.package / "build").mkdir()
@@ -491,7 +491,7 @@ class ProvenanceTests(unittest.TestCase):
         (self.root / ".github/workflows/build.yml").write_text("benign metadata fixture")
         (self.root / "global.json").write_text(json.dumps({
             "sdk": {"version": "10.0.300", "rollForward": "latestFeature"},
-            "msbuild-sdks": {"Gsharp.NET.Sdk": "0.5.212"}}))
+            "msbuild-sdks": {"Gsharp.NET.Sdk": "0.5.460-g21e3f30fa3"}}))
         head = "1" * 40
         event = self.root / "event.json"
         event.write_text(json.dumps({"action": "synchronize", "number": 5432, "pull_request": {
@@ -534,6 +534,29 @@ class ProvenanceTests(unittest.TestCase):
         self.assertIsNone(metadata["actual_testhost_runtime"])
         self.assertNotIn(CANARY, json.dumps(metadata))
         self.assertNotIn(str(self.root), json.dumps(metadata))
+
+    def use_compiler(self, compiler):
+        records = self.stamp.read_text().splitlines()
+        records = [f"COMPILER:{compiler}" if record.startswith("COMPILER:") else
+                   f"{compiler}|{hashlib.sha256(compiler.read_bytes()).hexdigest()}"
+                   if record.startswith(str(self.compiler) + "|") else record
+                   for record in records]
+        self.stamp.write_text("\n".join(records))
+
+    def test_ready_to_run_compiler_of_the_pinned_rid_package_is_accepted(self):
+        compiler = self.file(self.root / "packages/gsharp.net.sdk.compiler.linux-x64/"
+                             "0.5.460-g21e3f30fa3/tools/net10.0/linux-x64/gsc.dll")
+        self.use_compiler(compiler)
+        metadata = self.helper.provenance(self.root)
+        self.assertEqual([row["name"] for row in metadata["tool_images"]
+                          if row["role"] == "compiler"], ["gsc.dll"])
+
+    def test_ready_to_run_compiler_of_another_version_is_rejected(self):
+        compiler = self.file(self.root / "packages/gsharp.net.sdk.compiler.linux-x64/"
+                             "0.5.212/tools/net10.0/linux-x64/gsc.dll")
+        self.use_compiler(compiler)
+        with self.assertRaisesRegex(self.helper.DiagnosticError, "^compiler-selection$"):
+            self.helper.provenance(self.root)
 
     def test_stamp_hash_mismatch_stops_prepare_before_private_test_output(self):
         self.compiler.write_bytes(b"Changed benign metadata.")

@@ -781,6 +781,15 @@ internal partial class StatementBinder {
         }
     }
 
+    // Issue #5603: records the backward `goto` narrowing use of a `return` value where it binds, for a result type
+    // that the lambda binder chooses after the body: an inferred result, or the natural result of a speculative
+    // lambda. The use does not depend on a target conversion.
+    private func TrackResultReturnNarrowing(syntax ReturnStatementSyntax, value BoundExpression?) {
+        if value != nil && syntax.Expression is {} valueSyntax && function?.InferredReturnNarrowings is {} narrowings {
+            binderCtx.TrackInferredReturnNarrowing(narrowings, value, valueSyntax.Location)
+        }
+    }
+
     private func BindReturnStatement(syntax ReturnStatementSyntax) BoundStatement {
         // ADR-0055 Tier 4: returning an interpolated string where the function's
         // declared type is IFormattable/FormattableString lowers to
@@ -945,6 +954,9 @@ internal partial class StatementBinder {
                     function!!.Type
                 )
             }
+            // Issue #5603: the natural function type converts the natural value after the body, as an inferred result
+            // does. The target conversion above can read the declared value and record no use.
+            TrackResultReturnNarrowing(syntax, expression)
         } else if function!!.IsReturnTypeInferred {
             // ADR-0076 / issue #716: arrow-lambda binding deferred return-type
             // resolution to a post-bind pass. The expression has been bound,
@@ -954,7 +966,9 @@ internal partial class StatementBinder {
             // across all return paths and the trailing block expression, if
             // any), and applies a single conversion pass to each return-
             // statement expression once the return type is known.
-
+            // Issue #5603: that conversion runs outside the narrowing scope, so the backward `goto` check of a
+            // narrowed value runs here. The lambda binder reports it when the inferred result needs the narrowing.
+            TrackResultReturnNarrowing(syntax, expression)
         } else {
             if function!!.Type == TypeSymbol.Void {
                 if expression != nil {
