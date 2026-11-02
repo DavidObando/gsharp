@@ -322,8 +322,9 @@ namespace Demo
         RunsAs(printed, "True True True 1 1 1 1")
     }
 
-    /// G# infers a generic result from the argument that supplies it. `Id(Volatile.Read(ref cache!))` and
-    /// `cache.Echo()` over a capture are `Dictionary?` in G#, so a capture of either keeps its `!!` in the
+    /// G# infers a generic result from the arguments that supply it. `Id(Volatile.Read(ref cache!))`,
+    /// `First(Volatile.Read(ref cache!))` (`params T[]`), `Get(() => Volatile.Read(ref cache!))` (`Func<T>`)
+    /// and `cache.Echo()` over a capture are `Dictionary?` in G#, so a capture of each keeps its `!!` in the
     /// switch-arm, `case` and `is` forms.
     @Fact
     func AVarCaptureOfAnInferredGenericResult_KeepsItsAssertion() {
@@ -338,6 +339,8 @@ namespace Demo
     {
         private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
         static T Id<T>(T x) => x;
+        static T First<T>(params T[] xs) => xs[0];
+        static T Get<T>(System.Func<T> f) => f();
         static int Arm() => Id(Volatile.Read(ref cache!)) switch { var c => c.Count };
         static int Case()
         {
@@ -348,14 +351,36 @@ namespace Demo
         }
         static int Is() => Id(Volatile.Read(ref cache!)) is var c ? c.Count : -1;
         static int Receiver() => Volatile.Read(ref cache!) is var c ? c.Echo() switch { var e => e.Count } : -1;
-        public static string Run() => Arm() + " " + Case() + " " + Is() + " " + Receiver();
+        static int ParamsArm() => First(Volatile.Read(ref cache!)) switch { var p => p.Count };
+        static int ParamsCase()
+        {
+            switch (First(Volatile.Read(ref cache!)))
+            {
+                case var q: return q.Count;
+            }
+        }
+        static int CallbackArm() => Get(() => Volatile.Read(ref cache!)) switch { var f => f.Count };
+        static int CallbackCase()
+        {
+            switch (Get(() => Volatile.Read(ref cache!)))
+            {
+                case var g: return g.Count;
+            }
+        }
+        public static string Run() =>
+            Arm() + " " + Case() + " " + Is() + " " + Receiver() + " " + ParamsArm() + " " + ParamsCase() + " " +
+            CallbackArm() + " " + CallbackCase();
     }
 }`)
         Assert.Contains("case var c: c!!.Count", printed)
         Assert.Contains("return c!!.Count", printed)
         Assert.Contains("is var c { c!!.Count }", printed)
         Assert.Contains("case var e: e!!.Count", printed)
-        RunsAs(printed, "1 1 1 1")
+        Assert.Contains("case var p: p!!.Count", printed)
+        Assert.Contains("return q!!.Count", printed)
+        Assert.Contains("case var f: f!!.Count", printed)
+        Assert.Contains("return g!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 1")
     }
 
     /// With #5601's slot query: a capture of an `[AllowNull]` field typed by an unconstrained `T` has the

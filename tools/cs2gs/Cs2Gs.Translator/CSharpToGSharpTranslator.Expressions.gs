@@ -3887,8 +3887,11 @@ partial class CSharpToGSharpTranslator {
             this.GenericResultInfersNilableFromItsArgument(expression)
 
         // Issue #5582: a call whose result is its own method type parameter, without explicit type arguments.
-        // G# infers that parameter from the argument (or the reduced extension receiver) that supplies it. When
-        // that value is `T?` only in G#, the emitted result is `T?` too, although C# infers it non-null.
+        // G# infers that parameter from the emitted arguments whose parameter types mention it: a `T` argument,
+        // an expanded `params T[]` element, the result of a `Func<T>` lambda, an element of a `T[]` or
+        // `IEnumerable<T>` argument, and the receiver of a reduced `this T` extension. When a value in such an
+        // argument is `T?` only in G#, the emitted result can be `T?`, although C# infers it non-null. The
+        // query fails closed: any such value in the argument counts, so the capture keeps its bridge.
         private func GenericResultInfersNilableFromItsArgument(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
@@ -3897,7 +3900,10 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(invocation)
                 .Symbol is not IMethodSymbol method ||
-                !method.IsGenericMethod {
+                !method.IsGenericMethod ||
+                method
+                .ReturnType
+                .IsReferenceType != true {
                 return false
             }
             var callee = invocation.Expression
@@ -3914,12 +3920,12 @@ partial class CSharpToGSharpTranslator {
                 returnParameter.TypeParameterKind != TypeParameterKind.Method {
                 return false
             }
-            if method.ReducedFrom != nil && definition.Parameters.Length > 0 && SymbolEqualityComparer.Default.Equals(
+            if method.ReducedFrom != nil && definition.Parameters.Length > 0 && this.TypeMentionsTypeParameter(
                 definition.Parameters[0].Type,
                 returnParameter
             ) &&
                 invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
-                this.IsNilableOnlyInEmittedGSharp(receiverAccess.Expression) {
+                this.ContainsValueNilableOnlyInEmittedGSharp(receiverAccess.Expression) {
                 return true
             }
             let offset = if method.ReducedFrom != nil {
@@ -3933,15 +3939,40 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let ordinal = parameter.Ordinal + offset
-                if ordinal < definition.Parameters.Length && SymbolEqualityComparer.Default.Equals(
+                if ordinal < definition.Parameters.Length && this.TypeMentionsTypeParameter(
                     definition.Parameters[ordinal].Type,
                     returnParameter
                 ) &&
-                    this.IsNilableOnlyInEmittedGSharp(argument.Expression) {
+                    this.ContainsValueNilableOnlyInEmittedGSharp(argument.Expression) {
                     return true
                 }
             }
             return false
+        }
+
+        // Whether `expression`, or an expression inside it (a lambda result, an array element), is `T?` only in
+        // the emitted G#.
+        private func ContainsValueNilableOnlyInEmittedGSharp(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool -> expression
+            .DescendantNodesAndSelf()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            .Any(
+            (candidate Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> this.IsNilableOnlyInEmittedGSharp(
+                candidate
+            )
+        )
+
+        // Whether `type` is `parameter` or contains it as an array element or a type argument (`T[]`,
+        // `Func<T>`, `IEnumerable<T>`).
+        private func TypeMentionsTypeParameter(type ITypeSymbol?, parameter ITypeParameterSymbol) bool ->
+        switch type {
+            case typeParameter is ITypeParameterSymbol: SymbolEqualityComparer.Default.Equals(typeParameter, parameter)
+            case array is IArrayTypeSymbol: this.TypeMentionsTypeParameter(array.ElementType, parameter)
+            case named is INamedTypeSymbol: named.TypeArguments.Any(
+                (argument ITypeSymbol) -> this.TypeMentionsTypeParameter(argument, parameter)
+            )
+            default: false
         }
 
         /// Issue #5582: finds the value that a `var` pattern capture holds in the emitted G#.
