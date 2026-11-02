@@ -5243,15 +5243,29 @@ internal partial class StatementBinder {
         ) ||
             (
             node.IndexerProperty is {} indexer && !IsStableClrAccessor(indexer, isSetter: false) && node.Elements.Any(
-                (element BoundPattern) -> element is not(BoundSlicePattern or BoundDiscardPattern{Variable: nil})
+                (element BoundPattern) -> element is not BoundSlicePattern && PatternReadsInput(element)
             )
         )
+
+        /// ADR-0208 R19 (#5593): whether the emitted test of [`pattern`](paramref) loads its input value. A discard
+        /// without a variable loads nothing, and `and`, `or` and `not` load it only through an operand that does.
+        private func PatternReadsInput(pattern BoundPattern) bool -> switch pattern {
+            case BoundDiscardPattern{Variable: nil}: false
+            case binary is BoundBinaryPattern: PatternReadsInput(binary.Left) || PatternReadsInput(binary.Right)
+            case negation is BoundNotPattern: PatternReadsInput(negation.Pattern)
+            default: true
+        }
+
+        // The default of a reference type or of a nullable type is null. A value type, or a type whose CLR type is
+        // not known yet, does not count.
+        private func IsNullDefault(type TypeSymbol) bool -> type is NullableTypeSymbol ||
+            (type.ClrType is {} clrType && !clrType.IsValueType)
 
         /// ADR-0208 R19 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals`
         /// test (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual
         /// `Equals` of the input when both values are not null. An `object` input can hold any type, so its `Equals`
-        /// can be a user override, even for a literal pattern value. A `nil` value (a conversion of the literal, or
-        /// the default of the input type) never reaches it. A nullable value input holds its underlying type,
+        /// can be a user override, even for a literal pattern value. A null value (the `nil` literal, or the default
+        /// of a reference or nullable type) never reaches it. A nullable value input holds its underlying type,
         /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
         internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
             if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
@@ -5259,7 +5273,7 @@ internal partial class StatementBinder {
             }
             let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
             if value is BoundLiteralExpression{Value: nil} ||
-                (value is BoundDefaultExpression && value.Type == node.Type) {
+                (value is BoundDefaultExpression && IsNullDefault(value.Type)) {
                 return false
             }
             if node.Type is not NullableTypeSymbol nullable {
