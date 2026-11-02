@@ -3869,17 +3869,31 @@ partial class CSharpToGSharpTranslator {
                 isNonNull = decided
                 return true
             }
-            if !this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
+            if this.state.VarCaptureUndecided.Contains(local) || !this.TryGetVarCaptureInput(
+                local,
+                out var input,
+                out var member,
+                out var narrowedByTypeTest
+            ) {
                 return false
+            }
+            // The scrutinee mentions a value that is `T?` only in G#. Unless the capture reads that value
+            // itself, or a member whose declared type does not follow the scrutinee's type arguments, the
+            // emitted type of the capture is not known here: each form keeps its previous translation.
+            if !narrowedByTypeTest && local.Type.IsReferenceType && this.PatternScrutinee(local) is {} scrutinee &&
+                this
+                .MentionsValueNilableOnlyInEmittedGSharp(scrutinee) {
+                if input != nil && this.IsNilableOnlyInEmittedGSharp(input) {
+                    this.state.VarCaptureInputNonNull[local] = false
+                    return true
+                }
+                if input != nil || this.MemberTypeFollowsItsReceiver(member) {
+                    this.state.VarCaptureUndecided.Add(local)
+                    return false
+                }
             }
             if narrowedByTypeTest {
                 isNonNull = true
-            } else if local.Type.IsReferenceType && this.PatternScrutinee(local) is {} scrutinee &&
-                this
-                .FlowsValueNilableOnlyInEmittedGSharp(scrutinee) {
-                // The emitted type of the scrutinee, or of a member that a subpattern reads from it, can be
-                // `T?` although C# types it non-null.
-                isNonNull = false
             } else if input != nil {
                 isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
             } else {
@@ -3984,6 +3998,42 @@ partial class CSharpToGSharpTranslator {
                 candidate
             )
         )
+
+        // Issue #5582: whether `expression` mentions anywhere (an operand, an argument, a lambda body at any
+        // depth, or the initializer of a `var` local that it reads) a value that is `T?` only in G#.
+        private func MentionsValueNilableOnlyInEmittedGSharp(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            for candidate in expression.DescendantNodesAndSelf()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]() {
+                if this.IsNilableOnlyInEmittedGSharp(candidate) {
+                    return true
+                }
+                if candidate is IdentifierNameSyntax &&
+                    this
+                    .context
+                    .GetSymbolInfo(candidate)
+                    .Symbol is ILocalSymbol local &&
+                    this.LocalInitializerMentionsValueNilableOnlyInEmittedGSharp(local) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func LocalInitializerMentionsValueNilableOnlyInEmittedGSharp(local ILocalSymbol) bool {
+            if this.state.LocalsMentioningNilableOnlyValues.TryGetValue(local, out var decided) {
+                return decided
+            }
+            this.state.LocalsMentioningNilableOnlyValues[local] = false
+            let answer = local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                this.MentionsValueNilableOnlyInEmittedGSharp(initializer)
+            this.state.LocalsMentioningNilableOnlyValues[local] = answer
+            return answer
+        }
 
         // Whether the value of `node` can carry the type of a value inside it.
         private func CarriesItsOperandsValue(node Microsoft.CodeAnalysis.SyntaxNode) bool {

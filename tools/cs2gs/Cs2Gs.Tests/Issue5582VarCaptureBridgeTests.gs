@@ -426,9 +426,11 @@ namespace Demo
         RunsAs(printed, "node node node node")
     }
 
-    /// A value that is `T?` only in G# flows into a capture through a generic member read (`task.Result`),
-    /// `await`, a generic factory read by a property subpattern (`{ Value: var c }` over `Wrap(...)`), and a
-    /// nest of generic calls. Each capture keeps its `!!`.
+    /// A value that is `T?` only in G# can flow into a capture through a generic member read (`task.Result`,
+    /// also through a local), `await`, `GetAwaiter().GetResult()`, a receiver-dependent method (`box.Get()`), a
+    /// block-bodied callback, a generic factory read by a property subpattern, and a nest of generic calls.
+    /// The capture decision does not project these types: when the scrutinee mentions such a value, the
+    /// capture keeps the translation it had before, and each switch-arm and `case` capture keeps its `!!`.
     @Fact
     func AVarCaptureOfAGenericFlow_KeepsItsAssertion() {
         let nested = Nest(8, "Volatile.Read(ref cache!)")
@@ -439,12 +441,22 @@ using System.Threading;
 using System.Threading.Tasks;
 namespace Demo
 {
-    public class Box<T> { public Box(T value) { Value = value; } public T Value; }
+    public class Box<T> { public Box(T value) { Value = value; } public T Value; public T Get() => Value; }
     public static class P
     {
         private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
         static T Id<T>(T x) => x;
+        static T Call<T>(System.Func<T> f) => f();
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static int LocalResult()
+        {
+            var task = Task.FromResult(Volatile.Read(ref cache!));
+            return task.Result switch { var l => l.Count };
+        }
+        static int BlockCallback(bool flag) =>
+            Call(() => { if (flag) { return Volatile.Read(ref cache!); } else { return Volatile.Read(ref cache!); } }) switch { var k => k.Count };
+        static int ReceiverGet() => Wrap(Volatile.Read(ref cache!)).Get() switch { var g => g.Count };
+        static int Awaiter() => Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() switch { var w => w.Count };
         static int ResultArm() => Task.FromResult(Volatile.Read(ref cache!)).Result switch { var r => r.Count };
         static int ResultCase()
         {
@@ -457,7 +469,8 @@ namespace Demo
         static int BoxArm() => Wrap(Volatile.Read(ref cache!)) switch { { Value: var b } => b.Count, _ => -1 };
         static int Nested() => ` + nested + ` switch { var n => n.Count };
         public static string Run() =>
-            ResultArm() + " " + ResultCase() + " " + AwaitArm().Result + " " + BoxArm() + " " + Nested();
+            ResultArm() + " " + ResultCase() + " " + AwaitArm().Result + " " + BoxArm() + " " + Nested() + " " +
+            LocalResult() + " " + BlockCallback(true) + " " + ReceiverGet() + " " + Awaiter();
     }
 }`)
         Assert.Contains("case var r: r!!.Count", printed)
@@ -465,7 +478,42 @@ namespace Demo
         Assert.Contains("case var a: a!!.Count", printed)
         Assert.Contains("case { Value: var b }: b!!.Count", printed)
         Assert.Contains("case var n: n!!.Count", printed)
-        RunsAs(printed, "1 1 1 1 1")
+        Assert.Contains("case var l: l!!.Count", printed)
+        Assert.Contains("case var k: k!!.Count", printed)
+        Assert.Contains("case var g: g!!.Count", printed)
+        Assert.Contains("case var w: w!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 1 1")
+    }
+
+    /// A subpattern member whose declared type does not follow the scrutinee's type arguments (`Node Child` of
+    /// `Box<T>`) has its own emitted type, so its capture is decided by that member even when `T` is `T?` only
+    /// in G#. A null `Child` is passed on as C# does.
+    @Fact
+    func AVarCaptureOfAFixedMemberOfAGenericFlow_FollowsTheMember() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public class Node { }
+    public class Sink { public virtual string Take(Node n) => "taken"; }
+    public class Box<T>
+    {
+        public Box(T value, Node child) { Value = value; Child = child; }
+        public T Value;
+        public Node Child;
+    }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        static Box<T> Wrap<T>(T value) => new Box<T>(value, null!);
+        static string Arm() => Wrap(Volatile.Read(ref cache!)) switch { { Child: var c } => new Sink().Take(c), _ => "none" };
+        public static string Run() => Arm();
+    }
+}`)
+        Assert.Contains("case { Child: var c }: Sink().Take(c)\n", printed)
+        RunsAs(printed, "taken")
     }
 
     /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null

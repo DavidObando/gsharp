@@ -74,6 +74,8 @@ internal class DocumentTranslationState {
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
+        VarCaptureUndecided = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        LocalsMentioningNilableOnlyValues = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         LiftedStaticLocalFunctions = Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
@@ -451,6 +453,17 @@ internal class DocumentTranslationState {
 
     // Issue #5582: the same answer for an expression node, so that nested generic calls stay linear.
     prop NilableOnlyInEmittedGSharpNodes Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool] {
+        get;
+    }
+
+    // Issue #5582: `var` captures whose emitted type the capture decision cannot name. Each form keeps its
+    // previous translation for them.
+    prop VarCaptureUndecided HashSet[ILocalSymbol] {
+        get;
+    }
+
+    // Issue #5582: whether a local's initializer mentions a value that is `T?` only in G#.
+    prop LocalsMentioningNilableOnlyValues Dictionary[ILocalSymbol, bool] {
         get;
     }
 
