@@ -120,6 +120,9 @@ func Main() {
     @InlineData("member-call", "GS0159")
     @InlineData("implicit-field", "GS0159")
     @InlineData("closure", "GS0159")
+    @InlineData("break-only", "GS0159")
+    @InlineData("labeled-break", "GS0159")
+    @InlineData("other-instance-field", "GS0159")
     func AssignmentReachingBackEdge_InvalidatesInheritedNarrowing(shape string, expectedDiagnostic string) {
         let compilation = Compile(BuildRejectedSource(shape))
         let errors = compilation.BoundProgram.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.IsError).ToArray()
@@ -149,31 +152,35 @@ ok
 ok
 `)
     @InlineData("initializer-renarrow", "ok\n")
-    @InlineData("break-only", "ok\n")
     @InlineData("literal-false-do-while", "ok\n")
     @InlineData("literal-false-while", "")
     @InlineData("shadowed-assignment", `ok
 ok
 `)
-    @InlineData("labeled-break", "ok\n")
     @InlineData("post-condition-renarrow", "ok\n")
     @InlineData("type-test-condition", "5\n")
-    @InlineData("other-instance-field", `ok
-ok
-`)
     func SafeNarrowing_RemainsAcceptedAndRuns(shape string, expectedOutput string) {
         Assert.Equal(expectedOutput, CompileAndRun(BuildAcceptedSource(shape), shape))
     }
 
-    @Theory
-    @InlineData("constructor", "c = C(33)")
-    @InlineData("local", "c = fresh")
-    @InlineData("function", "c = Mk(33)")
-    func NonNullAssignmentAfterUse_PreservesInheritedNarrowing(shape string, secondIterationAssignment string) {
+    @Fact
+    func NonNullAssignmentAfterUse_FromAConstruction_PreservesInheritedNarrowing() {
         Assert.Equal(
             "11${Environment.NewLine}22${Environment.NewLine}33${Environment.NewLine}",
-            CompileAndRun(NonNullAssignmentSource(secondIterationAssignment, "function"), "non-null-after-use-$shape")
+            CompileAndRun(NonNullAssignmentSource("c = C(33)", "function"), "non-null-after-use-constructor")
         )
+    }
+
+    // ADR-0213 row R7 (b), question 1: a variable or a call is no proof across the back edge, so the
+    // fact is removed at the loop entry and `c.Print()` reports GS0159.
+    @Theory
+    @InlineData("local", "c = fresh")
+    @InlineData("function", "c = Mk(33)")
+    func NonNullAssignmentAfterUse_FromAVariableOrACall_IsRejected(shape string, secondIterationAssignment string) {
+        let source = NonNullAssignmentSource(secondIterationAssignment, "function")
+        let (exitCode, output) = CompileWithDriver(source, "non-null-after-use-rejected-$shape")
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains("GS0159", output, StringComparison.Ordinal)
     }
 
     // ADR-0208 R11 (#5170): a call may assign a top-level variable, so `c.Print()` cannot rely on
@@ -416,7 +423,7 @@ func Run() {
     }
 
     @Fact
-    func SpeculativeRebind_RollsBackDiagnosticsAndLabelState() {
+    func LoopBody_KeepsOneDiagnosticAndTheLabelState() {
         const Source = `class C {
     func M() { }
 }
@@ -440,7 +447,7 @@ func Run() {
     }
 
     @Fact
-    func SpeculativeRebind_DoesNotDuplicateLambdaReturnDiagnostic() {
+    func LoopBody_DoesNotDuplicateLambdaReturnDiagnostic() {
         const Source = `class C {
     func M() { }
 }
@@ -469,7 +476,7 @@ func Run() {
     }
 
     @Fact
-    func SpeculativeRebind_RestoresLoopStack() {
+    func LoopBody_LeavesTheLoopStack() {
         const Source = `class C {
     func M() { }
 }
@@ -493,7 +500,7 @@ func Run() {
     }
 
     @Fact
-    func SpeculativeRebind_RestoresSyntheticLambdaOrdinal() {
+    func LoopBody_DoesNotSkipALambdaOrdinal() {
         const Source = `import System
 
 class C {
@@ -523,7 +530,7 @@ func Run() {
     }
 
     @Fact
-    func SpeculativeRebind_DoesNotDuplicateGotoHandlerDiagnostics() {
+    func LoopBody_DoesNotDuplicateGotoHandlerDiagnostics() {
         const Source = `import System
 
 class C {
@@ -630,6 +637,37 @@ func Main() {
         )
 
         private func BuildRejectedSource(shape string) string {
+            if shape == "other-instance-field" {
+                return `import System
+import System.Diagnostics.CodeAnalysis
+
+class C {
+    func M() {
+        Console.WriteLine("ok")
+    }
+}
+
+class Box {
+    var _c C?
+
+    @MemberNotNull("_c")
+    func EnsureInit() {
+        _c = C()
+    }
+
+    func Run(other Box) {
+        this.EnsureInit()
+        for var i = 0; i < 2; i++ {
+            other._c = nil
+            _c.M()
+        }
+    }
+}
+
+func Main() {
+    Box{}.Run(Box{})
+}`
+            }
             if shape == "implicit-field" {
                 return `import System.Diagnostics.CodeAnalysis
 
@@ -733,6 +771,18 @@ func Run(box Box) {
     c = nil
     c.M()
 }`
+                case "break-only": `for var i = 0; i < 2; i++ {
+    c.M()
+    c = nil
+    break
+}`
+                case "labeled-break": `outer: for var i = 0; i < 2; i++ {
+    c.M()
+    for var j = 0; j < 1; j++ {
+        c = nil
+        break outer
+    }
+}`
                 case "closure": `for var i = 0; i < 2; i++ {
     c.M()
     let clear = func() { c = nil }
@@ -811,37 +861,6 @@ func Run() {
         }
 
         private func BuildAcceptedSource(shape string) string {
-            if shape == "other-instance-field" {
-                return `import System
-import System.Diagnostics.CodeAnalysis
-
-class C {
-    func M() {
-        Console.WriteLine("ok")
-    }
-}
-
-class Box {
-    var _c C?
-
-    @MemberNotNull("_c")
-    func EnsureInit() {
-        _c = C()
-    }
-
-    func Run(other Box) {
-        this.EnsureInit()
-        for var i = 0; i < 2; i++ {
-            other._c = nil
-            _c.M()
-        }
-    }
-}
-
-func Main() {
-    Box{}.Run(Box{})
-}`
-            }
             let loop = switch shape {
                 case "unchanged": `for var i = 0; i < 2; i++ {
     c.M()
@@ -864,11 +883,6 @@ func Main() {
     c.M()
     break
 }`
-                case "break-only": `for var i = 0; i < 2; i++ {
-    c.M()
-    c = nil
-    break
-}`
                 case "literal-false-do-while": `do {
     c.M()
     c = nil
@@ -883,13 +897,6 @@ func Main() {
         c = nil
     }
     c.M()
-}`
-                case "labeled-break": `outer: for var i = 0; i < 2; i++ {
-    c.M()
-    for var j = 0; j < 1; j++ {
-        c = nil
-        break outer
-    }
 }`
                 case "post-condition-renarrow": `for ; c != nil; c = nil {
     c.M()

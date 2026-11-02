@@ -236,124 +236,53 @@ internal partial class StatementBinder {
 
     /// Binds a loop body while pushing the loop's break/continue labels (and
     /// optional ADR-0070 label name) onto (cref:BinderContext.LoopStack).
+    /// @remarks ADR-0213 section 6 (slice L1): when a fact is in force at the loop, the lower
+    /// bound of the loop is applied to the frames first (cref:ApplyLoopEntryLowerBound), and the
+    /// header and the body are bound once. A fact that survives holds on every iteration, so
+    /// nothing is bound a second time and no state is saved or restored.
     /// @param body The loop body statement.
     /// @param labelName The ADR-0070 label, or `null`.
     /// @param breakLabel The synthesized break label.
     /// @param continueLabel The synthesized continue label.
-    /// @param inheritedNarrowingFrameCount Number of active frames whose
-    /// narrowings predate this loop iteration.
-    /// @param backEdgeTail Optional post/condition evaluation executed
-    /// between body completion and the next iteration.
-    /// @param backEdgeCondition Optional condition that must be true
-    /// before control reaches the next iteration.
-    /// @param bindIteration Optional binder for a repeated header and
-    /// body, so both are rebound after inherited narrowing is invalidated.
-    /// @param iterationRunsUserCode Whether the loop header calls user code
-    /// before every body run, as an enumerator `MoveNext` does (ADR-0208 R11, #5170).
+    /// @param bindIteration Optional binder for the header and the body of the loop, which runs
+    /// inside the loop's label scope and returns the bound body.
+    /// @param iterationRunsUserCode Whether the loop header calls user code before every body run, as an
+    /// enumerator `MoveNext` does (ADR-0208 R11, #5170). Syntax does not show it: the binder reads it from
+    /// the type of the collection, and an array, a slice or a string has no such call.
     private func BindLoopBody(
         body StatementSyntax,
         labelName string?,
         out breakLabel BoundLabel,
         out continueLabel BoundLabel,
-        inheritedNarrowingFrameCount int32 = -1,
-        backEdgeTail BoundStatement? = nil,
-        backEdgeCondition BoundExpression? = nil,
-        bindIteration(() -> (Body BoundStatement, Tail BoundStatement?, Condition BoundExpression?))? = nil,
+        bindIteration(() -> BoundStatement)? = nil,
         iterationRunsUserCode bool = false
     ) BoundStatement {
-        var inheritedNarrowingFrameCount = inheritedNarrowingFrameCount
-        var backEdgeTail = backEdgeTail
-        var backEdgeCondition = backEdgeCondition
-        let BindCore = func (out localBreakLabel BoundLabel, out localContinueLabel BoundLabel) BoundStatement {
-            binderCtx.LabelCounter++
-            localBreakLabel = BoundLabel("break${binderCtx.LabelCounter}")
-            localContinueLabel = BoundLabel("continue${binderCtx.LabelCounter}")
-            binderCtx.LoopStack.Push((labelName, localBreakLabel, localContinueLabel))
-            try {
-                if bindIteration != nil {
-                    let iteration = bindIteration()
-                    backEdgeTail = iteration.Tail
-                    backEdgeCondition = iteration.Condition
-                    return iteration.Body
-                }
-                return Invariant.Required(
-                    BindStatement(body),
-                    "a loop body has a bound statement",
-                    expression: "BindStatement(body)"
-                )
-            } finally {
-                binderCtx.LoopStack.Pop()
+        if HasAnyActiveNarrowings() {
+            ApplyLoopEntryLowerBound(body, iterationRunsUserCode)
+        }
+        binderCtx.LabelCounter++
+        breakLabel = BoundLabel("break${binderCtx.LabelCounter}")
+        continueLabel = BoundLabel("continue${binderCtx.LabelCounter}")
+        binderCtx.LoopStack.Push((labelName, breakLabel, continueLabel))
+        try {
+            if bindIteration != nil {
+                return bindIteration()
             }
+            return Invariant.Required(
+                BindStatement(body),
+                "a loop body has a bound statement",
+                expression: "BindStatement(body)"
+            )
+        } finally {
+            binderCtx.LoopStack.Pop()
         }
-        inheritedNarrowingFrameCount = if inheritedNarrowingFrameCount < 0 {
-            binderCtx.NarrowedVariables.Count
-        } else {
-            inheritedNarrowingFrameCount
-        }
-        if !HasActiveNarrowings(inheritedNarrowingFrameCount) {
-            return BindCore(out breakLabel, out continueLabel)
-        }
-        let saved = CaptureSpeculativeBindState()
-        let narrowingSnapshots = saved.NarrowingFrames
-        // Issue #2943: first bind supplies exact assignment symbols and lowered
-        // control flow. If a write can reach the back-edge, restore speculative
-        // state, remove only inherited narrowings, and bind the body again.
-        // Comparison mode: reports of a bind that is discarded must not reach the report.
-        let speculation = NarrowingComparison.BeginSpeculation()
-        let firstBody = BindCore(out var firstBreakLabel, out var firstContinueLabel)
-        let mutations = CollectLoopBackEdgeMutations(
-            firstBody,
-            firstBreakLabel,
-            firstContinueLabel,
-            backEdgeTail,
-            backEdgeCondition
-        )
-        if iterationRunsUserCode {
-            mutations.MarkIterationRunsUserCode()
-        }
-        let loopEntryExternalCallableAliases = ComputeLoopEntryExternalCallableAliases(
-            firstBody,
-            backEdgeTail,
-            firstBreakLabel,
-            firstContinueLabel,
-            saved.ExternalCallableAliases,
-            backEdgeCondition
-        )
-        let narrowingInvalidations = CollectInheritedNarrowingInvalidations(
-            mutations,
-            mutations.MayMutateMemberPaths,
-            inheritedNarrowingFrameCount,
-            narrowingSnapshots
-        )
-        if narrowingInvalidations.Count == 0 && loopEntryExternalCallableAliases.SetEquals(
-            saved.ExternalCallableAliases
-        ) {
-            NarrowingComparison.EndSpeculation(speculation, true)
-            // ADR-0213 slice L0: the walker's lower bound against the analysis above. Report only.
-            if NarrowingComparison.LoopsEnabled {
-                ReportLoopComparison(body, narrowingSnapshots, inheritedNarrowingFrameCount, narrowingInvalidations)
-            }
-            breakLabel = firstBreakLabel
-            continueLabel = firstContinueLabel
-            return firstBody
-        }
-        NarrowingComparison.EndSpeculation(speculation, false)
-        if NarrowingComparison.LoopsEnabled {
-            ReportLoopComparison(body, narrowingSnapshots, inheritedNarrowingFrameCount, narrowingInvalidations)
-        }
-        // ADR-0208 section 18: counts the loop bodies that this design binds twice.
-        CompilationMeasurements.Count("narrowing.loop-rebinds")
-        RestoreSpeculativeBindState(saved)
-        InvalidateInheritedNarrowings(narrowingInvalidations)
-        RestoreItems(externalCallableAliases, loopEntryExternalCallableAliases.ToArray())
-        return BindCore(out breakLabel, out continueLabel)
     }
 
     /// The function-wide binder state that a speculative bind can change: diagnostics, narrowing frame
     /// contents, pending exit and goto narrowing states, labels and jumps, callable aliases, assignment
     /// generations, reachability, finally and cleanup bookkeeping, the synthetic local counter, and the held
-    /// returns of a speculative lambda body (issue #5569). A loop body (issue #2943) and a speculative lambda
-    /// return value (issue #5569) bind again after a restore.
+    /// returns of a speculative lambda body (issue #5569). A speculative lambda return value (issue #5569) binds
+    /// again after a restore; a loop body binds once (ADR-0213 L1).
     private sealed class SpeculativeBindState {
         internal let DiagnosticCount int32
         internal let NarrowingFrames[]Dictionary[AccessPath, TypeSymbol]

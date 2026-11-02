@@ -371,16 +371,18 @@ Console.WriteLine(Run())
 import System
 
 var text string? = nil
-func Run() int32 {
+func Run(flag bool) string {
     text = "safe"
-    var total int32 = 0
     for item in []int32{1, 2} {
-        total = total + item + text.Length
+        // A member read or a conversion would remove the fact at the loop entry (ADR-0213 W4, W5).
+        if flag == true {
+            return text
+        }
     }
-    return total + text.Length
+    return text
 }
-Console.WriteLine(Run())
-`, []string{"15"}}
+Console.WriteLine(Run(false))
+`, []string{"safe"}}
             yield[]object{"read-only-global-survives-call", `
 import System
 
