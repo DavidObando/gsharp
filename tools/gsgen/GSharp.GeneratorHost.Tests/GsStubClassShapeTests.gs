@@ -526,6 +526,20 @@ class Plain {
         "Private(Base);Public(Int32)",
         "Protected(Target);Public(Int32)"
     )
+    @InlineData(
+        "open class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target : Base[int32, int32] {}",
+        "App.Target",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open data class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target : Base[int32, int32] {}\nclass Leaf : Target {}",
+        "App.Target",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
     func ClassFallbackCopyConstructor_DoesNotDuplicateExplicitCopyConstructorAcrossPartialDeclarations(
         firstPart string,
         secondPart string,
@@ -551,7 +565,9 @@ class Plain {
                 .DiagnosticSeverity
                 .Error
         )
-        let baseSymbol = compilation.GetTypeByMetadataName("App.Base")
+        let baseSymbol = compilation.GetTypeByMetadataName("App.Base") ?? compilation.GetTypeByMetadataName(
+            "App.Base`2"
+        )
         Assert.NotNull(baseSymbol)
         let actualBaseConstructors = string.Join(
             ";",

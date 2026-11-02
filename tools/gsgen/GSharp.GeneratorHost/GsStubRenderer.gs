@@ -578,9 +578,7 @@ class GsStubRenderer {
 
     private func TryGetAccessibleBaseCopyConstructorType(structSymbol StructSymbol) TypeSymbol? {
         if structSymbol.BaseClass is {} baseClass {
-            let baseDefinition = DefinitionOf(baseClass)!!
-            if GetProjectedCopyConstructorAccessibility(baseDefinition) is {} accessibility &&
-                accessibility != Accessibility.Private {
+            if CountAccessibleBaseCopyConstructors(baseClass) == 1 {
                 return baseClass
             }
             return nil
@@ -591,34 +589,33 @@ class GsStubRenderer {
         return nil
     }
 
-    private func GetProjectedCopyConstructorAccessibility(structSymbol StructSymbol) Accessibility? {
-        if structSymbol.ExplicitConstructors.IsDefaultOrEmpty {
-            if structSymbol.HasPrimaryConstructor &&
-                IsCopyConstructorSignature(structSymbol, structSymbol.PrimaryConstructorParameters) {
-                return PrimaryConstructorAccessibility(structSymbol)
+    private func CountAccessibleBaseCopyConstructors(baseClass StructSymbol) int32 {
+        let baseDefinition = DefinitionOf(baseClass)!!
+        var matches = 0
+        if baseDefinition.ExplicitConstructors.IsDefaultOrEmpty {
+            if baseDefinition.HasPrimaryConstructor &&
+                PrimaryConstructorAccessibility(baseDefinition) != Accessibility.Private &&
+                IsCopyConstructorSignature(baseClass, baseDefinition.PrimaryConstructorParameters) {
+                matches++
             }
         } else {
-            var matched Accessibility? = nil
-            for ctor in structSymbol.ExplicitConstructors {
-                if IsCopyConstructorSignature(structSymbol, ctor.Parameters) {
-                    let accessibility = ExplicitConstructorAccessibility(structSymbol, ctor)
-                    if accessibility != Accessibility.Private {
-                        return accessibility
-                    }
-                    matched = accessibility
+            for ctor in baseDefinition.ExplicitConstructors {
+                if ExplicitConstructorAccessibility(baseDefinition, ctor) != Accessibility.Private &&
+                    IsCopyConstructorSignature(baseClass, ctor.Parameters) {
+                    matches++
                 }
             }
-            if matched != nil {
-                return matched
+        }
+        if !HasDeclaredCopyConstructor(baseDefinition) {
+            if recordTypes.Contains(baseDefinition) ||
+                (
+                copyConstructorTypes.Contains(baseDefinition) &&
+                    CopyConstructorAccessibility(baseDefinition) != Accessibility.Private
+            ) {
+                matches++
             }
         }
-        if recordTypes.Contains(structSymbol) {
-            return Accessibility.Protected
-        }
-        if copyConstructorTypes.Contains(structSymbol) {
-            return CopyConstructorAccessibility(structSymbol)
-        }
-        return nil
+        return matches
     }
 
     private func RenderConstructor(
@@ -1168,6 +1165,11 @@ class GsStubRenderer {
             }
             if !structSymbol.ExplicitConstructors.IsDefaultOrEmpty {
                 for ctor in structSymbol.ExplicitConstructors {
+                    if !ctor.IsConvenience && ctor.BaseInitializer == nil {
+                        return nil
+                    }
+                }
+                for ctor in structSymbol.ExplicitConstructors {
                     if ctor.BaseInitializer != nil {
                         return ctor.BaseInitializer
                     }
@@ -1197,7 +1199,7 @@ class GsStubRenderer {
                 return false
             }
             return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                parameters[0].Type,
+                structSymbol.SubstituteMemberType(parameters[0].Type),
                 SelfType(structSymbol)
             )
         }
@@ -1206,6 +1208,7 @@ class GsStubRenderer {
             if !(importedBase?.ClrType is {} clrBase) || ClrTypeUtilities.AreSame(clrBase, typeof(object)) {
                 return false
             }
+            var matches = 0
             for constructor in ClrTypeUtilities.SafeGetConstructors(
                 clrBase,
                 System
@@ -1222,10 +1225,10 @@ class GsStubRenderer {
                 let parameters = constructor.GetParameters()
                 if parameters.Length == 1 && ClrTypeUtilities.AreSame(parameters[0].ParameterType, clrBase) &&
                     (constructor.IsPublic || constructor.IsFamily || constructor.IsFamilyOrAssembly) {
-                    return true
+                    matches++
                 }
             }
-            return false
+            return matches == 1
         }
 
         private func DefinitionOf(type StructSymbol?) StructSymbol? -> type!!.Definition ?? type
