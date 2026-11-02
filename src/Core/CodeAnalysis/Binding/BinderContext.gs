@@ -312,6 +312,35 @@ internal class BinderContext {
     /// `return` value of a lambda body with an inferred result records its narrowing use.
     prop DeferredReturnNarrowingOwner LambdaBinder.DeferredReturnState?
 
+    /// Issue #5613: the capture of the block value that the next expression bind gives (cref:BindWithBlockValueCapture).
+    /// The expression binder takes it when it binds the block, so a nested block does not receive it.
+    prop PendingBlockValueCapture((NarrowedBranchValue) -> void)?
+
+    /// Issue #5635: binds [`syntax`](paramref) with [`bind`](paramref). When the syntax is a block value, also in
+    /// parentheses or `checked`/`unchecked` (cref:ExpressionBinder.IsBlockValueSyntax), the block gives the narrowed
+    /// read that it yields to [`capture`](paramref), captured where the read binds. The consumer then decides the
+    /// read for the type that it converts the value to. Without a capture, a block decides the read at its own type.
+    /// @param syntax The value syntax.
+    /// @param capture Receives the narrowed read that a block value yields.
+    /// @param bind Binds the value.
+    /// @returns The bound value.
+    func BindWithBlockValueCapture(
+        syntax ExpressionSyntax,
+        capture(NarrowedBranchValue) -> void,
+        bind() -> BoundExpression
+    ) BoundExpression {
+        PendingBlockValueCapture = if ExpressionBinder.IsBlockValueSyntax(syntax) {
+            capture
+        } else {
+            default(((NarrowedBranchValue) -> void)?)
+        }
+        try {
+            return bind()
+        } finally {
+            PendingBlockValueCapture = nil
+        }
+    }
+
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
     /// local-function body contains any user-written `goto` statement or non-loop
     /// `label:` declaration (issue #4285), computed syntactically,
@@ -974,6 +1003,32 @@ internal class BinderContext {
             )
         } finally {
             DeferredReturnNarrowingOwner = outerOwner
+        }
+    }
+
+    /// Issue #5635: records the narrowed read that a block `return` value of a lambda body with an inferred result
+    /// yields, from the capture where the read binds. The use waits in [`owner`](paramref), as for a narrowed
+    /// `return` value. The declared read cannot replace a read in a block after the body, so a read that casts or
+    /// unwraps is recorded now, at its narrowed type.
+    /// @param owner The narrowing uses of the lambda body.
+    /// @param read The narrowed read that the block yields.
+    func TrackInferredReturnNarrowing(owner LambdaBinder.DeferredReturnState, read NarrowedBranchValue) {
+        if read.Use is {} use {
+            let held = if NarrowedReadChangesRuntimeType(
+                MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
+                read.NarrowedType
+            ) {
+                use
+            } else {
+                BackwardGotoNarrowingCapture(use.Path, use.NarrowedType, use.Labels, owner)
+            }
+            RecordBackwardGotoNarrowingUse(
+                held,
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                read.NarrowedType
+            )
         }
     }
 

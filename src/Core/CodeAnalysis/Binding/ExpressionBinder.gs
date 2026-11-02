@@ -52,8 +52,6 @@ internal partial class ExpressionBinder {
     private let binderCtx BinderContext
     private let memberLookup MemberLookup
     private let conversions ConversionClassifier
-    // Issue #5613: the capture of the block value that BindBranchValue binds next (TakeBlockValueCapture).
-    private var pendingBlockValueCapture((NarrowedBranchValue) -> void)? = nil
     private let overloads OverloadResolver
     private let patterns PatternBinder
     private let lambdas LambdaBinder

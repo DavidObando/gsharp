@@ -364,6 +364,53 @@ internal class ConversionClassifier {
         return value
     }
 
+    /// Decides the backward `goto` check of a narrowed read that converts to [`target`](paramref) where the read
+    /// binds (issue #5603), with the decision of every other conversion (cref:ConversionNeedsNarrowedSource). The
+    /// declared read replaces the narrowed read when the target takes it (cref:TryRecoverDeclaredMemberRead). Issue
+    /// #5635: a value that goes into a slot of its own type with no conversion uses this decision too.
+    /// @param diagnosticLocation The location of the use.
+    /// @param expression The value.
+    /// @param target The conversion target.
+    /// @returns The value, with the declared read when it replaces the narrowed read.
+    func DecideNarrowedConversion(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        target TypeSymbol?
+    ) BoundExpression {
+        if !binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
+            return expression
+        }
+        let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
+        let narrowedSourceType = Invariant.Required(
+            narrowedType,
+            "a narrowed conversion has a narrowed type",
+            expression: "narrowedType"
+        )
+        if TryRecoverDeclaredMemberRead(expression, narrowedPath, narrowedSourceType, target, out var declaredRead) {
+            return declaredRead
+        }
+        if (
+            narrowedPath.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(
+                narrowedPath.Root.Type,
+                narrowedSourceType
+            )
+        ) &&
+            ConversionNeedsNarrowedSource(
+            MemberLookup.GetDeclaredAccessPathType(narrowedPath, narrowedSourceType),
+            narrowedSourceType,
+            target
+        ) {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                narrowedPath,
+                diagnosticLocation,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                target
+            )
+        }
+        return expression
+    }
+
     // Issue #5613: replaces the narrowed read that a value yields (the value, or a block's trailing value).
     private func ReplaceNarrowedLeaf(
         value BoundExpression,
@@ -396,34 +443,8 @@ internal class ConversionClassifier {
         }
         // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
         // a branch value converts to the common type without it, because the branch decided it where the read binds.
-        if trackNarrowing && binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
-            let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
-            let narrowedSourceType = Invariant.Required(
-                narrowedType,
-                "a narrowed conversion has a narrowed type",
-                expression: "narrowedType"
-            )
-            if TryRecoverDeclaredMemberRead(expression, narrowedPath, narrowedSourceType, type, out var declaredRead) {
-                expression = declaredRead
-            } else if (
-                narrowedPath.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(
-                    narrowedPath.Root.Type,
-                    narrowedSourceType
-                )
-            ) &&
-                ConversionNeedsNarrowedSource(
-                MemberLookup.GetDeclaredAccessPathType(narrowedPath, narrowedSourceType),
-                narrowedSourceType,
-                type
-            ) {
-                binderCtx.TrackBackwardGotoNarrowingUse(
-                    narrowedPath,
-                    diagnosticLocation,
-                    string.Empty,
-                    BackwardGotoNarrowingUseKind.Conversion,
-                    type
-                )
-            }
+        if trackNarrowing {
+            expression = DecideNarrowedConversion(diagnosticLocation, expression, type)
         }
         if NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) ||
             ManagedReferenceTypes
@@ -1192,6 +1213,37 @@ internal class ConversionClassifier {
             var rebound = argument
             if paramIndex < parameters.Length {
                 let parameterType = parameters[paramIndex].ParameterType
+                // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
+                // slot takes the narrowed type of a narrowed read. The read is decided for that type, as `let t = s`
+                // is. The imported slot itself takes nil, so its conversion does not decide the read.
+                if call?.TypeArgumentList == nil &&
+                    method is {IsGenericMethod: true} genericMethod &&
+                    !parameterType.IsByRef &&
+                    (
+                    if genericMethod.IsGenericMethodDefinition {
+                        genericMethod
+                    } else {
+                        genericMethod.GetGenericMethodDefinition()
+                    }
+                )
+                    .GetParameters()[paramIndex]
+                    .ParameterType
+                    .IsGenericMethodParameter {
+                    let sourceIndex = i - receiverArgCount
+                    let _ = DecideNarrowedConversion(
+                        if !parameterArgumentLocations.IsDefault &&
+                            paramIndex < parameterArgumentLocations.Length &&
+                            parameterArgumentLocations[paramIndex] is {} inferredLocation {
+                            inferredLocation
+                        } else if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
+                            call.Arguments[sourceIndex].Location
+                        } else {
+                            argument.Syntax?.Location ?? call?.Location ?? default(TextLocation)
+                        },
+                        argument,
+                        argument.Type
+                    )
+                }
                 // Issue #1391: an untyped `default` literal (bound as a
                 // BoundDefaultExpression with the Error sentinel type) survives
                 // overload resolution against an imported method via the

@@ -2853,6 +2853,18 @@ internal partial class OverloadResolver {
                         expression: "expectedType"
                     )
                 )
+            } else if expectedType != nil {
+                // Issue #5635: an argument that goes into its parameter with no conversion (the parameter has the
+                // argument's type, also an inferred type argument) keeps the backward `goto` check of a narrowed read.
+                boundArguments[i] = conversions.DecideNarrowedConversion(
+                    if i < parameterSyntax.Length {
+                        parameterSyntax[i]?.Location ?? syntax.Identifier.Location
+                    } else {
+                        syntax.Identifier.Location
+                    },
+                    argument,
+                    expectedType
+                )
             }
         }
         // Issue #951: any deferred un-typed arrow lambda that did not map to a

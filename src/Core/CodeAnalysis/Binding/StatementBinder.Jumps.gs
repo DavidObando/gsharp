@@ -894,6 +894,18 @@ internal partial class StatementBinder {
             } else {
                 expression = if syntax.Expression == nil {
                     default(BoundExpression?)
+                } else if function is {
+                    IsReturnTypeInferred: true,
+                    DefersReturnConversion: false,
+                    InferredReturnNarrowings: {} narrowings
+                } {
+                    // Issue #5635: a block value holds the narrowed read that it yields for the inferred result, as
+                    // a narrowed `return` value does (TrackResultReturnNarrowing).
+                    binderCtx.BindWithBlockValueCapture(
+                        syntax.Expression,
+                        (read NarrowedBranchValue) -> binderCtx.TrackInferredReturnNarrowing(narrowings, read),
+                        () -> bindExpression(syntax.Expression!!, false)
+                    )
                 } else {
                     bindExpression(syntax.Expression, false)
                 }

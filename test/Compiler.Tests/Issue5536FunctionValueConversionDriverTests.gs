@@ -1264,7 +1264,8 @@ func Main() {
     /// Issue #5613 controls: a branch whose common type is `string?` takes the declared value, so the `goto` that
     /// removes the narrowing gives nil. A `goto` that keeps the narrowing gives a `string`. A branch that proves its
     /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. A block value
-    /// that is not a branch keeps its behavior (`let t string? = ({ …; s })`, #5635). Each runs as C# runs it.
+    /// that converts to a declared `string?` takes the declared value too (`let t string? = ({ …; s })`, #5635).
+    /// Each runs as C# runs it.
     @Fact
     func BranchValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1368,6 +1369,135 @@ func Main() {
         source.Append(main.ToString()).Append("}\n")
         oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
         Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111111")
+    }
+
+    /// Issue #5635: a narrowed read that gives its narrowed type to a slot with no conversion keeps the backward
+    /// `goto` check: a tuple element (also in a deconstruction), an argument whose parameter has its type (an
+    /// inferred type argument of a source or imported generic function, a plain parameter, a variadic element) and
+    /// the trailing value of a block without a target. A `goto` that removes the narrowing reports GS0155 at the
+    /// read, as `let t = s` does. A typed `let` and an assignment decide the block's read for their non-null type.
+    /// This applies in a function literal with an inferred result too.
+    @Fact
+    func NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(NoConversionForms)
+        for form in NoConversionForms {
+            RejectMarked(
+                fixture,
+                NoConversionPrelude + "func Main() {\n" + BranchValueBody.Replace("|", form).Replace("#", "s = nil") +
+                    "\n}\n",
+                "s"
+            )
+        }
+        Assert.NotEmpty(InferredResultShapes)
+        Assert.NotEmpty(NoConversionReturnForms)
+        for shape in InferredResultShapes {
+            for form in NoConversionReturnForms {
+                let literal = InferredResultBody.Replace("|", form).Replace("#", "s = nil")
+                RejectMarked(
+                    fixture,
+                    NoConversionPrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
+                    "s"
+                )
+            }
+        }
+    }
+
+    /// Issue #5635 controls: a block value that converts to a nullable declared type, assignment target or inferred
+    /// result, and an explicit nullable type argument, take the declared value, so the `goto` that removes the
+    /// narrowing gives nil. A `goto` that keeps the narrowing gives a `string` in each form of
+    /// (cref:NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto). Each runs as C# runs it.
+    @Fact
+    func NoConversionValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let cases[](Statement string, Oracle string, BeforeGoto string) = [](
+            Statement string,
+            Oracle string,
+            BeforeGoto string
+        ){
+            (
+                "var t string? = U()\n            t = ({\n                n = n + 0\n                s\n            })\n" +
+                    "            Console.Write(t == nil)",
+                "string? t = U(); t = s; Console.Write(t == null);",
+                "s = nil"
+            ),
+            (
+                "let t string? = checked({ s })\n            Console.Write(t == nil)",
+                "string? t = s; Console.Write(t == null);",
+                "s = nil"
+            ),
+            ("Console.Write(Id[string?](s) == nil)", "Console.Write(Id<string?>(s) == null);", "s = nil"),
+            (
+                "Console.Write(Task.FromResult[string?](s).Result == nil)",
+                "Console.Write(Task.FromResult<string?>(s).Result == null);",
+                "s = nil"
+            ),
+            (
+                "let f = () -> {\n                var r string? = \"a\"\n                var m = 0\n" +
+                    "                if r != nil {\n                    M: if m > 0 {\n                        return ({\n" +
+                    "                            m = m + 0\n                            r\n                        })\n" +
+                    "                    }\n                    m++\n                    r = nil\n                    goto M\n" +
+                    "                }\n                return default(string?)\n            }\n" +
+                    "            Console.Write(f() == nil)",
+                "Func<string?> f = () => { string? r = \"a\"; var m = 0; if (r != null) { M: if (m > 0) { return r; } " +
+                    "m++; r = null; goto M; } return default(string?); }; Console.Write(f() == null);",
+                "n = n + 0"
+            ),
+            (
+                "let t = (s, 1)\n            Console.Write(Len(t.Item1))",
+                "var t = (s, 1); Console.Write(Len(t.Item1));",
+                "n = n + 0"
+            ),
+            (
+                "let (a, b) = (s, 1)\n            Console.Write(Len(a))",
+                "var (a, b) = (s, 1); Console.Write(Len(a));",
+                "n = n + 0"
+            ),
+            ("Console.Write(Len(Id(s)))", "Console.Write(Len(Id(s)));", "n = n + 0"),
+            ("Console.Write(F(s))", "Console.Write(F(s));", "n = n + 0"),
+            ("Console.Write(V(\"x\", s))", "Console.Write(V(\"x\", s));", "n = n + 0"),
+            (
+                "Console.Write(Len(Task.FromResult(s).Result))",
+                "Console.Write(Len(Task.FromResult(s).Result));",
+                "n = n + 0"
+            ),
+            (
+                "let t = ({\n                n = n + 0\n                s\n            })\n            Console.Write(Len(t))",
+                "var t = s; Console.Write(Len(t));",
+                "n = n + 0"
+            )
+        }
+        let source = StringBuilder(NoConversionPrelude)
+        let oracle = StringBuilder(
+            "using System;\nusing System.Threading.Tasks;\nclass Program {\n    static int Len(string v) => v.Length;\n" +
+                "    static string? U() => null;\n    static T Id<T>(T x) => x;\n    static int F(string x) => x.Length;\n" +
+                "    static int V(params string[] xs) => xs.Length;\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        for var index = 0; index < cases.Length; index++ {
+            let (statement, oracleStatement, beforeGoto) = cases[index]
+            let name = "Case" + index.ToString()
+            source
+                .Append("func ")
+                .Append(name)
+                .Append("() {\n")
+                .Append(BranchValueBody.Replace("|", statement).Replace("#", beforeGoto))
+                .Append("\n}\n")
+            oracle
+                .Append("    static void ")
+                .Append(name)
+                .Append("() { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { ")
+                .Append(oracleStatement)
+                .Append(" return; } n++; ")
+                .Append(beforeGoto.Replace("nil", "null"))
+                .Append("; goto L; } }\n")
+            main.Append("    ").Append(name).Append("()\n")
+            oracleMain.Append("        ").Append(name).Append("();\n")
+        }
+        source.Append(main.ToString()).Append("}\n")
+        oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrue1111211")
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
@@ -2346,6 +2476,34 @@ class Program {
             "if n > 1 { \"t\" } else { ({ @s }) }",
             "n > 1 ? \"t\" : checked({ @s })",
             "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                ({ @s }) }"
+        }
+
+        // Issue #5635: `Id` infers its type argument, `F` has a `string` parameter and `V` a variadic one.
+        private let NoConversionPrelude string = BranchValuePrelude +
+            "func Id[T](x T) T -> x\nfunc F(x string) int32 -> x.Length\nfunc V(xs ...string) int32 -> xs.Length\n"
+
+        // Issue #5635: statements that give the narrowed read at `@` to a slot with no conversion.
+        private let NoConversionForms[]string = []string{
+            "let t = (@s, 1)",
+            "let (a, b) = (@s, 1)",
+            "let t = ((@s, 1), 2)",
+            "let t = (({ @s }), 1)",
+            "let u = Id(@s)",
+            "let u = F(@s)",
+            "let u = V(\"x\", @s)",
+            "let u = Task.FromResult(@s)",
+            "let t = ({\n                n = n + 0\n                @s\n            })",
+            "let t = ({\n                n = n + 0\n                @s\n            }).Length",
+            "let t string = ({\n                n = n + 0\n                @s\n            })",
+            "var w = \"x\"\n            w = ({\n                n = n + 0\n                @s\n            })"
+        }
+
+        // Issue #5635: `return` values of a function literal with an inferred result that give the narrowed read at
+        // `@` to a slot with no conversion.
+        private let NoConversionReturnForms[]string = []string{
+            "(@s, 1).Item1",
+            "Id(@s)",
+            "({\n                    n = n + 0\n                    @s\n                })"
         }
 
         private const Contract string = `#nullable enable
