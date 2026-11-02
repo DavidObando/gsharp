@@ -265,14 +265,14 @@ internal class ImportedMemberRefFactory {
             // constructed return type must also avoid its erased CLR backing.
             return this.GetFunctionDelegateTypeSpec(fnElement)
         }
-        if element.ClrType != nil {
+        if element.ClrType is {} elementClrType {
             // Issue #3501 (ilverify): element-bearing CLR shapes (arrays from
             // e.g. an imported `ParameterInfo[]` pattern binding) also route
             // through the TypeSpec path — see GetTypeHandleForMember.
-            if element.ClrType.IsConstructedGenericType || element.ClrType.HasElementType {
-                return this.GetTypeHandleForMember(element.ClrType)
+            if elementClrType.IsConstructedGenericType || elementClrType.HasElementType {
+                return this.GetTypeHandleForMember(elementClrType)
             }
-            return this.GetTypeReference(element.ClrType!!)
+            return this.GetTypeReference(elementClrType)
         }
         if element is StructSymbol structSym {
             // ADR-0087 §3 R3: a constructed user-generic struct must

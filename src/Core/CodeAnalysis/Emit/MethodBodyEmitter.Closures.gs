@@ -568,17 +568,17 @@ internal partial class MethodBodyEmitter {
 
     private func EmitUserEventSubscription(node BoundEventSubscriptionExpression) {
         // ADR-0052: user-defined event subscription — call add_X or remove_X accessor.
-        if node.Receiver != nil {
-            if node.Receiver.Type is TypeParameterSymbol typeParameterReceiver {
+        if node.Receiver is {} eventReceiver {
+            if eventReceiver.Type is TypeParameterSymbol typeParameterReceiver {
                 // Issue #2519: mirror constrained field/property access. Boxing
                 // a reference-shaped T is a runtime no-op and provides the
                 // verifier with the class-constraint receiver shape expected by
                 // the event accessor.
-                this.EmitExpression(node.Receiver)
+                this.EmitExpression(eventReceiver)
                 this.il.OpCode(ILOpCode.Box)
                 this.il.Token(this.outer.memberRefs.GetElementTypeToken(typeParameterReceiver))
             } else {
-                this.EmitInstanceReceiver(node.Receiver!!)
+                this.EmitInstanceReceiver(eventReceiver)
             }
         }
         // Issue #503: function-literal handlers default to Action/Func

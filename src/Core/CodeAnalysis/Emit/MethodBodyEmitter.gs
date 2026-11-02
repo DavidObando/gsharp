@@ -456,9 +456,9 @@ internal partial class MethodBodyEmitter {
     }
 
     private func RecordSequencePoint(syntax SyntaxNode?) {
-        if this.recordLocalSequencePoint != nil {
+        if this.recordLocalSequencePoint is {} recordLocalSequencePoint {
             if this.il.Offset != this.lastSequencePointIlOffset {
-                this.recordLocalSequencePoint(this.il.Offset, syntax)
+                recordLocalSequencePoint(this.il.Offset, syntax)
                 this.lastSequencePointIlOffset = this.il.Offset
             }
             return

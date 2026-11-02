@@ -341,14 +341,14 @@ shared class MoveNextBodyRewriter {
                 // If the receiver is hoisted into a state-machine field, the
                 // BoundFieldAssignmentExpression node shape can't reference the
                 // field directly (Receiver is VariableSymbol).
-                if node.Receiver != nil && TryGetHoistedField(node.Receiver, out var recvField) {
+                if node.Receiver is {} receiver && TryGetHoistedField(receiver, out var recvField) {
                     if BoundNodeForm.DeclaringType(node).IsClass {
                         // Class receiver — reference type. Alias the hoisted field
                         // to a fresh local and store through it.
                         let aliasLocal = LocalVariableSymbol(
                             "<>recv_alias_" + (aliasOrdinal++).ToString(),
                             isReadOnly: false,
-                            node.Receiver.Type
+                            receiver.Type
                         )
                         let decl = BoundVariableDeclaration(nil, aliasLocal, ctx.ReadField(recvField!!))
                         let newAssign = BoundFieldAssignmentExpression(
@@ -366,7 +366,7 @@ shared class MoveNextBodyRewriter {
                         let copyLocal = LocalVariableSymbol(
                             "<>recv_copy_" + (aliasOrdinal++).ToString(),
                             isReadOnly: false,
-                            node.Receiver!!.Type
+                            receiver.Type
                         )
                         let copyDecl = BoundVariableDeclaration(nil, copyLocal, ctx.ReadField(recvField!!))
                         let innerAssign = BoundFieldAssignmentExpression(
