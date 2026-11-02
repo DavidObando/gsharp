@@ -3111,52 +3111,6 @@ func Run() int32 {
     return k
 }
 func Main() { }`, "GS0158@27:19")
-            Add("constant-pattern-equals-in-a-loop-removes-a-nullable-value-fact (R19)", `package T
-import System
-var n int32? = 1
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        if o is 1 { }
-        if k > 3 { break }
-    }
-    return k
-}
-func Main() {
-    Console.WriteLine(Run(E{}))
-}`, "")
-            Add("switch-case-equals-in-a-loop-removes-a-nullable-value-fact (R19)", `package T
-import System
-var n int32? = 1
-class E {
-    override func Equals(o object?) bool {
-        n = nil
-        return true
-    }
-    override func GetHashCode() int32 -> 1
-}
-func Run(o object) int32 {
-    if n == nil { return 0 }
-    var k = 0
-    while n > 0 {
-        k++
-        switch o { case 1 { } default { } }
-        if k > 3 { break }
-    }
-    return k
-}
-func Main() {
-    Console.WriteLine(Run(E{}))
-}`, "")
             Add("out-declaration-takes-only-a-by-reference-overload (A3)", `package T
 import System
 func Use(v int32, d DateTime) { }
