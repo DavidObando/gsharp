@@ -1747,9 +1747,7 @@ namespace MultiControl {
         let compilation = CSharpCompilation.Create(
             "RejectedOracle",
             []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
-            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
-                (path string) -> MetadataReference.CreateFromFile(path)
-            ),
+            RuntimeMetadataReferences.Value.Append(MetadataReference.CreateFromFile(fixture.AssemblyPath)),
             CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
                 nullableContextOptions: NullableContextOptions.Enable
@@ -1815,9 +1813,7 @@ namespace MultiControl {
         let compilation = CSharpCompilation.Create(
             "Oracle",
             []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
-            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
-                (path string) -> MetadataReference.CreateFromFile(path)
-            ),
+            RuntimeMetadataReferences.Value.Append(MetadataReference.CreateFromFile(fixture.AssemblyPath)),
             CSharpCompilationOptions(
                 OutputKind.ConsoleApplication,
                 nullableContextOptions: NullableContextOptions.Enable,
@@ -1833,7 +1829,7 @@ namespace MultiControl {
             Path.ChangeExtension(image, ".runtimeconfig.json"),
             Path.ChangeExtension(oraclePath, ".runtimeconfig.json")
         )
-        Verify(fixture.AssemblyPath, nil)
+        VerifyContractOnce(fixture.AssemblyPath, contractSource ?? Contract)
         Verify(image, fixture.AssemblyPath)
         Verify(oraclePath, fixture.AssemblyPath)
         let missing = VerifyResult(image, nil)
@@ -1943,12 +1939,40 @@ namespace MultiControl {
         "SHA256 " + path + ": " + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
     )
 
+    private func VerifyContractOnce(contractPath string, contractSource string) {
+        if VerifiedContracts.Add(contractSource) {
+            Verify(contractPath, nil)
+        }
+    }
+
     shared {
+        private let VerifiedContracts HashSet[string] = HashSet[string](StringComparer.Ordinal)
+
+        private let CachedDefaultRuntimeReferences Lazy[[]string] = Lazy[[]string](
+            () -> {
+                let directory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+                return ReferenceResolver
+                    .HostTrustedPlatformAssemblyPaths()
+                    .Where((path string) -> Path.GetDirectoryName(path) == directory)
+                    .OrderBy((path string) -> path, StringComparer.Ordinal)
+                    .ToArray()
+            }
+        )
+
+        private let RuntimeMetadataReferences Lazy[[]MetadataReference] = Lazy[[]MetadataReference](
+            () -> RuntimeReferences().Select(
+                (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
+            )
+                .ToArray()
+        )
+
         private func RuntimeReferences(runtime string? = nil)[]string {
-            let directory = runtime ?? Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+            if runtime == nil {
+                return CachedDefaultRuntimeReferences.Value
+            }
             return ReferenceResolver
                 .HostTrustedPlatformAssemblyPaths()
-                .Where((path string) -> Path.GetDirectoryName(path) == directory)
+                .Where((path string) -> Path.GetDirectoryName(path) == runtime)
                 .OrderBy((path string) -> path, StringComparer.Ordinal)
                 .ToArray()
         }
