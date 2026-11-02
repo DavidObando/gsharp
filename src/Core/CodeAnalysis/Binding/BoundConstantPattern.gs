@@ -47,7 +47,10 @@ class BoundConstantPattern : BoundPattern {
         /// @param valueType The static type of the tested value.
         /// @param value The pattern value.
         /// @returns The test.
-        internal func ClassifyTest(valueType TypeSymbol, value BoundExpression) ConstantPatternTestKind -> ClassifyTestOf(
+        internal func ClassifyTest(
+            valueType TypeSymbol,
+            value BoundExpression
+        ) ConstantPatternTestKind -> ClassifyTestOf(
             valueType,
             value is BoundLiteralExpression literal && literal.Value == nil,
             UnwrapInputConversion(valueType, value).Type

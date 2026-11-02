@@ -1303,7 +1303,7 @@ internal sealed class RegionEffectScanner {
                     Rebase(test.Value)
                 },
                 test.ValueIsNull,
-                test.Candidate
+                CandidateUnlessDeclared(test.Candidate)
             )
         }
         for var i = nilComparesBefore; i < current.NilCompareOperandPaths.Count; i++ {
@@ -2720,12 +2720,7 @@ internal sealed class RegionEffectScanner {
         }
         let unwrapped = UnwrapParentheses(value)
         let isNull = unwrapped is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.NilKeyword
-        // A name that the region declares is a value, whatever type of that name the entry scope has.
-        let tested = if candidate?.TypeName is {} typeName && IsDeclared(FirstSegment(typeName)) {
-            default(RegionTypeTest?)
-        } else {
-            candidate
-        }
+        let tested = CandidateUnlessDeclared(candidate)
         current.PatternTests.Add(
             RegionPatternTest(
                 patternSubject,
@@ -2738,6 +2733,17 @@ internal sealed class RegionEffectScanner {
                 tested
             )
         )
+    }
+
+    // A name that the region declares is a value, whatever type of that name the entry scope has. A nested region's
+    // test is checked again when the enclosing region composes it, since the enclosing region can declare the name.
+    private func CandidateUnlessDeclared(
+        candidate RegionTypeTest?
+    ) RegionTypeTest? -> if candidate?.TypeName is {} typeName &&
+        IsDeclared(FirstSegment(typeName)) {
+        default(RegionTypeTest?)
+    } else {
+        candidate
     }
 
     private func FirstSegment(name string) string {

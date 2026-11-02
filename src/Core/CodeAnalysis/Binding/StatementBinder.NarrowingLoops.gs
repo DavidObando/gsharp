@@ -1291,8 +1291,9 @@ internal partial class StatementBinder {
                     // Between built-in types the conversion is predefined (numeric, boxing or identity).
                     if object.Equals(source, target) ||
                         (
-                        MetadataTypeKeys.IsBuiltIn(StripNullableValue(source)) &&
-                            MetadataTypeKeys.IsBuiltIn(StripNullableValue(target))
+                        MetadataTypeKeys.IsBuiltIn(StripNullableValue(source)) && MetadataTypeKeys.IsBuiltIn(
+                            StripNullableValue(target)
+                        )
                     ) {
                         continue
                     }
@@ -1534,8 +1535,10 @@ internal partial class StatementBinder {
                 }
             } else if argumentTypes[index] is {} types {
                 argument = ClassifyArgument(types, parameter, stripped, explicitTypeArguments)
-            } else if MetadataTypeKeys.IsBuiltIn(StripNullableValue(stripped)) ||
-                object.Equals(stripped, TypeSymbol.Object) ||
+            } else if MetadataTypeKeys.IsBuiltIn(StripNullableValue(stripped)) || object.Equals(
+                stripped,
+                TypeSymbol.Object
+            ) ||
                 TypeParameterTakesArgument(stripped, explicitTypeArguments) {
                 // A value of some built-in type.
                 argument = CandidateFree
@@ -1554,7 +1557,7 @@ internal partial class StatementBinder {
     // argument only a parameter that is not one. An `in` parameter is listed by value, so an `in` argument and a value
     // both take it.
     private func PassingModeMatches(parameter TypeSymbol, kind int32) bool -> (parameter is ByRefTypeSymbol) ==
-        (kind == ArgumentByReference || kind == ArgumentInlineDeclaration)
+    (kind == ArgumentByReference || kind == ArgumentInlineDeclaration)
 
     private func CandidateIsExactReference(types List[TypeSymbol], parameter TypeSymbol) bool {
         for argumentType in types {
@@ -1669,7 +1672,11 @@ internal partial class StatementBinder {
         // A nullable value parameter takes a value of its value type, or of another nullable value type, as that
         // value type takes the value (a wrapping or a lifted conversion is predefined).
         if IsNullableValueType(stripped) && !object.Equals(argument, stripped) && !SameClrType(argument, stripped) {
-            return ArgumentFits(StripNullableValue(argument), (stripped as NullableTypeSymbol)!!.UnderlyingType, explicitTypeArguments)
+            return ArgumentFits(
+                StripNullableValue(argument),
+                (stripped as NullableTypeSymbol)!!.UnderlyingType,
+                explicitTypeArguments
+            )
         }
         if object.Equals(argument, stripped) || object.Equals(stripped, TypeSymbol.Object) {
             return true
@@ -1895,7 +1902,7 @@ internal partial class StatementBinder {
     // A `ref` or `out` parameter is listed as a by-reference type, so that the passing mode of an argument is
     // checked (`Use(out var v, dt)` does not take `Use(v int32, d DateTime)`).
     private func PassedType(parameter ParameterSymbol, type TypeSymbol) TypeSymbol ->
-        if parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out {
+    if parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out {
         ByRefTypeSymbol.Get(type)
     } else {
         type
@@ -1977,7 +1984,9 @@ internal partial class StatementBinder {
                             (explicitTypeArguments || TypeParametersInferable(function)) {
                             let types = List[TypeSymbol]()
                             for parameter in function.Parameters {
-                                types.Add(PassedType(parameter, level.SubstituteMemberType(parameter.Type) ?? parameter.Type))
+                                types.Add(
+                                    PassedType(parameter, level.SubstituteMemberType(parameter.Type) ?? parameter.Type)
+                                )
                             }
                             lists.Add(types)
                         }
@@ -2166,7 +2175,9 @@ internal partial class StatementBinder {
     private func PatternTestRunsUserCode(test RegionPatternTest, effects RegionEffects) bool {
         // A switch case resolves a value before a type, so a name that is a variable of the entry scope is a value.
         if test.Candidate is {} candidate &&
-            !(candidate.TypeName is {} typeName && $scope.TryLookupSymbol(FirstNameSegment(typeName)) is VariableSymbol) &&
+            !(
+            candidate.TypeName is {} typeName && $scope.TryLookupSymbol(FirstNameSegment(typeName)) is VariableSymbol
+        ) &&
             TestedType(candidate, out _) != nil {
             return false
         }
@@ -2204,7 +2215,11 @@ internal partial class StatementBinder {
     }
 
     private func PatternTestOfTypesRunsUserCode(input TypeSymbol, valueIsNull bool, valueType TypeSymbol?) bool ->
-        ConstantPatternTestRunsUserCode(BoundConstantPattern.ClassifyTestOf(input, valueIsNull, valueType), input, valueIsNull)
+    ConstantPatternTestRunsUserCode(
+        BoundConstantPattern.ClassifyTestOf(input, valueIsNull, valueType),
+        input,
+        valueIsNull
+    )
 
     // The types of a value at a conversion site. A nullable value type keeps its `?` (`DateTime?` and `DateTime`
     // take different conversions); reference nullability does not change one.
