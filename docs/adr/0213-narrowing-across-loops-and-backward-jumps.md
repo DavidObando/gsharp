@@ -1322,7 +1322,11 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   for `"ab"`), so the call runs one. A `ref` or `out` argument takes only a parameter of its exact type, and a call
   that names its type arguments is not proved by an identity candidate. A concatenation of string literals or an
   interpolated string has the type `string`; a concatenation with another operand has it only when the operators
-  of the region are predefined (`token + "x"` can call a user `+`).
+  of the region are predefined (`token + "x"` can call a user `+`). Only a bare method type parameter is fixed by
+  its argument; a compound one (`List[T]`) takes an argument without a conversion only when the argument has its
+  generic definition (itself, a base or an interface). The arms of a conditional, `if` or switch expression meet in
+  one type, so each arm is a conversion site against each other arm (`flag ? dt : dto`); two operator or literal
+  arms meet in a predefined way.
   A call that the walker cannot check runs one (a callee or an argument that does not
   resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
