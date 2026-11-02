@@ -143,6 +143,12 @@ jobs:
       - name: Build cs2gs (Release)
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
+      - name: Cache the built C# baseline for ${{ matrix.app }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gsharp-cs2gs-gate/${{ matrix.app }}/source
+          key: cs2gs-app-source-${{ matrix.app }}-${{ runner.os }}-${{ hashFiles(format('tools/cs2gs/external/{0}.json', matrix.app)) }}
+
       - name: Migrate and validate ${{ matrix.app }}
         env:
           APP: ${{ matrix.app }}

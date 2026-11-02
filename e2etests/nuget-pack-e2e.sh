@@ -19,8 +19,10 @@ trap 'rm -rf "$WORKDIR"' EXIT
 printf '<Project />\n' > "$WORKDIR/Directory.Build.props"
 printf '<Project />\n' > "$WORKDIR/Directory.Build.targets"
 
-echo "==> Packing Gsharp.NET.Sdk"
-dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release -graph --nologo -v:q
+if [[ "${GSHARP_E2E_SDK_PACKED:-}" != "1" ]]; then
+    echo "==> Packing Gsharp.NET.Sdk"
+    dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj -c Release -graph --nologo -v:q
+fi
 
 SDK_NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.[0-9]*.nupkg | head -1)
 VER="${SDK_NUPKG##*Gsharp.NET.Sdk.}"
