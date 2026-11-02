@@ -1316,10 +1316,9 @@ internal class ConversionClassifier {
             var argument = arguments[i]
             // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
             // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
-            // type arguments, as `let t = s` is. The imported slot itself takes nil, so its conversion does not decide
-            // the read. A slot that the signature declares `T?` takes the declared value. A null default (`T value =
-            // default`) does not make the slot nullable. The declared read replaces the narrowed read when the slot
-            // takes it.
+            // type arguments, with the slot's declared `?` applied, as `let t = s` is. The imported slot itself takes
+            // nil, so its conversion does not decide the read. A null default (`T value = default`) does not make the
+            // slot nullable. The declared read replaces the narrowed read when the slot takes it.
             if paramIndex < parameters.Length &&
                 call?.TypeArgumentList == nil &&
                 method is {IsGenericMethod: true} genericMethod &&
@@ -1335,9 +1334,15 @@ internal class ConversionClassifier {
             ).GetParameters()[paramIndex] is {} openParameter &&
                 openParameter
                 .ParameterType
-                .IsGenericMethodParameter &&
-                ClrNullability.GetParameterDeclaredState(openParameter) != ClrNullabilityState.Annotated {
+                .IsGenericMethodParameter {
                 let sourceIndex = i - receiverArgCount
+                let slotType = TrySubstituteParameterTypeFromMethodTypeArgs(
+                    method,
+                    paramIndex,
+                    symbolicMethodTypeArgs,
+                    allowConcreteSymbolic: true
+                ) ??
+                    argument.Type
                 argument = DecideNarrowedConversion(
                     if !parameterArgumentLocations.IsDefault &&
                         paramIndex < parameterArgumentLocations.Length &&
@@ -1349,13 +1354,10 @@ internal class ConversionClassifier {
                         argument.Syntax?.Location ?? call?.Location ?? default(TextLocation)
                     },
                     argument,
-                    TrySubstituteParameterTypeFromMethodTypeArgs(
-                        method,
-                        paramIndex,
-                        symbolicMethodTypeArgs,
-                        allowConcreteSymbolic: true
-                    ) ??
-                        argument.Type
+                    NullabilityImportRule.ApplyOpenSlot(
+                        slotType,
+                        ClrNullability.GetParameterDeclaredState(openParameter)
+                    )
                 )
             }
             var rebound = argument

@@ -1518,8 +1518,9 @@ func Main() {
 
     /// Issue #5635 (review of d3333218): an imported generic slot whose type argument inference takes from a narrowed
     /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on `[]string?`,
-    /// `IsNil`, `IsNilParams` over a source class, `First` with `U()`) does not need the narrowing. A slot that
-    /// another argument widens (`Pick(holder.Pet, Animal())`) reads the declared member. Each runs as C# runs it.
+    /// `IsNil`, `IsNilParams` over a source class, `First` with `U()`) does not need a nil-guard narrowing, while a
+    /// `T?` slot still needs a type-test narrowing (`IsNil(holder.Pet)`). A slot that another argument widens
+    /// (`Pick(holder.Pet, Animal())`) reads the declared member. Each runs as C# runs it.
     @Fact
     func NoConversionValue_AtAnInferredImportedSlot_TakesTheSlotType() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -1607,6 +1608,15 @@ class Program {
 }
 `
         Check(fixture, source, oracle, "TrueTrueTruecatTrue")
+        RejectMarked(
+            fixture,
+            "import FunctionControl\n" + MemberResultSource(
+                "let f = () -> {",
+                "false",
+                "holder = Holder(Cat())"
+            ).Replace("return holder.Pet", "return Calls.IsNil(@holder.Pet)"),
+            "holder.Pet"
+        )
     }
 
     /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
