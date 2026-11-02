@@ -1612,10 +1612,7 @@ System.Console.WriteLine(NativeConsumer.Run())`, "consumer", executable: true, "
 public static class Bad {
     public static Readonly Run() => new Readonly { X = 9 };
 }`, path: "rejected.cs")},
-            cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
-                .Split(Path.PathSeparator)
-                .Append(selected)
-                .Select((path string) -> MetadataReference.CreateFromFile(path)),
+            CSharpFixture.HostReferences.Add(MetadataReference.CreateFromFile(selected)),
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
         )
         using let image = MemoryStream()

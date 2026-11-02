@@ -61,6 +61,42 @@ internal shared class SelfMigratedCompilerSource {
         text.Where((character char) -> !char.IsWhiteSpace(character))
     )
 
+    /// Loads a C# project under the default fixture root, reusing the cached
+    /// bound project across tests when [`projectPath`](paramref) lies under
+    /// (cref:TestFixtureSource.Root).
+    /// @param projectPath The `.csproj` path.
+    /// @returns The loaded C# project.
+    internal func LoadProjectAsync(projectPath string) Task[LoadedCSharpProject] -> LoadProjectAsync(
+        projectPath,
+        IsDefaultRootPath(Path.GetFullPath(projectPath)),
+        (fullPath string) -> CSharpProjectLoader.LoadProjectAsync(fullPath)
+    )
+
+    internal async func LoadProjectAsync(
+        projectPath string,
+        isDefaultRoot bool,
+        loadProject Func[string, Task[LoadedCSharpProject]]
+    ) LoadedCSharpProject {
+        let fullPath = Path.GetFullPath(projectPath)
+        if isDefaultRoot && CachedProjects.TryGetValue(fullPath, out var cached) {
+            return cached
+        }
+        let loaded = await loadProject(fullPath)
+        if loaded.BoundWithoutErrors && isDefaultRoot {
+            CachedProjects.TryAdd(fullPath, loaded)
+        }
+        return loaded
+    }
+
+    private func IsDefaultRootPath(fullPath string) bool {
+        let root = Path.GetFullPath(TestFixtureSource.Root).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar
+        ) +
+            Path.DirectorySeparatorChar
+        return fullPath.StartsWith(root, StringComparison.Ordinal)
+    }
+
     /// Loads the G# text of the named files of one project.
     /// @param projectDirectory The project directory relative to the repository, e.g.
     /// `tools/cs2gs/Cs2Gs.Translator`.
@@ -130,8 +166,41 @@ internal shared class SelfMigratedCompilerSource {
                 )
             )
         }
+        let documentList = documents.ToList()
+        if documentList.Count > 1 {
+            let parallelResults = ConcurrentDictionary[string, MigratedFile](StringComparer.Ordinal)
+            Parallel.ForEach(
+                documentList,
+                func (document LoadedDocument) {
+                    let stem = Path.GetFileNameWithoutExtension(document.FilePath)
+                    let cacheKey = (projectPath, preservePartialParts, stem)
+                    if isDefaultRoot && CachedTranslations.TryGetValue(cacheKey, out var cachedFile) {
+                        parallelResults[stem] = cachedFile
+                        return
+                    }
+                    let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+                    let text = GSharpPrinter.Print(
+                        CSharpToGSharpTranslator(preservePartialParts: preservePartialParts).TranslateDocument(
+                            document,
+                            context
+                        )
+                    )
+                    let migrated = MigratedFile(text, context.Diagnostics)
+                    if isDefaultRoot {
+                        CachedTranslations.TryAdd(cacheKey, migrated)
+                    }
+                    parallelResults[stem] = migrated
+                }
+            )
+            let ordered = Dictionary[string, MigratedFile](StringComparer.Ordinal)
+            for document in documentList {
+                let stem = Path.GetFileNameWithoutExtension(document.FilePath)
+                ordered.Add(stem, parallelResults[stem])
+            }
+            return ordered
+        }
         let translated = Dictionary[string, MigratedFile](StringComparer.Ordinal)
-        for document in documents {
+        for document in documentList {
             let stem = Path.GetFileNameWithoutExtension(document.FilePath)
             let cacheKey = (projectPath, preservePartialParts, stem)
             if isDefaultRoot && CachedTranslations.TryGetValue(cacheKey, out var cachedFile) {
