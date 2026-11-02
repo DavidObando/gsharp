@@ -274,13 +274,17 @@ class ReferenceResolver : IDisposable {
         EnumSymbol.ClearCache()
         InterfaceSymbol.ClearCache()
         DelegateTypeSymbol.ClearCache()
-        // Issue #1678: the binder's per-Type CLR member-enumeration
-        // memoization (ClrTypeUtilities.SafeGetMethods/SafeGetInterfaces/etc.
-        // and MemberLookup's higher-level (Type, name) method cache) is also
-        // process-wide and keyed on this context's Type objects. Clear it for
-        // the same reason as every cache above.
-        ClrTypeUtilities.ClearCache()
         MemberLookup.ClearCache()
+        // A default resolver holds only permanent host assemblies and owns no load context.
+        // Keep the Type-keyed CLR reflection caches when no load context unloads (#5611).
+        if metadataContext == nil && runtimeContext == nil {
+            return
+        }
+        // Issue #1678: the binder's per-Type CLR member-enumeration
+        // memoization (ClrTypeUtilities.SafeGetMethods/SafeGetInterfaces/etc.)
+        // is also process-wide and keyed on this context's Type objects. Clear
+        // it for the same reason as every cache above.
+        ClrTypeUtilities.ClearCache()
         // Issue #1632: ClrOperatorResolution.TryResolveConversion memoizes
         // user-defined-conversion lookups per (sourceType, targetType,
         // allowExplicit); those Type instances also originate from this
@@ -903,63 +907,33 @@ class ReferenceResolver : IDisposable {
     /// @param namespaceName The fully-qualified namespace name.
     /// @returns Whether the namespace is present in the reference set.
     internal func ContainsNamespace(namespaceName string) bool -> !string.IsNullOrEmpty(namespaceName) &&
-        namespaceIndex
+        (
+        if warmNameIndex == nil {
+            typeNameIndex.Value.Namespaces
+        } else {
+            namespaceIndex
+        }
+    )
         .Value
         .Contains(namespaceName)
 
-    internal func HasTypeNameAtAnyArity(fullName string) bool -> arityInsensitiveTypeNames.Value.TryGetValue(
-        fullName,
-        out var candidates
-    ) &&
-        candidates.Any((candidate string) -> TryResolveType(candidate, out _))
+    internal func HasTypeNameAtAnyArity(fullName string) bool -> (
+        if warmNameIndex == nil {
+            typeNameIndex.Value.ArityInsensitiveNames
+        } else {
+            arityInsensitiveTypeNames
+        }
+    )
+        .Value
+        .TryGetValue(fullName, out var candidates) && candidates.Any(
+        (candidate string) -> TryResolveType(candidate, out _)
+    )
 
-    private func BuildArityInsensitiveTypeNames() Dictionary[string, ImmutableArray[string]] {
-        using let measurement = CompilationMeasurements.BeginPhase("references.arity-name-index")
-        let names = cast[IEnumerable[string]](CurrentNameIndex().Keys)
-        let groups = Dictionary[string, List[string]](StringComparer.Ordinal)
-        for name in names {
-            var suffix = name.Length
-            while suffix > 0 && char.IsAsciiDigit(name[suffix - 1]) {
-                suffix--
-            }
-            let key = if suffix > 0 && suffix < name.Length && name[suffix - 1] == '`' {
-                name.Substring(0, suffix - 1)
-            } else {
-                name
-            }
-            if !groups.TryGetValue(key, out var group) {
-                group = List[string]()
-                groups.Add(key, group)
-            }
-            group.Add(name)
-        }
-        return groups.ToDictionary(
-            (pair KeyValuePair[string, List[string]]) -> pair.Key,
-            (pair KeyValuePair[string, List[string]]) -> pair.Value.ToImmutableArray(),
-            StringComparer.Ordinal
-        )
-    }
+    private func BuildArityInsensitiveTypeNames() Dictionary[string, ImmutableArray[string]] ->
+    BuildArityInsensitiveTypeNamesForNames(cast[IEnumerable[string]](CurrentNameIndex().Keys))
 
-    private func BuildNamespaceIndex() ImmutableHashSet[string] {
-        using let measurement = CompilationMeasurements.BeginPhase("references.namespace-index")
-        let builder = ImmutableHashSet.CreateBuilder[string](StringComparer.Ordinal)
-        let AddNamespacePrefixes = func (typeName string) {
-            let topLevelName = typeName.Split('+')[0]
-            for var separator = topLevelName.LastIndexOf('.'); separator > 0; separator = topLevelName.LastIndexOf(
-                '.',
-                separator - 1
-            ) {
-                builder.Add(topLevelName.Substring(0, separator))
-            }
-        }
-        let names = CurrentNameIndex().Keys.ToArray()
-        let scopes = BuildTypeNameScopes(names)
-        for name in names {
-            AddNamespacePrefixes(name)
-            AddNamespacePrefixes(CanonicalTypeName(name, scopes))
-        }
-        return builder.ToImmutable()
-    }
+    private func BuildNamespaceIndex() ImmutableHashSet[string] ->
+    BuildNamespaceIndexForNames(cast[IEnumerable[string]](CurrentNameIndex().Keys))
 
     // Raw resolution shared by the public/internal TryResolveType overloads: it
     // performs the reference-set name lookup (warm/cold index + cache) without
@@ -1013,7 +987,12 @@ class ReferenceResolver : IDisposable {
     }
 
     private func TryFindRawTypeName(emittedName string, @NotNullWhen(true) out rawName string?) bool {
-        return this.emittedTypeNameIndex.Value.TryGetValue(emittedName, out rawName)
+        let index = if warmNameIndex == nil {
+            this.typeNameIndex.Value.EmittedNames
+        } else {
+            this.emittedTypeNameIndex
+        }
+        return index.Value.TryGetValue(emittedName, out rawName)
     }
 
     // Issue: an `internal` (non-externally-visible) type declared by a
@@ -1808,6 +1787,56 @@ class ReferenceResolver : IDisposable {
             }
         }
 
+        private func BuildArityInsensitiveTypeNamesForNames(names IEnumerable[string]) Dictionary[
+            string,
+            ImmutableArray[string]
+        ] {
+            using let measurement = CompilationMeasurements.BeginPhase("references.arity-name-index")
+            let groups = Dictionary[string, List[string]](StringComparer.Ordinal)
+            for name in names {
+                var suffix = name.Length
+                while suffix > 0 && char.IsAsciiDigit(name[suffix - 1]) {
+                    suffix--
+                }
+                let key = if suffix > 0 && suffix < name.Length && name[suffix - 1] == '`' {
+                    name.Substring(0, suffix - 1)
+                } else {
+                    name
+                }
+                if !groups.TryGetValue(key, out var group) {
+                    group = List[string]()
+                    groups.Add(key, group)
+                }
+                group.Add(name)
+            }
+            return groups.ToDictionary(
+                (pair KeyValuePair[string, List[string]]) -> pair.Key,
+                (pair KeyValuePair[string, List[string]]) -> pair.Value.ToImmutableArray(),
+                StringComparer.Ordinal
+            )
+        }
+
+        private func BuildNamespaceIndexForNames(names IEnumerable[string]) ImmutableHashSet[string] {
+            using let measurement = CompilationMeasurements.BeginPhase("references.namespace-index")
+            let builder = ImmutableHashSet.CreateBuilder[string](StringComparer.Ordinal)
+            let AddNamespacePrefixes = func (typeName string) {
+                let topLevelName = typeName.Split('+')[0]
+                for var separator = topLevelName.LastIndexOf('.'); separator > 0; separator = topLevelName.LastIndexOf(
+                    '.',
+                    separator - 1
+                ) {
+                    builder.Add(topLevelName.Substring(0, separator))
+                }
+            }
+            let raw = names.ToArray()
+            let scopes = BuildTypeNameScopes(raw)
+            for name in raw {
+                AddNamespacePrefixes(name)
+                AddNamespacePrefixes(CanonicalTypeName(name, scopes))
+            }
+            return builder.ToImmutable()
+        }
+
         private func BuildEmittedTypeNameIndex(rawNames IEnumerable[string]) Dictionary[string, string] {
             let names = rawNames.ToArray()
             let scopes = BuildTypeNameScopes(names)
@@ -1942,9 +1971,52 @@ class ReferenceResolver : IDisposable {
             }
         }
 
+        private let ImageTypeNameIndexes ConcurrentDictionary[string, ReferenceTypeNameIndex] = ConcurrentDictionary[
+            string,
+            ReferenceTypeNameIndex
+        ](StringComparer.Ordinal)
+
         private func CreateTypeNameIndex(assemblies ImmutableArray[Assembly]) Lazy[ReferenceTypeNameIndex] -> Lazy[
             ReferenceTypeNameIndex
-        ](() -> BuildTypeNameIndex(assemblies), LazyThreadSafetyMode.ExecutionAndPublication)
+        ](() -> GetOrBuildTypeNameIndex(assemblies), LazyThreadSafetyMode.ExecutionAndPublication)
+
+        private func GetOrBuildTypeNameIndex(assemblies ImmutableArray[Assembly]) ReferenceTypeNameIndex {
+            if TryGetAssemblySetFingerprintKey(assemblies, out var key) && ImageTypeNameIndexes.TryGetValue(
+                key!!,
+                out var cached
+            ) {
+                return cached
+            }
+            let built = BuildTypeNameIndex(assemblies)
+            if key != nil && built.LoadedTypes.Count == 0 {
+                if ImageTypeNameIndexes.Count >= 32 {
+                    ImageTypeNameIndexes.Clear()
+                }
+                ImageTypeNameIndexes.TryAdd(key, built)
+            }
+            return built
+        }
+
+        private func TryGetAssemblySetFingerprintKey(
+            assemblies ImmutableArray[Assembly],
+            @NotNullWhen(true) out key string?
+        ) bool {
+            key = nil
+            if assemblies.Length == 0 {
+                return false
+            }
+            let parts = [assemblies.Length]string
+            for var i = 0; i < assemblies.Length; i++ {
+                if !AssemblyContentFingerprints.TryGetValue(assemblies[i], out var fingerprint) || string.IsNullOrEmpty(
+                    fingerprint.Value
+                ) {
+                    return false
+                }
+                parts[i] = assemblies[i].ManifestModule.ModuleVersionId.ToString("N") + ":" + fingerprint.Value
+            }
+            key = string.Join("|", parts)
+            return true
+        }
 
         private func GetDefaultTypeNameIndex(assemblies ImmutableArray[Assembly]) Lazy[ReferenceTypeNameIndex] {
             lock DefaultTypeNameIndexGate {
@@ -1966,14 +2038,33 @@ class ReferenceResolver : IDisposable {
             let namesByAssembly = ReadTypeNames(assemblies)
             for var i = 0; i < assemblies.Length; i++ {
                 let names = namesByAssembly[i].Defined
-                let types = namesByAssembly[i].Types
+                let types = if AssemblyImages.TryGetValue(assemblies[i], out _) {
+                    List[Type]()
+                } else {
+                    namesByAssembly[i].Types
+                }
                 for var n = 0; n < names.Count; n++ {
                     if index.TryAdd(names[n], i) && types.Count > 0 {
                         loadedTypes[names[n]] = types[n]
                     }
                 }
             }
-            return ReferenceTypeNameIndex(index, loadedTypes)
+            return ReferenceTypeNameIndex(
+                index,
+                loadedTypes,
+                Lazy[ImmutableHashSet[string]](
+                    () -> BuildNamespaceIndexForNames(cast[IEnumerable[string]](index.Keys)),
+                    LazyThreadSafetyMode.ExecutionAndPublication
+                ),
+                Lazy[Dictionary[string, ImmutableArray[string]]](
+                    () -> BuildArityInsensitiveTypeNamesForNames(cast[IEnumerable[string]](index.Keys)),
+                    LazyThreadSafetyMode.ExecutionAndPublication
+                ),
+                Lazy[Dictionary[string, string]](
+                    () -> BuildEmittedTypeNameIndex(cast[IEnumerable[string]](index.Keys)),
+                    LazyThreadSafetyMode.ExecutionAndPublication
+                )
+            )
         }
 
         // Gives the type names of each assembly, in the order that reflection reports them.
