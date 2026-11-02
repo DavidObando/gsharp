@@ -245,8 +245,15 @@ internal partial class StatementBinder {
             if symbol is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
                 resolved.ReadsProperty = true
             }
-            if symbol is ImplicitPropertyVariableSymbol{Property: {IsAutoProperty: false}} or
-                ImplicitStaticPropertyVariableSymbol{Property: {IsAutoProperty: false}} {
+            // ADR-0208 R14 (#5599): the one accessor decision; an implicit instance read is through `this`.
+            if (
+                symbol is ImplicitPropertyVariableSymbol instanceProperty &&
+                    SourcePropertyRunsUserCode(instanceProperty.Property, function?.ThisParameter?.Type)
+            ) ||
+                (
+                symbol is ImplicitStaticPropertyVariableSymbol staticProperty &&
+                    SourcePropertyRunsUserCode(staticProperty.Property, nil)
+            ) {
                 resolved.ReadsUserCodeProperty = true
             }
             if BareStaticOwnerInitializes(symbol) {
@@ -2438,7 +2445,15 @@ internal partial class StatementBinder {
                                         TypeInitializationRunsUserCode(level, true)
                                 }
                                 case property is PropertySymbol {
-                                    return !property.IsAutoProperty ||
+                                    // ADR-0208 R14 (#5599): the one accessor decision, on the receiver's type.
+                                    return SourcePropertyRunsUserCode(
+                                        property,
+                                        if property.IsStatic {
+                                            default(TypeSymbol?)
+                                        } else {
+                                            declared
+                                        }
+                                    ) ||
                                         property.IsStatic &&
                                         TypeInitializationRunsUserCode(level, true)
                                 }
