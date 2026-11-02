@@ -1199,6 +1199,13 @@ internal partial class ExpressionBinder {
         if syntax.Expression == nil {
             return BindValuelessBlockExpression(syntax, canBeVoid)
         }
+        // Issue #5635: a block value without a target gives the narrowed read that it yields its own type, as
+        // `let t = s` does, unless its consumer captures the read and decides it for the type that it converts to
+        // (cref:BinderContext.BindWithBlockValueCapture). So the read is checked where it binds.
+        var captureValue = captureValue
+        if captureValue == nil && targetType == nil {
+            captureValue = (read NarrowedBranchValue) -> RecordNarrowedValueAtItsType(read)
+        }
         // If there are no prefix statements, just bind the expression directly.
         if syntax.Statements.IsDefaultOrEmpty {
             let expression = BindBranchValue(syntax.Expression!!, nil, targetType, captureValue, canBeVoid)
@@ -1406,7 +1413,7 @@ internal partial class ExpressionBinder {
         if object.ReferenceEquals(value.Type, commonType) {
             return value
         }
-        return conversions.BindConversion(location, value, commonType, trackNarrowing: false)
+        return conversions.BindConversion(location, value, commonType, trackNarrowing: narrowedRead == nil)
     }
 
     /// Issue #5613: binds the value of a branch in its narrowing frame. A narrowed read that the value yields (the
@@ -1428,45 +1435,30 @@ internal partial class ExpressionBinder {
         narrowing,
         () -> {
             // A block value, also in parentheses or `checked`/`unchecked`, captures its trailing value in the
-            // narrowing of its statements. These wrappers bind their operand as the value.
-            var valueSyntax = syntax
-            while true {
-                if valueSyntax is ParenthesizedExpressionSyntax parenthesized {
-                    valueSyntax = parenthesized.Expression
-                } else if valueSyntax is CheckedExpressionSyntax checkedValue {
-                    valueSyntax = checkedValue.Expression
-                } else {
-                    break
-                }
-            }
-            let isBlock = valueSyntax is BlockExpressionSyntax
-            pendingBlockValueCapture = if isBlock {
-                captureValue
+            // narrowing of its statements.
+            let isBlock = IsBlockValueSyntax(syntax)
+            let bind = () -> if targetType == nil {
+                BindExpression(syntax, canBeVoid)
             } else {
-                default(((NarrowedBranchValue) -> void)?)
+                BindExpression(syntax, targetType)
             }
-            try {
-                let value = if targetType == nil {
-                    BindExpression(syntax, canBeVoid)
-                } else {
-                    BindExpression(syntax, targetType)
-                }
-                if !isBlock {
-                    CaptureBranchValue(value, syntax.Location, captureValue)
-                }
-                return value
-            } finally {
-                pendingBlockValueCapture = nil
+            if isBlock && captureValue is {} blockCapture {
+                return binderCtx.BindWithBlockValueCapture(syntax, blockCapture, bind)
             }
+            let value = bind()
+            if !isBlock {
+                CaptureBranchValue(value, syntax.Location, captureValue)
+            }
+            return value
         }
     )
 
-    /// Issue #5613: takes the capture of a block value that (cref:BindBranchValue) binds, so a nested block does not
-    /// receive it.
+    /// Issue #5613: takes the capture of a block value that (cref:BinderContext.BindWithBlockValueCapture) gives, so a
+    /// nested block does not receive it.
     /// @returns The capture, or `nil`.
     private func TakeBlockValueCapture()((NarrowedBranchValue) -> void)? {
-        let capture = pendingBlockValueCapture
-        pendingBlockValueCapture = nil
+        let capture = binderCtx.PendingBlockValueCapture
+        binderCtx.PendingBlockValueCapture = nil
         return capture
     }
 
@@ -1481,35 +1473,9 @@ internal partial class ExpressionBinder {
         location TextLocation,
         captureValue((NarrowedBranchValue) -> void)?
     ) {
-        if captureValue == nil || !binderCtx.TryGetBackwardGotoNarrowingPath(
-            value,
-            out var path,
-            out var narrowedType
-        ) {
-            return
+        if captureValue is {} sink && binderCtx.TryCaptureNarrowedRead(value, location, out var read) {
+            sink(read!!)
         }
-        let sink = Invariant.Required(captureValue, "a branch value capture has a receiver", expression: "captureValue")
-        let narrowedPath = Invariant.Required(path, "a narrowed branch value has an access path", expression: "path")
-        let narrowedValueType = Invariant.Required(
-            narrowedType,
-            "a narrowed branch value has a narrowed type",
-            expression: "narrowedType"
-        )
-        if !narrowedPath.HasMembers && BinderContext.NarrowedReadChangesRuntimeType(
-            narrowedPath.Root.Type,
-            narrowedValueType
-        ) {
-            return
-        }
-        sink(
-            NarrowedBranchValue(
-                value,
-                location,
-                narrowedPath,
-                narrowedValueType,
-                binderCtx.CaptureBackwardGotoNarrowingUse(narrowedPath)
-            )
-        )
     }
 
     // Issue #5613: records the use of a captured narrowed read whose value keeps its narrowed type.
@@ -2942,6 +2908,22 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        /// Issue #5635: gets a value indicating whether [`syntax`](paramref) is a block value, also in parentheses or
+        /// `checked`/`unchecked`. These wrappers bind their operand as the value.
+        /// @param syntax The value syntax.
+        /// @returns `true` when the value is a block.
+        internal func IsBlockValueSyntax(syntax ExpressionSyntax) bool {
+            var valueSyntax = syntax
+            while valueSyntax is ParenthesizedExpressionSyntax || valueSyntax is CheckedExpressionSyntax {
+                valueSyntax = if valueSyntax is ParenthesizedExpressionSyntax parenthesized {
+                    parenthesized.Expression
+                } else {
+                    cast[CheckedExpressionSyntax](valueSyntax).Expression
+                }
+            }
+            return valueSyntax is BlockExpressionSyntax
+        }
+
         private func IsPointerOffsetType(type TypeSymbol) bool -> type == TypeSymbol.Int8 ||
             type == TypeSymbol.UInt8 ||
             type == TypeSymbol.Int16 ||

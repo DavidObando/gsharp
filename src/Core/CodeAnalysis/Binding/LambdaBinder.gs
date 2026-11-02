@@ -2327,6 +2327,8 @@ internal class LambdaBinder {
         this.binderCtx.AssignmentNarrowingGeneration = 0
         binderCtx.PendingGotoNarrowingSnapshots.Clear()
         binderCtx.BackwardGotoNarrowingStates.Clear()
+        // Issue #5635: the narrowed reads of the nested body are captured against its own labels.
+        this.binderCtx.NarrowingFunctionFrame = Object()
         binderCtx.ReachableUserLabels.Clear()
         binderCtx.DeferredUnreachableGotoEdges.Clear()
         this.binderCtx.PotentialReachabilityLabel = nil
@@ -2379,6 +2381,7 @@ internal class LambdaBinder {
             binderCtx.AssignmentNarrowingGenerations[kvp.Key] = kvp.Value
         }
         this.binderCtx.AssignmentNarrowingGeneration = saved.AssignmentNarrowingGeneration
+        this.binderCtx.NarrowingFunctionFrame = saved.NarrowingFunctionFrame
         binderCtx.PendingGotoNarrowingSnapshots.Clear()
         for kvp in saved.PendingGotoNarrowingSnapshots {
             binderCtx.PendingGotoNarrowingSnapshots[kvp.Key] = kvp
@@ -2941,6 +2944,7 @@ internal class LambdaBinder {
             PendingGotoAssignmentStarts = Dictionary[string, int32](ctx.PendingGotoAssignmentStarts)
             AssignmentNarrowingGenerations = Dictionary[VariableSymbol, int32](ctx.AssignmentNarrowingGenerations)
             AssignmentNarrowingGeneration = ctx.AssignmentNarrowingGeneration
+            NarrowingFunctionFrame = ctx.NarrowingFunctionFrame
             PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
                 (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
                 (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
@@ -2992,6 +2996,10 @@ internal class LambdaBinder {
         }
 
         prop AssignmentNarrowingGeneration int32 {
+            get;
+        }
+
+        prop NarrowingFunctionFrame object {
             get;
         }
 
