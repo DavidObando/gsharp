@@ -1438,19 +1438,24 @@ internal partial class StatementBinder {
             }
         }
         // The receiver can have each of its alternative types (its declared type, a narrowing, a type test of the
-        // region), and the call binds among the candidates of the one it has. Each alternative that has candidates
-        // of this arity must take the call without a conversion operator; one without any cannot be the type the
-        // call binds on. A call that no alternative takes is not checked.
+        // region), and the call binds among the candidates of the one it has. Each alternative with a method of the
+        // name must take the call without a conversion operator; one whose methods have no candidate of this arity
+        // binds through an expanded or optional argument, which is not checked, so it counts. An alternative without
+        // a method of the name is not the type the call binds on unless an extension method can bind it, which is
+        // not checked either. A call that no alternative takes counts.
+        guard let groups = ParameterListGroups(call, name, effects) else {
+            return true
+        }
         var anyAlternative = false
-        for group in ParameterListGroups(call, name, effects) {
+        for group in groups {
+            if group.Count == 0 {
+                continue
+            }
             let candidates = List[List[TypeSymbol]]()
             for parameters in group {
                 if parameters.Count == argumentTypes.Count {
                     candidates.Add(parameters)
                 }
-            }
-            if candidates.Count == 0 {
-                continue
             }
             anyAlternative = true
             if CandidatesRunUserConversion(candidates, argumentTypes, kinds, call.HasTypeArguments) {
@@ -1873,8 +1878,11 @@ internal partial class StatementBinder {
         return true
     }
 
-    // The parameter lists of the candidates, one group for each alternative type of the receiver.
-    private func ParameterListGroups(call RegionCall, name string, effects RegionEffects) List[List[List[TypeSymbol]]] {
+    // The parameter lists of the candidates, one group for each alternative type of the receiver, or `nil` when an
+    // alternative without a method of the name can bind the call through an extension method.
+    private func ParameterListGroups(call RegionCall, name string, effects RegionEffects) List[
+        List[List[TypeSymbol]]
+    ]? {
         let groups = List[List[List[TypeSymbol]]]()
         var receivers List[ReceiverType]? = nil
         if call.Kind == RegionCallKind.NamedInvocation {
@@ -1909,6 +1917,14 @@ internal partial class StatementBinder {
                 AddIndexParameterLists(receiver, call, effects, lists)
             } else {
                 AddMethodParameterLists(receiver, name, call.HasTypeArguments, staticAccess, lists)
+                if lists.Count == 0 &&
+                    !staticAccess &&
+                    (
+                    HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
+                        .CollectImportedExtensionMethods(name).Count > 0
+                ) {
+                    return nil
+                }
             }
             groups.Add(lists)
         }

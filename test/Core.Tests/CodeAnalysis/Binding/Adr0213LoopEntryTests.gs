@@ -3279,6 +3279,43 @@ func Run(ref text string?, o object, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@12:16")
+            Add("receiver-alternative-with-an-optional-parameter-counts (A3)", `package T
+import System
+class A {
+    func Use(d DateTime) { }
+}
+class B {
+    func Use(d DateTimeOffset, extra int32 = 0) { }
+}
+func Run(ref text string?, o object, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is A { }
+        if o is B { o.Use(dt) }
+    }
+    return n
+}
+func Main() { }`, "GS0158@12:16")
+            Add("receiver-alternative-bound-by-an-extension-counts (A3)", `package T
+import System
+class A {
+    func Use(d DateTime) { }
+}
+class B { }
+func (b B) Use(d DateTimeOffset) { }
+func Run(ref text string?, o object, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        if o is A { }
+        if o is B { o.Use(dt) }
+    }
+    return n
+}
+func Main() { }`, "GS0158@11:16")
             return rows
         }
     }
