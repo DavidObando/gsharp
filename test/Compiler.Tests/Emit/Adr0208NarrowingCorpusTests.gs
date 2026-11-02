@@ -402,7 +402,14 @@ open class Adr0208NarrowingCorpusTests {
                 "y11_5593_list_pattern_on_a_list_keeps_the_fact_R19",
                 "y12_5593_list_pattern_on_an_array_keeps_the_fact_R19",
                 "y13_5593_float_constant_on_object_keeps_the_fact_R19",
-                "y14_5593_switch_constant_arm_on_object_kills_R19"
+                "y14_5593_switch_constant_arm_on_object_kills_R19",
+                "y15_5593_constant_pattern_keeps_a_by_reference_fact_like_a_plain_call_R19",
+                "y16_5593_nil_pattern_on_a_nullable_object_keeps_the_fact_R19",
+                "y17_5593_nil_pattern_on_a_nullable_value_keeps_the_fact_R19",
+                "y18_5593_empty_list_pattern_reads_no_element_R19",
+                "y19_5593_slice_only_list_pattern_reads_no_element_R19",
+                "y20_5593_discard_element_reads_no_element_R19",
+                "y21_5593_list_pattern_element_reads_an_unlisted_indexer_R19"
             },
             names
         )
@@ -7515,6 +7522,150 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "GS0158@24:14", "reject", "", "R19"}
+            yield[]object{"y15_5593_constant_pattern_keeps_a_by_reference_fact_like_a_plain_call_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(ref s string?, o object) int32 {
+    if s == nil { return 0 }
+    let matched = o is 1
+    return s.Length
+}
+var text string? = "abc"
+Console.WriteLine(Run(ref text, E{}))`, "", "run", "3", "R19"}
+            yield[]object{"y16_5593_nil_pattern_on_a_nullable_object_keeps_the_fact_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if o is not nil {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"y17_5593_nil_pattern_on_a_nullable_value_keeps_the_fact_R19", `import System
+
+class C {
+    var Value int32 = 1
+}
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(t DateTime?) int32 {
+    let e = E{}
+    var x C? = C{}
+    e.Clear = func() { x = nil }
+    if x == nil { return 0 }
+    if t is not nil {
+        return x.Value
+    }
+    return 2
+}
+Console.WriteLine(Run(DateTime.Now))`, "", "run", "1", "R19"}
+            yield[]object{"y18_5593_empty_list_pattern_reads_no_element_R19", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    let d = Dictionary[int32, int32]()
+    d[0] = 1
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if d is [] {
+        return x.Value
+    }
+    clear()
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "2", "R19"}
+            yield[]object{"y19_5593_slice_only_list_pattern_reads_no_element_R19", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    let d = Dictionary[int32, int32]()
+    d[0] = 1
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if d is [..] {
+        return x.Value
+    }
+    clear()
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R19"}
+            yield[]object{"y20_5593_discard_element_reads_no_element_R19", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    let d = Dictionary[int32, int32]()
+    d[0] = 1
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if d is [_] {
+        return x.Value
+    }
+    clear()
+    return 2
+}
+Console.WriteLine(Run())`, "", "run", "1", "R19"}
+            yield[]object{"y21_5593_list_pattern_element_reads_an_unlisted_indexer_R19", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func Run() int32 {
+    let d = Dictionary[int32, int32]()
+    d[0] = 1
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    if d is [1] {
+        return x.Value
+    }
+    clear()
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@14:18", "reject", "", "R19"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

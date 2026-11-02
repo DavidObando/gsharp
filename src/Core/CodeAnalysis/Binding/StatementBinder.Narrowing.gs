@@ -2570,15 +2570,16 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitConstantPattern(node BoundConstantPattern) {
-            // ADR-0208 (#5593): the test can call the input's `Equals`, which can be user code.
+            // ADR-0208 R19 (#5593): the test can call the input's `Equals`, which can be user code. It is a plain
+            // method call, so it does not write by-reference storage (R12, amendment A3).
             if StatementBinder.ConstantPatternRunsUserCode(node) {
-                MarkMayMutateGlobalRoots()
+                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
             }
             base.VisitConstantPattern(node)
         }
 
         protected open override func VisitListPattern(node BoundListPattern) {
-            // ADR-0208 R16 and R17 (#5593): the `Length`/`Count` getter and the indexer of an indexable input.
+            // ADR-0208 R19 (#5593): the `Length`/`Count` getter and the indexer of an indexable input (R16, R17).
             if StatementBinder.ListPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
             }
@@ -5234,20 +5235,31 @@ internal partial class StatementBinder {
 
         internal func IsStableClrGetter(property PropertyInfo) bool -> IsStableClrAccessor(property, isSetter: false)
 
-        /// ADR-0208 R16 and R17 (#5593): a list pattern over an indexable input (not an array) calls its
-        /// `Length`/`Count` getter and its `this[int]` getter. They follow the one accessor rule.
+        /// ADR-0208 R19 (#5593): a list pattern over an indexable input (not an array) calls its `Length`/`Count`
+        /// getter, and its `this[int]` getter for each element that reads the value. A slice is a discard there, and
+        /// a discard element (`_`) reads nothing. Both getters follow the one accessor rule of R16 and R17.
         internal func ListPatternRunsUserCode(node BoundListPattern) bool -> ClrMemberReadRunsUserCode(
             node.LengthProperty
         ) ||
-            (node.IndexerProperty is {} indexer && !IsStableClrAccessor(indexer, isSetter: false))
+            (
+            node.IndexerProperty is {} indexer && !IsStableClrAccessor(indexer, isSetter: false) && node.Elements.Any(
+                (element BoundPattern) -> element is not(BoundSlicePattern or BoundDiscardPattern{Variable: nil})
+            )
+        )
 
-        /// ADR-0208 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals` test
-        /// (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual `Equals`
-        /// of the input. An `object` input can hold any type, so its `Equals` can be a user override, even for a
-        /// literal pattern value. A nullable value input holds its underlying type, whose `Equals` runs no user code
-        /// only for a primitive, an enum or `decimal`.
+        /// ADR-0208 R19 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals`
+        /// test (cref:BoundConstantPattern.ClassifyTest) can: `object.Equals(object, object)` calls the virtual
+        /// `Equals` of the input when both values are not null. An `object` input can hold any type, so its `Equals`
+        /// can be a user override, even for a literal pattern value. A `nil` value (a conversion of the literal, or
+        /// the default of the input type) never reaches it. A nullable value input holds its underlying type,
+        /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
         internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
             if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
+                return false
+            }
+            let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
+            if value is BoundLiteralExpression{Value: nil} ||
+                (value is BoundDefaultExpression && value.Type == node.Type) {
                 return false
             }
             if node.Type is not NullableTypeSymbol nullable {
