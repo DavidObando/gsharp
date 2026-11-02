@@ -30,7 +30,8 @@ import Xunit
 /// | a `Node?[]`, `List<Node?>` or a widened array local | no `!!` | unchanged: the element accepts null |
 /// | another project's `[AllowNull]` indexer | no `!!` | unchanged: the indexer is promoted (#4356), so the slot is `T?` |
 /// | an oblivious indexer or array element of a prebuilt library outside the run | plain `h[0] = entry.Item!!` | no `!!` in either form: gsc imports the slot as a platform type (#3865) |
-/// | the same array through a `var` alias (`var nodes = h.Nodes`) | plain `nodes[0] = entry.Item!!` | no `!!` in either form: G# infers the alias from its initializer |
+/// | the same array through a `var` alias (`var nodes = h.Nodes`), and a jagged `Node[][]` (`h.Grid[0][0]`, `var row = h.Grid[0]`) | plain `nodes[0] = entry.Item!!` | no `!!` in either form: the slot is traced to the library's declaration |
+/// | an element of an array that is not a declaration (`((Node[])boxed)[0]`) | no bridge (GS0155) | unchanged in the deconstruction: unknown storage is not bridged |
 /// | that library's `T[] Items` of a `Box<Node>`, an annotated `Node[]`, or an explicitly typed `Node[]` local | plain `box.Items[0] = entry.Item!!` | bridged: the slot is non-null |
 /// | a value converted by a source `implicit operator Ext.Box(Node)` into that library's oblivious `Box` indexer | `h[0] = entry.Item!!` | unchanged in the plain form; `h[0] = hValue!!` in the deconstruction: the operator's input is bridged |
 /// @remarks Mutation witnesses (ADR-0154): the first two tests fail on 21e3f30fa (GS0155) and when the
@@ -41,7 +42,8 @@ import Xunit
 /// imported oblivious element test throws when `ElementStoreSlotAcceptsNil` does not ask
 /// `ElementStoreSlotIsImportedOblivious`, or when that query does not read an array receiver, and
 /// fails binding (GS0155) when it exempts a substituted `T[]` element or an annotated array element.
-/// The alias rows throw when `var` locals are not followed. The conversion test fails binding when the
+/// The alias rows throw when `var` locals are not followed, and the jagged rows when nested array
+/// accesses are not followed. The unknown-storage test fails when an unresolved array is bridged. The conversion test fails binding when the
 /// plain store skips its bridges for every slot that accepts nil.
 open class Issue5595DeconstructedElementStoreTests {
     /// A widened element stored into a `Node[]` element is bridged, as `arr[0] = entry.Item` is.
@@ -57,15 +59,23 @@ namespace Demo
         public static Entry Empty() => new Entry(null, 0);
         public static string A(Entry entry, Node[] arr) { int i; (arr[0], i) = entry; return arr[0].ToString() + i; }
         public static string APlain(Entry entry, Node[] arr) { arr[0] = entry.Item; return arr[0].ToString(); }
+        public static string Jagged(Entry entry, Node[][] grid)
+        {
+            int i;
+            (grid[0][0], i) = entry;
+            return grid[0][0].ToString() + i;
+        }
         public static string Run()
         {
             var entry = new Entry(new Node(), 1);
-            return A(entry, new Node[1]) + " " + APlain(entry, new Node[1]);
+            return A(entry, new Node[1]) + " " + APlain(entry, new Node[1]) + " " +
+                Jagged(entry, new Node[][] { new Node[1] });
         }
     }
 }`)
-        Assert.Equal("node1 node", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
+        Assert.Equal("node1 node node1", CompileAndRun([]string{printed}, "Demo.Use.Run()").Trim())
         Assert.Contains("arr[0] = arrValue!!\n", printed)
+        Assert.Contains("= gridValue!!\n", printed)
         Assert.Contains("arr[0] = entry.Item!!\n", printed)
     }
 
@@ -229,6 +239,7 @@ namespace Ext
         public Node this[int index] { get { return stored; } set { stored = value; } }
         public bool IsEmpty => stored == null;
         public Node[] Nodes = new Node[1];
+        public Node[][] Grid = new Node[][] { new Node[1] };
     }
     public class Box<T> { public T[] Items = new T[1]; }
 #nullable enable
@@ -285,6 +296,29 @@ namespace Demo.App
             object o = nodes[0];
             return (o == null).ToString();
         }
+        public static string StoreGrid(Entry entry)
+        {
+            var h = new Ext.Holder();
+            int i;
+            (h.Grid[0][0], i) = entry;
+            object o = h.Grid[0][0];
+            return (o == null) + ":" + i;
+        }
+        public static string PlainGrid(Entry entry)
+        {
+            var h = new Ext.Holder();
+            h.Grid[0][0] = entry.Item;
+            object o = h.Grid[0][0];
+            return (o == null).ToString();
+        }
+        public static string StoreRow(Entry entry)
+        {
+            var row = new Ext.Holder().Grid[0];
+            int i;
+            (row[0], i) = entry;
+            object o = row[0];
+            return (o == null) + ":" + i;
+        }
         public static string StoreTyped(Entry entry)
         {
             Ext.Node[] typed = new Ext.Holder().Nodes;
@@ -327,25 +361,48 @@ namespace Demo.App
         {
             var entry = new Entry(new Ext.Node(), 2);
             return Store(Empty()) + " " + Plain(Empty()) + " " + StoreArray(Empty()) + " " + PlainArray(Empty()) +
-                " " + StoreAlias(Empty()) + " " + PlainAlias(Empty()) + " " + StoreTyped(entry) + " " +
+                " " + StoreAlias(Empty()) + " " + PlainAlias(Empty()) + " " + StoreGrid(Empty()) + " " +
+                PlainGrid(Empty()) + " " + StoreRow(Empty()) + " " + StoreTyped(entry) + " " +
                 StoreGeneric(entry) + " " + PlainGeneric(entry) + " " + StoreStrict(entry) + " " + PlainStrict(entry);
         }
     }
 }`, Emit(library))
         let appPrinted = Translate(app, []CSharpCompilation{app})
         Assert.Equal(
-            "True:0 True True:0 True True:0 True False:2 False:2 False False:2 False",
+            "True:0 True True:0 True True:0 True True:0 True True:0 False:2 False:2 False False:2 False",
             CompileAndRun([]string{appPrinted}, "Demo.App.Use.Run()", library).Trim()
         )
         Assert.Contains("Item Node?", appPrinted)
         Assert.DoesNotContain("hValue!!", appPrinted)
         Assert.DoesNotContain("nodesValue!!", appPrinted)
+        Assert.DoesNotContain("rowValue!!", appPrinted)
         Assert.Contains("= typedValue!!\n", appPrinted)
         Assert.Contains("= boxValue!!\n", appPrinted)
         Assert.Contains("box.Items!![0] = entry.Item!!\n", appPrinted)
         Assert.Contains("= strictValue!!\n", appPrinted)
         Assert.Contains("strict.Nodes[0] = entry.Item!!\n", appPrinted)
         Assert.Equal(3, appPrinted.Split("entry.Item!!").Length)
+    }
+
+    /// A deconstruction into an element of an array whose storage is not a declaration (here a cast)
+    /// keeps `main`'s unbridged store: a wrong omission is a compile error that gsc reports, where a
+    /// wrong `!!` would throw where C# stores the null.
+    @Fact
+    func StoreIntoAnElementOfUnknownStorage_IsNotBridged() {
+        let printed = Translate(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+    public static class Use
+    {
+        public static Entry Empty() => new Entry(null, 0);
+        public static int Cast(Entry entry, object boxed) { int i; (((Node[])boxed)[0], i) = entry; return i; }
+    }
+}`)
+        Assert.Contains("Item Node?", printed)
+        Assert.Contains("let (", printed)
+        Assert.DoesNotContain("Value!!", printed)
     }
 
     /// A source conversion whose input stays non-null still needs `!!` on a nullable value that it

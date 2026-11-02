@@ -948,7 +948,12 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     value
                 }
-            } else if target is ElementAccessExpressionSyntax {
+            } else if target is ElementAccessExpressionSyntax access {
+                // An array element whose storage is not a declaration keeps the
+                // unbridged store, as a local with no record does.
+                if slot == nil && this.ArrayElementStorage(access).Root == nil {
+                    return value
+                }
                 return if this.ElementAccessStoreRequiresNonNullReference(target) {
                     EnsureNonNullAssertion(value)
                 } else {

@@ -3524,33 +3524,89 @@ partial class CSharpToGSharpTranslator {
         // Issue #3865: gsc imports the value of an oblivious indexer, and the
         // element of an oblivious array, that a prebuilt library declares as a
         // platform type, which takes a nullable value. An array element has no
-        // symbol: its contract is the element position of the receiver's
-        // declaration, read before type-argument substitution, so a `T[]` whose
-        // `T` the consumer substitutes keeps that type argument's contract. A
-        // `var` local without a type clause has the type of its initializer, so
-        // it is followed to the declaration of that initializer.
+        // symbol: its contract is the position of the declaration that
+        // `ArrayElementStorage` resolves, read on the original definition, so a
+        // `T[]` whose `T` the consumer substitutes keeps that type argument's
+        // contract, and an annotated position keeps its annotation.
         private func ElementStoreSlotIsImportedOblivious(target ElementAccessExpressionSyntax, slot ISymbol?) bool {
             if slot != nil {
                 return this.IsImportedObliviousNullableTarget(slot)
             }
-            var receiver ISymbol? = this.context.GetSymbolInfo(target.Expression).Symbol
-            for var depth = 0; depth < 8 && receiver is ILocalSymbol; depth++ {
-                receiver = this.InferredLocalInitializerSymbol(cast[ILocalSymbol](receiver))
+            let (root, depth) = this.ArrayElementStorage(target)
+            if root == nil || !this.TargetContractIsFrozenInMetadata(root) {
+                return false
             }
-            let declared ITypeSymbol? = switch receiver?.OriginalDefinition {
+            var position ITypeSymbol? = switch root.OriginalDefinition {
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
                 case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
             }
-            return declared is IArrayTypeSymbol array && this.TargetContractIsFrozenInMetadata(receiver) &&
-                ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(array.ElementType)
+            for var level = 0; level < depth; level++ {
+                position = (position as IArrayTypeSymbol)?.ElementType
+            }
+            return ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(position)
         }
 
-        // The declaration that the initializer of a `var` local reads, when the
-        // local's emitted declaration has no type clause (see
-        // `InferredLocalDeclarationIsNullable`), so G# infers it from that initializer.
-        private func InferredLocalInitializerSymbol(local ILocalSymbol) ISymbol? {
+        /// Issue #5595: the declaration whose declared type holds the slot of an array
+        /// element store, and the number of array levels from that type to the slot.
+        /// The walk goes through parentheses, nested array accesses (`grid[0][1]`) and
+        /// `var` locals that G# infers from their initializer (`var row = grid[0]`).
+        /// @param target The array element store target.
+        /// @returns The field, property, method, parameter, indexer or explicitly typed
+        /// local, or a nil root when the storage is not a declaration (a cast, a
+        /// conditional receiver, or a `foreach` or pattern variable that G# infers).
+        private func ArrayElementStorage(target ElementAccessExpressionSyntax)(Root ISymbol?, Depth int32) {
+            var receiver ExpressionSyntax? = target.Expression
+            var depth = 1
+            for var step = 0; step < 16; step++ {
+                receiver = Unparenthesize(receiver)
+                let symbol ISymbol? = this.context.GetSymbolInfo(receiver).Symbol
+                if receiver is ElementAccessExpressionSyntax inner && symbol == nil {
+                    receiver = inner.Expression
+                    depth++
+                    continue
+                }
+                if symbol is ILocalSymbol local {
+                    let initializer ExpressionSyntax? = this.InferredLocalInitializer(local)
+                    if initializer != nil {
+                        receiver = initializer
+                        continue
+                    }
+                    return if this.LocalDeclarationHasTypeClause(local) {
+                        (cast[ISymbol](local), depth)
+                    } else {
+                        (default(ISymbol?), 0)
+                    }
+                }
+                if symbol is IFieldSymbol ||
+                    symbol is IPropertySymbol ||
+                    symbol is IMethodSymbol ||
+                    symbol is IParameterSymbol {
+                    return (symbol, depth)
+                }
+                return (nil, 0)
+            }
+            return (nil, 0)
+        }
+
+        // Whether the emitted declaration of a local states its type: a C# type clause,
+        // or the `T?` clause that `InferredLocalDeclarationIsNullable` adds to a `var` local.
+        private func LocalDeclarationHasTypeClause(local ILocalSymbol) bool {
+            return switch local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() {
+                case declarator is VariableDeclaratorSyntax: declarator.Parent is VariableDeclarationSyntax{
+                    Type: {IsVar: false}
+                } ||
+                    this.InferredLocalDeclarationIsNullable(local)
+                case forEach is ForEachStatementSyntax: !forEach.Type.IsVar
+                default: false
+            }
+        }
+
+        // The initializer of a `var` local whose emitted declaration has no type
+        // clause (see `InferredLocalDeclarationIsNullable`), so G# infers the local
+        // from that initializer.
+        private func InferredLocalInitializer(local ILocalSymbol) ExpressionSyntax? {
             if this.InferredLocalDeclarationIsNullable(local) {
                 return nil
             }
@@ -3559,7 +3615,7 @@ partial class CSharpToGSharpTranslator {
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} declarator &&
                 declarator.Parent is VariableDeclarationSyntax{Type: {IsVar: true}} {
-                return this.context.GetSymbolInfo(initializer).Symbol
+                return initializer
             }
             return nil
         }
