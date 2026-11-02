@@ -3371,6 +3371,9 @@ internal partial class ExpressionBinder {
         if declaringType == nil {
             return false
         }
+        let methods = declaringType.GetMethods(
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
+        )
         for var i = 0; i < arguments.Length; i++ {
             if !(arguments[i] is BoundAddressOfExpression{Operand: {Type: {} storage}}) ||
                 NullableLifting.GetEffectiveClrType(storage) is not{IsValueType: true} storageClr {
@@ -3384,18 +3387,19 @@ internal partial class ExpressionBinder {
             } else {
                 storageClr
             }
-            for method in declaringType.GetMethods(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
-            ) {
+            for method in methods {
                 if !string.Equals(method.Name, methodName, StringComparison.Ordinal) {
                     continue
                 }
                 let parameters = method.GetParameters()
-                if parameters.Length != arguments.Length ||
-                    !parameters[i]
+                let paramIndex = MapSourceArgumentToParameter(parameters, ce, i, offset: 0)
+                if paramIndex < 0 ||
+                    paramIndex >= parameters.Length ||
+                    parameters.Length != arguments.Length ||
+                    !parameters[paramIndex]
                     .ParameterType
                     .IsByRef ||
-                    parameters[i]
+                    parameters[paramIndex]
                     .ParameterType
                     .GetElementType() is not{} element || NullableLifting.IsValueTypeNullableClr(
                     element
@@ -3417,8 +3421,49 @@ internal partial class ExpressionBinder {
                 }
                 Diagnostics.ReportWrongValueNullableByRefArgument(
                     location,
-                    parameters[i].Name ?? "value",
-                    ClrNullability.GetParameterTypeSymbol(parameters[i]),
+                    parameters[paramIndex].Name ?? "value",
+                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]),
+                    storage
+                )
+                return true
+            }
+        }
+        // Issue #5558: report GS0154 when an explicit address has storage that
+        // does not match a same-arity by-reference parameter.
+        for var i = 0; i < arguments.Length; i++ {
+            if ByRefStorageMatching.TryGetStorageType(arguments[i]) is not{} storage {
+                continue
+            }
+            for method in methods {
+                if !string.Equals(method.Name, methodName, StringComparison.Ordinal) {
+                    continue
+                }
+                let parameters = method.GetParameters()
+                let paramIndex = MapSourceArgumentToParameter(parameters, ce, i, offset: 0)
+                if paramIndex < 0 ||
+                    paramIndex >= parameters.Length ||
+                    parameters.Length != arguments.Length ||
+                    !parameters[paramIndex]
+                    .ParameterType
+                    .IsByRef ||
+                    parameters[paramIndex]
+                    .ParameterType
+                    .ContainsGenericParameters {
+                    continue
+                }
+                let parameterType = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                if ByRefStorageMatching.AreSameStorageType(storage, parameterType, out _, out _, out _) {
+                    continue
+                }
+                let location = if i < ce.Arguments.Count {
+                    ce.Arguments[i].Location
+                } else {
+                    ce.Location
+                }
+                conversions.ReportByRefStorageMismatch(
+                    location,
+                    parameters[paramIndex].Name ?? "value",
+                    parameterType,
                     storage
                 )
                 return true

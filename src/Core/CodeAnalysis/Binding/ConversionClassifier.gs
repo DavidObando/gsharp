@@ -1439,6 +1439,49 @@ internal class ConversionClassifier {
                     } else {
                         BindImplicitInArgument(location, argument, inPointee, parameter: nil)
                     }
+                } else if parameterType.IsByRef && ByRefStorageMatching.TryGetStorageType(argument) is {} storageType {
+                    // Issue #5558: an explicit address at an imported by-reference
+                    // parameter must match the substituted storage type.
+                    var byRefPointeeOverride TypeSymbol? = nil
+                    parameterTypeOverrides?.TryGetValue(paramIndex, out byRefPointeeOverride)
+                    let byRefPointee = byRefPointeeOverride ??
+                        GetImplicitInClrPointeeType(
+                        parameters[paramIndex],
+                        paramIndex,
+                        method,
+                        receiverType,
+                        symbolicMethodTypeArgs,
+                        argument
+                    )
+                    if byRefPointee != TypeSymbol.Error && !ByRefStorageMatching.AreSameStorageType(
+                        storageType,
+                        byRefPointee,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        let sourceIndex = i - receiverArgCount
+                        let location = if !parameterArgumentLocations.IsDefault &&
+                            paramIndex < parameterArgumentLocations.Length &&
+                            parameterArgumentLocations[paramIndex] is {} mappedLocation {
+                            mappedLocation
+                        } else {
+                            (
+                                if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
+                                    call.Arguments[sourceIndex].Location
+                                } else {
+                                    call?.Location ?? default(TextLocation)
+                                }
+                            )
+                        }
+                        ReportByRefStorageMismatch(
+                            location,
+                            parameters[paramIndex].Name ?? "value",
+                            byRefPointee,
+                            storageType
+                        )
+                        rebound = BoundErrorExpression(argument.Syntax)
+                    }
                 } else if !parameterType.IsByRef &&
                     (
                     argument.Type != TypeSymbol.Error || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)

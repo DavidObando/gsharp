@@ -4106,7 +4106,6 @@ internal partial class ExpressionBinder {
         internal func IsErasedArgumentApplicabilityMismatch(sourceType TypeSymbol?, clrParameterType Type?) bool {
             if sourceType == nil ||
                 clrParameterType == nil ||
-                clrParameterType.IsByRef ||
                 clrParameterType.IsPointer ||
                 clrParameterType.ContainsGenericParameters {
                 return false
@@ -4116,6 +4115,9 @@ internal partial class ExpressionBinder {
                 sourceType
             ) {
                 return false
+            }
+            if clrParameterType.IsByRef {
+                return sourceType is ByRefTypeSymbol
             }
             // An erasure can only be MISTAKEN for the parameter where the parameter
             // has an erasure SURROGATE in the position the erasure filled — that

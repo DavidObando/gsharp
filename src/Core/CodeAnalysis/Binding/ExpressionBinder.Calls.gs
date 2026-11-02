@@ -1901,8 +1901,18 @@ internal partial class ExpressionBinder {
                 (
                 !hasInvalidExplicitTypedInlineOut &&
                     !hasErrorArgument &&
+                    (
                     inlineOutArguments.Count > 0 &&
-                    TryReportClrConstructorArgumentTypeMismatch(syntax, ctors, argumentNames, boundArguments)
+                        TryReportClrConstructorArgumentTypeMismatch(syntax, ctors, argumentNames, boundArguments) ||
+                        TryReportClrConstructorByRefArgumentStorageMismatch(
+                        syntax,
+                        ctors,
+                        argumentNames,
+                        boundArguments,
+                        openGenericDefinition,
+                        symbolicTypeArgs
+                    )
+                )
             ) {
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
@@ -2057,11 +2067,7 @@ internal partial class ExpressionBinder {
                     symbolicTypeArgs,
                     bestCtor,
                     p,
-                    peelByRef: ctorParameters[p]
-                        .ParameterType
-                        .IsByRef &&
-                        ctorParameters[p].IsIn &&
-                        !ctorParameters[p].IsOut
+                    peelByRef: ctorParameters[p].ParameterType.IsByRef
                 )
                 if recovered == nil {
                     continue
@@ -2174,6 +2180,70 @@ internal partial class ExpressionBinder {
                     parameter.Name ?? "value",
                     expectedType,
                     actualType
+                )
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TryReportClrConstructorByRefArgumentStorageMismatch(
+        syntax CallExpressionSyntax,
+        constructors IReadOnlyList[ConstructorInfo],
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        openGenericDefinition Type?,
+        symbolicTypeArguments ImmutableArray[TypeSymbol]
+    ) bool {
+        for var index = 0; index < boundArguments.Count; index++ {
+            if ByRefStorageMatching.TryGetStorageType(boundArguments[index]) is not{} storage {
+                continue
+            }
+            let name string? = if argumentNames.IsDefault {
+                default(string?)
+            } else {
+                argumentNames[index]
+            }
+            for constructor in constructors {
+                let parameters = constructor.GetParameters()
+                if parameters.Length != boundArguments.Count {
+                    continue
+                }
+                let parameterIndex = if name == nil {
+                    index
+                } else {
+                    FindClrParameterIndex(parameters, name)
+                }
+                if parameterIndex < 0 ||
+                    parameterIndex >= parameters.Length ||
+                    !parameters[parameterIndex]
+                    .ParameterType
+                    .IsByRef ||
+                    parameters[parameterIndex]
+                    .ParameterType
+                    .ContainsGenericParameters {
+                    continue
+                }
+                let expectedType = ResolveConstructorParameterPointeeType(
+                    constructor,
+                    parameterIndex,
+                    openGenericDefinition,
+                    symbolicTypeArguments
+                ) ??
+                    ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex])
+                if ByRefStorageMatching.AreSameStorageType(storage, expectedType, out _, out _, out _) {
+                    continue
+                }
+                let location = if index < syntax.Arguments.Count {
+                    syntax.Arguments[index].Location
+                } else {
+                    syntax.Location
+                }
+                conversions.ReportByRefStorageMismatch(
+                    location,
+                    parameters[parameterIndex].Name ?? "value",
+                    expectedType,
+                    storage
                 )
                 return true
             }

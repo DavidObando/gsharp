@@ -339,6 +339,28 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         Assert.Equal("3 b 2", result.Output.Trim())
     }
 
+    @Theory
+    @InlineData("var h int32 = 1\nConsole.Write(S.R(&h))", "x")
+    @InlineData("var h int32 = 1\nConsole.Write(S.I(&h))", "x")
+    @InlineData("var h int32 = 1\nConsole.Write(S.I(in h))", "x")
+    @InlineData("var f () -> int32 = () -> 1\nConsole.Write(S.F(&f))", "f")
+    @InlineData("var h Func[int32] = () -> 1\nConsole.Write(S.In(&h, 1))", "f")
+    func ClrCallee_DifferentStorageTypeAtByRefParameter_IsGS0154(body string, parameterName string) {
+        using let fixture = CSharpFixture(`namespace Storage {
+    public static class S {
+        public static long R(ref long x) => x;
+        public static long I(in long x) => x;
+        public static long F(in System.Func<long> f) => f();
+        public static string In(in System.Func<long> f, int x) => "F";
+        public static string In(object o, long x) => "O";
+    }
+}`)
+        let result = EmittedOracle.Evaluate("import System\nimport Storage\n" + body, []string{fixture.AssemblyPath})
+        let error = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal("GS0154", error.Id)
+        Assert.Contains("'" + parameterName + "'", error.Message, StringComparison.Ordinal)
+    }
+
     shared {
         private const Callees string = `
 import System.Collections.Generic

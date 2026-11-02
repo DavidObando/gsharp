@@ -1845,13 +1845,15 @@ import FunctionControl
 func S(in f () -> int64, x int32) string -> "F"
 func S(o object, x int64) string -> "O"
 func Main() {
-    let f () -> int32 = () -> 1
+    var f () -> int32 = () -> 1
     var g () -> int64 = () -> 2
     Console.Write(Calls.M(() -> 1, 1))
     Console.Write(S(() -> 1, 1))
     Console.Write(Calls.In(f, 1))
     Console.Write(Calls.In(g, 1))
     Console.Write(Calls.In(&g, 1))
+    Console.Write(Calls.Amb(&f, 1))
+    Console.Write(Calls.Amb(in f, 1))
 }
 `, `using System;
 using FunctionControl;
@@ -1866,9 +1868,210 @@ class Program {
         Console.Write(Calls.In(f, 1));
         Console.Write(Calls.In(g, 1));
         Console.Write(Calls.In(in g, 1));
+        Console.Write(Calls.Amb(in f, 1));
+        Console.Write(Calls.Amb(in f, 1));
     }
 }
-`, "FFOFF")
+`, "FFOFFOO")
+    }
+
+    /// Issue #5558: an explicit address (`&x` or `in x`) of differently typed storage is rejected at an imported
+    /// by-reference parameter instead of emitting invalid IL or reporting a false ambiguity.
+    @Fact
+    func ExplicitAddress_OfDifferentStorageAtImportedByRefParameter_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(S.R(&h))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(S.R(ref h));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(S.I(&h))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(S.I(in h));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(S.I(in h))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(S.I(in h));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 4, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var f () -> int32 = () -> 1
+    Console.Write(S.F(&f))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Console.Write(S.F(in f));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var f () -> int32 = () -> 1
+    Console.Write(S.F(in f))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Console.Write(S.F(in f));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 4, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(Calls.In(&h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(Calls.In(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 28, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(Calls.In(in h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(Calls.In(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 28, length: 4, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(InCtor(&h, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(new InCtor(in h, 1).Kind);
+    }
+}
+`, "CS1503", line: 5, column: 26, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(InReceiver().M(&h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(new InReceiver().M(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 34, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(Calls.G(&h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(Calls.G(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 27, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+class MyD : B {}
+func Main() {
+    var d = MyD()
+    Console.Write(S.B(&d))
+}
+`, `using System;
+using FunctionControl;
+class MyD : B {}
+class Program {
+    static void Main() {
+        var d = new MyD();
+        Console.Write(S.B(in d));
+    }
+}
+`, "CS1503", line: 6, column: 23, length: 2, diagnostic: "GS0154")
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int64 = 3
+    var f () -> int64 = () -> 4
+    Console.Write(S.R(&h))
+    Console.Write(S.I(&h))
+    Console.Write(S.I(in h))
+    Console.Write(S.F(&f))
+    Console.Write(S.F(in f))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        long h = 3;
+        Func<long> f = () => 4;
+        Console.Write(S.R(ref h));
+        Console.Write(S.I(in h));
+        Console.Write(S.I(in h));
+        Console.Write(S.F(in f));
+        Console.Write(S.F(in f));
+    }
+}
+`, "33344")
     }
 
     /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
@@ -2819,6 +3022,12 @@ namespace FunctionControl {
         public string Kind;
         public C(System.Func<long> f, int x) { Kind = "F"; }
         public C(object o, long x) { Kind = "O"; }
+    }
+    public static class S {
+        public static long R(ref long x) => x;
+        public static long I(in long x) => x;
+        public static long F(in System.Func<long> f) => f();
+        public static string B(in B b) => "B";
     }
 }
 `
