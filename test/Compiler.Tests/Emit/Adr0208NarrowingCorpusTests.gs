@@ -131,6 +131,11 @@ open class Adr0208NarrowingCorpusTests {
                 "a16_5629_case_value_after_a_default_sees_the_tests_before_it_R19",
                 "a17_5629_arm_value_after_a_default_sees_the_tests_before_it_R19",
                 "a18_5629_default_fallthrough_carries_the_later_tests_R19",
+                "a19_5629_guard_effects_reach_a_later_case_value_R18",
+                "a20_5629_guard_effects_reach_a_later_arm_value_R18",
+                "a21_5629_case_test_that_clears_the_discriminant_narrows_nothing_R18",
+                "a22_5629_statements_after_a_hidden_continue_are_not_on_the_back_edge",
+                "a23_5629_continue_under_a_false_guard_is_no_back_edge",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -7634,6 +7639,109 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@22:29", "reject", "", "R19"}
+            yield[]object{"a19_5629_guard_effects_reach_a_later_case_value_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(k int32) int32 {
+    var x C? = C{}
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    if x == nil { return 0 }
+    switch k {
+        default { }
+        case 1 when clear() { }
+        case x.Value { return 3 }
+    }
+    return 2
+}
+Console.WriteLine(Run(1))`, "GS0158@16:16", "reject", "", "R18"}
+            yield[]object{"a20_5629_guard_effects_reach_a_later_arm_value_R18", `import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(k int32) int32 {
+    var x C? = C{}
+    let clear = func() bool {
+        x = nil
+        return false
+    }
+    if x == nil { return 0 }
+    return switch k {
+        default: 2
+        case 1 when clear(): 4
+        case x.Value: 3
+    }
+}
+Console.WriteLine(Run(1))`, "GS0158@16:16", "reject", "", "R18"}
+            yield[]object{"a21_5629_case_test_that_clears_the_discriminant_narrows_nothing_R18", `import System
+
+open class Pet {
+    var Value int32 = 1
+}
+class Dog : Pet {
+    var Clear () -> void = func() { }
+    prop P int32 {
+        get {
+            Clear()
+            return 1
+        }
+    }
+}
+func Run() int32 {
+    let d = Dog{}
+    var x Pet? = d
+    d.Clear = func() { x = nil }
+    switch x {
+        case Dog { P: 1 } { return x.Value }
+        default { }
+    }
+    return 2
+}
+Console.WriteLine(Run())`, "GS0158@20:38", "reject", "", "R18"}
+            yield[]object{"a22_5629_statements_after_a_hidden_continue_are_not_on_the_back_edge", `import System
+
+func Run(s string?, start int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    var k = start
+    while true {
+        Console.WriteLine(t.Length)
+        k++
+        switch k {
+            case 1 { continue }
+            default { }
+        }
+        t = nil
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 0))`, "", "run", "1|1|1", ""}
+            yield[]object{"a23_5629_continue_under_a_false_guard_is_no_back_edge", `import System
+
+func Run(s string?, k int32) int32 {
+    var t = s
+    if t == nil { return 0 }
+    while true {
+        let n = t.Length
+        Console.WriteLine(n)
+        switch k {
+            case 1 when false {
+                t = nil
+                continue
+            }
+            default { }
+        }
+        break
+    }
+    return 1
+}
+Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {

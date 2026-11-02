@@ -531,6 +531,10 @@ partial class Binder {
             BindNativeProtocolConversion(location, source, target, testOnly: true),
             applySwitchArmTestEffects: (syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) ->
             Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern),
+            switchArmPatternNarrowing: (syntax SyntaxNode, discriminant BoundExpression, pattern BoundPattern) ->
+            Statements.SwitchArmPatternNarrowing(syntax, discriminant, pattern),
+            applySwitchGuardEffects: (syntax SyntaxNode, boundGuard BoundExpression) ->
+            Statements.ApplySwitchGuardEffects(syntax, boundGuard),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
             Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
         )

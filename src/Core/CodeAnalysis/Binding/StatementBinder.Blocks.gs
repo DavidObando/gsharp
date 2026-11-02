@@ -17,6 +17,30 @@ import System.Reflection
 import System.Threading
 
 internal partial class StatementBinder {
+    // #5629: binds a case's header in the current (arm) scope, in dispatch order: the pattern (after the headers
+    // before it), its test's effects, the narrowing it proves, and the guard with its effects.
+    private func BindSwitchCaseHeader(caseSyntax SwitchCaseSyntax, discriminant BoundExpression)(
+        Pattern BoundPattern,
+        Frame Dictionary[AccessPath, TypeSymbol]?,
+        Guard BoundExpression?
+    ) {
+        let caseValue = Invariant.Required(
+            caseSyntax.Value,
+            "a non-default switch case has a pattern value",
+            expression: "caseSyntax.Value"
+        )
+        let pattern = patterns.BindPattern(caseValue, discriminant.Type)
+        ApplySwitchArmTestEffects(caseValue, discriminant.Type, pattern)
+        let frame = SwitchArmPatternNarrowing(caseValue, discriminant, pattern)
+        var boundGuard BoundExpression? = nil
+        if caseSyntax.Guard is {} guardSyntax {
+            let bound = BindGuardExpressionWithNarrowing(guardSyntax, frame)
+            ApplySwitchGuardEffects(guardSyntax, bound)
+            boundGuard = bound
+        }
+        return (pattern, frame, boundGuard)
+    }
+
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
         let discriminant = bindExpression(syntax.Expression, false)
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
@@ -62,6 +86,8 @@ internal partial class StatementBinder {
         // #5629: the patterns of the cases after a `default` that is not last bind before its body, which runs only
         // after their tests fail; each case reuses its pattern and scope.
         let earlyPatterns = [syntax.Cases.Length]BoundPattern?
+        let earlyFrames = [syntax.Cases.Length]Dictionary[AccessPath, TypeSymbol]?
+        let earlyGuards = [syntax.Cases.Length]BoundExpression?
         let earlyScopes = [syntax.Cases.Length]BoundScope?
         binderCtx.LoopStack.Push((nil, switchBreakLabel, nil))
         try {
@@ -114,17 +140,13 @@ internal partial class StatementBinder {
                                         if laterSyntax.IsDefault {
                                             continue
                                         }
-                                        let laterValue = Invariant.Required(
-                                            laterSyntax.Value,
-                                            "a non-default switch case has a pattern value",
-                                            expression: "laterSyntax.Value"
-                                        )
                                         $scope = BoundScope($scope)
-                                        let laterPattern = patterns.BindPattern(laterValue, switchType)
-                                        earlyPatterns[later] = laterPattern
+                                        let laterHeader = BindSwitchCaseHeader(laterSyntax, discriminant)
+                                        earlyPatterns[later] = laterHeader.Pattern
+                                        earlyFrames[later] = laterHeader.Frame
+                                        earlyGuards[later] = laterHeader.Guard
                                         earlyScopes[later] = $scope
                                         $scope = $scope.Pop()
-                                        ApplySwitchArmTestEffects(laterValue, switchType, laterPattern)
                                     }
                                 },
                                 endsInFallthrough,
@@ -161,16 +183,27 @@ internal partial class StatementBinder {
                     "a non-default switch case has a pattern value",
                     expression: "caseSyntax.Value"
                 )
-                let pattern = if earlyPatterns[caseIndex] is {} early {
+                // ADR-0208 R18 and R19 (#5629): the case's header (its test and guard) runs after the headers before it
+                // and before its body. A header bound before a `default` applies its effects again here.
+                var frame Dictionary[AccessPath, TypeSymbol]? = nil
+                var guard_ BoundExpression? = nil
+                var pattern BoundPattern? = nil
+                if earlyPatterns[caseIndex] is {} early {
                     $scope = earlyScopes[caseIndex]!!
-                    early
+                    ApplySwitchArmTestEffects(caseValue, switchType, early)
+                    if caseSyntax.Guard is {} earlyGuardSyntax && earlyGuards[caseIndex] is {} earlyGuard {
+                        ApplySwitchGuardEffects(earlyGuardSyntax, earlyGuard)
+                    }
+                    pattern = early
+                    frame = earlyFrames[caseIndex]
+                    guard_ = earlyGuards[caseIndex]
                 } else {
                     $scope = BoundScope($scope)
-                    patterns.BindPattern(caseValue, switchType)
+                    let header = BindSwitchCaseHeader(caseSyntax, discriminant)
+                    pattern = header.Pattern
+                    frame = header.Frame
+                    guard_ = header.Guard
                 }
-                // ADR-0208 R18 and R19 (#5629): the case's test runs after the tests before it and before its guard
-                // and body.
-                ApplySwitchArmTestEffects(caseValue, switchType, pattern)
                 // Issue #3501 A3: a fallthrough INTO this arm skips its pattern
                 // test — pattern bindings and guards would run unassigned/
                 // unevaluated, so such targets are rejected. Pattern-declared
@@ -192,19 +225,9 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                 }
-                let frame Dictionary[AccessPath, TypeSymbol]? = TryClassifyPatternNarrowing(discriminant, pattern)
-                var guard_ BoundExpression? = nil
-                if hasGuard {
-                    guard_ = BindGuardExpressionWithNarrowing(
-                        Invariant.Required(
-                            guardSyntax,
-                            "a guarded switch case has a guard expression",
-                            expression: "guardSyntax"
-                        ),
-                        frame
-                    )
-                    callableEntry.ExceptWith(ApplyHeaderCallableEffects(guard_) ?? HashSet[VariableSymbol]())
-                    ShadowAddGuard(shadowFlow, guard_)
+                if guard_ is {} boundGuard {
+                    callableEntry.ExceptWith(ApplyHeaderCallableEffects(boundGuard) ?? HashSet[VariableSymbol]())
+                    ShadowAddGuard(shadowFlow, boundGuard)
                 }
                 // ADR-0166: the arm body runs only when the guard was true, so the
                 // guard's when-true pattern variables (`when x.Tag is string tag`)

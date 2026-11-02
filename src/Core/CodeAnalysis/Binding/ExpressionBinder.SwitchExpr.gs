@@ -23,6 +23,30 @@ internal partial class ExpressionBinder {
         targetType: nil
     )
 
+    // #5629: binds an arm's header in the current (arm) scope, in dispatch order: the pattern (after the headers
+    // before it), its test's effects, the narrowing it proves, and the guard with its effects (as the statement form).
+    private func BindSwitchArmHeader(armSyntax SwitchExpressionArmSyntax, discriminant BoundExpression)(
+        Pattern BoundPattern,
+        Frame Dictionary[AccessPath, TypeSymbol]?,
+        Guard BoundExpression?
+    ) {
+        let patternSyntax = Invariant.Required(
+            armSyntax.Value,
+            "a non-default switch arm has a pattern value",
+            expression: "armSyntax.Value"
+        )
+        let pattern = patterns.BindPattern(patternSyntax, discriminant.Type)
+        applySwitchArmTestEffects(patternSyntax, discriminant.Type, pattern)
+        let frame = switchArmPatternNarrowing(patternSyntax, discriminant, pattern)
+        var boundGuard BoundExpression? = nil
+        if armSyntax.Guard is {} guardSyntax {
+            let bound = BindGuardExpression(guardSyntax, frame)
+            applySwitchGuardEffects(guardSyntax, bound)
+            boundGuard = bound
+        }
+        return (pattern, frame, boundGuard)
+    }
+
     /// @param canBeVoid Issue #4966 §2 (ADR-0202): the switch is in a position
     /// whose value is discarded (an expression statement, a void arrow body, a
     /// lambda body). When an arm is then void, the whole switch is the void
@@ -75,6 +99,8 @@ internal partial class ExpressionBinder {
         // #5629: the patterns of the arms after a `default` that is not last bind before its result, which is evaluated
         // only after their tests fail; each arm reuses its pattern and scope.
         let earlyPatterns = [syntax.Arms.Length]BoundPattern?
+        let earlyFrames = [syntax.Arms.Length]Dictionary[AccessPath, TypeSymbol]?
+        let earlyGuards = [syntax.Arms.Length]BoundExpression?
         let earlyScopes = [syntax.Arms.Length]BoundScope?
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
@@ -100,17 +126,13 @@ internal partial class ExpressionBinder {
                                     if laterSyntax.IsDefault {
                                         continue
                                     }
-                                    let laterValue = Invariant.Required(
-                                        laterSyntax.Value,
-                                        "a non-default switch arm has a pattern value",
-                                        expression: "laterSyntax.Value"
-                                    )
                                     $scope = BoundScope($scope)
-                                    let laterPattern = patterns.BindPattern(laterValue, switchType)
-                                    earlyPatterns[later] = laterPattern
+                                    let laterHeader = BindSwitchArmHeader(laterSyntax, discriminant)
+                                    earlyPatterns[later] = laterHeader.Pattern
+                                    earlyFrames[later] = laterHeader.Frame
+                                    earlyGuards[later] = laterHeader.Guard
                                     earlyScopes[later] = $scope
                                     $scope = $scope.Pop()
-                                    applySwitchArmTestEffects(laterValue, switchType, laterPattern)
                                 }
                             },
                             false,
@@ -132,16 +154,27 @@ internal partial class ExpressionBinder {
                 "a non-default switch arm has a pattern value",
                 expression: "armSyntax.Value"
             )
-            pattern = if earlyPatterns[armIndex] is {} early {
+            // ADR-0208 R18 and R19 (#5629): the arm's header (its test and guard) runs after the headers before it and
+            // before its result, as the statement form's does. A header bound before a `default` applies its effects
+            // again here.
+            var frame Dictionary[AccessPath, TypeSymbol]? = nil
+            var guard_ BoundExpression? = nil
+            if earlyPatterns[armIndex] is {} early {
                 $scope = earlyScopes[armIndex]!!
-                early
+                applySwitchArmTestEffects(patternSyntax, switchType, early)
+                if armSyntax.Guard is {} earlyGuardSyntax && earlyGuards[armIndex] is {} earlyGuard {
+                    applySwitchGuardEffects(earlyGuardSyntax, earlyGuard)
+                }
+                pattern = early
+                frame = earlyFrames[armIndex]
+                guard_ = earlyGuards[armIndex]
             } else {
                 $scope = BoundScope($scope)
-                patterns.BindPattern(patternSyntax, switchType)
+                let header = BindSwitchArmHeader(armSyntax, discriminant)
+                pattern = header.Pattern
+                frame = header.Frame
+                guard_ = header.Guard
             }
-            // ADR-0208 R18 and R19 (#5629): the arm's test runs after the tests before it and before its guard and
-            // result, as the statement form's does.
-            applySwitchArmTestEffects(patternSyntax, switchType, pattern!!)
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so it never contributes to exhaustiveness — in
             // particular a guarded discard `case _ when …` does NOT act as a
@@ -152,18 +185,6 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(patternSyntax.Location)
                 }
                 hasDefault = true
-            }
-            let frame = StatementBinder.TryClassifyPatternNarrowing(discriminant, pattern)
-            var guard_ BoundExpression? = nil
-            if hasGuard {
-                guard_ = BindGuardExpression(
-                    Invariant.Required(
-                        armSyntax.Guard,
-                        "a guarded switch arm has a guard expression",
-                        expression: "armSyntax.Guard"
-                    ),
-                    frame
-                )
             }
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)

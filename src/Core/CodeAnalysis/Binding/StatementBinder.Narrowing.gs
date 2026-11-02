@@ -796,12 +796,14 @@ internal partial class StatementBinder {
             (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
         )
         // #5629: a switch, `try` or `fixed` statement is one statement of the graph, so a `continue` inside it adds no
-        // edge. Its block reaches the back edge through that jump, as the marker's does, and so do the blocks before
-        // it; the jump also runs the tail and the condition, which have no reachable block when it is the only one.
+        // edge. The statements of its block up to it reach the back edge through that jump (not those after it, which
+        // the jump skips), and so do the blocks before it; the jump also runs the tail and the condition, which have no
+        // reachable block when it is the only one.
         let seeds = List[ControlFlowGraph.BasicBlock]()
         if markerBlock != nil {
             seeds.Add(markerBlock)
         }
+        let hiddenSeeds = List[(Block ControlFlowGraph.BasicBlock, Index int32)]()
         let continueTargets = HashSet[BoundLabel]()
         continueTargets.Add(continueLabel)
         var hiddenContinue = false
@@ -816,25 +818,35 @@ internal partial class StatementBinder {
                 graph.Blocks
             }
         ) {
-            for statement in block.Statements {
+            // The last such statement of a block decides how far the block runs before a hidden jump.
+            var hiddenIndex = -1
+            for var index = 0; index < block.Statements.Count; index++ {
+                let statement = block.Statements[index]
                 if statement is BoundPatternSwitchStatement or BoundTryStatement or BoundFixedStatement {
                     let finder = JumpToLabelsFinder(continueTargets)
                     finder.VisitStatement(statement)
                     if finder.Found {
-                        seeds.Add(block)
-                        hiddenContinue = true
-                        break
+                        hiddenIndex = index
                     }
                 }
             }
+            if hiddenIndex >= 0 {
+                hiddenSeeds.Add((block, hiddenIndex))
+                hiddenContinue = true
+            }
         }
-        if seeds.Count == 0 {
+        if seeds.Count == 0 && hiddenSeeds.Count == 0 {
             return collector
         }
         let reachesBackEdge = HashSet[ControlFlowGraph.BasicBlock]()
         let pending = Stack[ControlFlowGraph.BasicBlock]()
         for seed in seeds {
             pending.Push(seed)
+        }
+        for hidden in hiddenSeeds {
+            for incoming in hidden.Block.Incoming {
+                pending.Push(incoming.From)
+            }
         }
         while pending.Count > 0 {
             let block = pending.Pop()
@@ -848,6 +860,14 @@ internal partial class StatementBinder {
         for block in reachesBackEdge {
             for statement in block.Statements {
                 collector.Visit(statement)
+            }
+        }
+        for hidden in hiddenSeeds {
+            if reachesBackEdge.Contains(hidden.Block) {
+                continue
+            }
+            for var index = 0; index <= hidden.Index; index++ {
+                collector.Visit(hidden.Block.Statements[index])
             }
         }
         if hiddenContinue && markerBlock == nil {
@@ -879,6 +899,19 @@ internal partial class StatementBinder {
             if (node is BoundGotoStatement jump && labels.Contains(jump.Label)) ||
                 (node is BoundConditionalGotoStatement conditional && labels.Contains(conditional.Label)) {
                 Found = true
+                return
+            }
+            // An arm whose guard is the literal `false` never runs.
+            if node is BoundPatternSwitchStatement switchStatement {
+                for arm in switchStatement.Arms {
+                    if !(
+                        arm.Guard is BoundLiteralExpression literalGuard &&
+                            literalGuard.Value is bool guardValue &&
+                            !guardValue
+                    ) {
+                        VisitStatement(arm.Body)
+                    }
+                }
                 return
             }
             base.VisitStatement(node)
@@ -2021,6 +2054,25 @@ internal partial class StatementBinder {
             syntax,
             BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern)
         )
+    }
+
+    /// #5629: the narrowing that a switch arm's pattern proves for the discriminant. A test whose own effects can remove
+    /// the tested fact proves nothing about the value that the arm reads, as for `if x is P` (R18).
+    internal func SwitchArmPatternNarrowing(
+        syntax SyntaxNode,
+        discriminant BoundExpression,
+        pattern BoundPattern
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        if TestMayRemoveItsOperandFact(BoundIsExpression(syntax, discriminant, pattern)) {
+            return nil
+        }
+        return TryClassifyPatternNarrowing(discriminant, pattern)
+    }
+
+    /// #5629: a switch arm's guard runs after its test and before its body and the later arms, so its effects apply
+    /// as a condition's do (R18).
+    internal func ApplySwitchGuardEffects(syntax SyntaxNode, boundGuard BoundExpression) {
+        ApplyConditionEffectsToNarrowings(syntax, boundGuard)
     }
 
     /// #5629: a `default` that is not the last arm runs after the tests of the arms after it.
