@@ -2680,19 +2680,20 @@ internal class LambdaBinder {
             return builder.ToImmutable()
         }
 
-        /// Issue #5603: reports the held narrowing uses of a lambda body with an inferred result, when that result
-        /// needs the narrowing (cref:ConversionClassifier.ConversionNeedsNarrowedSource). A `return` value then
-        /// does not convert to the result without the narrowing, as at a declared result.
+        /// Issue #5603: reports each held narrowing use of a lambda body with an inferred result that the result
+        /// needs (cref:ConversionClassifier.ConversionNeedsNarrowedSource). The `return` value then does not convert
+        /// to the result without the narrowing, as at a declared result. For another use, the result conversion reads
+        /// the declared value (see `ReturnConversionRewriter`).
         /// @param diagnostics The bag that receives the diagnostics.
         /// @param resultType The inferred result type.
         internal func ReportInferredResultNarrowings(diagnostics DiagnosticBag, resultType TypeSymbol) {
-            if resultType == TypeSymbol.Error ||
-                resultType == TypeSymbol.Void ||
-                !ConversionClassifier.ConversionNeedsNarrowedSource(resultType) {
+            if resultType == TypeSymbol.Error || resultType == TypeSymbol.Void {
                 return
             }
             for use in narrowingUses {
-                diagnostics.ReportCannotConvert(use.Access.Location, use.Access.DeclaredType, resultType)
+                if NeedsNarrowing(use.Access, resultType) {
+                    diagnostics.ReportCannotConvert(use.Access.Location, use.Access.DeclaredType, resultType)
+                }
             }
         }
 
@@ -2701,8 +2702,21 @@ internal class LambdaBinder {
         /// (cref:ConversionClassifier.ConversionNeedsNarrowedSource).
         /// @param naturalReturnType The natural result type.
         /// @returns `true` when the natural type cannot take the place of the target.
-        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Count > 0 &&
-            ConversionClassifier.ConversionNeedsNarrowedSource(naturalReturnType)
+        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Any(
+            (use(Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])) -> NeedsNarrowing(
+                use.Access,
+                naturalReturnType
+            )
+        )
+
+        private func NeedsNarrowing(
+            access BackwardGotoNarrowingAccess,
+            resultType TypeSymbol
+        ) bool -> ConversionClassifier.ConversionNeedsNarrowedSource(
+            access.DeclaredType,
+            access.RequiredType,
+            resultType
+        )
 
         /// Captures the held values, conversions and narrowing uses, for a binder that discards a bind (see
         /// `StatementBinder.CaptureSpeculativeBindState`).
@@ -3143,7 +3157,7 @@ internal class LambdaBinder {
             }
             // Issue #4965 (ADR-0202): convert any `return` nested inside the
             // operand first (`return if c { return a } else { b }`).
-            let operand = RewriteExpression(value)
+            var operand = RewriteExpression(value)
             // Issue #5569: a deferred return value converted where it bound, with the eager bind's narrowing checks.
             // A value whose nested returns changed converts here, as its own conversion does not depend on them.
             let held = heldConversions
@@ -3158,6 +3172,14 @@ internal class LambdaBinder {
                 } else {
                     cast[BoundStatement](BoundReturnStatement(node.Syntax, heldValue, node.IsRef))
                 }
+            }
+            // Issue #5603: the conversion runs outside the narrowing scope, so the stable member path of a narrowed
+            // read comes from the read itself. The read takes its declared value when the result does not need the
+            // narrowing, as an eager conversion does.
+            if SmartCastStability.TryGetStableMemberPath(operand, out var path, out _) &&
+                ConversionClassifier
+                .TryRecoverDeclaredMemberRead(operand, path!!, operand.Type, returnType, out var declaredRead) {
+                operand = declaredRead!!
             }
             if operand.Type == returnType {
                 return if object.ReferenceEquals(operand, value) {

@@ -1043,6 +1043,100 @@ class Program {
         Check(fixture, source.ToString(), oracle.ToString(), "1111111111" + "12True")
     }
 
+    /// Issue #5603 (review of e920ba13): a stable member path declared `Animal` and narrowed to `Dog` by a type test
+    /// reads the narrowed value with a cast. When a backward `goto` replaces the holder, the result conversion of
+    /// the `return` value needs the narrowing for a `Dog` or `Dog?` result: an inferred result and a declared `Dog?`
+    /// result report GS0155 at the value, as a declared `Dog` result does. The cast does not throw at run time.
+    @Fact
+    func InferredResult_OfANarrowedMember_ChecksTheDeclaredRead() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(MemberResultCases)
+        for (head, other) in MemberResultCases {
+            RejectConsumer(
+                fixture,
+                MemberResultSource(head, other, "holder = Holder(Cat())"),
+                "GS0155",
+                line: 23,
+                column: 24,
+                length: "holder.Pet".Length
+            )
+        }
+    }
+
+    /// Issue #5603 (review of e920ba13): for an `Animal` result, inferred or declared, the declared read of the
+    /// member replaces the narrowed read, as an eager conversion does. A backward `goto` that replaces the holder
+    /// then returns the `Cat`, as C# does. A `goto` that keeps the narrowing returns the `Dog`.
+    @Fact
+    func InferredResult_OfANarrowedMember_ReadsTheDeclaredValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = MemberResultSource("let f = () -> {", "Animal()", "holder = Holder(Cat())").Replace(
+            "    Console.Write(r)\n",
+            "    Console.Write(Declared().Name())\n    Console.Write(Kept().Name())\n    Console.Write(r.Name())\n"
+        )
+            .Replace(
+            "func Main() {",
+            "func Declared() Animal {\n" +
+                MemberResultBody("Animal()", "holder = Holder(Cat())") +
+                "\n}\n" +
+                "func Kept() Animal {\n    let f = () -> {\n" +
+                MemberResultBody("Animal()", "Console.Write(\"\")") +
+                "\n    }\n    return f()\n}\nfunc Main() {"
+        )
+        let oracleBody = "{ var holder = new Holder(new Dog()); var n = 0; if (holder.Pet is Dog) { L: if (n > 0) { " +
+            "return holder.Pet; } n++; # goto L; } return new Animal(); }"
+        let oracle = "using System;\nclass Animal { public virtual string Name() => \"animal\"; }\n" +
+            "class Dog : Animal { public override string Name() => \"dog\"; }\n" +
+            "class Cat : Animal { public override string Name() => \"cat\"; }\n" +
+            "class Holder { public readonly Animal Pet; public Holder(Animal pet) { Pet = pet; } }\n" +
+            "class Program {\n    static Animal Declared() " +
+            oracleBody.Replace("#", "holder = new Holder(new Cat());") +
+            "\n    static Animal Kept() { Func<Animal> f = () => " +
+            oracleBody.Replace("#", "Console.Write(\"\");") +
+            "; return f(); }\n    static void Main() {\n        Func<Animal> f = () => " +
+            oracleBody.Replace("#", "holder = new Holder(new Cat());") +
+            ";\n        var r = f();\n        Console.Write(Declared().Name());\n        Console.Write(Kept().Name());\n" +
+            "        Console.Write(r.Name());\n    }\n}\n"
+        Check(fixture, source, oracle, "catdogcat")
+    }
+
+    /// Issue #5603 (review of e920ba13): the natural result of a speculative literal uses the same decision. The
+    /// `return` of the `Pet` declared `object` and narrowed to `string` converts to the delegate result `string`
+    /// with the narrowing, which the backward `goto` removes. The natural result `string?` needs it too, so the
+    /// literal keeps the delegate and its two GS0155, and does not cast the `int32` to `string` at run time.
+    @Fact
+    func SpeculativeLiteral_NaturalResultOfANarrowedMember_KeepsTheCheck() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+import FunctionControl
+class Box {
+    let Pet object
+    init(pet object) {
+        Pet = pet
+    }
+}
+func Main() {
+    Console.Write(Calls.Pz(() -> {
+        var holder = Box("s")
+        var n = 0
+        if holder.Pet is string {
+            L: if n > 0 {
+                return holder.Pet
+            }
+            n++
+            holder = Box(1)
+            goto L
+        }
+        let none string? = nil
+        return none
+    }, 1))
+}
+`
+        Assert.Equal(
+            [](Code string, Line int32, Column int32){("GS0155", 15, 24), ("GS0155", 22, 16)},
+            RejectConsumerErrors(fixture, source)
+        )
+    }
+
     /// Issue #5569 (review of 7c9c7101): a loop body that binds again after an inherited narrowing changes
     /// discards the held returns of its first bind. So a call where no overload applies reports the held target
     /// diagnostics of a speculative literal once: the same set as the same loop without the rebind (`s = nil`
@@ -1826,6 +1920,35 @@ class Program {
                 .ToArray()
         }
 
+        // Issue #5603 (review of e920ba13): a function literal or function head, and the other `return` value that
+        // sets its result type.
+        private let MemberResultCases[](Head string, Other string) = [](Head string, Other string){
+            ("let f = () -> {", "default(Dog?)"),
+            ("let f = () -> {", "Dog()"),
+            ("let f = func() Dog? {", "default(Dog?)")
+        }
+
+        // Issue #5603: the source has the `return` value on line 23 from column 24.
+        private func MemberResultBody(
+            other string,
+            beforeGoto string
+        ) string -> "        var holder = Holder(Dog())\n" +
+            "        var n = 0\n        if holder.Pet is Dog {\n            L: if n > 0 {\n                return holder.Pet\n" +
+            "            }\n            n++\n            " +
+            beforeGoto +
+            "\n            goto L\n        }\n        return " +
+            other
+
+        private func MemberResultSource(head string, other string, beforeGoto string) string -> "import System\n" +
+            "open class Animal {\n    open func Name() string -> \"animal\"\n}\nclass Dog : Animal {\n" +
+            "    override func Name() string -> \"dog\"\n}\nclass Cat : Animal {\n" +
+            "    override func Name() string -> \"cat\"\n}\nclass Holder {\n    let Pet Animal\n    init(pet Animal) {\n" +
+            "        Pet = pet\n    }\n}\nfunc Main() {\n    " +
+            head +
+            "\n" +
+            MemberResultBody(other, beforeGoto) +
+            "\n    }\n    let r = f()\n    Console.Write(r)\n}\n"
+
         // Issue #5603: the prelude has six lines, so a literal that starts on the first line of `Main` starts on line 7.
         private const InferredResultPrelude string = "import System\nimport System.Threading.Tasks\n" +
             "func Len(v string) int32 -> v.Length\nfunc T[R](f () -> R) R -> f()\nfunc S(f Func[string]) string -> f()\n"
@@ -1895,6 +2018,8 @@ namespace FunctionControl {
         public static string Ns(object o, long x) => "O";
         public static string NsIn(in System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
         public static string NsIn(object o, long x) => "O";
+        public static string Pz(System.Func<string> f, int x) => "F" + f();
+        public static string Pz(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
         public static string Pa(System.Func<long> f, int x) => "F";
         public static string Pa(params object[] xs) => "P" + Kinds.OfS(xs[0]);
         public static string PaIn(in System.Func<long> f, int x) => "F";
