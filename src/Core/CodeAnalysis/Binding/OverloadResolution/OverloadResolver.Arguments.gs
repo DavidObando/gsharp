@@ -83,7 +83,11 @@ internal partial class OverloadResolver {
                     methodTypeArguments: symbolicMethodTypeArgs
                 )
                 if TypeSymbol.RequiresSymbolicProjection(symbolicElementType) {
-                    elementTypeSymbol = symbolicElementType
+                    elementTypeSymbol = if elementTypeSymbol.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                        NullabilityImportRule.ApplyOpenSlot(symbolicElementType, ClrNullabilityState.Annotated)
+                    } else {
+                        symbolicElementType
+                    }
                 }
             }
         }
@@ -181,8 +185,13 @@ internal partial class OverloadResolver {
         if ClrOverloadResolution.IsMethodGroupArgument(arg) {
             return conversions.BindConversion(location, arg, elementTypeSymbol)
         }
-        if arg.Type == nil || arg.Type == TypeSymbol.Error || arg.Type == elementTypeSymbol {
+        if arg.Type == nil || arg.Type == TypeSymbol.Error {
             return arg
+        }
+        // Issue #5635: an element that goes into the array with no conversion keeps the backward `goto` check of a
+        // narrowed read, as a variadic element does (cref:CoerceVariadicElement).
+        if arg.Type == elementTypeSymbol {
+            return conversions.DecideNarrowedConversion(location, arg, elementTypeSymbol)
         }
         let conversion = Conversion.Classify(arg.Type, elementTypeSymbol)
         if conversions.TryRejectClrPlatformContainerArgument(
@@ -1114,10 +1123,15 @@ internal partial class OverloadResolver {
             // members are erased: leave the argument untouched. Open element types
             // follow the type-erased model where the emitter boxes as needed.
             if argType == nil || argType == TypeSymbol.Error || elementType is TypeParameterSymbol {
-                return Invariant.Required(argument, "a finalized call argument remains bound", expression: "argument")
+                // Issue #5635: a narrowed read keeps its backward `goto` check where it goes into the slice.
+                return conversions.DecideNarrowedConversion(
+                    location,
+                    Invariant.Required(argument, "a finalized call argument remains bound", expression: "argument"),
+                    elementType
+                )
             }
             if argType == elementType {
-                return argument
+                return conversions.DecideNarrowedConversion(location, argument, elementType)
             }
             let conversion = Conversion.Classify(argType, elementType)
             if conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity) {
