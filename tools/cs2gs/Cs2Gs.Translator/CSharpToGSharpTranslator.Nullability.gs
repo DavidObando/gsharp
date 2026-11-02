@@ -718,7 +718,10 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInitializer}} {
-                return this.IsNullablePromotedValue(localInitializer)
+                // The receiver rule also reads the arms of a composed initializer (`a ?? b`, `c ? a : b`).
+                return this.IsNullablePromotedValue(localInitializer) || this.ReceiverValueIsPromotedNullable(
+                    localInitializer
+                )
             }
             return this.IsTranslatorWidenedDeclaration(local)
         }

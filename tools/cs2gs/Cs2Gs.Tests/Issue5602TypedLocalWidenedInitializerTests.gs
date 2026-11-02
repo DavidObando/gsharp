@@ -28,7 +28,9 @@ import Xunit
 open class Issue5602TypedLocalWidenedInitializerTests {
     /// The store into a typed local or an existing local is bridged, and the read of that local is
     /// not asserted again. The translation prints what the C# prints, also for `Empty()`: C# throws
-    /// `NullReferenceException` at `o.ToString()`, and G# throws it at the store `item!!`.
+    /// `NullReferenceException` at `o.ToString()`, and G# throws it at the store `item!!`. A local of
+    /// a composed widened initializer (`entry.Item ?? entry.Item`) holds `Node?`, so its read is
+    /// asserted (it was GS0159).
     @Fact
     func StoreOfAWidenedLocalIntoATypedLocal_IsBridgedLikeAnAssignment() {
         let (printed, compilation) = Translate(`
@@ -42,21 +44,22 @@ namespace Demo
         public static string Plain(Entry entry) { var item = entry.Item; object o = item; return o.ToString(); }
         public static string Decon(Entry entry) { var (item, _) = entry; object o = item; return o.ToString(); }
         public static string Assigned(Entry entry) { var item = entry.Item; object o; o = item; return o.ToString(); }
+        public static string Coalesced(Entry entry) { var n = entry.Item ?? entry.Item; return n.ToString(); }
         public static string Guard(Entry entry, int shape)
         {
-            try { return shape == 0 ? Plain(entry) : shape == 1 ? Decon(entry) : Assigned(entry); }
+            try { return shape == 0 ? Plain(entry) : shape == 1 ? Decon(entry) : shape == 2 ? Assigned(entry) : Coalesced(entry); }
             catch (System.NullReferenceException) { return "nre"; }
         }
         public static string Run()
         {
             var entry = new Entry(new Node(), 1);
-            return Guard(entry, 0) + " " + Guard(entry, 1) + " " + Guard(entry, 2) + " " +
-                Guard(Empty(), 0) + " " + Guard(Empty(), 1) + " " + Guard(Empty(), 2);
+            return Guard(entry, 0) + " " + Guard(entry, 1) + " " + Guard(entry, 2) + " " + Guard(entry, 3) + " " +
+                Guard(Empty(), 0) + " " + Guard(Empty(), 1) + " " + Guard(Empty(), 2) + " " + Guard(Empty(), 3);
         }
     }
 }`)
-        Assert.Equal("node node node nre nre nre", RunCSharp(compilation).Trim())
-        Assert.Equal("node node node nre nre nre", CompileAndRun(printed).Trim())
+        Assert.Equal("node node node node nre nre nre nre", RunCSharp(compilation).Trim())
+        Assert.Equal("node node node node nre nre nre nre", CompileAndRun(printed).Trim())
         Assert.Contains(
             "func Plain(entry Entry) string? {\n        let item = entry.Item\n        let o object = item!!\n        return o.ToString()\n",
             printed
@@ -66,6 +69,7 @@ namespace Demo
             printed
         )
         Assert.Contains("        var o object\n        o = item!!\n        return o.ToString()\n", printed)
+        Assert.Contains("let n = entry.Item ?? entry.Item\n        return n!!.ToString()\n", printed)
         Assert.DoesNotContain("o!!", printed)
     }
 
@@ -95,8 +99,9 @@ namespace Demo
     }
 
     /// A local whose emitted storage G# infers from a widened initializer (`Node n = entry.Item`,
-    /// `var n = entry.Item`) holds `Node?`, so a store into it takes the null as C# does: plain,
-    /// chained and from the widened property. A user-defined conversion still checks its operand.
+    /// `var n = entry.Item`, also through `??` or `?:`) holds `Node?`, so a store into it takes the
+    /// null as C# does: plain, chained and from the widened property. A user-defined conversion still
+    /// checks its operand.
     @Fact
     func StoreIntoALocalOfNullableStorage_IsNotBridged() {
         let (printed, compilation) = Translate(`
@@ -116,6 +121,8 @@ namespace Demo
         public static bool Inferred(Entry entry) { var n = entry.Item; var item = entry.Item; n = item; return ReferenceEquals(n, item); }
         public static bool TypedProperty(Entry entry) { Node n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
         public static bool InferredProperty(Entry entry) { var n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
+        public static bool Coalesced(Entry entry) { var n = entry.Item ?? entry.Item; var item = entry.Item; n = item; return ReferenceEquals(n, item); }
+        public static bool Conditional(Entry entry, bool flag) { var n = flag ? entry.Item : new Node(); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
         public static bool Chained(Entry entry)
         {
             Node n = entry.Item;
@@ -133,12 +140,13 @@ namespace Demo
         }
         public static string Run() =>
             Typed(Empty()) + " " + Inferred(Empty()) + " " + TypedProperty(Empty()) + " " +
-            InferredProperty(Empty()) + " " + Chained(Empty()) + " " + Convert(Empty()) + " " +
+            InferredProperty(Empty()) + " " + Coalesced(Empty()) + " " + Conditional(Empty(), true) + " " +
+            Chained(Empty()) + " " + Convert(Empty()) + " " +
             Convert(new Entry(new Node(), null, 1));
     }
 }`)
-        Assert.Equal("True True True True True nre node", RunCSharp(compilation).Trim())
-        Assert.Equal("True True True True True nre node", CompileAndRun(printed).Trim())
+        Assert.Equal("True True True True True True True nre node", RunCSharp(compilation).Trim())
+        Assert.Equal("True True True True True True True nre node", CompileAndRun(printed).Trim())
         Assert.Contains(
             "func Typed(entry Entry) bool {\n        var n = entry.Item\n        let item = entry.Item\n        n = item\n",
             printed
