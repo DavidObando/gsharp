@@ -808,22 +808,33 @@ internal partial class StatementBinder {
         if RunsNoCode(pattern) {
             return false
         }
+        return EffectsMayRemoveFactOf(isExpr.Expression, isExpr, isExpr)
+    }
+
+    /// The one rule of (cref:TestMayRemoveItsOperandFact): whether the effects of [`effects`](paramref) can remove
+    /// the fact of the variable or stable member path that [`operand`](paramref) reads, by
+    /// (cref:StatementKillsPath). A switch arm's test and guard use it too (#5629).
+    private func EffectsMayRemoveFactOf(
+        operand BoundExpression,
+        effects BoundExpression,
+        test BoundIsExpression?
+    ) bool {
         var path AccessPath? = nil
-        if isExpr.Expression is BoundVariableExpression variable {
+        if operand is BoundVariableExpression variable {
             path = variable.Variable
-        } else if !SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out path, out _) {
+        } else if !SmartCastStability.TryGetStableMemberPath(operand, out path, out _) {
             return false
         }
         CompilationMeasurements.Count("narrowing.pattern-effect-walks")
-        if isExpr.Syntax is {} anchor {
+        if effects.Syntax is {} anchor {
             EnsureClosureAssignedNames(anchor)
         }
         var aliases HashSet[VariableSymbol] = externalCallableAliases
-        if testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(isExpr, out var atTest) {
+        if test != nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(test, out var atTest) {
             aliases = atTest
         }
         let collector = NewCollector(nil, aliases)
-        collector.Visit(isExpr)
+        collector.Visit(effects)
         return StatementKillsPath(
             collector,
             path!!,

@@ -528,7 +528,20 @@ partial class Binder {
             bindRichAnonymousObject: BindRichAnonymousObject,
             bindStructuralAdaptation: BindStructuralAdaptation,
             bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
-            BindNativeProtocolConversion(location, source, target, testOnly: true)
+            BindNativeProtocolConversion(location, source, target, testOnly: true),
+            bindSwitchArmHeader: (
+                valueSyntax PatternSyntax,
+                guardSyntax ExpressionSyntax?,
+                discriminant BoundExpression,
+                discriminantStale bool
+            ) -> Statements.BindSwitchArmHeader(valueSyntax, guardSyntax, discriminant, discriminantStale),
+            reapplySwitchArmHeaderEffects: (
+                valueSyntax PatternSyntax,
+                guardSyntax ExpressionSyntax?,
+                header StatementBinder.SwitchArmHeader
+            ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
+            bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
+            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

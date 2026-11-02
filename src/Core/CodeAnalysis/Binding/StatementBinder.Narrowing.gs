@@ -37,6 +37,8 @@ internal partial class StatementBinder {
     // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
     // so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
+    // #5629: the facts that statements remove while the headers after a `default` are bound early.
+    private var laterArmStatementKills List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
     // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
     // `nil` otherwise, and the current aliases apply.
     private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
@@ -469,6 +471,8 @@ internal partial class StatementBinder {
                     }
                     if removedFacts != nil {
                         conditionKillJournal?.Add((frame, key, frame[key]))
+                    } else {
+                        laterArmStatementKills?.Add((frame, key, frame[key]))
                     }
                     frame.Remove(key)
                 }
@@ -1836,6 +1840,172 @@ internal partial class StatementBinder {
         } else {
             removedFacts
         }
+    }
+
+    /// ADR-0208 R18 and R19 (#5629): a switch arm's test runs before its guard and its body or result, so its effects
+    /// apply to the narrowing facts first, as a condition's do. The test is the `is` test of the arm's pattern on the
+    /// value that the switch evaluated once, so the one collector classifies it as it classifies `if x is 1`. The
+    /// discriminant's own evaluation is not part of the test.
+    internal func ApplySwitchArmTestEffects(syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) {
+        let evaluated = LocalVariableSymbol("<switch-value>", true, discriminantType)
+        ApplyConditionEffectsToNarrowings(
+            syntax,
+            BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern)
+        )
+    }
+
+    /// #5629: a switch arm's header, bound once in dispatch order: the pattern, the narrowing that it proves for the
+    /// discriminant, the guard, the callable aliases that the guard removed, and whether the header's effects can
+    /// remove the discriminant's fact (then no later arm proves a narrowing of it either).
+    internal sealed class SwitchArmHeader {
+        init(
+            pattern BoundPattern,
+            frame Dictionary[AccessPath, TypeSymbol]?,
+            boundGuard BoundExpression?,
+            removedAliases HashSet[VariableSymbol]?,
+            mayRemoveDiscriminantFact bool
+        ) {
+            Pattern = pattern
+            Frame = frame
+            Guard = boundGuard
+            RemovedAliases = removedAliases
+            MayRemoveDiscriminantFact = mayRemoveDiscriminantFact
+        }
+
+        prop Pattern BoundPattern {
+            get;
+        }
+
+        prop Frame Dictionary[AccessPath, TypeSymbol]? {
+            get;
+        }
+
+        prop Guard BoundExpression? {
+            get;
+        }
+
+        prop RemovedAliases HashSet[VariableSymbol]? {
+            get;
+        }
+
+        prop MayRemoveDiscriminantFact bool {
+            get;
+        }
+    }
+
+    /// ADR-0208 R18 and R19 (#5629): binds a switch arm's header in the current (arm) scope, after the headers before
+    /// it. The test's effects apply first, as a condition's do. Its pattern proves a narrowing of the discriminant
+    /// unless its own effects or those of a header before it ([`discriminantStale`](paramref)) can remove the tested
+    /// fact, as for `if x is P`. The guard binds under that narrowing; its effects then apply with the pattern's frame
+    /// on the stack (the body pushes the same dictionary), and so do its callable-alias effects. The switch statement
+    /// and the switch expression both bind their headers here.
+    internal func BindSwitchArmHeader(
+        valueSyntax PatternSyntax,
+        guardSyntax ExpressionSyntax?,
+        discriminant BoundExpression,
+        discriminantStale bool
+    ) SwitchArmHeader {
+        // The aliases that the header removes, statements inside a guard's block included, against its entry.
+        let aliasesBefore = CaptureExternalCallableAliases()
+        let pattern = patterns.BindPattern(valueSyntax, discriminant.Type)
+        ApplySwitchArmTestEffects(valueSyntax, discriminant.Type, pattern)
+        let test = BoundIsExpression(valueSyntax, discriminant, pattern)
+        let testMayRemove = TestMayRemoveItsOperandFact(test)
+        let frame = if discriminantStale || testMayRemove {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            TryClassifyPatternNarrowing(discriminant, pattern)
+        }
+        var boundGuard BoundExpression? = nil
+        var removedAliases HashSet[VariableSymbol]? = nil
+        var guardMayRemove = false
+        if guardSyntax != nil {
+            let bound = BindGuardExpressionWithNarrowing(guardSyntax, frame)
+            ApplySwitchGuardEffects(guardSyntax, bound, frame)
+            ApplyHeaderCallableEffects(bound)
+            guardMayRemove = EffectsMayRemoveFactOf(discriminant, bound, nil)
+            boundGuard = bound
+        }
+        aliasesBefore.ExceptWith(externalCallableAliases)
+        if aliasesBefore.Count > 0 {
+            removedAliases = aliasesBefore
+        }
+        return SwitchArmHeader(pattern, frame, boundGuard, removedAliases, testMayRemove || guardMayRemove)
+    }
+
+    /// #5629: applies a header that was bound before a `default` again where its arm is dispatched, since the
+    /// default put its effects back. Returns the callable aliases that its guard removes.
+    internal func ReapplySwitchArmHeaderEffects(
+        valueSyntax PatternSyntax,
+        guardSyntax ExpressionSyntax?,
+        header SwitchArmHeader
+    ) HashSet[VariableSymbol]? {
+        ApplySwitchArmTestEffects(valueSyntax, header.Pattern.Type, header.Pattern)
+        if guardSyntax != nil && header.Guard is {} boundGuard {
+            ApplySwitchGuardEffects(guardSyntax, boundGuard, header.Frame)
+        }
+        if header.RemovedAliases is {} removed {
+            externalCallableAliases.ExceptWith(removed)
+        }
+        return header.RemovedAliases
+    }
+
+    private func ApplySwitchGuardEffects(
+        syntax SyntaxNode,
+        boundGuard BoundExpression,
+        frame Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        if frame == nil {
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+            return
+        }
+        binderCtx.PushNarrowingFrame(frame)
+        try {
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+        } finally {
+            binderCtx.EndNarrowingProof()
+        }
+    }
+
+    /// #5629: a `default` that is not the last arm runs after the tests of the arms after it.
+    /// [`bindLaterTests`](paramref) binds those arms' patterns in dispatch order, each after the tests before it, and
+    /// applies their effects; [`bind`](paramref) then binds the default's body. The facts that the tests and the
+    /// default's conditions removed are put back afterwards (as R18 does for an else-branch), and each of those arms
+    /// applies its own test where it is dispatched. A default that falls through keeps them: the next arm's body also
+    /// runs after the default, and that path removes at least what the arm's own dispatch removes.
+    /// The callable aliases are put back the same way.
+    internal func BindAfterLaterArmTests(bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) BoundNode {
+        let outer = BeginThenBranchConditionKills()
+        let entry = binderCtx.Narrowing
+        let entryAliases = CaptureExternalCallableAliases()
+        let outerStatementKills = laterArmStatementKills
+        let statementKills = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
+        laterArmStatementKills = statementKills
+        bindLaterTests()
+        laterArmStatementKills = outerStatementKills
+        outerStatementKills?.AddRange(statementKills)
+        let bound = bind()
+        if !fallsThrough {
+            RestoreExternalCallableAliases(entryAliases)
+        }
+        if fallsThrough {
+            let kills = conditionKillJournal!!
+            conditionKillJournal = outer
+            outer?.AddRange(kills)
+        } else {
+            RestoreThenBranchConditionKills(outer, entry)
+            // A statement in a header (a block in a guard) is not a condition, so its kills are not in the journal.
+            // Each of those arms removes them again where it is dispatched.
+            for kill in statementKills {
+                if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
+                    entry.NarrowedType(kill.Path),
+                    kill.Type
+                ) {
+                    kill.Frame[kill.Path] = kill.Type
+                }
+            }
+        }
+        return bound
     }
 
     private func EnsureClosureAssignedNames(anchor SyntaxNode) -> binderCtx.EnsureClosureAssignedNames(

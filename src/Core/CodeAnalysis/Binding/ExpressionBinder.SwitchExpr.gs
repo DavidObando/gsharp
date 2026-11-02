@@ -72,36 +72,95 @@ internal partial class ExpressionBinder {
             .CreateBuilder[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
         ]()
+        // #5629: the patterns of the arms after a `default` that is not last bind before its result, which is evaluated
+        // only after their tests fail; each arm reuses its pattern and scope.
+        let earlyHeaders = [syntax.Arms.Length]StatementBinder.SwitchArmHeader?
+        let earlyScopes = [syntax.Arms.Length]BoundScope?
+        // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
+        var discriminantStale = false
         // Issue #5613: the narrowed read that each arm result yields, in arm order, captured where it binds.
         let armReads = List[NarrowedBranchValue?](syntax.Arms.Length)
-        for armSyntax in syntax.Arms {
+        for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
+            let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
             if armSyntax.IsDefault {
                 if hasDefault {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
+                let defaultIndex = armIndex
                 var defaultRead NarrowedBranchValue? = nil
-                let result = BindBranchValue(
-                    armSyntax.Result,
-                    nil,
-                    targetType,
-                    (read NarrowedBranchValue) -> {
-                        defaultRead = read
-                    },
-                    canBeVoid
-                )
+                let bindDefaultResult = func () BoundExpression {
+                    return BindBranchValue(
+                        armSyntax.Result,
+                        nil,
+                        targetType,
+                        (read NarrowedBranchValue) -> {
+                            defaultRead = read
+                        },
+                        canBeVoid
+                    )
+                }
+                let result = if defaultIndex == syntax.Arms.Length - 1 {
+                    bindDefaultResult()
+                } else {
+                    cast[BoundExpression](
+                        bindAfterLaterArmTests(
+                            func () {
+                                for var later = defaultIndex + 1; later < syntax.Arms.Length; later++ {
+                                    let laterSyntax = syntax.Arms[later]
+                                    if laterSyntax.IsDefault {
+                                        continue
+                                    }
+                                    let laterValue = Invariant.Required(
+                                        laterSyntax.Value,
+                                        "a non-default switch arm has a pattern value",
+                                        expression: "laterSyntax.Value"
+                                    )
+                                    $scope = BoundScope($scope)
+                                    let laterHeader = bindSwitchArmHeader(
+                                        laterValue,
+                                        laterSyntax.Guard,
+                                        discriminant,
+                                        discriminantStale
+                                    )
+                                    discriminantStale = discriminantStale || laterHeader.MayRemoveDiscriminantFact
+                                    earlyHeaders[later] = laterHeader
+                                    earlyScopes[later] = $scope
+                                    $scope = $scope.Pop()
+                                }
+                            },
+                            false,
+                            func () BoundNode {
+                                return bindDefaultResult()
+                            }
+                        )
+                    )
+                }
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 armReads.Add(defaultRead)
                 continue
             }
-            $scope = BoundScope($scope)
             let patternSyntax = Invariant.Required(
                 armSyntax.Value,
                 "a non-default switch arm has a pattern value",
                 expression: "armSyntax.Value"
             )
-            pattern = patterns.BindPattern(patternSyntax, switchType)
+            // ADR-0208 R18 and R19 (#5629): the arm's header (its test and guard) runs after the headers before it and
+            // before its result, as the statement form's does. A header bound before a `default` applies its effects
+            // again here.
+            let header = if earlyHeaders[armIndex] is {} early {
+                $scope = earlyScopes[armIndex]!!
+                reapplySwitchArmHeaderEffects(patternSyntax, armSyntax.Guard, early)
+                early
+            } else {
+                $scope = BoundScope($scope)
+                bindSwitchArmHeader(patternSyntax, armSyntax.Guard, discriminant, discriminantStale)
+            }
+            discriminantStale = discriminantStale || header.MayRemoveDiscriminantFact
+            pattern = header.Pattern
+            let frame = header.Frame
+            let guard_ = header.Guard
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so it never contributes to exhaustiveness — in
             // particular a guarded discard `case _ when …` does NOT act as a
@@ -112,18 +171,6 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(patternSyntax.Location)
                 }
                 hasDefault = true
-            }
-            let frame = StatementBinder.TryClassifyPatternNarrowing(discriminant, pattern)
-            var guard_ BoundExpression? = nil
-            if hasGuard {
-                guard_ = BindGuardExpression(
-                    Invariant.Required(
-                        armSyntax.Guard,
-                        "a guarded switch arm has a guard expression",
-                        expression: "armSyntax.Guard"
-                    ),
-                    frame
-                )
             }
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
