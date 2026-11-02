@@ -382,6 +382,50 @@ public class Demo
         Assert.Contains("return s.Length + *q + 1", printed)
     }
 
+    /// cs2gs passes the receiver of a `this ref` extension as `&counters[0]`, a writable reference to an element,
+    /// which gsc counts as a write (R12). A local receiver and an `in` receiver keep the fact.
+    @Fact
+    func RefParameter_ReadAfterARefExtensionCallOnAnElement_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public struct Counter { public int N; }
+public static class Ext
+{
+    public static void Touch(this ref Counter value) { value.N++; }
+    public static int Peek(this in Counter value) => value.N;
+}
+public class Demo
+{
+    public static int Element(ref string? s, Counter[] counters)
+    {
+        if (s == null) return 0;
+        counters[0].Touch();
+        return s.Length + counters[0].N;
+    }
+    public static int Local(ref string? s, int seed)
+    {
+        var c = new Counter { N = seed };
+        if (s == null) return 0;
+        c.Touch();
+        return s.Length + c.N + 1;
+    }
+    public static int ReadOnly(ref string? s, Counter[] counters)
+    {
+        if (s == null) return 0;
+        var n = counters[0].Peek();
+        return s.Length + n + 2;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var counters = new Counter[1];
+        return Element(ref text, counters) + "," + Local(ref text, 1) + "," + ReadOnly(ref text, counters);
+    }
+}`)
+        Assert.Contains("return s!!.Length + counters[0].N", printed)
+        Assert.Contains("return s.Length + c.N + 1", printed)
+        Assert.Contains("return s.Length + n + 2", printed)
+    }
+
     /// A field read, the getters and indexers on the stable list, a plain auto property, an overridable auto property
     /// through a receiver that cannot have a subclass, and `Nullable<T>.Value` (which the translator emits as `!!`)
     /// run no user code, so gsc keeps the fact and the read stays bare.

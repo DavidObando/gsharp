@@ -4522,6 +4522,22 @@ partial class CSharpToGSharpTranslator {
                     // The address of a member or an element names storage that a later write can change.
                     return this.WritesThroughStorage(addressOf.Operand, isArgument: true)
                 }
+                case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
+                    this
+                    .context
+                    .GetSymbolInfo(invocation)
+                    .Symbol is IMethodSymbol method &&
+                    method.ReducedFrom != nil &&
+                    method.ReducedFrom!!
+                    .Parameters
+                    .Length > 0 &&
+                    method.ReducedFrom!!
+                    .Parameters[0]
+                    .RefKind == RefKind
+                    .Ref {
+                    // cs2gs passes the receiver of a `this ref` extension as `&receiver`, a writable reference.
+                    return this.WritesThroughStorage(receiverAccess.Expression, isArgument: true)
+                }
                 case reference is Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax {
                     // A writable `ref` alias of a member or an element names storage that a later write can change.
                     return !this.IsReadOnlyReference(reference) && this.WritesThroughStorage(
