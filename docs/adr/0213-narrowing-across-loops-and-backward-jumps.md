@@ -1319,26 +1319,31 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   index read runs user code unless it is a field, a tuple element, an array or slice element or length, an enum
   member, a source auto property (R14) or an imported property or indexer that `IsStableClrAccessor` lists (R16, R17);
   an imported operator runs user code; a conversion site (an assigned or typed value, a non-`bool` condition, a
-  returned value, a by-value argument against the parameters of the callee's candidates) runs a conversion operator
-  when the conversion classifier finds one between the types of its value and its target
-  (`HasUserDefinedImplicitConversion`); an argument is taken to bind a candidate that takes every argument without a
-  conversion operator, and a call that the walker cannot check runs one. Among the candidates of a call, one that
-  takes every argument by identity is the one that binds; otherwise a candidate that takes an argument through a
-  conversion operator can be the better one (`Accept(Payload)` over `Accept(object)`, `Consume(ReadOnlySpan[char])`
-  for `"ab"`), so the call runs one. A `ref` or `out` argument takes only a parameter of its exact type, and a call
-  that names its type arguments is not proved by an identity candidate. A concatenation of string literals or an
+  returned value, a by-value argument against the parameter at its position) runs a conversion operator when the
+  conversion classifier finds one between the types of its value and its target (`HasUserDefinedImplicitConversion`).
+  *Call and index arguments: one conservative rule (coordinator decision 2026-11-02, after review rounds 30 to 36).*
+  The walker does not model overload resolution. A call or an index access keeps a `ref` or `out` fact only when, for
+  every candidate of the name with as many parameters as arguments, on every type the receiver can have (with the
+  receiver's type arguments substituted), every by-value argument reaches the parameter at its position without a
+  conversion operator; which candidate the binder selects does not matter. An argument passed by reference, an
+  inline declaration (typed or not) and a function literal convert nothing, and a value does not bind a `ref` or `out`
+  parameter. A parameter that names a type parameter counts, since the walker does not infer type arguments. A callee
+  whose candidates the walker cannot list (a receiver that it does not resolve, an imported base interface with a
+  method of the name, a method that only an extension can supply), a candidate with an optional or variadic parameter
+  that can take another number of arguments, and a call that no candidate takes, all count. This is stricter than
+  main where the binder selects a candidate that converts nothing while another candidate of the name could convert:
+  `Console.WriteLine("ab")` (a `ReadOnlySpan[char]` candidate and `params` overloads), `Math.Max(n, 1)` and
+  `Keep(dt)` for a generic `Keep[T]`. The PR lists those rows. It replaced a model of candidate selection (identity
+  candidates, passing modes, type inference, lookup precedence) whose differences from the binder review found
+  again and again. A concatenation of string literals or an
   interpolated string has the type `string`; a concatenation with another operand has it only when the operators
-  of the region are predefined (`token + "x"` can call a user `+`). Only a bare method type parameter is fixed by
-  its argument; a compound one (`List[T]`) takes an argument without a conversion only when the argument has its
-  generic definition (itself, a base or an interface). The arms of a conditional, `if` or switch expression meet in
+  of the region are predefined (`token + "x"` can call a user `+`). The arms of a conditional, `if` or switch expression meet in
   one type, so each arm is a conversion site against each other arm that is not an operator (`flag ? dt : dto`,
   `flag ? nf : 1.0`); a literal arm is a target of its literal type, and two operator arms meet without an
   operator only when the operators of the region are predefined. The arms of `if let` expressions merge the same
   way. Each arm's path is taken where its names are in scope (`if var x = dt; flag { x } else { dto }`), nested
   arms merge into the outermost expression, and an expression with more than eight arms is one site that can run
-  code. A generic candidate whose type arguments a call without type arguments cannot infer is not applicable, and
-  an index in a constant pattern of a variable (`n is xs[key]`) is an index access. A function-literal argument proves no
-  candidate by identity, and a base call (`base.Touch()`) is a call that the walker does not resolve. A typed
+  code. An index in a constant pattern of a variable (`n is xs[key]`) is an index access, and a base call (`base.Touch()`) is a call that the walker does not resolve. A typed
   binding of `if let`, `guard let` or `while let` (`if let b DateTimeOffset = maybe`) is a conversion site against its
   type, and the initializers of a `while let` see the enclosing names, not its own bindings, as its binder does. A call
   through a type name (`Sink.Use(dt)`) takes only the static candidates, and a call through a value only the instance
@@ -1355,9 +1360,7 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   `ref` or `out` fact. This is a superset of R19, whose getter and indexer rule (R16, R17) keeps the fact for
   `List[T]`, arrays and spans. The difference is listed in the PR with its row; a syntax-level copy of the binder's
   indexable lookup would be a second calculation.
-  The candidates of a call keep their passing modes. A `ref` or `out` argument, including an inline declaration
-  (`Use(out var v, dt)`), takes only a `ref` or `out` parameter, and any other argument only a parameter that is not
-  one; an imported `in` parameter takes a value. The argument at a conversion site keeps the `?` of a nullable value
+  The argument at a conversion site keeps the `?` of a nullable value
   type that is not narrowed (`Use(dt)` with `dt DateTime?` does not take `Use(DateTime)`). Types are compared by their
   effective CLR type (`Nullable<T>`), and the classifier is also asked for the lifted conversion between the value
   types, so no conversion operator is missed. A typed range loop variable converts each element. A predefined
@@ -1366,14 +1369,13 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   A name in a pattern is a value when the region declares it or the entry scope has a variable of that name, since a
   switch case resolves a value before a type (`let One = 1; switch o { case One { } }` calls `Equals`). A constant
   pattern's `Equals` is code that runs in the region for the enclosing `when` filters (W8) too. A `with` update is a
-  member write through a setter (W4), as a member assignment is. An `in` argument takes an `in` parameter, which is
-  listed by value, and a value takes it too; an `in` argument proves no candidate by identity. A typed local keeps the
+  member write through a setter (W4), as a member assignment is. A typed local keeps the
   `?` of a nullable value type (`let local DateTime? = dt`). A narrowed variable has its narrowed type at a conversion
   site only when the region cannot remove the narrowing (no write to it and no writer that the walker cannot see);
   otherwise the declared type with its `?` counts as well. This is stricter than main, whose second pass does not
   check a `ref` fact again after an argument loses its narrowing.
   A call that the walker cannot check runs one (a callee or an argument that does not
-  resolve, a callee without such a candidate, a named or expanded argument, an extension receiver, an argument
+  resolve, a callee whose candidates the walker cannot list, a named argument, an extension receiver, an argument
   without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
   built-in types can return a value of another type, so its converted result runs one (`n = n + Pick(m)` with a
   generic `Pick`), and the operator itself can be an imported one (`Pick(token) == Pick(token)`); an index argument is checked the same way against `int32` (or a `System.Index`) for an array, a
@@ -1382,9 +1384,8 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   since no conversion operator converts between array types), an allocation length and a range bound or `^`
   operand against `int32`; `nil` runs one when its
   target or parameter is a non-nullable value type; the parameter types of a candidate have the receiver's type
-  arguments substituted (`Add(T)` on `Dictionary[Token, DateTimeOffset]`), a type parameter takes an argument without
-  a conversion only when the call infers it (`Keep(dt)`, not `Keep[DateTimeOffset](dt)`), and a type parameter of the
-  receiver that stays open does not; a conversion between
+  arguments substituted (`Add(T)` on `Dictionary[Token, DateTimeOffset]`), and a parameter that names a type
+  parameter counts (`Keep(dt)`); a conversion between
   built-in types is predefined, and a value of another type converted to a generic type, a `??`, a deconstruction or a
   multiple assignment can run one; `^n` and a range value construct a `System.Index` or `System.Range` (a
   constructor, which A3 does not exempt), while a range index slices its target and the read classification decides,
