@@ -379,6 +379,7 @@ public class Base {
 [assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Value:0")]
 [assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554435|class|1|Value:0")]
 [assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554436|class|1|Value:0")]
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554437|class|1|Value:0")]
 namespace LegacyStorage5425;
 public class Box : Base {
     public Box(int Value) : base(Value) { }
@@ -390,6 +391,11 @@ public class Own {
 public class OwnField {
     public readonly int Value;
     public OwnField(int Value = 9) { this.Value = Value; }
+}
+public class OwnDualCtor {
+    public int Value { get; }
+    public OwnDualCtor() : this(0) { }
+    public OwnDualCtor(int Value = 9) { this.Value = Value; }
 }`, "LegacyStorage5425", reference, baseContract)
         VerifyPrimaryShapeIl(baseContract)
         VerifyPrimaryShapeIl(contract, []string{baseContract})
@@ -423,9 +429,13 @@ System.Console.WriteLine(Own{Value: 7}.Value)
 System.Console.WriteLine(OwnField{Value: 8}.Value)
 System.Console.WriteLine(Own().Value)
 System.Console.WriteLine(OwnField().Value)
+System.Console.WriteLine(OwnDualCtor{}.Value)
+System.Console.WriteLine(OwnDualCtor{Value: 7}.Value)
+System.Console.WriteLine(OwnDualCtor().Value)
+System.Console.WriteLine(OwnDualCtor(9).Value)
 `, "LegacyOwnControls", true, "/r:" + baseContract, "/r:" + selected)
         VerifyPrimaryShapeIl(controls, []string{baseContract, contract})
-        Assert.Equal("0\n0\n7\n8\n9\n9\n", fixture.Run(controls))
+        Assert.Equal("0\n0\n7\n8\n9\n9\n0\n7\n9\n9\n", fixture.Run(controls))
     }
 
     @Theory

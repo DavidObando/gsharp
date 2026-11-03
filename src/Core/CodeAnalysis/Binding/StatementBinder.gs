@@ -753,6 +753,8 @@ internal partial class StatementBinder {
                 // so it can strengthen a fact they lifted but never weakens one.
                 ApplyJoinExitNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
+                // ADR-0213 row R7 (f): the facts that the header of a loop proves when the loop ends.
+                ApplyLoopExitNarrowings(statementSyntax, memberNotNullFrame)
                 ShadowAfterStatement(statement)
                 let hasInternallyReachableFallthrough = HasInternallyReachableFallthrough(statement)
                 let canCompleteNormally = CanCompleteNormally(statement)

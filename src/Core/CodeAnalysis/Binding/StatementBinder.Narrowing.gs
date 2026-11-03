@@ -112,35 +112,6 @@ internal partial class StatementBinder {
         RestoreExternalCallableAliases(left)
     }
 
-    private func ComputeLoopEntryExternalCallableAliases(
-        body BoundStatement,
-        backEdgeTail BoundStatement?,
-        breakLabel BoundLabel,
-        continueLabel BoundLabel,
-        entryAliases IReadOnlyCollection[VariableSymbol],
-        backEdgeCondition BoundExpression? = nil
-    ) HashSet[VariableSymbol] {
-        let iteration = ImmutableArray.CreateBuilder[BoundStatement]()
-        if backEdgeCondition != nil {
-            iteration.Add(BoundExpressionStatement(nil, backEdgeCondition))
-        }
-        iteration.Add(body)
-        iteration.Add(BoundLabelStatement(nil, continueLabel))
-        if backEdgeTail != nil {
-            iteration.Add(backEdgeTail)
-        }
-        iteration.Add(BoundLabelStatement(nil, breakLabel))
-        let loop = BoundForInfiniteStatement(
-            nil,
-            BoundBlockStatement(nil, iteration.ToImmutable()),
-            breakLabel,
-            continueLabel
-        )
-        let collector = NewCollector(nil, entryAliases)
-        collector.Visit(loop)
-        return collector.DefinitelyExternalFunctionValues.ToHashSet()
-    }
-
     /// If [`statement`](paramref) is a call expression statement whose
     /// called function carries `[MemberNotNull("_f", …)]`, narrows each
     /// named field (via its (cref:ImplicitFieldVariableSymbol)) to its
@@ -739,257 +710,9 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func CollectInheritedNarrowingInvalidations(
-        mutations AssignedRootsCollector,
-        mayMutateMemberPaths bool,
-        frameCount int32,
-        frames IReadOnlyList[Dictionary[AccessPath, TypeSymbol]]
-    ) List[(FrameIndex int32, Path AccessPath)] {
-        let invalidations = List[(FrameIndex int32, Path AccessPath)]()
-        for var i = Math.Min(frameCount, frames.Count) - 1; i >= 0; i-- {
-            for path in frames[i].Keys {
-                if MayBeMutatedByUnknownWrite(mutations, path) || mutations.MayMutateGlobalRoot(
-                    path.Root,
-                    frames[i][path]
-                ) ||
-                    mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    DropsOnMemberMutation(path, mutations) {
-                    invalidations.Add((i, path))
-                }
-            }
-        }
-        return invalidations
-    }
-
     private func InvalidateInheritedNarrowings(invalidations IReadOnlyList[(FrameIndex int32, Path AccessPath)]) {
         for (frameIndex, path) in invalidations {
             binderCtx.NarrowedVariables[frameIndex].Remove(path)
-        }
-    }
-
-    private func CollectLoopBackEdgeMutations(
-        body BoundStatement,
-        breakLabel BoundLabel,
-        continueLabel BoundLabel,
-        backEdgeTail BoundStatement?,
-        backEdgeCondition BoundExpression?
-    ) LoopBackEdgeMutationCollector {
-        let markerLabel = BoundLabel("loopBackEdge")
-        let marker = BoundExpressionStatement(nil, BoundLiteralExpression(nil, true))
-        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        statements.Add(body)
-        statements.Add(BoundLabelStatement(nil, continueLabel))
-        if backEdgeTail != nil {
-            statements.Add(backEdgeTail)
-        }
-        if backEdgeCondition != nil {
-            statements.Add(BoundConditionalGotoStatement(nil, markerLabel, backEdgeCondition, jumpIfTrue: true))
-            statements.Add(BoundGotoStatement(nil, breakLabel))
-            statements.Add(BoundLabelStatement(nil, markerLabel))
-        }
-        statements.Add(marker)
-        statements.Add(BoundLabelStatement(nil, breakLabel))
-        let graph = ControlFlowGraph.Create(Lowerer.Lower(BoundBlockStatement(nil, statements.ToImmutable())))
-        let markerBlock ControlFlowGraph.BasicBlock? = graph.Blocks.FirstOrDefault(
-            (block ControlFlowGraph.BasicBlock) -> block.Statements.Any(
-                (statement BoundStatement) -> object.ReferenceEquals(statement, marker)
-            )
-        )
-        let collector = LoopBackEdgeMutationCollector(
-            AssignmentPreservesNarrowing,
-            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
-        )
-        // #5629: a switch, `try` or `fixed` statement is one statement of the graph, so a `continue` inside it adds no
-        // edge. The statements of its block up to it reach the back edge through that jump (not those after it, which
-        // the jump skips), and so do the blocks before it; the jump also runs the tail and the condition, which have no
-        // reachable block when it is the only one.
-        let seeds = List[ControlFlowGraph.BasicBlock]()
-        if markerBlock != nil {
-            seeds.Add(markerBlock)
-        }
-        let hiddenSeeds = List[(Block ControlFlowGraph.BasicBlock, Index int32)]()
-        let continueTargets = HashSet[BoundLabel]()
-        continueTargets.Add(continueLabel)
-        var hiddenContinue = false
-        // A `continue` reaches only the condition of `do { } while false`, which ends the loop.
-        let conditionIsFalse = backEdgeCondition is BoundLiteralExpression literalCondition &&
-            literalCondition.Value is bool conditionValue &&
-            !conditionValue
-        for block in(
-            if conditionIsFalse {
-                List[ControlFlowGraph.BasicBlock]()
-            } else {
-                graph.Blocks
-            }
-        ) {
-            // The last such statement of a block decides how far the block runs before a hidden jump.
-            var hiddenIndex = -1
-            for var index = 0; index < block.Statements.Count; index++ {
-                let statement = block.Statements[index]
-                if statement is BoundPatternSwitchStatement or BoundTryStatement or BoundFixedStatement {
-                    let finder = JumpToLabelsFinder(continueTargets)
-                    finder.VisitStatement(statement)
-                    if finder.Found {
-                        hiddenIndex = index
-                    }
-                }
-            }
-            if hiddenIndex >= 0 {
-                hiddenSeeds.Add((block, hiddenIndex))
-                hiddenContinue = true
-            }
-        }
-        if seeds.Count == 0 && hiddenSeeds.Count == 0 {
-            return collector
-        }
-        let reachesBackEdge = HashSet[ControlFlowGraph.BasicBlock]()
-        let pending = Stack[ControlFlowGraph.BasicBlock]()
-        for seed in seeds {
-            pending.Push(seed)
-        }
-        for hidden in hiddenSeeds {
-            for incoming in hidden.Block.Incoming {
-                pending.Push(incoming.From)
-            }
-        }
-        while pending.Count > 0 {
-            let block = pending.Pop()
-            if !reachesBackEdge.Add(block) {
-                continue
-            }
-            for incoming in block.Incoming {
-                pending.Push(incoming.From)
-            }
-        }
-        for block in reachesBackEdge {
-            for statement in block.Statements {
-                collector.Visit(statement)
-            }
-        }
-        for hidden in hiddenSeeds {
-            if reachesBackEdge.Contains(hidden.Block) {
-                continue
-            }
-            for var index = 0; index < hidden.Index; index++ {
-                collector.Visit(hidden.Block.Statements[index])
-            }
-            VisitPathsToHiddenJump(collector, hidden.Block.Statements[hidden.Index], continueTargets)
-        }
-        if hiddenContinue && markerBlock == nil {
-            collector.Visit(backEdgeTail)
-            if backEdgeCondition != nil {
-                collector.Visit(BoundExpressionStatement(nil, backEdgeCondition))
-            }
-        }
-        return collector
-    }
-
-    // The parts of a statement with a hidden jump that run on the paths to the jump (#5629). Of a `switch`: the
-    // discriminant, every header, and the bodies of the arms that reach the jump directly or by falling through into
-    // such an arm. The body of an arm that only leaves the loop adds nothing to the back edge.
-    private func VisitPathsToHiddenJump(
-        collector AssignedRootsCollector,
-        statement BoundStatement,
-        targets HashSet[BoundLabel]
-    ) {
-        if !(statement is BoundPatternSwitchStatement switchStatement) {
-            collector.Visit(statement)
-            return
-        }
-        let labels = HashSet[BoundLabel](targets)
-        let reaches = HashSet[BoundPatternSwitchArm]()
-        var changed = true
-        while changed {
-            changed = false
-            for arm in switchStatement.Arms {
-                if reaches.Contains(arm) {
-                    continue
-                }
-                let finder = JumpToLabelsFinder(labels)
-                finder.VisitArm(arm)
-                if finder.Found {
-                    reaches.Add(arm)
-                    changed = true
-                    // A fallthrough into this arm jumps to the label its body starts with.
-                    if arm.Body is BoundBlockStatement entryBlock &&
-                        entryBlock
-                        .Statements
-                        .Length > 0 &&
-                        entryBlock.Statements[0] is BoundLabelStatement entry {
-                        labels.Add(entry.Label)
-                    }
-                }
-            }
-        }
-        let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](switchStatement.Arms.Length)
-        for arm in switchStatement.Arms {
-            arms.Add(
-                if reaches.Contains(arm) {
-                    arm
-                } else {
-                    BoundPatternSwitchArm(
-                        arm.Syntax,
-                        arm.Pattern,
-                        arm.Guard,
-                        BoundBlockStatement(arm.Body.Syntax, ImmutableArray[BoundStatement].Empty)
-                    )
-                }
-            )
-        }
-        collector.Visit(
-            BoundPatternSwitchStatement(
-                switchStatement.Syntax,
-                switchStatement.Discriminant,
-                arms.MoveToImmutable(),
-                switchStatement.IsExhaustive
-            )
-        )
-    }
-
-    // Whether a statement contains a jump to one of a set of labels (#5629).
-    private sealed class JumpToLabelsFinder : BoundTreeWalker {
-        private let labels HashSet[BoundLabel]
-
-        init(labels HashSet[BoundLabel]) {
-            this.labels = labels
-        }
-
-        prop Found bool {
-            get;
-            private set;
-        }
-
-        override func VisitStatement(node BoundStatement?) {
-            if Found {
-                return
-            }
-            if (node is BoundGotoStatement jump && labels.Contains(jump.Label)) ||
-                (node is BoundConditionalGotoStatement conditional && labels.Contains(conditional.Label)) {
-                Found = true
-                return
-            }
-            // An arm whose guard is the literal `false` never runs its body. The discriminant, the patterns and the
-            // guards can hold a block expression with a jump.
-            if node is BoundPatternSwitchStatement switchStatement {
-                VisitExpression(switchStatement.Discriminant)
-                for arm in switchStatement.Arms {
-                    VisitArm(arm)
-                }
-                return
-            }
-            base.VisitStatement(node)
-        }
-
-        func VisitArm(arm BoundPatternSwitchArm) {
-            if arm.Pattern != nil {
-                VisitPattern(arm.Pattern)
-            }
-            VisitExpression(arm.Guard)
-            if !(
-                arm.Guard is BoundLiteralExpression literalGuard && literalGuard.Value is bool guardValue && !guardValue
-            ) {
-                VisitStatement(arm.Body)
-            }
         }
     }
 
@@ -2331,7 +2054,10 @@ internal partial class StatementBinder {
         }
         for path in state
             .Keys
-            .Where((path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root))
+            .Where(
+            (path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root) ||
+                DropsOnMemberMutation(path, collector)
+        )
             .ToArray() {
             state.Remove(path)
         }
@@ -2592,7 +2318,7 @@ internal partial class StatementBinder {
             // with user code may assign a mutable global. A static member access runs the type initializer (#5504).
             if sourcePropertyRunsUserCode ||
                 sourceConstructionRunsUserCode ||
-                StatementBinder.StaticMemberAccessRunsUserCode(node) {
+                StatementBinder.StaticMemberAccessRunsUserCode(node) || node is BoundClrConversionCallExpression {
                 MarkMayMutateGlobalRoots()
             }
             // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
@@ -2622,10 +2348,11 @@ internal partial class StatementBinder {
                 MarkRunsEscapedClosure()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                // ADR-0208 R12 (#5292, amendment A3): a plain function call does not write by-reference storage;
-                // a property or indexer accessor can assign the members the storage names.
+                // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.
+                // A property accessor, an indexer accessor, or a conversion operator can write the storage.
                 MarkMayMutateGlobalRoots(
-                    writesReferenceStorage: function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet
+                    writesReferenceStorage: (function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet) ||
+                        StatementBinder.IsConversionOperator(function)
                 )
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
@@ -2656,6 +2383,9 @@ internal partial class StatementBinder {
                         RecordWritableReference(argument)
                     }
                 }
+            }
+            if node is BoundClrConversionCallExpression conversionCall {
+                AnalyzeCallableArguments(ImmutableArray.Create(conversionCall.Source))
             }
             if node is BoundCallOperationExpression call {
                 RecordCallSiteAliasing(call)
@@ -3313,11 +3043,6 @@ internal partial class StatementBinder {
             }
         }
 
-        // ADR-0208 R11 (#5170): the loop header runs user code before every body run.
-        func MarkIterationRunsUserCode() {
-            MarkMayMutateGlobalRoots()
-        }
-
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
         // (ADR-0208 row R15).
         private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true, runsSourceCode bool = true) {
@@ -3692,13 +3417,6 @@ internal partial class StatementBinder {
         Mutations AssignedRootsCollector,
         NonNullOnNormalExit Dictionary[AccessPath, TypeSymbol]?
     ) : IEquatable[FinallyFlowSummary] { }
-
-    private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
-        init(
-            assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
-            mayShareStorage(VariableSymbol, VariableSymbol) -> bool
-        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage) { }
-    }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
         if internallyReachableFallthroughStatements.Contains(statement) {
@@ -4529,11 +4247,12 @@ internal partial class StatementBinder {
             }
             return BoundBlockStatement(syntax, statements.ToImmutable())
         }
-        if initializer.Type is StructSymbol structType && (structType.IsData || structType.IsInline) {
-            let members = if structType.IsData {
-                TypeMemberModel.GetDataDeconstructionMembers(structType)
+        if TryResolveDeconstructionAggregate(initializer.Type, out var structType) {
+            let aggregate = structType!!
+            let members = if aggregate.IsData {
+                TypeMemberModel.GetDataDeconstructionMembers(aggregate)
             } else {
-                structType.Fields.Cast[Symbol]().ToImmutableArray()
+                aggregate.Fields.Cast[Symbol]().ToImmutableArray()
             }
             if syntax.Identifiers.Count != members.Length {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
@@ -4543,8 +4262,9 @@ internal partial class StatementBinder {
                 )
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
+            let receiverType = initializer.Type
             let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-            let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, structType)
+            let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
             $scope.TryDeclareVariable(tempVar)
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
@@ -4554,8 +4274,14 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let elemVar = bindLocalVariable(idTok, isReadOnly, GetDeconstructionMemberType(member))
-                let access = BindDeconstructionMemberAccess(BoundVariableExpression(nil, tempVar), structType, member)
+                let memberType = GetDeconstructionMemberType(receiverType, member, $scope.References)
+                let elemVar = bindLocalVariable(idTok, isReadOnly, memberType)
+                let access = BindDeconstructionMemberAccess(
+                    BoundVariableExpression(nil, tempVar),
+                    aggregate,
+                    member,
+                    memberType
+                )
                 statements.Add(BoundVariableDeclaration(syntax, elemVar, access))
             }
             return BoundBlockStatement(syntax, statements.ToImmutable())
@@ -4666,11 +4392,12 @@ internal partial class StatementBinder {
             }
             return statements.ToImmutable()
         }
-        if elementType is StructSymbol structType && (structType.IsData || structType.IsInline) {
-            let members = if structType.IsData {
-                TypeMemberModel.GetDataDeconstructionMembers(structType)
+        if TryResolveDeconstructionAggregate(elementType, out var structType) {
+            let aggregate = structType!!
+            let members = if aggregate.IsData {
+                TypeMemberModel.GetDataDeconstructionMembers(aggregate)
             } else {
-                structType.Fields.Cast[Symbol]().ToImmutableArray()
+                aggregate.Fields.Cast[Symbol]().ToImmutableArray()
             }
             if identifiers.Count != members.Length {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
@@ -4687,8 +4414,9 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let elemVar = bindLocalVariable(identifiers[i], true, GetDeconstructionMemberType(member))
-                let access = BindDeconstructionMemberAccess(elementAccessBase, structType, member)
+                let memberType = GetDeconstructionMemberType(elementType, member, $scope.References)
+                let elemVar = bindLocalVariable(identifiers[i], true, memberType)
+                let access = BindDeconstructionMemberAccess(elementAccessBase, aggregate, member, memberType)
                 // LanguageServer fix: see the matching comment in the tuple
                 // branch above.
                 statements.Add(BoundVariableDeclaration(identifiers[i], elemVar, access))
@@ -4928,12 +4656,14 @@ internal partial class StatementBinder {
         // StructSymbol, so `let { X = x } = obliviousCall()` reported GS0164
         // where `DPt` compiled.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
-        if !(initializer.Type is StructSymbol structType) || (!structType.IsData && !structType.IsInline) {
+        if !TryResolveDeconstructionAggregate(initializer.Type, out var structType) {
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type)
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
+        let aggregate = structType!!
+        let receiverType = initializer.Type
         let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, structType)
+        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
         $scope.TryDeclareVariable(tempVar)
         let seen = HashSet[string]()
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -4945,7 +4675,7 @@ internal partial class StatementBinder {
                 continue
             }
             if !TypeMemberModel.TryGetFieldIncludingInherited(
-                structType,
+                aggregate,
                 fieldName,
                 MemberQuery.Instance(MemberKinds.Field),
                 out var field,
@@ -4957,11 +4687,39 @@ internal partial class StatementBinder {
             if IsDiscard(fieldSyntax.LocalIdentifier) {
                 continue
             }
-            let variable = bindLocalVariable(fieldSyntax.LocalIdentifier, true, field.Type)
-            let access = BoundFieldAccessExpression(nil, BoundVariableExpression(nil, tempVar), declaringType, field)
+            let fieldType = GetDeconstructionMemberType(receiverType, field, $scope.References)
+            let variable = bindLocalVariable(fieldSyntax.LocalIdentifier, true, fieldType)
+            let access = BindDeconstructionMemberAccess(
+                BoundVariableExpression(nil, tempVar),
+                declaringType,
+                field,
+                fieldType
+            )
             statements.Add(BoundVariableDeclaration(syntax, variable, access))
         }
         return BoundBlockStatement(syntax, statements.ToImmutable())
+    }
+
+    private func TryResolveDeconstructionAggregate(type TypeSymbol, out structType StructSymbol?) bool {
+        structType = nil
+        if type.ReferenceNullability == ReferenceNullabilityKind.Nullable || NullableLifting.IsAnyValueTypeNullable(
+            type.StripToBareShape() as NullableTypeSymbol
+        ) {
+            return false
+        }
+        structType = switch type {
+            case direct is StructSymbol: direct
+            case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol annotated}: annotated
+            default: default(StructSymbol?)
+        }
+        if structType == nil && type.ClrType is {} clrType && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            clrType,
+            $scope.References,
+            out var importedAggregate
+        ) {
+            structType = importedAggregate
+        }
+        return structType != nil && (structType.IsData || structType.IsInline)
     }
 
     shared {
@@ -5704,15 +5462,27 @@ internal partial class StatementBinder {
         /// of a reference or nullable type) never reaches it. A nullable value input holds its underlying type,
         /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
         internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
-            if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
-                return false
-            }
             let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
-            if value is BoundLiteralExpression{Value: nil} ||
-                (value is BoundDefaultExpression && IsNullDefault(value.Type)) {
+            return ConstantPatternTestRunsUserCode(
+                BoundConstantPattern.ClassifyTest(node.Type, node.Value),
+                node.Type,
+                value is BoundLiteralExpression{Value: nil} ||
+                    (value is BoundDefaultExpression && IsNullDefault(value.Type))
+            )
+        }
+
+        /// The one R19 decision for a constant pattern's test of an input of type [`inputType`](paramref), which the
+        /// bound pattern and the loop walker (ADR-0213) both use. `valueIsNull` is whether the pattern value is null
+        /// for every instantiation.
+        internal func ConstantPatternTestRunsUserCode(
+            test ConstantPatternTestKind,
+            inputType TypeSymbol,
+            valueIsNull bool
+        ) bool {
+            if test != ConstantPatternTestKind.ObjectEquals || valueIsNull {
                 return false
             }
-            if node.Type is not NullableTypeSymbol nullable {
+            if inputType is not NullableTypeSymbol nullable {
                 return true
             }
             let underlying = nullable.UnderlyingType
@@ -5907,6 +5677,9 @@ internal partial class StatementBinder {
             let chain = AliasChain(root)
             return !(chain[chain.Count - 1] is ParameterSymbol)
         }
+
+        internal func IsConversionOperator(function FunctionSymbol) bool -> function.IsSpecialName &&
+            (function.Name == "op_Implicit" || function.Name == "op_Explicit")
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.
@@ -6193,21 +5966,83 @@ internal partial class StatementBinder {
             return names.MoveToImmutable()
         }
 
-        private func GetDeconstructionMemberType(member Symbol) TypeSymbol -> switch member {
-            case field is FieldSymbol: field.Type
-            case property is PropertySymbol: property.Type
+        private func GetDeconstructionMemberType(
+            receiverType TypeSymbol,
+            member Symbol,
+            references ReferenceResolver?
+        ) TypeSymbol -> switch member {
+            case field is FieldSymbol: if field.ImportedMember is FieldInfo importedField {
+                ImportedTypeSymbol.NormalizeSemanticAggregate(
+                    MemberLookup.GetClrFieldTypeSymbol(receiverType, importedField),
+                    importedField.FieldType,
+                    references
+                )
+            } else {
+                field.Type
+            }
+            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+                let projected = MemberLookup.GetClrPropertyTypeSymbol(receiverType, importedProperty)
+                let pointee = if projected is ByRefTypeSymbol byRefProperty {
+                    byRefProperty.PointeeType
+                } else {
+                    projected
+                }
+                let clrPropertyType = if importedProperty.PropertyType.IsByRef {
+                    importedProperty.PropertyType.GetElementType()
+                } else {
+                    importedProperty.PropertyType
+                }
+                ImportedTypeSymbol.NormalizeSemanticAggregate(pointee, clrPropertyType, references)
+            } else {
+                property.Type
+            }
             default: TypeSymbol.Error
         }
 
         private func BindDeconstructionMemberAccess(
             receiver BoundExpression,
             type StructSymbol,
-            member Symbol
+            member Symbol,
+            memberType TypeSymbol? = nil
         ) BoundExpression -> switch member {
-            case field is FieldSymbol: cast[BoundExpression](BoundFieldAccessExpression(nil, receiver, type, field))
-            case property is PropertySymbol: cast[BoundExpression](
-                BoundPropertyAccessExpression(nil, receiver, type, property)
-            )
+            case field is FieldSymbol: if field.ImportedMember is FieldInfo importedField {
+                cast[BoundExpression](
+                    BoundClrPropertyAccessExpression(nil, receiver, importedField, memberType ?? field.Type)
+                )
+            } else {
+                cast[BoundExpression](
+                    BoundFieldAccessExpression(
+                        nil,
+                        receiver,
+                        type,
+                        field,
+                        substitutedType: memberType,
+                        narrowedType: nil
+                    )
+                )
+            }
+            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+                let effectiveType = memberType ?? property.Type
+                let accessType = if property.ReturnRefKind != RefKind.None && effectiveType is not ByRefTypeSymbol {
+                    cast[TypeSymbol](ByRefTypeSymbol.Get(effectiveType))
+                } else {
+                    effectiveType
+                }
+                ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrPropertyAccessExpression(nil, receiver, importedProperty, accessType)
+                )
+            } else {
+                cast[BoundExpression](
+                    BoundPropertyAccessExpression(
+                        nil,
+                        receiver,
+                        type,
+                        property,
+                        substitutedType: memberType,
+                        narrowedType: nil
+                    )
+                )
+            }
             default: cast[BoundExpression](BoundErrorExpression(nil))
         }
     }

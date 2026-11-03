@@ -11,14 +11,13 @@ import System
 import Xunit
 
 /// ADR-0208 section 18: `narrowing.loop-rebinds` counts the loop bodies that the
-/// current design binds twice. It is the first input of the follow-up ADR on
-/// loops (#5196).
+/// design of that time binds twice. ADR-0213 slice L1 binds every loop once, so the counter is
+/// always 0 (it is removed in slice L3).
 open class Adr0208LoopRebindCounterTests {
     @Fact
-    func ALoopWhoseWriteReachesTheBackEdge_BindsItsBodyTwice() {
-        // Probe e4: `s = Get()` reaches the back edge and invalidates the
-        // inherited fact, so the body binds a second time and the read of `s`
-        // is rejected.
+    func ALoopWhoseWriteReachesTheBackEdge_BindsItsBodyOnce() {
+        // Probe e4: `s = Get()` reaches the back edge, so the fact is removed
+        // at the loop entry and the read of `s` is rejected. The body binds once.
         using let measurements = CompilationMeasurements.Start("test")
         let result = Evaluate(`package T
 func Get() string? { return nil }
@@ -35,7 +34,7 @@ func Run(n int32) int32 {
     return total
 }`)
         Assert.NotEmpty(result.Diagnostics)
-        Assert.Equal(1L, measurements.GetCounter("narrowing.loop-rebinds"))
+        Assert.Equal(0L, measurements.GetCounter("narrowing.loop-rebinds"))
     }
 
     @Fact

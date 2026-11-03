@@ -743,7 +743,9 @@ internal partial class ExpressionBinder {
                 symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                     boundArgs,
                     argumentOffset: offset,
-                    nativeConversions: conversions
+                    nativeConversions: conversions,
+                    receiverType: receiverType,
+                    explicitMethodTypeArguments: explicitTypeArgSymbols
                 )
             )
             if resolution.Outcome != ClrOverloadResolution
@@ -2104,7 +2106,7 @@ internal partial class ExpressionBinder {
             // the call identifier names a nested type of the outer class. If so,
             // bind as a constructor invocation — this unifies the call-expression
             // path with the type-clause path that #526 already fixed.
-            if TryBindNestedTypeConstructorCall(classSymbol.ClassType, ce, out var nestedCtorResult) {
+            if TryBindNestedTypeConstructorCall(classSymbol, ce, out var nestedCtorResult) {
                 return nestedCtorResult!!
             }
             // Issue #1833: a value-type-erased type argument (a concrete
@@ -2158,7 +2160,14 @@ internal partial class ExpressionBinder {
             ) {
                 return BoundErrorExpression(ce)
             }
-            if TryReportValueNullableByRefArgument(ce, arguments, classSymbol.ClassType, methodName) {
+            if TryReportValueNullableByRefArgument(
+                ce,
+                arguments,
+                classSymbol.ClassType,
+                methodName,
+                classSymbol.ConstructedReceiver ?? classSymbol.SymbolicReceiver ?? receiver?.Type,
+                typeArgSymbols
+            ) {
                 return BoundErrorExpression(nil)
             }
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
@@ -2554,7 +2563,14 @@ internal partial class ExpressionBinder {
                     methodName,
                     DescribeCallReceiver(receiver!!, effectiveReceiverSyntax, receiverStart)
                 )
-            } else if !TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName) {
+            } else if !TryReportValueNullableByRefArgument(
+                ce,
+                arguments,
+                receiver?.Type?.ClrType,
+                methodName,
+                effectiveReceiverType,
+                typeArgSymbols
+            ) {
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
             }
             return BoundErrorExpression(nil)
@@ -2925,7 +2941,9 @@ internal partial class ExpressionBinder {
                     symbolicArgTypes: preResolutionSymbolicArgs,
                     symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                         arguments,
-                        nativeConversions: conversions
+                        nativeConversions: conversions,
+                        receiverType: effectiveReceiverType,
+                        explicitMethodTypeArguments: typeArgSymbols
                     )
                 )
                 // Issue #3745: a user-declared class argument erases to
@@ -2978,7 +2996,9 @@ internal partial class ExpressionBinder {
                             symbolicArgTypes: preResolutionSymbolicArgs,
                             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                                 arguments,
-                                nativeConversions: conversions
+                                nativeConversions: conversions,
+                                receiverType: effectiveReceiverType,
+                                explicitMethodTypeArguments: typeArgSymbols
                             )
                         )
                         if projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -3344,7 +3364,14 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        if TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName) {
+        if TryReportValueNullableByRefArgument(
+            ce,
+            arguments,
+            receiver?.Type?.ClrType,
+            methodName,
+            effectiveReceiverType,
+            typeArgSymbols
+        ) {
             return BoundErrorExpression(nil)
         }
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
@@ -3366,11 +3393,16 @@ internal partial class ExpressionBinder {
         ce CallExpressionSyntax,
         arguments ImmutableArray[BoundExpression],
         declaringType Type?,
-        methodName string
+        methodName string,
+        receiverType TypeSymbol? = nil,
+        explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) bool {
         if declaringType == nil {
             return false
         }
+        let methods = declaringType.GetMethods(
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
+        )
         for var i = 0; i < arguments.Length; i++ {
             if !(arguments[i] is BoundAddressOfExpression{Operand: {Type: {} storage}}) ||
                 NullableLifting.GetEffectiveClrType(storage) is not{IsValueType: true} storageClr {
@@ -3384,18 +3416,19 @@ internal partial class ExpressionBinder {
             } else {
                 storageClr
             }
-            for method in declaringType.GetMethods(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
-            ) {
+            for method in methods {
                 if !string.Equals(method.Name, methodName, StringComparison.Ordinal) {
                     continue
                 }
                 let parameters = method.GetParameters()
-                if parameters.Length != arguments.Length ||
-                    !parameters[i]
+                let paramIndex = MapSourceArgumentToParameter(parameters, ce, i, offset: 0)
+                if paramIndex < 0 ||
+                    paramIndex >= parameters.Length ||
+                    parameters.Length != arguments.Length ||
+                    !parameters[paramIndex]
                     .ParameterType
                     .IsByRef ||
-                    parameters[i]
+                    parameters[paramIndex]
                     .ParameterType
                     .GetElementType() is not{} element || NullableLifting.IsValueTypeNullableClr(
                     element
@@ -3417,8 +3450,60 @@ internal partial class ExpressionBinder {
                 }
                 Diagnostics.ReportWrongValueNullableByRefArgument(
                     location,
-                    parameters[i].Name ?? "value",
-                    ClrNullability.GetParameterTypeSymbol(parameters[i]),
+                    parameters[paramIndex].Name ?? "value",
+                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]),
+                    storage
+                )
+                return true
+            }
+        }
+        // Issue #5558: report GS0154 when an explicit address has storage that
+        // does not match a same-arity by-reference parameter.
+        for var i = 0; i < arguments.Length; i++ {
+            if ByRefStorageMatching.TryGetStorageType(arguments[i]) is not{} storage {
+                continue
+            }
+            for method in methods {
+                if !string.Equals(method.Name, methodName, StringComparison.Ordinal) {
+                    continue
+                }
+                let parameters = method.GetParameters()
+                let paramIndex = MapSourceArgumentToParameter(parameters, ce, i, offset: 0)
+                if paramIndex < 0 ||
+                    paramIndex >= parameters.Length ||
+                    parameters.Length != arguments.Length ||
+                    !parameters[paramIndex]
+                    .ParameterType
+                    .IsByRef ||
+                    (
+                    parameters[paramIndex]
+                        .ParameterType
+                        .ContainsGenericParameters &&
+                        explicitMethodTypeArguments.IsDefaultOrEmpty
+                ) {
+                    continue
+                }
+                let parameterType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    parameters[paramIndex].ParameterType,
+                    TryResolveSymbolicByRefParameterPointee(
+                        parameters[paramIndex],
+                        receiverType,
+                        explicitMethodTypeArguments: explicitMethodTypeArguments
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                )
+                if ByRefStorageMatching.AreSameStorageType(storage, parameterType, out _, out _, out _) {
+                    continue
+                }
+                let location = if i < ce.Arguments.Count {
+                    ce.Arguments[i].Location
+                } else {
+                    ce.Location
+                }
+                conversions.ReportByRefStorageMismatch(
+                    location,
+                    parameters[paramIndex].Name ?? "value",
+                    parameterType,
                     storage
                 )
                 return true

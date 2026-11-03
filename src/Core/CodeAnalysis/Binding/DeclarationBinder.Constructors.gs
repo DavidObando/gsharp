@@ -260,7 +260,7 @@ internal partial class DeclarationBinder {
             }
         }
         let ctors = visibleConstructors.ToArray()
-        RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments)
+        RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments, importedBaseType)
         let argTypes = [boundArguments.Count]Type?
         var argsAllTyped = true
         for var i = 0; i < boundArguments.Count; i++ {
@@ -297,7 +297,12 @@ internal partial class DeclarationBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(boundArguments)
+                delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(boundArguments),
+                symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    receiverType: importedBaseType
+                )
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -517,6 +522,41 @@ internal partial class DeclarationBinder {
                 }
                 // A by-ref argument is forwarded as-is (it is already a managed
                 // pointer, e.g. the result of `&x`); no value conversion applies.
+                if ByRefStorageMatching.TryGetStorageType(orderedArgs[i]) is {} baseByRefStorage {
+                    let baseByRefPointee = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                        clrParamType,
+                        TryProjectSymbolicBaseInPointeeType(
+                            openBaseCtorParams,
+                            openBaseDefinition,
+                            baseTypeArguments,
+                            i
+                        ) ??
+                            ConversionClassifier
+                            .GetImplicitInClrPointeeType(
+                            ctorParams[i],
+                            i,
+                            method: nil,
+                            receiverType: nil,
+                            symbolicMethodTypeArgs: default(ImmutableArray[TypeSymbol?])
+                        )
+                    )
+                    if baseByRefPointee != TypeSymbol.Error && !ByRefStorageMatching.AreSameStorageType(
+                        baseByRefStorage,
+                        baseByRefPointee,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        conversions.ReportByRefStorageMismatch(
+                            argLocation(i),
+                            ctorParams[i].Name ?? "value",
+                            baseByRefPointee,
+                            baseByRefStorage
+                        )
+                        convertedArgs.Add(BoundErrorExpression(orderedArgs[i].Syntax))
+                        continue
+                    }
+                }
                 convertedArgs.Add(orderedArgs[i])
                 continue
             }
@@ -624,7 +664,8 @@ internal partial class DeclarationBinder {
 
     private func RebindDeferredArgumentsWithCommonClrTargets(
         constructors[]ConstructorInfo,
-        boundArguments ImmutableArray[BoundExpression].Builder
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        importedBaseType TypeSymbol? = nil
     ) {
         let deferred = List[int32]()
         for var i = 0; i < boundArguments.Count; i++ {
@@ -691,7 +732,12 @@ internal partial class DeclarationBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: delegateCheck
+                delegateArgumentCheck: delegateCheck,
+                symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    receiverType: importedBaseType
+                )
             )
             if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved {
                 compatible.Add((constructor, parameters))

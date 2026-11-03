@@ -131,6 +131,60 @@ func Run() int32 {
         }
     }
 
+    @Fact
+    func Imported_GenericDataClass_NamedDeconstruction_PreservesNullableTypeArgument() {
+        let libraryPath = EmitLibrary("Imported_GenericDataClass_NamedDeconstruction_PreservesNullableTypeArgument")
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        resolver.CurrentAssemblyName = "Geometry.GenericDataConsumer"
+        let consumer = Compilation(resolver, SyntaxTree.Parse(SourceText.From(`package Consumer
+import System
+import Geometry
+
+func Main() {
+    let { Field = f } = Box[Data[string?]]{ Value: Data[string?]{ Field: "ok" } }.Value
+    Console.WriteLine(f!!)
+}`)))
+        using let peStream = MemoryStream()
+        let result = consumer.Emit(
+            peStream,
+            pdbStream: nil,
+            refStream: nil,
+            assemblyName: "Geometry.GenericDataConsumer"
+        )
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+        let output = LoadInvokeCaptureStdout(peStream, libraryPath, "Issue2263-GenericDataConsumer")
+        Assert.Equal("ok", output.Trim())
+        let unguarded = Compilation(resolver, SyntaxTree.Parse(SourceText.From(`package Consumer
+import System
+import Geometry
+
+func Main() {
+    let { Field = f } = Box[Data[string?]]().Value
+    let { Field = df } = MakeNullableData()
+    let (pf, _) = MakeNullablePair()
+    Console.WriteLine(f.Length)
+    Console.WriteLine(df.Length)
+    Console.WriteLine(pf.Length)
+}`)))
+        using let unguardedStream = MemoryStream()
+        let unguardedResult = unguarded.Emit(
+            unguardedStream,
+            pdbStream: nil,
+            refStream: nil,
+            assemblyName: "Geometry.GenericDataUnguarded"
+        )
+        Assert.False(unguardedResult.Success)
+        Assert.Equal(
+            3,
+            unguardedResult.Diagnostics.Count(
+                (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                    "Length",
+                    StringComparison.Ordinal
+                )
+            )
+        )
+    }
+
     shared {
         private const LibrarySource string = `package Geometry
 
@@ -142,7 +196,21 @@ data class Label(Key string, Header string) {
     convenience init(key string) {
         init(key, key)
     }
-}`
+}
+
+data class Data[T] {
+    var Field T
+}
+
+data class Pair[T](First T, Second T)
+
+class Box[T] {
+    var Value T
+}
+
+func MakeNullableData() Data[string?] -> Data[string?]{ Field: "factory" }
+
+func MakeNullablePair() Pair[string?] -> Pair[string?]("left", "right")`
 
         private func EmitLibrary(caseName string) string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue2263", caseName)

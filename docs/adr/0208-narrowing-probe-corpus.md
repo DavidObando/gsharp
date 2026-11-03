@@ -187,3 +187,13 @@ a loop that calls `TryGetValue`; `Binding/MemberLookup.gs:1108-1120` and
 read in loops that call), of which 5 are `GS0532` cascades; 0 errors in
 Core.Tests and gsc. This is the whole measured cost of the conservative
 call rule on the compiler's own source.
+
+## ADR-0213 slice L1: rows that change or join
+
+Slice L1 of [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) changes four rows of this
+corpus and adds the loop probes of its section 24. e2b becomes rejected (`GS0158`, R7 (a)), e3 becomes
+rejected (`GS0158`, R7 (b)), c8 prints `dog` as c8b does (R7 (d)), and the `local` and `function` rows of
+`NonNullAssignmentAfterUse_PreservesInheritedNarrowing` become rejected (R7 (b)). The rows q3, q4, q5a,
+q5b, q5c, q5d, q7, q8, q9, q12, q13 and q14 are corpus rows (`Adr0208NarrowingCorpusTests`): q3 and q14
+were `NullReferenceException` on the compiler before the slice and are `GS0158` now; q12 is accepted and
+q13 reports `GS0536`.
