@@ -268,6 +268,17 @@ class Issue4750SProbe {
     }
 }`)
         Assert.Empty(diagnostics)
+
+        let topLevelInheritedNestedDiagnostics = GetDiagnostics(`package Issue4750BinderTopLevelInheritedNested
+open class Issue4750TopBase[U] {
+    class N(Tag U) { }
+}
+class Issue4750TopOuter[T] {
+    class Derived[V] : Issue4750TopBase[V] { }
+}
+func ConvertToBase(value Issue4750TopOuter[int32].Derived[string].N) Issue4750TopBase[string].N -> value
+func ConvertFromBase(value Issue4750TopBase[string].N) Issue4750TopOuter[int32].Derived[string].N -> value`)
+        Assert.Empty(topLevelInheritedNestedDiagnostics)
     }
 
     shared {

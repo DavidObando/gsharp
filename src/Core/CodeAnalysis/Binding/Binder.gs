@@ -5059,7 +5059,12 @@ partial class Binder {
                 constructedSegments[i] is StructSymbol constructedContainer {
                 var resolvedContainer = constructedContainer
                 if i > 0 {
-                    let precedingEnclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, 0, i)
+                    let precedingEnclosingArgs = CollectConstructedEnclosingArguments(
+                        constructedSegments,
+                        inheritedDeclaringContainers,
+                        0,
+                        i
+                    )
                     if !precedingEnclosingArgs.IsDefaultOrEmpty {
                         let ownArgs = resolvedContainer.TypeArguments
                         resolvedContainer = if ownArgs.IsDefaultOrEmpty {
@@ -5096,7 +5101,12 @@ partial class Binder {
         // construction's arguments and the nested type's own arguments so member
         // lookup substitutes both levels and the emitter encodes
         // `Outer`1+Middle`2<int32, string>`.
-        let enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, 0, segmentTexts.Length - 1)
+        let enclosingArgs = CollectConstructedEnclosingArguments(
+            constructedSegments,
+            inheritedDeclaringContainers,
+            0,
+            segmentTexts.Length - 1
+        )
         if deepest is StructSymbol deepestStruct {
             if !enclosingArgs.IsDefaultOrEmpty {
                 let ownArgs = deepestStruct.TypeArguments
@@ -11607,6 +11617,7 @@ partial class Binder {
         /// @returns The flattened enclosing type-argument vector, or `default`.
         private func CollectConstructedEnclosingArguments(
             constructedSegments[]TypeSymbol,
+            inheritedDeclaringContainers[]StructSymbol?,
             startIndex int32,
             deepestIndex int32
         ) ImmutableArray[TypeSymbol] {
@@ -11614,12 +11625,17 @@ partial class Binder {
             for var i = startIndex; i < deepestIndex; i++ {
                 let seg = constructedSegments[i]
                 if seg is StructSymbol nestedConstruction &&
-                    !nestedConstruction
-                    .EnclosingTypeArguments
-                    .IsDefaultOrEmpty {
-                    builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
-                    builder!!.Clear()
-                    builder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                    (
+                    inheritedDeclaringContainers[i] != nil ||
+                        !nestedConstruction
+                        .EnclosingTypeArguments
+                        .IsDefaultOrEmpty
+                ) {
+                    builder?.Clear()
+                    if !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
+                        builder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                    }
                 }
                 let ownParams = switch seg {
                     case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
@@ -11643,7 +11659,11 @@ partial class Binder {
                 builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                 builder!!.AddRange(ownArgs)
             }
-            return builder?.ToImmutable() ?? default(ImmutableArray[TypeSymbol])
+            return if builder != nil && builder.Count > 0 {
+                builder.ToImmutable()
+            } else {
+                default(ImmutableArray[TypeSymbol])
+            }
         }
 
         /// Issue #4032: reports `GS0152` when a closed generic TYPE clause

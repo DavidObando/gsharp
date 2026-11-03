@@ -966,6 +966,7 @@ internal partial class ExpressionBinder {
             return false
         }
         let definitions = [segments.Count]TypeSymbol
+        let inheritedDeclaringContainers = [segments.Count]StructSymbol?
         definitions[0] = headDef!!
         for var i = 1; i < segments.Count; i++ {
             let containerDef = (definitions[i - 1] as StructSymbol)?.Definition ?? definitions[i - 1]
@@ -985,7 +986,7 @@ internal partial class ExpressionBinder {
                 out var inheritedNested,
                 out var declaringContainer
             ) {
-                definitions[i - 1] = declaringContainer!!
+                inheritedDeclaringContainers[i - 1] = declaringContainer
                 definitions[i] = inheritedNested!!
             } else {
                 return false
@@ -1011,22 +1012,71 @@ internal partial class ExpressionBinder {
                 case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
                 default: ImmutableArray[TypeParameterSymbol].Empty
             }
-            if ownParams.IsDefaultOrEmpty {
+            var constructionArgs = default(ImmutableArray[TypeSymbol])
+            if !ownParams.IsDefaultOrEmpty {
+                constructionArgs = if definitions[i] is StructSymbol constructedStruct &&
+                    !constructedStruct
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    constructedStruct.TypeArguments
+                } else {
+                    segments[i].Args
+                }
+                if constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length {
+                    enclosingBuilder = nil
+                    break
+                }
+            }
+            if inheritedDeclaringContainers[i] is {} declaredOwner && definitions[i] is StructSymbol containerStruct {
+                let def = containerStruct.Definition ?? containerStruct
+                let precedingEnclosingArgs = if enclosingBuilder!!.Count > 0 {
+                    enclosingBuilder!!.ToImmutable()
+                } else {
+                    default(ImmutableArray[TypeSymbol])
+                }
+                let resolvedContainer = if !precedingEnclosingArgs.IsDefaultOrEmpty &&
+                    !constructionArgs
+                    .IsDefaultOrEmpty {
+                    StructSymbol.ConstructNestedGeneric(
+                        def,
+                        precedingEnclosingArgs,
+                        constructionArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )!!
+                } else if !precedingEnclosingArgs.IsDefaultOrEmpty {
+                    StructSymbol.ConstructNested(
+                        def,
+                        precedingEnclosingArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )!!
+                } else if !constructionArgs.IsDefaultOrEmpty {
+                    StructSymbol.Construct(def, constructionArgs, $scope.References!!.MapClrTypeToReferences)!!
+                } else {
+                    containerStruct
+                }
+                let projectedOwner = TypeMemberModel.ResolveStaticMemberOwner(resolvedContainer, declaredOwner)
+                enclosingBuilder!!.Clear()
+                if !projectedOwner.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    enclosingBuilder!!.AddRange(projectedOwner.EnclosingTypeArguments)
+                }
+                let projectedOwnParams = (projectedOwner.Definition ?? projectedOwner).DeclaredTypeParameters
+                if !projectedOwnParams.IsDefaultOrEmpty {
+                    if projectedOwner
+                        .TypeArguments
+                        .IsDefaultOrEmpty ||
+                        projectedOwner
+                        .TypeArguments
+                        .Length != projectedOwnParams.Length {
+                        enclosingBuilder = nil
+                        break
+                    }
+                    enclosingBuilder!!.AddRange(projectedOwner.TypeArguments)
+                }
                 continue
             }
-            let constructionArgs = if definitions[i] is StructSymbol constructedStruct &&
-                !constructedStruct
-                .TypeArguments
-                .IsDefaultOrEmpty {
-                constructedStruct.TypeArguments
-            } else {
-                segments[i].Args
+            if !constructionArgs.IsDefaultOrEmpty {
+                enclosingBuilder!!.AddRange(constructionArgs)
             }
-            if constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length {
-                enclosingBuilder = nil
-                break
-            }
-            enclosingBuilder!!.AddRange(constructionArgs)
         }
         let enclosingArgs = if enclosingBuilder != nil && enclosingBuilder.Count > 0 {
             enclosingBuilder.ToImmutable()
