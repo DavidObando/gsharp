@@ -37,6 +37,17 @@ open class Issue5623MissingEntryPointTests {
         Assert.True(entryPoint == nil, "gsc must not leave an executable without an entry point")
     }
 
+    // A severity override changes only the display of GS0634. gsc still writes no executable and fails.
+    @Theory
+    @InlineData("/gsdiag:GS0634=none")
+    @InlineData("/gsdiag:GS0634=warning")
+    func Executable_WithoutEntryPoint_SeverityOverride_StillFails(option string) {
+        let (exit, output, entryPoint) = Compile(Source("Lowercase"), option)
+        Assert.NotEqual(0, exit)
+        Assert.DoesNotContain("error GS0634", output, StringComparison.Ordinal)
+        Assert.True(entryPoint == nil, output)
+    }
+
     // gsc writes no executable when another error stops the output, so GS0634 does not add a second error.
     @Fact
     func Executable_WithAnotherError_ReportsOnlyThatError() {
@@ -106,16 +117,16 @@ shared class Program {
         }
 
         // Returns the entry-point token of the written assembly, or nil when gsc wrote no assembly.
-        private func Compile(source string, target string)(Exit int32, Output string, EntryPoint int32?) {
+        private func Compile(source string, option string)(Exit int32, Output string, EntryPoint int32?) {
             let directory = Directory.CreateTempSubdirectory("gs5623-")
             try {
                 let sourcePath = Path.Combine(directory.FullName, "lower.gs")
                 File.WriteAllText(sourcePath, source)
                 let assembly = Path.Combine(directory.FullName, "out", "NoEntry.dll")
-                let arguments = if target.Length == 0 {
+                let arguments = if option.Length == 0 {
                     []string{"/out:$assembly", sourcePath}
                 } else {
-                    []string{"/out:$assembly", target, sourcePath}
+                    []string{"/out:$assembly", option, sourcePath}
                 }
                 let (exit, stdout, stderr) = ByteStringLanguageTests.RunDriver("Compiler", "gsc.dll", arguments)
                 if !File.Exists(assembly) {

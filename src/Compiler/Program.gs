@@ -760,19 +760,23 @@ open class Program {
             var effectiveDiagnostics = ApplySuppressPromote(mergedDiagnostics, args)
             // Issue #5623: only the driver knows that the output is an executable. GS0634 is checked only when no
             // other error stops the output, because only then does gsc write an executable without an entry point.
+            // A severity override changes only the display: the executable is never kept, as for other errors.
+            var missingEntryPoint = false
             if args.Target == OutputTarget.Exe && result.Success && !effectiveDiagnostics.Any(
                 (d Diagnostic) -> d.IsError
             ) {
-                effectiveDiagnostics = effectiveDiagnostics.Concat(
-                    ApplySuppressPromote(compilation.GetMissingEntryPointDiagnostics(), args)
-                )
+                let entryPointDiagnostics = compilation.GetMissingEntryPointDiagnostics()
+                missingEntryPoint = !entryPointDiagnostics.IsEmpty
+                effectiveDiagnostics = effectiveDiagnostics.Concat(ApplySuppressPromote(entryPointDiagnostics, args))
                     .ToList()
             }
             // Always print diagnostics (errors and warnings).
             if effectiveDiagnostics.Any() {
                 DiagnosticWriter.WriteDiagnostics(Console.Out, effectiveDiagnostics)
             }
-            let hasErrors = !result.Success || effectiveDiagnostics.Any((d Diagnostic) -> d.IsError)
+            let hasErrors = !result.Success || missingEntryPoint || effectiveDiagnostics.Any(
+                (d Diagnostic) -> d.IsError
+            )
             if hasErrors {
                 TryDelete(outputPath)
                 if !string.IsNullOrEmpty(refOutputPath) {

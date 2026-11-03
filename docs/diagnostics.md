@@ -698,7 +698,7 @@ These complement the existing top-level statement diagnostics in the main table 
 
 ## Entry-point diagnostics (GS0634)
 
-`gsc` reports this error only when it writes an executable with `/out:` and no other error stops the output. The language server does not know the project output type, so it does not report it. See issue #5623.
+`gsc` reports this error only when it writes an executable with `/out:` and no other error stops the output. A `/gsdiag` severity override changes only the display; gsc still writes no executable. The language server does not know the project output type, so it does not report it. See issue #5623.
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |

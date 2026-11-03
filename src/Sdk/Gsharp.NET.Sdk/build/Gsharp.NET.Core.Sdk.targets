@@ -243,6 +243,9 @@
       <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(WarningsNotAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(OutputType)" />
+      <!-- Issue #5623: these switches add or remove the generated test entry point. -->
+      <_GsharpCoreCompileInputsToHash Include="GenerateProgramFile=$(GenerateProgramFile)" />
+      <_GsharpCoreCompileInputsToHash Include="IsTestProject=$(IsTestProject)" />
       <_GsharpCoreCompileInputsToHash Include="$(TargetFramework)" />
       <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
       <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
