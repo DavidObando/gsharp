@@ -30,7 +30,10 @@ open class Issue2842CrossProjectObliviousLocalPromotionTranslationTests {
         TranslationTestValidation.AssertBinds(printed, printedData)
         let compact = Compact(printed)
         Assert.Contains("let reason = conversion.FailureReason!!", compact)
-        Assert.Contains("return reason!!", compact)
+        // Issue #5602: the declaration asserts the value, so `reason` is non-null and its return
+        // needs no second `!!` (GS0536).
+        Assert.Contains("return reason }", compact)
+        Assert.DoesNotContain("return reason!!", compact)
     }
 
     @Fact
