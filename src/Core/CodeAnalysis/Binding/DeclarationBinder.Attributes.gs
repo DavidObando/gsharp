@@ -1769,6 +1769,9 @@ internal partial class DeclarationBinder {
         /// type or a multi-dimensional (cref:RectangularArrayTypeSymbol)
         /// (ECMA-335 II.23.3 permits only a 1-D array as an attribute argument).
         private func GetOneDimensionalArrayElementType(type TypeSymbol?) TypeSymbol? -> switch type {
+            case nullable is NullableTypeSymbol when !NullableLifting.IsAnyValueTypeNullable(nullable):
+            GetOneDimensionalArrayElementType(nullable.UnderlyingType)
+            case platform is PlatformTypeSymbol: GetOneDimensionalArrayElementType(platform.UnderlyingType)
             case slice is SliceTypeSymbol: slice.ElementType
             case array is ArrayTypeSymbol: array.ElementType
             default: default(TypeSymbol?)

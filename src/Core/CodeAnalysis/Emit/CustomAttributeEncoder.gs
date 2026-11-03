@@ -86,6 +86,9 @@ internal class CustomAttributeEncoder {
     private enum AttributeArgumentConversionKind {
         NotApplicable,
         Exact,
+        UntypedNullToReferenceArray,
+        UntypedNullToObjectArray,
+        UntypedNullToOtherReference,
         CovariantArray,
         ObjectFallback
     }
@@ -942,20 +945,17 @@ internal class CustomAttributeEncoder {
     private func WriteCustomAttributeFixedArg(bb BlobBuilder, paramType Type, value object?) {
         var value = value
         if value is BoundAttributeArgument argument {
+            let unwrappedArgumentType = UnwrapAttributeReferenceNullability(argument.Type) ?? argument.Type
             if paramType.IsSameAs(typeof(object)) &&
-                (argument.Type is EnumSymbol || argument.Type.ClrType?.IsEnum == true) &&
-                TryGetAttributeParameterWriteType(argument.Type, out var enumType) {
+                (unwrappedArgumentType is EnumSymbol || unwrappedArgumentType.ClrType?.IsEnum == true) &&
+                TryGetAttributeParameterWriteType(unwrappedArgumentType, out var enumType) {
                 // A boxed enum's tag names the enum, not its integer payload.
                 bb.WriteByte(0x55)
-                bb.WriteSerializedString(this.GetSerializedTypeName(argument.Type))
+                bb.WriteSerializedString(this.GetSerializedTypeName(unwrappedArgumentType))
                 this.WriteCustomAttributeFixedArg(bb, enumType!!, argument.Value)
                 return
             }
-            let arrayElement TypeSymbol? = switch argument.Type {
-                case slice is SliceTypeSymbol: slice.ElementType
-                case array is ArrayTypeSymbol: array.ElementType
-                default: default(TypeSymbol?)
-            }
+            let arrayElement TypeSymbol? = GetOneDimensionalArrayElementType(argument.Type)
             if paramType.IsSameAs(typeof(object)) &&
                 (arrayElement is EnumSymbol || arrayElement?.ClrType?.IsEnum == true) &&
                 TryGetAttributeParameterWriteType(arrayElement, out var elementWriteType) {
@@ -977,6 +977,16 @@ internal class CustomAttributeEncoder {
                 // because it contains a same-compilation TypeSymbol).
                 WriteCustomAttributeFieldOrPropertyType(bb, arrayWriteType!!)
                 this.WriteCustomAttributeFixedArg(bb, arrayWriteType!!, argument.Value)
+                return
+            }
+            if paramType.IsSameAs(typeof(object)) &&
+                argument.Value == nil &&
+                unwrappedArgumentType.ClrType is {} scalarNullClr &&
+                NormalizeWellKnownType(scalarNullClr) is {} normalizedScalarNull &&
+                normalizedScalarNull
+                .IsSameAs(typeof(Type)) {
+                WriteCustomAttributeFieldOrPropertyType(bb, typeof(Type))
+                this.WriteCustomAttributeFixedArg(bb, typeof(Type), nil)
                 return
             }
             value = argument.Value
@@ -2208,18 +2218,22 @@ internal class CustomAttributeEncoder {
             paramType = NormalizeWellKnownType(paramType)!!
             let unwrappedSupplied = UnwrapAttributeReferenceNullability(suppliedType)
             let unwrappedDeclared = UnwrapAttributeReferenceNullability(declaredParamType)
+            let suppliedIsObject = unwrappedSupplied != nil &&
+                unwrappedSupplied != TypeSymbol.Null &&
+                unwrappedSupplied
+                .ClrType
+                ?.FullName == "System.Object"
             // Everything is assignable to System.Object. Compared by name so the
             // check holds for attribute types resolved through a MetadataLoadContext.
             if paramType.FullName == "System.Object" {
-                return if unwrappedSupplied != nil &&
-                    unwrappedSupplied != TypeSymbol.Null &&
-                    unwrappedSupplied
-                    .ClrType
-                    ?.FullName == "System.Object" {
+                return if suppliedIsObject {
                     AttributeArgumentConversionKind.Exact
                 } else {
                     AttributeArgumentConversionKind.ObjectFallback
                 }
+            }
+            if suppliedIsObject {
+                return AttributeArgumentConversionKind.NotApplicable
             }
             if supplied == nil {
                 if paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == nil {
@@ -2228,11 +2242,7 @@ internal class CustomAttributeEncoder {
                 if unwrappedSupplied != nil && unwrappedSupplied != TypeSymbol.Null {
                     return ClassifyTypedNullAttributeArgumentConversion(paramType, unwrappedSupplied, unwrappedDeclared)
                 }
-                return if IsObjectArrayType(paramType) {
-                    AttributeArgumentConversionKind.CovariantArray
-                } else {
-                    AttributeArgumentConversionKind.Exact
-                }
+                return ClassifyUntypedNullAttributeArgumentConversion(paramType, unwrappedDeclared)
             }
             if unwrappedDeclared is EnumSymbol declaredEnum {
                 return if unwrappedSupplied is EnumSymbol suppliedEnum && suppliedEnum == declaredEnum {
@@ -2302,7 +2312,7 @@ internal class CustomAttributeEncoder {
                     return AttributeArgumentConversionKind.NotApplicable
                 }
                 if paramType.IsInstanceOfType(supplied) {
-                    return if supplied.GetType() == typeof([]object) {
+                    return if supplied.GetType().IsSameAs(typeof([]object)) {
                         AttributeArgumentConversionKind.Exact
                     } else {
                         AttributeArgumentConversionKind.CovariantArray
@@ -2422,6 +2432,25 @@ internal class CustomAttributeEncoder {
             }
         }
 
+        private func ClassifyUntypedNullAttributeArgumentConversion(
+            paramType Type,
+            unwrappedDeclared TypeSymbol?
+        ) AttributeArgumentConversionKind {
+            if IsObjectArrayType(paramType) {
+                return AttributeArgumentConversionKind.UntypedNullToObjectArray
+            }
+            if GetOneDimensionalArrayElementType(unwrappedDeclared) is EnumSymbol {
+                return AttributeArgumentConversionKind.UntypedNullToOtherReference
+            }
+            if paramType.IsArray && paramType.GetArrayRank() == 1 && paramType.GetElementType() is {} elementType {
+                let normalizedElement = NormalizeWellKnownType(elementType)!!
+                if !normalizedElement.IsValueType && !normalizedElement.IsEnumSafe() {
+                    return AttributeArgumentConversionKind.UntypedNullToReferenceArray
+                }
+            }
+            return AttributeArgumentConversionKind.UntypedNullToOtherReference
+        }
+
         private func IsBetterAttributeConstructorCandidate(
             conversionsA[]AttributeArgumentConversionKind,
             formA AttributeConstructorArgumentForm,
@@ -2430,7 +2459,7 @@ internal class CustomAttributeEncoder {
         ) bool {
             var hasStrictlyBetterConversion = false
             for var i = 0; i < conversionsA.Length; i++ {
-                let cmp = (int32(conversionsA[i])).CompareTo(int32(conversionsB[i]))
+                let cmp = CompareAttributeArgumentConversions(conversionsA[i], conversionsB[i])
                 if cmp > 0 {
                     return false
                 }
@@ -2442,6 +2471,42 @@ internal class CustomAttributeEncoder {
                 return true
             }
             return int32(formA) < int32(formB)
+        }
+
+        private func CompareAttributeArgumentConversions(
+            ka AttributeArgumentConversionKind,
+            kb AttributeArgumentConversionKind
+        ) int32 {
+            if ka == kb {
+                return 0
+            }
+            if ka == AttributeArgumentConversionKind.ObjectFallback {
+                return 1
+            }
+            if kb == AttributeArgumentConversionKind.ObjectFallback {
+                return -1
+            }
+            if ka == AttributeArgumentConversionKind.UntypedNullToReferenceArray &&
+                kb == AttributeArgumentConversionKind.UntypedNullToObjectArray {
+                return -1
+            }
+            if kb == AttributeArgumentConversionKind.UntypedNullToReferenceArray &&
+                ka == AttributeArgumentConversionKind.UntypedNullToObjectArray {
+                return 1
+            }
+            if (
+                ka is AttributeArgumentConversionKind.UntypedNullToReferenceArray or
+                    AttributeArgumentConversionKind.UntypedNullToObjectArray or
+                    AttributeArgumentConversionKind.UntypedNullToOtherReference
+            ) ||
+                (
+                kb is AttributeArgumentConversionKind.UntypedNullToReferenceArray or
+                    AttributeArgumentConversionKind.UntypedNullToObjectArray or
+                    AttributeArgumentConversionKind.UntypedNullToOtherReference
+            ) {
+                return 0
+            }
+            return (int32(ka)).CompareTo(int32(kb))
         }
 
         private func IsObjectArrayType(type Type) bool -> type.IsArray && type.GetArrayRank() == 1 &&

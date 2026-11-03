@@ -202,6 +202,10 @@ class TagAttribute : Attribute {
 class Owner {
 }
 
+@Tag(cast[Object]("hello"))
+class ExplicitObjectOwner {
+}
+
 func run() {
     var t Type = typeof(Owner)
     var attrs = t.GetCustomAttributes(true)
@@ -215,6 +219,14 @@ func run() {
             Console.WriteLine(tag.Which)
         }
     }
+    var explicitType Type = typeof(ExplicitObjectOwner)
+    var explicitAttrs = explicitType.GetCustomAttributes(true)
+    for var j int32 = 0; j < explicitAttrs.Length; j += 1 {
+        if explicitAttrs[j].GetType().Name == "TagAttribute" {
+            var explicitTag TagAttribute = (explicitAttrs[j] as TagAttribute)!!
+            Console.WriteLine("Explicit:" + explicitTag.Which)
+        }
+    }
 }
 
 run()
@@ -222,6 +234,7 @@ run()
         let output = CompileAndRun(Source, "Issue4749_OverloadedTypeAndObjectCtors_SelectsMoreSpecificOverload")
         Assert.Contains("Type:Owner", output)
         Assert.Contains("String:hello", output)
+        Assert.Contains("Explicit:Object", output)
     }
 
     @Fact

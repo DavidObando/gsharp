@@ -582,6 +582,18 @@ class ImportedArrayOwner {
 class ImportedCovariantArrayOwner {
 }
 
+@TypeArrayOrObjectArray(nil)
+class ImportedNullArrayOwner {
+}
+
+@StringOrObject(cast[object]("hello"))
+class ImportedExplicitObjectOwner {
+}
+
+@Boxed(cast[[]?Type](nil))
+class ImportedBoxedNullTypeArrayOwner {
+}
+
 Console.WriteLine("ok")
 `
         const LocalSource = `package P
@@ -636,6 +648,25 @@ class EnumMarkerAttribute : Attribute {
     }
 }
 
+class LocalStringOrObjectAttribute : Attribute {
+    init(text string) {
+    }
+
+    init(value object) {
+    }
+}
+
+class LocalTypeArrayOrObjectArrayAttribute : Attribute {
+    init(types []?Type) {
+    }
+
+    init(values []?object) {
+    }
+}
+
+class LocalBoxedAttribute(Value object?) : Attribute {
+}
+
 @LocalMarker(typeof(Owner))
 class Owner {
 }
@@ -658,6 +689,18 @@ class CovariantArrayOwner {
 
 @LocalMarker(cast[[]?Type](nil))
 class NullArrayOwner {
+}
+
+@LocalTypeArrayOrObjectArray(nil)
+class UntypedNullTypeArrayOwner {
+}
+
+@LocalStringOrObject(cast[object]("hello"))
+class ExplicitObjectOwner {
+}
+
+@LocalBoxed(cast[[]?Type](nil))
+class BoxedNullTypeArrayOwner {
 }
 
 @EnumMarker(Status.Retired)
@@ -695,6 +738,18 @@ Console.WriteLine("ok")
                 "System.Object[]",
                 SelectedConstructorParameterType(importedAppPath, libPath, "ImportedCovariantArrayOwner")
             )
+            Assert.Equal(
+                "System.Type[]",
+                SelectedConstructorParameterType(importedAppPath, libPath, "ImportedNullArrayOwner")
+            )
+            Assert.Equal(
+                "System.Object",
+                SelectedConstructorParameterType(importedAppPath, libPath, "ImportedExplicitObjectOwner")
+            )
+            Assert.Equal(
+                ("System.Object", "System.Type[]", true),
+                SelectedConstructorAndArgumentType(importedAppPath, libPath, "ImportedBoxedNullTypeArrayOwner")
+            )
 
             let localAppPath = Path.Combine(tempDir, "Local.dll")
             let localLog = Compile(
@@ -718,8 +773,53 @@ Console.WriteLine("ok")
                 SelectedConstructorParameterType(localAppPath, libPath, "CovariantArrayOwner")
             )
             Assert.Equal("System.Type[]", SelectedConstructorParameterType(localAppPath, libPath, "NullArrayOwner"))
+            Assert.Equal(
+                "System.Type[]",
+                SelectedConstructorParameterType(localAppPath, libPath, "UntypedNullTypeArrayOwner")
+            )
+            Assert.Equal(
+                "System.Object",
+                SelectedConstructorParameterType(localAppPath, libPath, "ExplicitObjectOwner")
+            )
+            Assert.Equal(
+                ("System.Object", "System.Type[]", true),
+                SelectedConstructorAndArgumentType(localAppPath, libPath, "BoxedNullTypeArrayOwner")
+            )
             Assert.Equal("P.Status", SelectedConstructorParameterType(localAppPath, libPath, "EnumOwner"))
             Assert.Equal("System.Int32", SelectedConstructorParameterType(localAppPath, libPath, "IntOwner"))
+
+            for (name, annotation) in[](string, string){
+                ("ImportedStringOrObjectArray", "@StringOrObjectArray(nil)"),
+                ("ImportedIntArrayOrObjectArray", "@IntArrayOrObjectArray(nil)"),
+                ("LocalStringOrObjectArray", "@LocalStringOrObjectArray(nil)"),
+                ("LocalIntArrayOrObjectArray", "@LocalIntArrayOrObjectArray(nil)")
+            } {
+                let ambPath = Path.Combine(tempDir, name + ".dll")
+                let ambSource = `package P
+import System
+import HelperLib4097
+
+class LocalStringOrObjectArrayAttribute : Attribute {
+    init(text string?) {
+    }
+
+    init(values []?object) {
+    }
+}
+
+class LocalIntArrayOrObjectArrayAttribute : Attribute {
+    init(numbers []?int32) {
+    }
+
+    init(values []?object) {
+    }
+}
+
+` + annotation + "\nclass " + name + " {\n}\nConsole.WriteLine(\"ok\")\n"
+                let ambLog = Compile(tempDir, name + ".gs", ambSource, ambPath, "/target:exe", "/reference:" + libPath)
+                Assert.Contains("GS9998", ErrorIds(ambLog))
+                Assert.Contains("Ambiguous constructor for attribute", ambLog)
+            }
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
@@ -860,6 +960,44 @@ public class OverloadedMarkerAttribute : Attribute
     public Type[] Types { get; }
 
     public Type Type { get; }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class TypeArrayOrObjectArrayAttribute : Attribute
+{
+    public TypeArrayOrObjectArrayAttribute(object[]? values) { }
+
+    public TypeArrayOrObjectArrayAttribute(Type[]? types) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class StringOrObjectAttribute : Attribute
+{
+    public StringOrObjectAttribute(string text) { }
+
+    public StringOrObjectAttribute(object value) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class StringOrObjectArrayAttribute : Attribute
+{
+    public StringOrObjectArrayAttribute(string? text) { }
+
+    public StringOrObjectArrayAttribute(object[]? values) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class IntArrayOrObjectArrayAttribute : Attribute
+{
+    public IntArrayOrObjectArrayAttribute(int[]? numbers) { }
+
+    public IntArrayOrObjectArrayAttribute(object[]? values) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class BoxedAttribute : Attribute
+{
+    public BoxedAttribute(object? value) { }
 }`)
 
         private const Preamble string = `package P
@@ -1002,6 +1140,33 @@ class NoteAttribute(Text string) : Attribute {
             )
             let parameter = Assert.Single(attribute.Constructor.GetParameters())
             return parameter.ParameterType.FullName ?? parameter.ParameterType.Name
+        }
+
+        private func SelectedConstructorAndArgumentType(assemblyPath string, libPath string, typeName string)(
+            string,
+            string,
+            bool
+        ) {
+            let paths = List[string](TrustedPlatformAssemblies()){assemblyPath, libPath}
+            using let context = MetadataLoadContext(PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)))
+            let assembly = context.LoadFromAssemblyPath(assemblyPath)
+            let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
+            let attribute = target.GetCustomAttributesData().Single(
+                (candidate CustomAttributeData) -> candidate
+                    .AttributeType
+                    .Namespace == "P" ||
+                    candidate
+                    .AttributeType
+                    .Namespace
+                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+            )
+            let parameter = Assert.Single(attribute.Constructor.GetParameters())
+            let argument = Assert.Single(attribute.ConstructorArguments)
+            return (
+                parameter.ParameterType.FullName ?? parameter.ParameterType.Name,
+                argument.ArgumentType.FullName ?? argument.ArgumentType.Name,
+                argument.Value == nil
+            )
         }
 
         private func ErrorIds(log string)[]string -> Regex
