@@ -148,8 +148,9 @@ namespace Demo
     }
 
     /// Control: the result of a lambda whose type G# infers from its body (`var read = () => …`), in block and
-    /// expression form, takes the null as C# does. A block lambda whose delegate type fixes a non-null result
-    /// keeps the `!!`. The expression form at a fixed delegate binds without it (#5686).
+    /// expression form and through a conditional arm, takes the null as C# does. A block lambda and an arm of an
+    /// expression lambda whose delegate type fixes a non-null result keep the `!!`. A bare expression body at a
+    /// fixed delegate binds without it (#5686).
     @Fact
     func AnInferredLambdaResult_TakesTheNullUnasserted() {
         let printed = Translate(`
@@ -167,13 +168,17 @@ namespace Demo
         static bool Expression() { var read = () => Volatile.Read(ref cache!); return read() == null; }
         static int Fixed() { Func<Dictionary<string, int>> read = () => Volatile.Read(ref full!); return read().Count; }
         static int FixedBlock() { Func<Dictionary<string, int>> read = () => { return Volatile.Read(ref full!); }; return read().Count; }
-        public static string Run() => Block() + " " + Expression() + " " + Fixed() + " " + FixedBlock();
+        static bool Arm(bool flag) { var read = () => flag ? Volatile.Read(ref cache!) : new Dictionary<string, int>(); return read() == null; }
+        static int FixedArm(bool flag) { Func<Dictionary<string, int>> read = () => flag ? Volatile.Read(ref full!) : new Dictionary<string, int>(); return read().Count; }
+        public static string Run() => Block() + " " + Expression() + " " + Fixed() + " " + FixedBlock() + " " + Arm(true) + " " + FixedArm(true);
     }
 }`)
         Assert.Contains("return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read = () -> Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
-        RunsAs(printed, "True True 1 1")
+        Assert.Contains("let read = () -> if flag { Volatile.Read(&cache) } else", printed)
+        Assert.Contains("() -> if flag { Volatile.Read(&full)!! } else", printed)
+        RunsAs(printed, "True True 1 1 True 1")
     }
 
     /// Control: a tuple element that initializes a `var` local (also named or nested) or a local that a

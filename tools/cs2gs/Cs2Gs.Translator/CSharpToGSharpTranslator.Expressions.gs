@@ -2969,20 +2969,32 @@ partial class CSharpToGSharpTranslator {
         /// other slot from the value: a `var` local, an inferred generic parameter and the result of an inferred
         /// lambda. A value with no slot symbol (an arm of a receiver or of a `var` initializer, a tuple element of
         /// `var` storage, a reassigned `var` local) is left to the bridge of its whole value or to gsc.
-        private func SlotTypeIsDeclared(targetSymbol ISymbol?, inferredSink bool) bool -> switch targetSymbol {
+        private func SlotTypeIsDeclared(
+            targetSymbol ISymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            inferredSink bool
+        ) bool -> switch targetSymbol {
             case IFieldSymbol: true
             case IPropertySymbol: true
             case parameter is IParameterSymbol: !inferredSink
             case local is ILocalSymbol: !IsImplicitlyTypedLocal(local)
-            case method is IMethodSymbol: method.MethodKind != MethodKind.AnonymousFunction ||
-                !(
-                method
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax() is AnonymousFunctionExpressionSyntax lambda &&
-                    this.LambdaTypeIsInferred(lambda)
+            case method is IMethodSymbol: !(
+                this.ResultLambda(method, value) is {} lambda && this.LambdaTypeIsInferred(lambda)
             )
             default: false
+        }
+
+        // The lambda whose result [`value`](paramref) is, when [`method`](paramref) is that result's slot: the
+        // lambda itself for a `return` in its block, or the lambda whose body yields the value for its delegate's
+        // `Invoke` (an expression body, also through a conditional or switch arm).
+        private func ResultLambda(
+            method IMethodSymbol,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) AnonymousFunctionExpressionSyntax? -> if method.MethodKind == MethodKind
+            .AnonymousFunction {
+            method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as AnonymousFunctionExpressionSyntax
+        } else {
+            this.FindResultLambda(value)
         }
 
         private func ComputeNilableOnlyInEmittedGSharp(
@@ -3304,7 +3316,7 @@ partial class CSharpToGSharpTranslator {
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a slot whose
             // non-null type the program text declares.
-            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, inferredSink) &&
+            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, value, inferredSink) &&
                 this.YieldsValueNilableBeyondItsCSharpType(value)
             let inferredExpandedParamsElement = inferredSink &&
                 targetSymbol is IParameterSymbol expandedParam &&
