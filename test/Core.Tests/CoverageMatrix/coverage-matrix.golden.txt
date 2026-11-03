@@ -361,6 +361,7 @@ MapLiteralExpression
 MethodGroupExpression
 NotPattern
 NullConditionalAccessExpression
+PatternOperandExpression
 PatternSwitchArm
 PatternSwitchStatement
 PropertyAccessExpression
