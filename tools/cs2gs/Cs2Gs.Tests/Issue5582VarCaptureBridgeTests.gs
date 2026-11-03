@@ -689,6 +689,43 @@ namespace Demo
         Assert.Contains("case var n: n.Count", printed)
     }
 
+    /// With #5651's by-reference narrowing (#5617): a narrowed `ref` parameter read after an accessor that
+    /// gsc counts as a write of by-reference storage is `T?` in G#, so a capture of it keeps its `!!` in
+    /// every form. Without the accessor gsc keeps the fact, so the capture is non-null and gets no `!!`.
+    @Fact
+    func AVarCaptureOfANarrowedByRefParameter_FollowsItsGSharpNarrowing() {
+        let printed = Translate(`
+#nullable enable
+namespace Demo
+{
+    public class Node { public string Name => "n"; }
+    public sealed class Counter { private int count; public int Next => ++count; }
+    public static class P
+    {
+        static string Take(Node n) => n.Name;
+        static string ArmAfter(ref Node? s, Counter k) { if (s == null) return "0"; var n = k.Next; return s switch { var a => Take(a) }; }
+        static string CaseAfter(ref Node? s, Counter k) { if (s == null) return "0"; var n = k.Next; switch (s) { case var b: return Take(b); } }
+        static string IsAfter(ref Node? s, Counter k) { if (s == null) return "0"; var n = k.Next; return s is var c ? Take(c) : ""; }
+        static string Arm(ref Node? s) { if (s == null) return "0"; return s switch { var d => Take(d) }; }
+        static string Case(ref Node? s) { if (s == null) return "0"; switch (s) { case var e: return Take(e); } }
+        static string Is(ref Node? s) { if (s == null) return "0"; return s is var f ? Take(f) : ""; }
+        public static string Run()
+        {
+            Node? x = new Node();
+            var k = new Counter();
+            return ArmAfter(ref x, k) + CaseAfter(ref x, k) + IsAfter(ref x, k) + Arm(ref x) + Case(ref x) + Is(ref x);
+        }
+    }
+}`)
+        Assert.Contains("case var a: Take(a!!)", printed)
+        Assert.Contains("return Take(b!!)", printed)
+        Assert.Contains("Take(c!!)", printed)
+        Assert.Contains("case var d: Take(d)", printed)
+        Assert.Contains("return Take(e)", printed)
+        Assert.Contains("{ Take(f) }", printed)
+        RunsAs(printed, "nnnnnn")
+    }
+
     /// With #5598's store bridge: a deconstruction stores a widened element into a `var` capture or into a
     /// local initialized from one. A capture has no recorded storage, so its store is not bridged (#5605).
     /// The taint widens a local that receives the element, so its store is not bridged either. Each form
