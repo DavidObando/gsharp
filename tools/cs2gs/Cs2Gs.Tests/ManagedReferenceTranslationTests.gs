@@ -7473,6 +7473,7 @@ public class Probe {
     func NonGenericDerivedReceiverRejectsFixedBaseConversionWhenProjected() {
         const source = `using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Gsharp.Values;
 namespace ManagedArrayInheritedGenericBaseFixedDestination;
 public interface IStore<T> {
@@ -7480,6 +7481,9 @@ public interface IStore<T> {
 }
 public interface IFixedProperty {
     ManagedRef<int> PropValue { get; set; }
+}
+public class SelfNode<T> where T : SelfNode<T> {
+    public object BoxValue(T value) => value;
 }
 public class Box<T> {
     public Box() { }
@@ -7523,6 +7527,7 @@ public class Base<T> {
     public void Use(Box<T> box) { }
     public void Replace(ref T value) { }
     public T Get() => default;
+    public Task<Box<T>> GetAsync() => Task.FromResult(this.Value);
     public int this[Box<T> key] {
         get => 0;
         set { }
@@ -7576,13 +7581,26 @@ public class ForEachDerived : CollectionBase<ManagedRef<int>> { }
 public class NamedIndexerDerived : NamedIndexerBase<ManagedRef<int>> { }
 public class ValueAssignDerived : Base<ManagedRef<int>> { }
 public class GenericExtDerived : Base<ManagedRef<int>> { }
+public class DelegateCallDerived : Base<ManagedRef<int>> { }
+public class ConstraintInstantiationDerived : Base<ManagedRef<int>> { }
+public class AwaitDerived : Base<ManagedRef<int>> { }
+public class PatternDerived : Base<ManagedRef<int>> { }
+public class SuppressDerived : Base<ManagedRef<int>> { }
+public class CrossProjectDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
     private static void AcceptBox(Box<ManagedRef<int>> value) { }
+    private static void RequireBase<T>() where T : Base<ManagedRef<int>> { }
     private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
     private static void ReadConstrainedBox<U>(U item) where U : ConstrainedDerived => AcceptBox(item.Value);
+
+    private static async Task RunAsync(ManagedRef<int>[] source) {
+        var awaitDerived = new AwaitDerived();
+        AcceptBox(await awaitDerived.GetAsync());
+        awaitDerived.Add(source[0]);
+    }
 
     public static void Run(
         bool flag,
@@ -7717,7 +7735,34 @@ public class Probe {
         var genericExt = new GenericExtDerived();
         genericExt.Add(source[0]);
         genericExt.Value.Ignore(0);
+
+        var delegateCall = new DelegateCallDerived();
+        delegateCall.Callback(FixedBox);
+        delegateCall.Add(source[0]);
+
+        RequireBase<ConstraintInstantiationDerived>();
+        new ConstraintInstantiationDerived().Add(source[0]);
+
+        _ = RunAsync(source);
+
+        var patternDerived = new PatternDerived();
+        if (patternDerived is { Value: var patternBox }) {
+            AcceptBox(patternBox);
+        }
+        patternDerived.Add(source[0]);
+
+        var suppressDerived = new SuppressDerived();
+        suppressDerived.Add(source[0]);
+        AcceptBox(suppressDerived.Value!);
+
+        new CrossProjectDerived().Add(source[0]);
     }
+}`
+        const consumerSource = `using Gsharp.Values;
+using ManagedArrayInheritedGenericBaseFixedDestination;
+namespace DownstreamConsumer;
+public class ConsumerProbe {
+    public static Base<ManagedRef<int>> Hold() => new CrossProjectDerived();
 }`
         let references = List[MetadataReference](
             CSharpProjectLoader.RuntimeReferences()
@@ -7727,11 +7772,29 @@ public class Probe {
             references
         )
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let consumerReferences = List[MetadataReference](references){project.Compilation.ToMetadataReference()}
+        let consumerProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Consumer.cs", consumerSource)},
+            consumerReferences,
+            assemblyName: "DownstreamConsumer"
+        )
+        Assert.True(
+            consumerProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, consumerProject.ErrorDiagnostics)
+        )
         let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let context = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{project.Compilation, consumerProject.Compilation}
+        )
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            34,
+            40,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7798,6 +7861,16 @@ public class Probe {
         )
         Assert.Contains("open class ValueAssignDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class GenericExtDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class DelegateCallDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class ConstraintInstantiationDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class AwaitDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class PatternDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SuppressDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class CrossProjectDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

@@ -764,7 +764,14 @@ partial class CSharpToGSharpTranslator {
                 return nativeVariables
             }
             var receiver GExpression? = this.TranslateExpression(isPattern.Expression)
-            let receiverType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
+            let receiverType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
+                isPattern.Expression
+            ) ??
+                this.GetProjectedReceiverType(isPattern.Expression) ??
+                this
+                .context
+                .GetTypeInfo(isPattern.Expression)
+                .Type
             // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
             // pattern subject exactly once. Use that form when C# introduces no
             // pattern local and gsc cannot smart-cast the original scrutinee.
@@ -2259,7 +2266,11 @@ partial class CSharpToGSharpTranslator {
                             this.EmittedName(subpatternMember, memberName)
                         )
                         this.RegisterPatternMemberSlot(subpatternMember, memberAccess)
-                        let memberType ITypeSymbol? = this.TryGetSubpatternMemberType(sub)
+                        let memberType ITypeSymbol? = this.GetProjectedPatternMemberType(
+                            receiverType,
+                            subpatternMember
+                        ) ??
+                            this.TryGetSubpatternMemberType(sub)
                         memberTest = this.TranslatePatternTest(
                             memberAccess,
                             sub.Pattern,

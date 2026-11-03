@@ -99,6 +99,7 @@ class TranslationContext {
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
         get;
+        private set;
     }
 
     /// Gets every project's own (cref:CSharpCompilation) loaded
@@ -149,13 +150,26 @@ class TranslationContext {
         if tree == nil || tree == this.SemanticModel.SyntaxTree {
             return NoOpScope.Instance
         }
+        var ownerCompilation CSharpCompilation = this.Compilation
+        if !ownerCompilation.ContainsSyntaxTree(tree) {
+            for candidate in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
+                this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
+            ) {
+                if candidate != nil && candidate.ContainsSyntaxTree(tree) {
+                    ownerCompilation = candidate
+                    break
+                }
+            }
+        }
         if !this.modelsByTree.TryGetValue(tree, out var model) {
-            model = this.Compilation.GetSemanticModel(tree)
+            model = ownerCompilation.GetSemanticModel(tree)
             this.modelsByTree[tree] = model
         }
-        let previous = this.SemanticModel
+        let previousCompilation = this.Compilation
+        let previousModel = this.SemanticModel
+        this.Compilation = ownerCompilation
         this.SemanticModel = model
-        return RestoreModelScope(this, previous)
+        return RestoreModelScope(this, previousCompilation, previousModel)
     }
 
     /// Resolves the declared symbol for a declaration node via the active model.
@@ -283,14 +297,19 @@ class TranslationContext {
 
     private class RestoreModelScope : IDisposable {
         private let owner TranslationContext
-        private let previous SemanticModel
+        private let previousCompilation CSharpCompilation
+        private let previousModel SemanticModel
 
-        init(owner TranslationContext, previous SemanticModel) {
+        init(owner TranslationContext, previousCompilation CSharpCompilation, previousModel SemanticModel) {
             this.owner = owner
-            this.previous = previous
+            this.previousCompilation = previousCompilation
+            this.previousModel = previousModel
         }
 
-        func Dispose() -> this.owner.SemanticModel = this.previous
+        func Dispose() {
+            this.owner.Compilation = this.previousCompilation
+            this.owner.SemanticModel = this.previousModel
+        }
     }
 
     private class NoOpScope : IDisposable {

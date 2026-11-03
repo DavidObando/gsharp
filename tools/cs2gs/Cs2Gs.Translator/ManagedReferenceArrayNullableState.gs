@@ -9,6 +9,7 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 
 internal class ManagedReferenceArrayNullableState {
     init() {
@@ -53,6 +54,11 @@ internal class ManagedReferenceArrayNullableState {
     prop ProjectedBaseTypesInProgress HashSet[INamedTypeSymbol] {
         get;
     }
+
+    prop ProjectedBaseIndex ProjectedBaseCompilationIndex? {
+        get;
+        set;
+    }
 }
 
 internal class ProjectedBaseCompilationIndex {
@@ -60,6 +66,10 @@ internal class ProjectedBaseCompilationIndex {
         MemberConsumersByCandidate = Dictionary[INamedTypeSymbol, List[SyntaxNode]](SymbolEqualityComparer.Default)
         ConversionsByCandidate = Dictionary[INamedTypeSymbol, List[ExpressionSyntax]](SymbolEqualityComparer.Default)
         DerivedTypesByCandidate = Dictionary[INamedTypeSymbol, List[INamedTypeSymbol]](SymbolEqualityComparer.Default)
+        GenericInstantiationsByCandidate = Dictionary[
+            INamedTypeSymbol,
+            List[(SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
+        ](SymbolEqualityComparer.Default)
         ReplacementsByType = Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?](
             SymbolEqualityComparer.Default
         )
@@ -77,11 +87,23 @@ internal class ProjectedBaseCompilationIndex {
         get;
     }
 
+    prop GenericInstantiationsByCandidate Dictionary[
+        INamedTypeSymbol,
+        List[(SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
+    ] {
+        get;
+    }
+
     prop ReplacementsByType Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?] {
         get;
     }
 
     prop IsIndexed bool {
+        get;
+        set;
+    }
+
+    prop IndexedCompilationCount int32 {
         get;
         set;
     }

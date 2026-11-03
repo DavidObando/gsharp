@@ -41,6 +41,7 @@ partial class CSharpToGSharpTranslator {
             let effectiveReceiverType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
                 isPattern.Expression
             ) ??
+                this.GetProjectedReceiverType(isPattern.Expression) ??
                 this
                 .context
                 .GetTypeInfo(isPattern.Expression)
@@ -102,7 +103,7 @@ partial class CSharpToGSharpTranslator {
                             .context
                             .GetTypeInfo(recursive.Type)
                             .Type is INamedTypeSymbol narrowedType {
-                            designationType = ReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
+                            designationType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
                                 (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
                                     candidate.OriginalDefinition,
                                     narrowedType.OriginalDefinition
@@ -155,10 +156,7 @@ partial class CSharpToGSharpTranslator {
 
         private func RegisterProjectedSwitchPatternBindings(pattern PatternSyntax, receiver ExpressionSyntax) {
             let receiverType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(receiver) ??
-                this
-                .context
-                .GetTypeInfo(receiver)
-                .Type
+                this.GetProjectedReceiverType(receiver) ?? this.context.GetTypeInfo(receiver).Type
             this.RegisterProjectedNativePatternBindings(pattern, receiverType, this.GetMappedArrayElementType(receiver))
         }
 
@@ -226,11 +224,16 @@ partial class CSharpToGSharpTranslator {
             if receiverType is INamedTypeSymbol projectedReceiver && member != nil {
                 member = this.GetProjectedMember(projectedReceiver, member) ?? member
             }
-            return switch member {
+            let rawType ITypeSymbol? = switch member {
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
                 case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
+            }
+            return if receiverType is INamedTypeSymbol ownerNamed {
+                this.SubstituteProjectedContainingTypeParameter(ownerNamed, rawType)
+            } else {
+                rawType
             }
         }
 
