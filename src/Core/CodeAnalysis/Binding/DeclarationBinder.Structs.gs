@@ -3661,6 +3661,9 @@ internal partial class DeclarationBinder {
                 try {
                     using let _ = PushStaticMemberScope(structSymbol)
                     conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter)
+                    if parameter.HasExplicitDefaultValue {
+                        structSymbol.NotifyParameterDefaultAttached()
+                    }
                 } finally {
                     $scope.SetCurrentDeclaringPackage(savedPackage)
                     $scope.SetCurrentReferencingSyntaxTree(savedTree)

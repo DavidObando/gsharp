@@ -20,7 +20,7 @@ import System.Threading
 internal partial class DeclarationBinder {
     private func BindIndexerParameters(
         propSyntax PropertyDeclarationSyntax,
-        structSymbol StructSymbol? = nil,
+        ownerType TypeSymbol? = nil,
         $package PackageSymbol? = nil
     ) ImmutableArray[ParameterSymbol] {
         let indexerParamBuilder = ImmutableArray.CreateBuilder[ParameterSymbol]()
@@ -67,8 +67,10 @@ internal partial class DeclarationBinder {
             // Issue #4350 (review): an indexer parameter may declare
             // a default (`this[row int32, column int32 = 0]`), which
             // was previously dropped silently.
-            if structSymbol != nil && $package != nil {
+            if ownerType is StructSymbol structSymbol && $package != nil {
                 DeferParameterDefaultValueBinding(indexParamSyntax, indexerParam, structSymbol, $package)
+            } else if ownerType is InterfaceSymbol interfaceSymbol && $package != nil {
+                DeferInterfaceParameterDefaultValueBinding(indexParamSyntax, indexerParam, interfaceSymbol, $package)
             } else {
                 conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
             }

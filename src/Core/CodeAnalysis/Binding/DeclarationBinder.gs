@@ -378,6 +378,9 @@ internal partial class DeclarationBinder {
                         this.binderCtx.CurrentTypeParameters = capturedTypeParameters
                         try {
                             conversions.BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam)
+                            if delegateParam.HasExplicitDefaultValue {
+                                delegateSymbol.SetSignature(delegateSymbol.Parameters, delegateSymbol.ReturnType)
+                            }
                         } finally {
                             $scope.SetCurrentDeclaringPackage(savedPackage)
                             $scope.SetCurrentReferencingSyntaxTree(savedTree)

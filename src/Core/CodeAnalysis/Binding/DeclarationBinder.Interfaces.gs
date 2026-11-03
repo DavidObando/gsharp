@@ -199,10 +199,10 @@ internal partial class DeclarationBinder {
     ) {
         BindInterfaceBaseInterfaces(syntax, interfaceSymbol)
         let seenNames = HashSet[string]()
-        BindInterfaceStaticFields(syntax, interfaceSymbol, seenNames)
         BindInterfaceMethods(syntax, interfaceSymbol, $package, seenNames)
         BindInterfaceProperties(syntax, interfaceSymbol, $package, seenNames)
         BindInterfaceEvents(syntax, interfaceSymbol, $package, seenNames)
+        BindInterfaceStaticFields(syntax, interfaceSymbol, $package, seenNames)
         VerifyInterfaceMemberVariance(syntax, interfaceSymbol)
     }
 
@@ -324,48 +324,12 @@ internal partial class DeclarationBinder {
                             isScoped: parameterSyntax.IsScoped,
                             refKind: parameterRefKind
                         )
-                        if parameterSyntax.HasDefaultValue {
-                            let capturedScope = $scope
-                            let packageName = $package.Name
-                            let syntaxTree = parameterSyntax.SyntaxTree
-                            let capturedInUnsafeContext = binderCtx.InUnsafeContext
-                            let capturedTypeParameters = if binderCtx.CurrentTypeParameters == nil {
-                                default(Dictionary[string, TypeParameterSymbol]?)
-                            } else {
-                                Dictionary[string, TypeParameterSymbol](binderCtx.CurrentTypeParameters!!)
-                            }
-                            pendingParameterDefaultValueBindings.Add(
-                                () -> {
-                                    let outerScope = $scope
-                                    let outerTypeParameters = binderCtx.CurrentTypeParameters
-                                    $scope = capturedScope
-                                    using let unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext)
-                                    let savedPackage = $scope.SetCurrentDeclaringPackage(packageName)
-                                    let savedTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
-                                    this.binderCtx.CurrentTypeParameters = capturedTypeParameters
-                                    let previousScope = binderCtx.RootScope
-                                    let staticScope = BoundScope(previousScope)
-                                    for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
-                                        staticScope.TryDeclareVariable(
-                                            ImplicitStaticFieldVariableSymbol(interfaceSymbol, fld)
-                                        )
-                                    }
-                                    this.binderCtx.RootScope = staticScope
-                                    try {
-                                        conversions.BindAndAttachParameterDefaultValue(
-                                            parameterSyntax,
-                                            ifaceMethodParam
-                                        )
-                                    } finally {
-                                        this.binderCtx.RootScope = previousScope
-                                        $scope.SetCurrentDeclaringPackage(savedPackage)
-                                        $scope.SetCurrentReferencingSyntaxTree(savedTree)
-                                        $scope = outerScope
-                                        this.binderCtx.CurrentTypeParameters = outerTypeParameters
-                                    }
-                                }
-                            )
-                        }
+                        DeferInterfaceParameterDefaultValueBinding(
+                            parameterSyntax,
+                            ifaceMethodParam,
+                            interfaceSymbol,
+                            $package
+                        )
                         BindAndAttachParameterAttributes(parameterSyntax, ifaceMethodParam)
                         parameters.Add(ifaceMethodParam)
                     }
@@ -559,7 +523,7 @@ internal partial class DeclarationBinder {
                         )
                         continue
                     }
-                    indexerParameters = BindIndexerParameters(propSyntax)
+                    indexerParameters = BindIndexerParameters(propSyntax, interfaceSymbol, $package)
                 }
                 let propName = if isIndexer {
                     "Item"
@@ -846,9 +810,59 @@ internal partial class DeclarationBinder {
         }
     }
 
+    private func DeferInterfaceParameterDefaultValueBinding(
+        parameterSyntax ParameterSyntax?,
+        parameter ParameterSymbol?,
+        interfaceSymbol InterfaceSymbol,
+        $package PackageSymbol
+    ) {
+        if parameterSyntax == nil || !parameterSyntax.HasDefaultValue || parameter == nil {
+            return
+        }
+        let capturedScope = $scope
+        let packageName = $package.Name
+        let syntaxTree = parameterSyntax.SyntaxTree
+        let capturedInUnsafeContext = binderCtx.InUnsafeContext
+        let capturedTypeParameters = if binderCtx.CurrentTypeParameters == nil {
+            default(Dictionary[string, TypeParameterSymbol]?)
+        } else {
+            Dictionary[string, TypeParameterSymbol](binderCtx.CurrentTypeParameters!!)
+        }
+        pendingParameterDefaultValueBindings.Add(
+            () -> {
+                let outerScope = $scope
+                let outerTypeParameters = binderCtx.CurrentTypeParameters
+                $scope = capturedScope
+                using let unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext)
+                let savedPackage = $scope.SetCurrentDeclaringPackage(packageName)
+                let savedTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
+                this.binderCtx.CurrentTypeParameters = capturedTypeParameters
+                let previousScope = binderCtx.RootScope
+                let staticScope = BoundScope(previousScope)
+                for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(interfaceSymbol, fld))
+                }
+                this.binderCtx.RootScope = staticScope
+                try {
+                    conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter)
+                    if parameter.HasExplicitDefaultValue {
+                        interfaceSymbol.NotifyParameterDefaultAttached()
+                    }
+                } finally {
+                    this.binderCtx.RootScope = previousScope
+                    $scope.SetCurrentDeclaringPackage(savedPackage)
+                    $scope.SetCurrentReferencingSyntaxTree(savedTree)
+                    $scope = outerScope
+                    this.binderCtx.CurrentTypeParameters = outerTypeParameters
+                }
+            }
+        )
+    }
+
     private func BindInterfaceStaticFields(
         syntax InterfaceDeclarationSyntax,
         interfaceSymbol InterfaceSymbol,
+        $package PackageSymbol,
         seenNames HashSet[string]
     ) {
         // ADR-0089 / issue #1030: bind interface static *state* — `var` / `let`
@@ -856,151 +870,173 @@ internal partial class DeclarationBinder {
         // CLR interfaces may own static fields; these become `Static` FieldDef
         // rows on the interface TypeDef (const → `literal` + `Constant` row).
         if !syntax.StaticFields.IsDefaultOrEmpty {
-            // ADR-0089 / issue #1030: interface static state is supported on
-            // both non-generic and generic interfaces. For a generic interface
-            // the FieldDef rows live on the interface TypeDef and access sites
-            // reference them through a TypeSpec for the closed construction, so
-            // each construction (`IBox[int32]` vs `IBox[string]`) owns
-            // independent storage — matching CLR static-field semantics.
-            let previousFunction = getCurrentFunction()
-            // Issue #3096: identify this bind as an interface .cctor context
-            // so native spread lowering keeps its loop directly in the
-            // stack-empty initializer instead of synthesizing a helper method
-            // that an interface cannot own in this path.
-            let initializerContext = FunctionSymbol(
-                "<field-initializer>",
-                ImmutableArray[ParameterSymbol].Empty,
-                TypeSymbol.Void
-            ){
-                IsUnsafe = binderCtx.InUnsafeContext,
-                IsStatic = true,
-                IsStaticInitializer = true,
-                StaticOwnerType = interfaceSymbol
-            }
-            setCurrentFunction(initializerContext)
-            try {
-                let staticFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
-                let constFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
-                let initializersBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
-                for fieldSyntax in syntax.StaticFields {
-                    let fieldName = fieldSyntax.Identifier.ValueText
-                    if !seenNames.Add(fieldName) {
-                        Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
-                        continue
-                    }
-                    let fieldType TypeSymbol? = bindTypeClause(fieldSyntax.Type)
-                    if fieldType == nil {
-                        continue
-                    }
-                    if TypeSymbol.IsByRefLike(fieldType) {
-                        Diagnostics.ReportByRefLikeEscape(
+            let staticFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
+            let constFieldsBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
+            let pendingConstInitializers = List[
+                (Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)
+            ]()
+            let pendingStaticInitializers = List[
+                (Field FieldSymbol, InitSyntax ExpressionSyntax, FieldType TypeSymbol)
+            ]()
+            for fieldSyntax in syntax.StaticFields {
+                let fieldName = fieldSyntax.Identifier.ValueText
+                if !seenNames.Add(fieldName) {
+                    Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
+                    continue
+                }
+                let fieldType TypeSymbol? = bindTypeClause(fieldSyntax.Type)
+                if fieldType == nil {
+                    continue
+                }
+                if TypeSymbol.IsByRefLike(fieldType) {
+                    Diagnostics.ReportByRefLikeEscape(
+                        fieldSyntax.Identifier.Location,
+                        fieldType,
+                        "be used as the type of field '$fieldName'"
+                    )
+                    continue
+                }
+                if fieldType is ByRefTypeSymbol byRefFieldType {
+                    Diagnostics.ReportPointerTypeCannotBeFieldType(fieldSyntax.Identifier.Location, byRefFieldType.Name)
+                    continue
+                }
+                let fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier)
+                // const → compile-time literal field (reads inlined).
+                if fieldSyntax.IsConst {
+                    if fieldType == TypeSymbol.NInt || fieldType == TypeSymbol.NUInt {
+                        Diagnostics.ReportConstNativeIntegerNotSupported(
                             fieldSyntax.Identifier.Location,
-                            fieldType,
-                            "be used as the type of field '$fieldName'"
-                        )
-                        continue
-                    }
-                    if fieldType is ByRefTypeSymbol byRefFieldType {
-                        Diagnostics.ReportPointerTypeCannotBeFieldType(
-                            fieldSyntax.Identifier.Location,
-                            byRefFieldType.Name
-                        )
-                        continue
-                    }
-                    let fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier)
-                    // const → compile-time literal field (reads inlined).
-                    if fieldSyntax.IsConst {
-                        if fieldType == TypeSymbol.NInt || fieldType == TypeSymbol.NUInt {
-                            Diagnostics.ReportConstNativeIntegerNotSupported(
-                                fieldSyntax.Identifier.Location,
-                                fieldName,
-                                fieldType.Name
-                            )
-                            continue
-                        }
-                        let constField = FieldSymbol(
                             fieldName,
-                            fieldType,
-                            fieldAccessibility,
-                            isReadOnly: true,
-                            isStatic: true,
-                            isConst: true,
-                            declaration: fieldSyntax
+                            fieldType.Name
                         )
-                        Binder.AttachDocumentation(constField, fieldSyntax)
-                        if fieldSyntax.Initializer == nil {
-                            Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntax.Identifier.Location, fieldName)
-                        } else {
-                            let boundConst = if fieldSyntax.Initializer is BlockExpressionSyntax {
-                                conversions.BindConversion(fieldSyntax.Initializer, fieldType)
-                            } else {
-                                bindExpression(fieldSyntax.Initializer)
-                            }
-                            let convertedConst = if fieldSyntax.Initializer is BlockExpressionSyntax {
-                                boundConst
-                            } else {
-                                conversions.BindConversion(fieldSyntax.Initializer!!.Location, boundConst, fieldType)
-                            }
-                            if ConstantExpressionEvaluator.TryFindNativeInteger(convertedConst, out var nativeType) {
-                                Diagnostics.ReportConstNativeIntegerNotSupported(
-                                    fieldSyntax.Identifier.Location,
-                                    fieldName,
-                                    Invariant.Required(
-                                        nativeType,
-                                        "a detected native integer has a type",
-                                        expression: "nativeType"
-                                    )
-                                        .Name
-                                )
-                            } else if ConstantExpressionEvaluator.TryFold(
-                                convertedConst,
-                                fieldType,
-                                out var constValue
-                            ) {
-                                constField.SetConstantValue(constValue)
-                            } else if !(boundConst is BoundErrorExpression) &&
-                                !(convertedConst is BoundErrorExpression) {
-                                pendingCrossTypeConstFolds.Add(
-                                    (constField, convertedConst, fieldSyntax.Initializer!!.Location)
-                                )
-                            }
-                        }
-                        constFieldsBuilder.Add(constField)
                         continue
                     }
-                    let fieldSymbol = FieldSymbol(
+                    let constField = FieldSymbol(
                         fieldName,
                         fieldType,
                         fieldAccessibility,
-                        isReadOnly: fieldSyntax.IsReadOnly,
+                        isReadOnly: true,
                         isStatic: true,
+                        isConst: true,
                         declaration: fieldSyntax
                     )
-                    Binder.AttachDocumentation(fieldSymbol, fieldSyntax)
-                    if fieldSyntax.Initializer != nil {
-                        let boundInit = if fieldSyntax.Initializer is BlockExpressionSyntax {
-                            conversions.BindConversion(fieldSyntax.Initializer, fieldType)
-                        } else {
-                            bindExpression(fieldSyntax.Initializer)
-                        }
-                        let convertedInit = if fieldSyntax.Initializer is BlockExpressionSyntax {
-                            boundInit
-                        } else {
-                            conversions.BindConversion(fieldSyntax.Initializer!!.Location, boundInit, fieldType)
-                        }
-                        initializersBuilder[fieldSymbol] = convertedInit
+                    Binder.AttachDocumentation(constField, fieldSyntax)
+                    if fieldSyntax.Initializer == nil {
+                        Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntax.Identifier.Location, fieldName)
+                    } else {
+                        pendingConstInitializers.Add((constField, fieldSyntax, fieldType))
                     }
-                    staticFieldsBuilder.Add(fieldSymbol)
+                    constFieldsBuilder.Add(constField)
+                    continue
                 }
-                interfaceSymbol.SetStaticFields(staticFieldsBuilder.ToImmutable())
-                if constFieldsBuilder.Count > 0 {
-                    interfaceSymbol.SetConstFields(constFieldsBuilder.ToImmutable())
+                let fieldSymbol = FieldSymbol(
+                    fieldName,
+                    fieldType,
+                    fieldAccessibility,
+                    isReadOnly: fieldSyntax.IsReadOnly,
+                    isStatic: true,
+                    declaration: fieldSyntax
+                )
+                Binder.AttachDocumentation(fieldSymbol, fieldSyntax)
+                if fieldSyntax.Initializer != nil {
+                    pendingStaticInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType))
                 }
-                if initializersBuilder.Count > 0 {
-                    interfaceSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable())
+                staticFieldsBuilder.Add(fieldSymbol)
+            }
+            interfaceSymbol.SetStaticFields(staticFieldsBuilder.ToImmutable())
+            if constFieldsBuilder.Count > 0 {
+                interfaceSymbol.SetConstFields(constFieldsBuilder.ToImmutable())
+            }
+            let capturedScope = $scope
+            let packageName = $package.Name
+            let syntaxTree = syntax.SyntaxTree
+            let capturedInUnsafeContext = binderCtx.InUnsafeContext
+            let capturedTypeParameters = if binderCtx.CurrentTypeParameters == nil {
+                default(Dictionary[string, TypeParameterSymbol]?)
+            } else {
+                Dictionary[string, TypeParameterSymbol](binderCtx.CurrentTypeParameters!!)
+            }
+            let RunInInterfaceStaticScope = func (action() -> void) {
+                let outerScope = $scope
+                let outerTypeParameters = binderCtx.CurrentTypeParameters
+                let previousFunction = getCurrentFunction()
+                let diagnosticMark = Diagnostics.Count
+                $scope = capturedScope
+                using let unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext)
+                let savedPackage = $scope.SetCurrentDeclaringPackage(packageName)
+                let savedTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
+                this.binderCtx.CurrentTypeParameters = capturedTypeParameters
+                // Issue #3096: identify this bind as an interface .cctor context
+                // so native spread lowering keeps its loop directly in the
+                // stack-empty initializer instead of synthesizing a helper method
+                // that an interface cannot own in this path.
+                let initializerContext = FunctionSymbol(
+                    "<field-initializer>",
+                    ImmutableArray[ParameterSymbol].Empty,
+                    TypeSymbol.Void
+                ){
+                    IsUnsafe = capturedInUnsafeContext,
+                    IsStatic = true,
+                    IsStaticInitializer = true,
+                    StaticOwnerType = interfaceSymbol
                 }
-            } finally {
-                setCurrentFunction(previousFunction)
+                setCurrentFunction(initializerContext)
+                let previousScope = binderCtx.RootScope
+                let staticScope = BoundScope(previousScope)
+                for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(interfaceSymbol, fld))
+                }
+                for method in interfaceSymbol.StaticMethods {
+                    staticScope.TryDeclareFunction(method)
+                }
+                this.binderCtx.RootScope = staticScope
+                try {
+                    using let _ = binderCtx.PushCheckedContext(false)
+                    action()
+                } finally {
+                    Diagnostics.DrainSince(diagnosticMark, deferredInitializerDiagnostics)
+                    this.binderCtx.RootScope = previousScope
+                    $scope.SetCurrentDeclaringPackage(savedPackage)
+                    $scope.SetCurrentReferencingSyntaxTree(savedTree)
+                    $scope = outerScope
+                    this.binderCtx.CurrentTypeParameters = outerTypeParameters
+                    setCurrentFunction(previousFunction)
+                }
+            }
+            if pendingConstInitializers.Count > 0 {
+                pendingConstInitializerBindings.Add(
+                    () -> RunInInterfaceStaticScope(
+                        () -> BindDeferredConstInitializers(
+                            pendingConstInitializers,
+                            List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)]()
+                        )
+                    )
+                )
+            }
+            if pendingStaticInitializers.Count > 0 {
+                pendingStaticFieldInitializerBindings.Add(
+                    () -> RunInInterfaceStaticScope(
+                        () -> {
+                            let initializersBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
+                            for (fieldSymbol, initSyntax, fieldType) in pendingStaticInitializers {
+                                let boundInit = if initSyntax is BlockExpressionSyntax {
+                                    conversions.BindConversion(initSyntax, fieldType)
+                                } else {
+                                    bindExpression(initSyntax)
+                                }
+                                let convertedInit = if initSyntax is BlockExpressionSyntax {
+                                    boundInit
+                                } else {
+                                    conversions.BindConversion(initSyntax.Location, boundInit, fieldType)
+                                }
+                                initializersBuilder[fieldSymbol] = convertedInit
+                            }
+                            if initializersBuilder.Count > 0 {
+                                interfaceSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable())
+                            }
+                        }
+                    )
+                )
             }
         }
     }

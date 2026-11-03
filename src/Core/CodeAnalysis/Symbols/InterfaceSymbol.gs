@@ -40,6 +40,8 @@ class InterfaceSymbol : TypeSymbol {
     // lazily so call-site dispatch through a constructed interface
     // (e.g. <c>IBox[int32].Get()</c>) succeeds.
     private var membersResolved bool
+    private var signatureVersion int32
+    private var resolvedSignatureVersion int32 = -1
 
     // Issue #3905: the managed thread currently substituting this instance's
     // member tables, or 0 when none is. Guards <see cref="TryResolveMembers"/>
@@ -547,13 +549,21 @@ class InterfaceSymbol : TypeSymbol {
         Declaration = declaration
     }
 
+    internal func NotifyParameterDefaultAttached() {
+        signatureVersion++
+    }
+
     /// Ensures the lazy member tables ((cref:Methods), (cref:StaticMethods),
     /// (cref:PrivateMethods), (cref:StaticPrivateMethods)) of a constructed
     /// generic interface instance have been substituted/populated. Idempotent. Exposed as
     /// `internal` (ADR-0112 A9) so (cref:TypeMemberModel) can guarantee the same
     /// resolution the per-accessor getters perform before enumerating member tables directly.
     internal func EnsureMembersResolved() {
-        if membersResolved {
+        if membersResolved &&
+            (
+            Definition == nil || object.ReferenceEquals(Definition, this) ||
+                resolvedSignatureVersion == Definition!!.signatureVersion
+        ) {
             return
         }
         TryResolveMembers()
@@ -670,6 +680,7 @@ class InterfaceSymbol : TypeSymbol {
         } finally {
             resolvingThreadId = 0
         }
+        resolvedSignatureVersion = definition.signatureVersion
         membersResolved = true
     }
 

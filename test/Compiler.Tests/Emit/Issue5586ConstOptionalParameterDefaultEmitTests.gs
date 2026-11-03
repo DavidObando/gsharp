@@ -55,9 +55,23 @@ public class Holder(Scale float64 = Size) {
     }
 }
 
+public delegate Callback[T](item T, count int32 = Tokens.SmallCount) int32;
+
 public interface ITokenContract {
     shared {
-        public const Bonus float64 = 3.5
+        const Bonus float64 = 3.5
+        const DefaultColumn int32 = 2
+        var DefaultHolder Holder = Holder()
+        var BuiltScale float64 = ITokenContract.MakeScale()
+        var Handler Callback[int32] = func(x int32, c int32) int32 { return x + c }
+
+        func MakeScale() float64 {
+            return Bonus * 2
+        }
+    }
+
+    prop this[row int32, column int32 = Tokens.SmallCount, pad int32 = DefaultColumn] int32 {
+        get -> row + column + pad
     }
 
     func Apply(v float64 = Bonus, baseSize float64 = Tokens.Size) float64 {
@@ -85,6 +99,7 @@ public class Tokens {
         public const Size float64 = 14
         public const DoubleSize float64 = Size * 2
         public const SmallCount int32 = 7
+        public const MinInt int32 = -2147483648
         public const Prefix string = "tok"
         public const MissingTag string? = nil
 
@@ -92,6 +107,7 @@ public class Tokens {
     }
 }
 
+public func UncheckedNegMin(value int64 = -Tokens.MinInt) int64 -> value
 public func Qualified(value float64 = Tokens.Size) float64 -> value
 public func Imported(value float64 = Size) float64 -> value
 `
@@ -106,7 +122,8 @@ func LocalArithmetic(value float64 = Tokens.DoubleSize + 2) float64 -> value
 public func RunConsumer() string {
     let iface ITokenContract = TokenContractImpl()
     let widget = Widget()
-    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}"
+    let cbResult = ITokenContract.Handler(10)
+    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${UncheckedNegMin()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}"
 }
 `
             let libraryPath = CompileAssembly(
@@ -144,7 +161,10 @@ public func RunConsumer() string {
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
                 )!!
                 let actual = Assert.IsType[string](runConsumer.Invoke(nil, nil))
-                Assert.Equal("14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:17.5:v:14:14:30", actual)
+                Assert.Equal(
+                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:17.5:10:14:7:17:-2147483648:v:14:14:30",
+                    actual
+                )
             } finally {
                 loadContext.Unload()
             }
@@ -179,6 +199,41 @@ func BadReadOnly(value float64 = ReadOnlySize) float64 -> value
         Assert.Equal(2, gs0265.Length)
         Assert.Equal(10, gs0265[0].Location.StartLine)
         Assert.Equal(11, gs0265[1].Location.StartLine)
+    }
+
+    @Fact
+    func CheckedOverflowNegationAndInterfaceFieldMethodCollision_ReportExpectedDiagnostics() {
+        const source = `package ConstantDefaults
+
+class Tokens {
+    shared {
+        const MinInt int32 = -2147483648
+    }
+}
+
+func BadCheckedNeg(value int64 = checked(-Tokens.MinInt)) int64 -> value
+
+interface ICollide {
+    shared {
+        var F int32
+        func F() int32 {
+            return 1
+        }
+    }
+}
+`
+        using let resolver = ReferenceResolver.WithReferences(Array.Empty[string]())
+        let compilation = GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source))){IsLibrary = true}
+        using let output = MemoryStream()
+        let result = compilation.Emit(
+            output,
+            pdbStream: nil,
+            refStream: nil,
+            assemblyName: "Issue5586.CheckedAndCollision"
+        )
+        Assert.False(result.Success)
+        Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0265")
+        Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0102")
     }
 
     shared {
