@@ -1051,23 +1051,35 @@ internal partial class StatementBinder {
         return (prefix.ToImmutable(), capturedCall, nil)
     }
 
-    // ADR-0030 / issue #1635 (NB-1 follow-up): rebuild the deferred call with the
-    // SAME node kind and EVERY metadata property the original call carried —
-    // constrained-interface dispatch info, explicit type arguments, non-virtual
-    // base-call marking, ref-kind annotations, static generic owner types, etc.
-    // Only the receiver/target and arguments change (to the captured `$defer$`
-    // locals); nothing else may be dropped or the deferred call can emit wrong
-    // dispatch or invalid metadata.
     private func CaptureDeferArguments(
         expression BoundExpression,
         prefix ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        let capture = (operand BoundExpression) -> CaptureExpression(operand, prefix)
+        return CaptureCallOperands(expression, prefix, capture, capture)
+    }
+
+    // ADR-0030 / issue #1635 (NB-1 follow-up), ADR-0174 D5 / issue #5591: the
+    // single rebuild that `defer` and `go` share. It rebuilds the call with the
+    // SAME node kind and EVERY metadata property the original call carried —
+    // constrained-interface dispatch info, explicit type arguments, non-virtual
+    // base-call marking, ref-kind annotations, static generic owner types, etc.
+    // Only the receiver/target and arguments change (to what the capture
+    // callbacks return, in source order: the receiver or function value first,
+    // then each argument); nothing else may be dropped or the later call can
+    // emit wrong dispatch or invalid metadata.
+    private func CaptureCallOperands(
+        expression BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder,
+        captureReceiver Func[BoundExpression, BoundExpression],
+        captureArgument Func[BoundExpression, BoundExpression]
     ) BoundExpression {
         switch expression {
             case call is BoundCallExpression {
                 return BoundCallExpression(
                     nil,
                     call.Function,
-                    CaptureArguments(call.Arguments, prefix),
+                    CaptureArguments(call.Arguments, captureArgument),
                     call.ReturnType,
                     call.IsConditionalElided
                 ){
@@ -1079,18 +1091,18 @@ internal partial class StatementBinder {
             case call is BoundIndirectCallExpression {
                 return BoundIndirectCallExpression(
                     nil,
-                    CaptureExpression(call.Target, prefix),
+                    captureReceiver(call.Target),
                     call.FunctionType,
-                    CaptureArguments(call.Arguments, prefix),
+                    CaptureArguments(call.Arguments, captureArgument),
                     call.ArgumentRefKinds
                 )
             }
             case call is BoundUserInstanceCallExpression {
                 return BoundUserInstanceCallExpression(
                     nil,
-                    CaptureExpression(call.Receiver, prefix),
+                    captureReceiver(call.Receiver),
                     call.Method,
-                    CaptureArguments(call.Arguments, prefix),
+                    CaptureArguments(call.Arguments, captureArgument),
                     call.Type,
                     call.ConstrainedReceiverTypeParameter,
                     call.ConstrainedInterfaceType
@@ -1098,7 +1110,7 @@ internal partial class StatementBinder {
             }
             case call is BoundImportedCallExpression {
                 let captureStart = prefix.Count
-                let arguments = CaptureArguments(call.Arguments, prefix)
+                let arguments = CaptureArguments(call.Arguments, captureArgument)
                 let copy = BoundImportedCallExpression(
                     call.Syntax,
                     call.Function,
@@ -1126,10 +1138,10 @@ internal partial class StatementBinder {
             case call is BoundImportedInstanceCallExpression {
                 return BoundImportedInstanceCallExpression(
                     nil,
-                    CaptureExpression(call.Receiver, prefix),
+                    captureReceiver(call.Receiver),
                     call.Method,
                     call.Type,
-                    CaptureArguments(call.Arguments, prefix),
+                    CaptureArguments(call.Arguments, captureArgument),
                     call.ArgumentRefKinds,
                     call.TypeArgumentSymbols,
                     call.ConstrainedReceiverTypeParameter,
@@ -1137,22 +1149,34 @@ internal partial class StatementBinder {
                     call.IsNonVirtualBaseCall
                 )
             }
+            case call is BoundBaseClassCallExpression {
+                return BoundBaseClassCallExpression(
+                    nil,
+                    captureReceiver(call.Receiver),
+                    call.BaseClass,
+                    call.Method,
+                    CaptureArguments(call.Arguments, captureArgument),
+                    call.Type,
+                    call.Property,
+                    call.IsSetterAccessor
+                ){MethodTypeArguments = call.MethodTypeArguments}
+            }
             default {
-                throw InvalidOperationException("Unexpected deferred expression: ${expression.Kind}")
+                throw InvalidOperationException("Unexpected captured call expression: ${expression.Kind}")
             }
         }
     }
 
     private func CaptureArguments(
         arguments ImmutableArray[BoundExpression],
-        prefix ImmutableArray[BoundStatement].Builder
+        captureArgument Func[BoundExpression, BoundExpression]
     ) ImmutableArray[BoundExpression] {
         if arguments.IsEmpty {
             return arguments
         }
         let capturedArguments = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
         for argument in arguments {
-            capturedArguments.Add(CaptureExpression(argument, prefix))
+            capturedArguments.Add(captureArgument(argument))
         }
         return capturedArguments.ToImmutable()
     }
@@ -1164,16 +1188,121 @@ internal partial class StatementBinder {
     private func CaptureExpression(
         expression BoundExpression,
         prefix ImmutableArray[BoundStatement].Builder
+    ) BoundExpression -> SpillToReadOnlyLocal(expression, "$$defer$$arg$$${binderCtx.DeferArgumentCounter++}", prefix)
+
+    private func SpillToReadOnlyLocal(
+        expression BoundExpression,
+        name string,
+        prefix ImmutableArray[BoundStatement].Builder
     ) BoundExpression {
-        let variable = LocalVariableSymbol(
-            "$$defer$$arg$$${binderCtx.DeferArgumentCounter++}",
-            isReadOnly: true,
-            expression.Type ?? TypeSymbol.Error
-        )
+        let variable = LocalVariableSymbol(name, isReadOnly: true, expression.Type ?? TypeSymbol.Error)
         $scope.TryDeclareVariable(variable)
         prefix.Add(BoundVariableDeclaration(nil, variable, expression))
         return BoundVariableExpression(nil, variable)
     }
+
+    // ADR-0174 D5 / issue #5591: `go f(args)` evaluates the function value, the
+    // receiver and every argument on the spawning goroutine, in source order,
+    // before the work item is queued. Each operand is evaluated into a fresh
+    // read-only local declared ahead of the `go`, so the child captures values,
+    // never the expressions that produced them — a field read, a `?.`/`??`
+    // and its synthetic capture local, or a side-effecting call all run here.
+    private func CaptureGoOperands(
+        expression BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder
+    ) BoundExpression -> CaptureCallOperands(
+        expression,
+        prefix,
+        (receiver BoundExpression) -> CaptureGoReceiver(receiver, prefix),
+        (argument BoundExpression) -> CaptureGoOperand(argument, prefix)
+    )
+
+    // A value-type receiver is a storage location, not a value: the method runs
+    // against (and may mutate) that storage, as the same call does outside `go`.
+    // Evaluate the location's operands — the object that holds the field, the
+    // array and its indices — on the spawner and leave only the field or element
+    // step to the child. Static storage needs no evaluation, and a variable is
+    // its own location: the work item captures it as it captures any variable.
+    // A receiver that is a value rather than storage (a call or property
+    // result) is copied.
+    private func CaptureGoReceiver(
+        receiver BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        if !MayBeValueType(receiver.Type) {
+            return CaptureGoOperand(receiver, prefix)
+        }
+        switch receiver {
+            case field is BoundFieldAccessExpression {
+                if field.Receiver is not{} instance {
+                    return receiver
+                }
+                return BoundFieldAccessExpression(
+                    field.Syntax,
+                    CaptureGoReceiver(instance, prefix),
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    field.NarrowedType
+                )
+            }
+            case element is BoundIndexExpression when element.IsArrayBackedElementAccess {
+                let target = CaptureGoOperand(element.Target, prefix)
+                let indices = CaptureArguments(
+                    element.Indices,
+                    (index BoundExpression) -> CaptureGoOperand(index, prefix)
+                )
+                return BoundIndexExpression(element.Syntax, target, indices, element.Type)
+            }
+            case BoundVariableExpression {
+                return receiver
+            }
+            default {
+                return CaptureGoOperand(receiver, prefix)
+            }
+        }
+    }
+
+    private func CaptureGoOperand(
+        operand BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        // A constant and `this` cannot change before the child runs, and a
+        // function literal only allocates a closure over shared variables, so
+        // these stay in place. A local is not one of them: a local that a
+        // function literal also captures is shared storage, which the child
+        // would read late. A by-ref argument is the address of its storage,
+        // which a read-only local cannot hold, and a byref-like value (a
+        // `Span[T]`) cannot cross into the child; both stay in place. An
+        // operand that reads a variable no closure may capture also stays, so
+        // capture legality still rejects the statement and names the variable.
+        if (
+            operand is BoundLiteralExpression or
+                BoundDefaultExpression or
+                BoundFunctionLiteralExpression or
+                BoundAddressOfExpression or
+                BoundConditionalAddressExpression
+        ) ||
+            operand is BoundVariableExpression{Variable: ParameterSymbol{IsReceiverParameter: true}} ||
+            ReadsUncapturableVariable(operand) ||
+            operand.Type is ByRefTypeSymbol ||
+            TypeSymbol.IsByRefLike(operand.Type) {
+            return operand
+        }
+        return SpillToReadOnlyLocal(operand, "$$go$$arg$$${binderCtx.GoArgumentCounter++}", prefix)
+    }
+
+    private func ReadsUncapturableVariable(operand BoundExpression) bool {
+        for variable in GoCapturedVariableCollector.CollectCapturedVariables(operand) {
+            if ClosureCaptureLegalityChecker.RejectsCapture(variable) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func MayBeValueType(type TypeSymbol?) bool -> type != nil &&
+        (type.IsValueType || type is TypeParameterSymbol{HasReferenceTypeConstraint: false})
 
     private func BindGoStatement(syntax GoStatementSyntax) BoundStatement {
         // Issue #3304: the spawned call's result is discarded (ADR-0022), so
@@ -1218,6 +1347,13 @@ internal partial class StatementBinder {
             )
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
+        let prefix = ImmutableArray.CreateBuilder[BoundStatement]()
+        // An explicit `await` nested in the operand is rejected after
+        // inference (GS0576, SuspendingCallRewriter). Leave that operand as
+        // written so the rejection and its location do not change.
+        if GSharp.Core.CodeAnalysis.Lowering.Async.AsyncBoundTreeQueries.FindFirstAwaitSyntax(expression) == nil {
+            expression = CaptureGoOperands(expression, prefix)
+        }
         // Copilot review of PR #4273 / issue #4271: a `go` statement's operand
         // is wrapped into a display-class closure by SynthesizeGoClosures at
         // EMIT time, entirely bypassing LambdaBinder's capture-legality
@@ -1244,7 +1380,19 @@ internal partial class StatementBinder {
             default(BoundVariableExpression?)
         }
         let lexicalEnclosingType = function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType
-        return BoundGoStatement(syntax, shapedExpression, sink, resultCell: nil, resultType: nil, lexicalEnclosingType)
+        let goStatement = BoundGoStatement(
+            syntax,
+            shapedExpression,
+            sink,
+            resultCell: nil,
+            resultType: nil,
+            lexicalEnclosingType
+        )
+        if prefix.Count == 0 {
+            return goStatement
+        }
+        prefix.Add(goStatement)
+        return BoundBlockStatement(syntax, prefix.ToImmutable())
     }
 
     private func BindChannelSendStatement(syntax ChannelSendStatementSyntax) BoundStatement {

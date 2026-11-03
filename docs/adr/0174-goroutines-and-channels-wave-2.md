@@ -3375,6 +3375,25 @@ implementation had to refine it.
     tests and low-level code that deliberately exercise the blocking runtime
     surface.
 
+51. **D5's evaluation order as implemented (issue #5591).** The work item used
+    to capture the operand's variables and evaluate the call in the child, so
+    a field read, a `?.`/`??`, or a side-effecting argument ran after the
+    spawner had moved on, and the `?.` capture local was copied into the
+    closure before the spawner assigned it. `go f(args)` now evaluates the
+    function value, the receiver and each argument once, in source order, into
+    read-only locals declared before the work item is queued. `defer` already
+    did this (ADR-0030) and shares the same call rebuild. Constants, `this`,
+    and function literals stay in place because their values cannot change.
+    A value-type receiver is storage, not a value: the object that holds the
+    field, or the array and its indices, is evaluated on the spawner, and the
+    call still mutates that storage, as Go's pointer receivers do. Three
+    operand kinds keep the old in-child evaluation: a by-reference argument,
+    a byref-like value, and an operand that reads a variable no closure may
+    capture (the statement is rejected by capture legality in that case). An
+    explicit `await` in an argument is still GS0576. `async let` (D15) still
+    evaluates its initializer in the child; its locals from `?.` and type
+    patterns now belong to the child.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

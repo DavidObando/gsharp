@@ -87,6 +87,38 @@ internal shared class GoCapturedVariableCollector {
             this.declared.Add(node.Variable)
         }
 
+        // Issue #5591: `?.` evaluates its receiver into a synthetic capture
+        // local (and a value-typed result into a result slot) that it declares
+        // itself, not through a BoundVariableDeclaration. Those locals belong to
+        // the child's evaluation of this expression. Treating the capture read
+        // inside WhenNotNull as free copied the spawner's never-assigned local
+        // into the closure, so the child dereferenced nil.
+        protected override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
+            if node.Capture != nil {
+                this.declared.Add(node.Capture)
+            }
+            if node.ResultSlot != nil {
+                this.declared.Add(node.ResultSlot)
+            }
+            base.VisitNullConditionalAccessExpression(node)
+        }
+
+        // A pattern declares its designation the same way, without a
+        // BoundVariableDeclaration; the lambda capture collector records the
+        // same three forms.
+        override func VisitPattern(node BoundPattern?) {
+            if node is BoundDiscardPattern{Variable: not nil} varPattern {
+                this.declared.Add(varPattern.Variable!!)
+            }
+            if node is BoundTypePattern typePattern && typePattern.Variable != nil {
+                this.declared.Add(typePattern.Variable)
+            }
+            if node is BoundSlicePattern slicePattern && slicePattern.Variable != nil {
+                this.declared.Add(slicePattern.Variable)
+            }
+            base.VisitPattern(node)
+        }
+
         private func CaptureIfFree(variable VariableSymbol) {
             if !this.declared.Contains(variable) && this.seen.Add(variable) {
                 this.captured.Add(variable)
