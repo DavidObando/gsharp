@@ -1833,10 +1833,7 @@ partial class CSharpToGSharpTranslator {
             if body == nil {
                 return false
             }
-            if !this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied = this.CollectOccupiedSynthesizedLocalNames(body)
-                this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied)
-            }
+            let occupied = this.CollectOccupiedSynthesizedLocalNames(body)
             if !occupied.Contains(name!!) || allowedSourceSymbol == nil {
                 return occupied.Contains(name!!)
             }

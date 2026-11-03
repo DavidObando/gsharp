@@ -3947,10 +3947,7 @@ partial class CSharpToGSharpTranslator {
                 return stem
             }
             try {
-                if !this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                    occupied = this.CollectOccupiedSynthesizedLocalNames(body)
-                    this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied)
-                }
+                let occupied = this.CollectOccupiedSynthesizedLocalNames(body)
                 var candidate = stem
                 for var suffix = 2; claimed.Contains(candidate) || this.BodyHasConflictingLocalName(
                     body,

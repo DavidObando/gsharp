@@ -388,17 +388,34 @@ namespace Demo
             }
         }
 
+        public static string TwoCapturedPromotedOutLocals()
+        {
+            if (!TryLookup(1, out string first))
+            {
+                first = null;
+            }
+
+            if (!TryLookup(9, out string second))
+            {
+                second = null;
+            }
+
+            Func<string> combine = () => (first ?? "nil") + ":" + (second ?? "nil");
+            return combine();
+        }
+
         public static string MainEntry() =>
             RunQuery() + "|" +
             string.Join(",", YieldAfterLoops(true)) + "|" +
             string.Join(",", YieldBeforeLoops(true)) + "|" +
-            PatternDesignatorAfterRenamedOut(new Item { Code = 7 });
+            PatternDesignatorAfterRenamedOut(new Item { Code = 7 }) + "|" +
+            TwoCapturedPromotedOutLocals();
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "k1:k2:nil|1|10|s1:nil"
+            "k1:k2:nil|1|10|s1:nil|k1:nil"
         )
     }
 

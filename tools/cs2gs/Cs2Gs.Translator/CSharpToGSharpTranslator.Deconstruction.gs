@@ -979,10 +979,7 @@ partial class CSharpToGSharpTranslator {
         private func AllocateDeconstructionTempName(anchor SyntaxNode, preferredName string? = nil) string {
             let stem = this.nameAllocator.GetName(preferredName ?? this.DeconstructionTempStem(anchor))
             let body = this.state.CurrentBodyScope ?? anchor.SyntaxTree.GetRoot()
-            if !this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied = this.CollectOccupiedSynthesizedLocalNames(body)
-                this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied)
-            }
+            let occupied = this.CollectOccupiedSynthesizedLocalNames(body)
             if !this.state.DeconstructionTempNamesByBody.TryGetValue(body, out var allocated) {
                 allocated = HashSet[string](StringComparer.Ordinal)
                 this.state.DeconstructionTempNamesByBody.Add(body, allocated)
@@ -998,11 +995,15 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func CollectOccupiedSynthesizedLocalNames(body SyntaxNode) HashSet[string] {
+            if this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var existing) {
+                return existing
+            }
             let DescendIntoCurrentBody = func (node SyntaxNode) bool {
                 return object.ReferenceEquals(node, body) ||
                     !((node is AnonymousFunctionExpressionSyntax || node is LocalFunctionStatementSyntax))
             }
             let occupied = HashSet[string](StringComparer.Ordinal)
+            this.state.SynthesizedLocalOccupiedNamesByBody[body] = occupied
             for token in body.DescendantTokens(DescendIntoCurrentBody) {
                 if token.IsKind(SyntaxKind.IdentifierToken) {
                     occupied.Add(this.nameAllocator.GetName(token.ValueText))

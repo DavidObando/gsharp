@@ -2724,11 +2724,7 @@ partial class CSharpToGSharpTranslator {
             occupied.UnionWith(this.predeclaredOutLocalNames.Values)
             let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? recursive?.SyntaxTree.GetRoot()
             if body != nil {
-                if !this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var bodyOccupied) {
-                    bodyOccupied = this.CollectOccupiedSynthesizedLocalNames(body)
-                    this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, bodyOccupied)
-                }
-                occupied.UnionWith(bodyOccupied)
+                occupied.UnionWith(this.CollectOccupiedSynthesizedLocalNames(body))
             }
             for token in arm!!.DescendantTokens() {
                 if !token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) {
