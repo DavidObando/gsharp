@@ -5052,7 +5052,7 @@ partial class CSharpToGSharpTranslator {
                     .WhileStatementSyntax or
                     _ is DoStatementSyntax or
                     _ is ForStatementSyntax {
-                    return this.ContainsNestedForEach(node)
+                    return !this.LoopHeaderIsLiteralFalse(node) && this.ContainsNestedForEach(node)
                 }
                 case identifier is IdentifierNameSyntax when identifier.Parent is MemberAccessExpressionSyntax{
                     Name: var name
@@ -5150,7 +5150,20 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if forEach is ForEachStatementSyntax typed {
-                return this.context.SemanticModel.GetForEachStatementInfo(typed).ElementConversion.IsUserDefined
+                // gsc binds a predefined conversion of the element as a conversion, but a tuple conversion is rebuilt
+                // element by element and an unwrapped nullable value is read, which `LoopPreludeRunsUserCode` counts.
+                let conversion = this.context.SemanticModel.GetForEachStatementInfo(typed).ElementConversion
+                return conversion.IsUserDefined ||
+                    conversion.IsTupleConversion ||
+                    (
+                    conversion.IsNullable &&
+                        this
+                        .context
+                        .GetTypeInfo(typed.Type)
+                        .Type
+                        ?.OriginalDefinition
+                        .SpecialType != SpecialType.System_Nullable_T
+                )
             }
             if forEach is ForEachVariableStatementSyntax deconstructing {
                 return this.DeconstructionCallsMember(this.context.SemanticModel.GetDeconstructionInfo(deconstructing))
@@ -5162,6 +5175,23 @@ partial class CSharpToGSharpTranslator {
             return info.Method != nil || info.Conversion?.IsUserDefined == true || info.Nested.Any(
                 (nested DeconstructionInfo) -> this.DeconstructionCallsMember(nested)
             )
+        }
+
+        /// Whether the condition of a `while`, `do` or `for` loop is the literal `false`. gsc does not apply a loop's
+        /// region at the entry of such a loop (`HeaderIsLiteralFalse`), because it has no back edge.
+        private func LoopHeaderIsLiteralFalse(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
+            var condition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+            if loop is Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax whileLoop {
+                condition = whileLoop.Condition
+            } else if loop is DoStatementSyntax doLoop {
+                condition = doLoop.Condition
+            } else if loop is ForStatementSyntax forLoop {
+                condition = forLoop.Condition
+            }
+            while condition is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                condition = parenthesized.Expression
+            }
+            return condition != nil && condition.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.FalseLiteralExpression)
         }
 
         /// ADR-0213 section 9 (#5650): gsc scans a loop's region without types, so a `for ... in` nested in the body
@@ -5507,7 +5537,10 @@ partial class CSharpToGSharpTranslator {
                     node is ForEachStatementSyntax ||
                     node is ForEachVariableStatementSyntax {
                     // The collection and a `for` initializer run once, before the loop's region (ADR-0213 table T5).
-                    if node is CommonForEachStatementSyntax loop && loop.Expression.Span.Contains(use.Span) {
+                    // A loop whose condition is the literal `false` has no back edge, so its body runs once from the
+                    // entry state, and the nodes before the read are counted above.
+                    if (node is CommonForEachStatementSyntax loop && loop.Expression.Span.Contains(use.Span)) ||
+                        this.LoopHeaderIsLiteralFalse(node) {
                         continue
                     }
                     if node is ForStatementSyntax forLoop &&

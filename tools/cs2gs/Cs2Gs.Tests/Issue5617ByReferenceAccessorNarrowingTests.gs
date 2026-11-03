@@ -692,8 +692,8 @@ public class Demo
     }
 
     /// gsc iterates a single-dimensional array and a `string` by index, which runs no user code, also with a typed
-    /// loop variable that converts the element and with a tuple-target loop over value tuples (ADR-0213 table T5). A
-    /// loop that holds a `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
+    /// loop variable that widens, wraps or boxes the element and with a tuple-target loop over value tuples (ADR-0213
+    /// table T5). A loop that holds a `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
     @Fact
     func RefParameter_ReadAfterAForEachOverAnArrayOrAString_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -723,6 +723,8 @@ public class Demo
         long sum = 0;
         var n = 0;
         foreach (long item in items) sum += item;
+        foreach (int? item in items) n += 1;
+        foreach (object item in items) n += 1;
         foreach (var (a, b) in pairs) n += s.Length;
         return s.Length + n + (int)sum;
     }
@@ -748,8 +750,9 @@ public class Demo
         Assert.DoesNotContain("s!!", printed)
     }
 
-    /// The loop variable's prelude runs before every body run (ADR-0213 table T5): a `Deconstruct` of a record and a
-    /// user-defined conversion of a typed loop variable are calls, so the fact ends even over an array.
+    /// The loop variable's prelude runs before every body run (ADR-0213 table T5): a `Deconstruct` of a record, a
+    /// user-defined conversion of a typed loop variable, a tuple conversion (rebuilt element by element) and the
+    /// unwrapping of a nullable value run code, so the fact ends even over an array.
     @Fact
     func RefParameter_ReadAfterAForEachWhosePreludeRunsUserCode_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -783,25 +786,46 @@ public class Demo
         foreach (Wrapper w in items) total += w.V;
         return s.Length + total;
     }
+    public static int Tuples(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach ((long, long) pair in items) total += s.Length + 1;
+        return s.Length + total;
+    }
+    public static int Unwrapped(ref string? s, int?[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (int item in items) total += item;
+        return s.Length + total;
+    }
     public static string Run()
     {
         string? text = "abc";
         return Records(ref text, new[] { new Point(1, 2) }) + "," +
-            Pairs(ref text, new Dictionary<int, int> { [1] = 2 }) + "," + Converted(ref text, new[] { 7 });
+            Pairs(ref text, new Dictionary<int, int> { [1] = 2 }) + "," + Converted(ref text, new[] { 7 }) + "," +
+            Tuples(ref text, new[] { (1, 2) }) + "," + Unwrapped(ref text, new int?[] { 3 });
     }
 }`)
-        Assert.Contains("total += s!!.Length", printed)
-        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("total += s!!.Length\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("total += s!!.Length + 1", printed)
+        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// gsc scans a loop's region without types, so a `for ... in` nested in a loop counts as an iteration that runs
     /// user code for the enclosing loop, whatever its collection (ADR-0213 section 9). The fact ends at the entry of
     /// the enclosing loop and stays removed after it. A guard inside the enclosing loop is after that entry, so only
-    /// the inner loop counts for its reads.
+    /// the inner loop counts for its reads. A `do ... while (false)` has no back edge, so gsc does not apply its region
+    /// (`HeaderIsLiteralFalse`).
     @Fact
     func RefParameter_ReadAroundALoopThatHoldsAForEach_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
 using System.Collections.Generic;
+public sealed class Box
+{
+    public int F;
+}
 public class Demo
 {
     public static int NestedArrays(ref string? s, int[] outer, int[] inner)
@@ -850,6 +874,28 @@ public class Demo
         } while (n < 2);
         return s.Length + total;
     }
+    public static int DoOnce(ref string? s, int[] inner, Box box)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        do
+        {
+            total += s.Length + 3;
+            box.F = 1;
+            foreach (var i in inner) total += i;
+        } while (false);
+        return s.Length + total;
+    }
+    public static int DoOnceThenRead(ref string? s, int[] inner)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        do
+        {
+            foreach (var i in inner) total += i;
+        } while (false);
+        return total + s.Length;
+    }
     public static int GuardInLoopOverArrays(ref string? s, int[] outer, int[] inner)
     {
         var total = 0;
@@ -877,14 +923,17 @@ public class Demo
         string? text = "abc";
         var inner = new[] { 2 };
         return NestedArrays(ref text, new[] { 1 }, inner) + "," + WhileLoop(ref text, inner) + "," +
-            ForLoop(ref text, inner) + "," + DoLoop(ref text, inner) + "," +
+            ForLoop(ref text, inner) + "," + DoLoop(ref text, inner) + "," + DoOnce(ref text, inner, new Box()) + "," +
+            DoOnceThenRead(ref text, inner) + "," +
             GuardInLoopOverArrays(ref text, new[] { 1 }, inner) + "," +
             GuardInLoopOverList(ref text, new[] { 1 }, new List<int> { 2 });
     }
 }`)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("total += s!!.Length + 2", printed)
-        Assert.Equal(6, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("total += s.Length + 3", printed)
+        Assert.Contains("return total + s.Length", printed)
+        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// The collection of a `for ... in` and the initializer of a `for` run once, before the loop's region, so effects
