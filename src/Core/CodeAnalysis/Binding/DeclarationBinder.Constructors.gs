@@ -901,7 +901,15 @@ internal partial class DeclarationBinder {
                 // readonly reference after the ordinary conversion).
                 if parameter.RefKind != RefKind.None && !IsImplicitInArgument(parameter, boundArguments[i]) {
                     if !TryGetAddressedArgumentType(boundArguments[i], out var addressedType) ||
-                        addressedType != paramType {
+                        (
+                        addressedType != paramType && !ByRefStorageMatching.AreSameStorageType(
+                            addressedType!!,
+                            paramType,
+                            out _,
+                            out _,
+                            out _
+                        )
+                    ) {
                         applicable = false
                         break
                     }
