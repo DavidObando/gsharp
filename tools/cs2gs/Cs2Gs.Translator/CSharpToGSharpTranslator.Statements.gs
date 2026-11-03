@@ -4705,11 +4705,8 @@ partial class CSharpToGSharpTranslator {
                 // `for (var c = x; c != null; c = Parent(c))` into a guaranteed
                 // NullReferenceException at the loop's normal exit — compiling
                 // and ILVerifying clean the whole way. Keep the promotion target
-                // so a widened declaration vetoes the assertion. Issue #5627: an
-                // initializer that is `T?` only in G# (`Volatile.Read(ref cache!)`)
-                // gives the storage that `T?` too.
-                if this.InferredLocalDeclarationIsNullable(inferredAssignmentLocal) ||
-                    this.YieldsValueNilableBeyondItsCSharpType(initializer) {
+                // so a widened declaration vetoes the assertion.
+                if this.InferredLocalDeclarationIsNullable(inferredAssignmentLocal) {
                     return value
                 }
                 assignmentTargetType = this.context.GetTypeInfo(initializer).Type
