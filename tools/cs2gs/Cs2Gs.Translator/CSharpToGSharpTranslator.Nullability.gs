@@ -28,6 +28,11 @@ partial class CSharpToGSharpTranslator {
             SymbolEqualityComparer.Default
         )
 
+        private let nonParamsTypeParameterBounds Dictionary[
+            (Call SyntaxNode, ParameterName string, TypeParameterOrdinal int32),
+            bool
+        ] = Dictionary[(Call SyntaxNode, ParameterName string, TypeParameterOrdinal int32), bool]()
+
         private var repositoryCompilationsByIdentity Dictionary[AssemblyIdentity, CSharpCompilation]?
         private var repositorySharedDocumentPaths HashSet[string]?
 
@@ -1247,17 +1252,634 @@ partial class CSharpToGSharpTranslator {
             sink ISymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
-            if sink is not IParameterSymbol parameter || !IsInferredGenericParameterTarget(parameter, value) {
+            if sink is not IParameterSymbol parameter || !this.IsInferredGenericParameterTarget(parameter, value) {
                 return false
             }
             let declared = parameter.OriginalDefinition.Type
-            let inferred ITypeSymbol? = if declared is IArrayTypeSymbol array {
-                array.ElementType
+            let inferred ITypeSymbol? = if this.IsExpandedParamsArgument(value, parameter) {
+                GetParamsElementType(parameter.OriginalDefinition) ?? declared
             } else {
                 declared
             }
             return inferred is ITypeParameterSymbol typeParameter &&
-                !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter)
+                !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter) &&
+                !this.OtherArgumentFixesTypeParameterToNonNull(value, parameter, typeParameter)
+        }
+
+        private func EmittedExpandedParamsElementMayBeNull(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            var current = expression
+            while (
+                current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax
+            ) {
+                current = switch current {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    default: current
+                }
+            }
+            if current == nil || IsNullOrSuppressedNull(current) || current.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
+            ) ||
+                current is DefaultExpressionSyntax {
+                return true
+            }
+            if current is CastExpressionSyntax castExpression && this.IsNullPreservingReferenceCast(castExpression) {
+                return this.EmittedExpandedParamsElementMayBeNull(castExpression.Expression)
+            }
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                return this.EmittedExpandedParamsElementMayBeNull(conditional.WhenTrue) ||
+                    this.EmittedExpandedParamsElementMayBeNull(conditional.WhenFalse)
+            }
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                return switchExpression.Arms.Any(
+                    (arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax) ->
+                    this.EmittedExpandedParamsElementMayBeNull(arm.Expression)
+                )
+            }
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.EmittedExpandedParamsElementMayBeNull(coalesce.Right)
+            }
+            if this.GetExpressionNullablePositions(current) is {} positions &&
+                (positions.Nullable.Contains("") || positions.Platform.Contains("")) {
+                return true
+            }
+            return this.NullableReferenceValueMayBeNull(
+                current,
+                respectDeclaredAnnotations: true,
+                respectDeclaredCallResults: true
+            )
+        }
+
+        private func OtherArgumentFixesTypeParameterToNonNull(
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameter IParameterSymbol,
+            typeParameter ITypeParameterSymbol
+        ) bool {
+            if parameter.ContainingSymbol is IMethodSymbol{Parameters: {Length: 1}, ReducedFrom: nil} ||
+                parameter.ContainingSymbol is IPropertySymbol{Parameters: {Length: 1}} {
+                return false
+            }
+            let enclosingArgument ArgumentSyntax? = if callSite == nil {
+                default(ArgumentSyntax?)
+            } else {
+                this.FindEnclosingArgumentThroughReferenceCasts(callSite)
+            }
+            if enclosingArgument?.Parent is not BaseArgumentListSyntax argumentList || argumentList.Parent == nil {
+                return false
+            }
+            let callNode = argumentList.Parent!!
+            let cacheKey = (callNode, parameter.Name, typeParameter.Ordinal)
+            if this.nonParamsTypeParameterBounds.TryGetValue(cacheKey, out var cached) {
+                return cached
+            }
+            let computed = this.ComputeOtherArgumentFixesTypeParameterToNonNull(
+                callNode,
+                argumentList,
+                enclosingArgument,
+                parameter,
+                typeParameter
+            )
+            this.nonParamsTypeParameterBounds[cacheKey] = computed
+            return computed
+        }
+
+        private func ComputeOtherArgumentFixesTypeParameterToNonNull(
+            callNode SyntaxNode,
+            argumentList BaseArgumentListSyntax,
+            enclosingArgument ArgumentSyntax?,
+            parameter IParameterSymbol,
+            typeParameter ITypeParameterSymbol
+        ) bool {
+            let receiverExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch callNode {
+                case InvocationExpressionSyntax{
+                    Expression: MemberAccessExpressionSyntax memberAccess
+                }: memberAccess.Expression
+                case InvocationExpressionSyntax{Expression: MemberBindingExpressionSyntax} bindingCall: bindingCall
+                    .Ancestors()
+                    .OfType[ConditionalAccessExpressionSyntax]()
+                    .FirstOrDefault()
+                    ?.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if receiverExpression != nil &&
+                this
+                .context
+                .GetSymbolInfo(callNode)
+                .Symbol is IMethodSymbol{ReducedFrom: {} reducedFrom} &&
+                reducedFrom
+                .OriginalDefinition
+                .Parameters
+                .FirstOrDefault() is {} receiverParameter {
+                let receiverType ITypeSymbol? = this.GetExpressionInferenceType(receiverExpression)
+                let initialVariance = if receiverParameter.RefKind != RefKind.None {
+                    VarianceKind.None
+                } else {
+                    VarianceKind.Out
+                }
+                if receiverType != nil &&
+                    ParameterArgumentPreventsNullableInference(
+                    receiverParameter.Type,
+                    receiverType,
+                    this.GetExpressionNullablePositions(receiverExpression),
+                    typeParameter,
+                    initialVariance
+                ) {
+                    return true
+                }
+            }
+            for var i = 0; i < argumentList.Arguments.Count; i++ {
+                let otherArgument = argumentList.Arguments[i]
+                if otherArgument == enclosingArgument || (otherArgument.NameColon == nil && i >= parameter.Ordinal) {
+                    continue
+                }
+                let otherParameter IParameterSymbol? = this.GetArgumentParameter(otherArgument)
+                if otherParameter == nil || otherParameter.Name == parameter.Name {
+                    continue
+                }
+                let argumentType ITypeSymbol? = this.GetExpressionInferenceType(
+                    otherArgument.Expression,
+                    otherArgument,
+                    otherParameter
+                )
+                if argumentType == nil {
+                    continue
+                }
+                let isEmittedIn = otherArgument.RefKindKeyword.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword
+                ) ||
+                    (
+                    this.TargetsSourceDeclaredInParameter(otherArgument) && this.PassesInArgumentWithoutConversion(
+                        otherArgument
+                    )
+                )
+                let initialVariance = if (otherParameter.RefKind is RefKind.Ref or RefKind.Out) || isEmittedIn {
+                    VarianceKind.None
+                } else {
+                    VarianceKind.Out
+                }
+                if ParameterArgumentPreventsNullableInference(
+                    otherParameter.OriginalDefinition.Type,
+                    argumentType,
+                    this.GetExpressionNullablePositions(otherArgument.Expression),
+                    typeParameter,
+                    initialVariance
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func GetExpressionNullablePositions(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) ObliviousPositionSet? {
+            let dropsTopLevelSuppression = expression?.Parent is ArgumentSyntax parentArgument &&
+                this.PassesArgumentStorageUnasserted(parentArgument)
+            var unwrapped = expression
+            var suppressedTopLevel = false
+            while (
+                unwrapped is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax or
+                    PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) {
+                if unwrapped is PostfixUnaryExpressionSyntax && !dropsTopLevelSuppression {
+                    suppressedTopLevel = true
+                }
+                unwrapped = switch unwrapped {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    case postfix is PostfixUnaryExpressionSyntax: postfix.Operand
+                    default: unwrapped
+                }
+            }
+            if unwrapped == nil {
+                return nil
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is IMethodSymbol callableMethod &&
+                (
+                unwrapped is AnonymousFunctionExpressionSyntax ||
+                    (
+                    callableMethod.MethodKind != MethodKind.Constructor &&
+                        !(unwrapped is InvocationExpressionSyntax) &&
+                        !(unwrapped is BaseObjectCreationExpressionSyntax)
+                )
+            ) {
+                return this.ProjectCallableNullablePositions(unwrapped, callableMethod)
+            }
+            var result ObliviousPositionSet? = nil
+            if this.ConvertedObliviousPositionsOf(
+                unwrapped,
+                this.context.SemanticModel,
+                this.ObliviousContainerFlowState()
+            ) is {} valuePositions {
+                result = ObliviousPositionSet()
+                result.UnionWith(valuePositions)
+            }
+            if this.UserDefinedConversionOperator(unwrapped, this.context.SemanticModel) is {} conversionOperator {
+                if !suppressedTopLevel &&
+                    (
+                    this.ShouldPromoteToNullableReference(conversionOperator) || this.IsTranslatorWidenedDeclaration(
+                        conversionOperator
+                    )
+                ) {
+                    result ??= ObliviousPositionSet()
+                    result!!.Nullable.Add("")
+                }
+                if suppressedTopLevel && result != nil {
+                    result.Nullable.Remove("")
+                    result.Platform.Remove("")
+                }
+                return result
+            }
+            if !suppressedTopLevel &&
+                symbol != nil &&
+                (
+                this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) ||
+                    this
+                    .GetDeclaredValueType(unwrapped)
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            ) {
+                result ??= ObliviousPositionSet()
+                result!!.Nullable.Add("")
+            }
+            if symbol != nil && !(symbol is ILocalSymbol) {
+                let declared = this.ObliviousContainerPositions(symbol)
+                if declared != nil && declared.Count > 0 {
+                    result ??= ObliviousPositionSet()
+                    result!!.Nullable.UnionWith(declared)
+                }
+            }
+            if suppressedTopLevel && result != nil {
+                result.Nullable.Remove("")
+                result.Platform.Remove("")
+            }
+            return result
+        }
+
+        private func ProjectCallableNullablePositions(
+            unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            callableMethod IMethodSymbol
+        ) ObliviousPositionSet? {
+            if this
+                .context
+                .GetTypeInfo(unwrapped)
+                .ConvertedType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate} named ||
+                named
+                .OriginalDefinition
+                .DelegateInvokeMethod is not{} invokeDefinition {
+                return nil
+            }
+            let definition = named.OriginalDefinition
+            if definition
+                .TypeParameters
+                .Length == 0 ||
+                callableMethod
+                .Parameters
+                .Length != invokeDefinition
+                .Parameters
+                .Length {
+                return nil
+            }
+            let bindings = TypeParameterMap()
+            let boundParameters = HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
+            for var i = 0; i < invokeDefinition.Parameters.Length; i++ {
+                let parameterSymbol = callableMethod.Parameters[i]
+                let parameterPositions = this.GetCallableSymbolNullablePositions(parameterSymbol)
+                let parameterVariance = if invokeDefinition.Parameters[i].RefKind != RefKind.None {
+                    VarianceKind.None
+                } else {
+                    VarianceKind.In
+                }
+                MergeCallableSlotPositions(
+                    invokeDefinition.Parameters[i].Type,
+                    parameterSymbol.Type,
+                    parameterPositions,
+                    parameterVariance,
+                    bindings,
+                    boundParameters
+                )
+            }
+            let returnVariance = if invokeDefinition.ReturnsByRef || invokeDefinition.ReturnsByRefReadonly {
+                VarianceKind.None
+            } else {
+                VarianceKind.Out
+            }
+            if !(unwrapped is AnonymousFunctionExpressionSyntax) && !invokeDefinition.ReturnsVoid {
+                let returnPositions = this.GetCallableSymbolNullablePositions(callableMethod)
+                MergeCallableSlotPositions(
+                    invokeDefinition.ReturnType,
+                    callableMethod.ReturnType,
+                    returnPositions,
+                    returnVariance,
+                    bindings,
+                    boundParameters
+                )
+            } else if unwrapped is AnonymousFunctionExpressionSyntax anonymousFunction &&
+                !invokeDefinition
+                .ReturnsVoid {
+                var returnPositions ObliviousPositionSet? = nil
+                for returnExpression in GetLambdaResultExpressions(anonymousFunction) {
+                    if this.GetExpressionNullablePositions(returnExpression) is {} expressionPositions {
+                        returnPositions ??= ObliviousPositionSet()
+                        returnPositions!!.UnionWith(expressionPositions)
+                    }
+                }
+                if anonymousFunction.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword) &&
+                    returnPositions != nil {
+                    returnPositions = Prefixed(returnPositions, "0")
+                }
+                MergeCallableSlotPositions(
+                    invokeDefinition.ReturnType,
+                    callableMethod.ReturnType,
+                    returnPositions,
+                    returnVariance,
+                    bindings,
+                    boundParameters
+                )
+            }
+            if bindings.Count == 0 {
+                return nil
+            }
+            let result = ObliviousPositionSet()
+            Substitute(definition, bindings, "", result)
+            return if result.IsEmpty {
+                nil
+            } else {
+                result
+            }
+        }
+
+        private func GetCallableSymbolNullablePositions(symbol ISymbol) ObliviousPositionSet? {
+            var result ObliviousPositionSet? = nil
+            let promotedTopLevel = if symbol is IParameterSymbol{
+                ContainingSymbol: IMethodSymbol{MethodKind: MethodKind.AnonymousFunction}
+            } {
+                this.IsTranslatorWidenedDeclaration(symbol)
+            } else {
+                this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol)
+            }
+            if promotedTopLevel {
+                result ??= ObliviousPositionSet()
+                result!!.Nullable.Add("")
+            }
+            let declared = this.ObliviousContainerPositions(symbol)
+            if declared != nil && declared.Count > 0 {
+                result ??= ObliviousPositionSet()
+                result!!.Nullable.UnionWith(declared)
+            }
+            if this.IsFrozenObliviousImportMember(symbol) {
+                result ??= ObliviousPositionSet()
+                CollectPlatformPositions(StorageType(UnreducedDefinition(symbol)), "", result!!.Platform)
+            }
+            return result
+        }
+
+        private func GetExpressionInferenceType(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            argument ArgumentSyntax? = nil,
+            parameter IParameterSymbol? = nil
+        ) ITypeSymbol? {
+            var current = expression
+            while (
+                current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax or
+                    PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) {
+                current = switch current {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    case postfix is PostfixUnaryExpressionSyntax: postfix.Operand
+                    default: current
+                }
+            }
+            if current == nil {
+                return nil
+            }
+            if IsNullOrSuppressedNull(current) {
+                return if argument != nil && this.LowersNullArgumentToTypedDefault(argument, parameter) {
+                    (this.context.GetTypeInfo(current).ConvertedType ?? parameter?.Type)?.WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                    )
+                } else {
+                    default(ITypeSymbol?)
+                }
+            }
+            if this.UserDefinedConversionOperator(current, this.context.SemanticModel) is {} conversionOperator {
+                return if this.ShouldPromoteToNullableReference(conversionOperator) ||
+                    this
+                    .IsTranslatorWidenedDeclaration(conversionOperator) {
+                    conversionOperator.ReturnType.WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                    )
+                } else {
+                    conversionOperator.ReturnType
+                }
+            }
+            let typeInfo = this.context.GetTypeInfo(current)
+            if typeInfo.Type != nil {
+                return typeInfo.Type
+            }
+            if current.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression) {
+                return typeInfo.ConvertedType
+            }
+            let hasCallableParameters = !(
+                current is AnonymousMethodExpressionSyntax anonymousMethod && anonymousMethod.ParameterList == nil
+            )
+            if hasCallableParameters && this.context.GetSymbolInfo(current).Symbol is IMethodSymbol callableMethod {
+                return this.ConstructDelegateFromCallableMethod(
+                    typeInfo.ConvertedType,
+                    callableMethod,
+                    includeReturn: !(current is AnonymousFunctionExpressionSyntax)
+                )
+            }
+            return nil
+        }
+
+        private func LowersNullArgumentToTypedDefault(argument ArgumentSyntax, targetParameter IParameterSymbol?) bool {
+            let targetType ITypeSymbol? = targetParameter?.Type
+            if targetParameter == nil ||
+                targetType == nil ||
+                !IsNullOrSuppressedNull(argument.Expression) ||
+                !targetType.IsReferenceType ||
+                targetParameter
+                .OriginalDefinition
+                .Type is ITypeParameterSymbol {
+                return false
+            }
+            if targetParameter
+                .ContainingAssembly
+                ?.Name != "Gsharp.Runtime.Values" &&
+                !ContainsTypeParameter(targetParameter.OriginalDefinition.Type) {
+                return false
+            }
+            let targetIsPromotedMigratedSibling = !SymbolEqualityComparer.Default.Equals(
+                targetParameter.ContainingAssembly,
+                this.context.Compilation.Assembly
+            ) &&
+                targetParameter
+                .ContainingAssembly
+                ?.Name is {} targetAssemblyName &&
+                targetAssemblyName != this
+                .context
+                .Compilation
+                .AssemblyName &&
+                (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
+                (compilation CSharpCompilation) -> compilation.AssemblyName == targetAssemblyName
+            ) == true &&
+                this.ShouldPromoteToNullableReference(targetParameter)
+            return !targetIsPromotedMigratedSibling && !this.IsObliviousImportedInferredTypeParameterTarget(
+                targetParameter,
+                argument.Expression
+            ) &&
+                this.TargetWillRemainNonNullableReference(targetType, targetParameter, argument.Expression)
+        }
+
+        private func ConstructDelegateFromCallableMethod(
+            convertedType ITypeSymbol?,
+            callableMethod IMethodSymbol,
+            includeReturn bool
+        ) ITypeSymbol? {
+            if convertedType is not INamedTypeSymbol named {
+                return convertedType
+            }
+            if named.TypeKind == TypeKind.Delegate &&
+                named
+                .OriginalDefinition
+                .DelegateInvokeMethod is {} invokeDefinition {
+                let definition = named.OriginalDefinition
+                if definition
+                    .TypeParameters
+                    .Length == 0 ||
+                    callableMethod
+                    .Parameters
+                    .Length != invokeDefinition
+                    .Parameters
+                    .Length {
+                    return named
+                }
+                let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                for var i = 0; i < invokeDefinition.Parameters.Length; i++ {
+                    let parameterSymbol = callableMethod.Parameters[i]
+                    let isPromotedParameter = if callableMethod.MethodKind == MethodKind.AnonymousFunction {
+                        this.IsTranslatorWidenedDeclaration(parameterSymbol)
+                    } else {
+                        this.ShouldPromoteToNullableReference(parameterSymbol) || this.IsTranslatorWidenedDeclaration(
+                            parameterSymbol
+                        )
+                    }
+                    let parameterType = if isPromotedParameter {
+                        parameterSymbol.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                    } else {
+                        parameterSymbol.Type
+                    }
+                    let parameterVariance = if invokeDefinition.Parameters[i].RefKind != RefKind.None {
+                        VarianceKind.None
+                    } else {
+                        VarianceKind.In
+                    }
+                    BindCallableTypeParameters(
+                        invokeDefinition.Parameters[i].Type,
+                        parameterType,
+                        parameterVariance,
+                        bindings,
+                        this.context.Compilation
+                    )
+                }
+                if includeReturn && !invokeDefinition.ReturnsVoid {
+                    let returnType = if this.ShouldPromoteToNullableReference(callableMethod) ||
+                        this
+                        .IsTranslatorWidenedDeclaration(callableMethod) {
+                        callableMethod.ReturnType.WithNullableAnnotation(
+                            Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                        )
+                    } else {
+                        callableMethod.ReturnType
+                    }
+                    let returnVariance = if invokeDefinition.ReturnsByRef || invokeDefinition.ReturnsByRefReadonly {
+                        VarianceKind.None
+                    } else {
+                        VarianceKind.Out
+                    }
+                    BindCallableTypeParameters(
+                        invokeDefinition.ReturnType,
+                        returnType,
+                        returnVariance,
+                        bindings,
+                        this.context.Compilation
+                    )
+                }
+                let typeArguments = List[ITypeSymbol](definition.TypeParameters.Length)
+                for var i = 0; i < definition.TypeParameters.Length; i++ {
+                    typeArguments.Add(
+                        if bindings.TryGetValue(definition.TypeParameters[i], out var bound) {
+                            bound
+                        } else {
+                            named.TypeArguments[i]
+                        }
+                    )
+                }
+                return definition.Construct(typeArguments.ToArray())
+            }
+            return named
         }
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
@@ -1620,6 +2242,9 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 return !(targetSymbol is IParameterSymbol{Type: IArrayTypeSymbol array} paramsParameter) ||
+                    (paramsParameter.OriginalDefinition.Type as IArrayTypeSymbol)
+                    ?.ElementType
+                    .IsReferenceType != true ||
                     !SymbolEqualityComparer
                     .Default
                     .Equals(targetType, array.ElementType) || this.TargetContractIsFrozenInMetadata(paramsParameter) ||
@@ -1680,7 +2305,7 @@ partial class CSharpToGSharpTranslator {
                 typeParameter
                 .ConstraintTypes
                 .Length > 0 ||
-                !IsInferredGenericParameterTarget(parameter, argumentExpression) ||
+                !this.IsInferredGenericParameterTarget(parameter, argumentExpression) ||
                 !this.TargetContractIsFrozenInMetadata(parameter) {
                 return false
             }
@@ -2085,6 +2710,464 @@ partial class CSharpToGSharpTranslator {
                     method
                     .ContainingType
                     .IsRecord
+            }
+
+            private func ParameterArgumentPreventsNullableInference(
+                declaredType ITypeSymbol?,
+                actualType ITypeSymbol?,
+                positions ObliviousPositionSet?,
+                target ITypeParameterSymbol,
+                variance VarianceKind
+            ) bool {
+                if declaredType is ITypeParameterSymbol candidate {
+                    if candidate.TypeParameterKind != target.TypeParameterKind ||
+                        candidate.Ordinal != target.Ordinal ||
+                        candidate.Name != target.Name {
+                        return false
+                    }
+                    let promotedNullable = positions != nil &&
+                        (positions.Nullable.Contains("") || positions.Platform.Contains(""))
+                    return (variance is VarianceKind.None or VarianceKind.In) &&
+                        !promotedNullable &&
+                        actualType != nil &&
+                        actualType.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                }
+                if declaredType is IArrayTypeSymbol declaredArray {
+                    return ParameterArgumentPreventsNullableInference(
+                        declaredArray.ElementType,
+                        (actualType as IArrayTypeSymbol)?.ElementType,
+                        if positions == nil {
+                            default(ObliviousPositionSet?)
+                        } else {
+                            Subtree(positions, "0")
+                        },
+                        target,
+                        VarianceKind.None
+                    )
+                }
+                if declaredType is IPointerTypeSymbol declaredPointer {
+                    return ParameterArgumentPreventsNullableInference(
+                        declaredPointer.PointedAtType,
+                        (actualType as IPointerTypeSymbol)?.PointedAtType,
+                        nil,
+                        target,
+                        VarianceKind.None
+                    )
+                }
+                if declaredType is not INamedTypeSymbol declaredNamed || FlatTypeArguments(declaredNamed).Count == 0 {
+                    return false
+                }
+                var effectiveDeclared INamedTypeSymbol = declaredNamed
+                var matchingActual INamedTypeSymbol? = FindMatchingNamedTypeInHierarchy(
+                    actualType,
+                    declaredNamed.OriginalDefinition
+                )
+                if matchingActual == nil &&
+                    variance == VarianceKind.In &&
+                    actualType is INamedTypeSymbol actualNamed &&
+                    FlatTypeArguments(actualNamed).Count > 0 &&
+                    FindMatchingNamedTypeInHierarchy(
+                    declaredNamed,
+                    actualNamed.OriginalDefinition
+                ) is {} matchedDeclared {
+                    effectiveDeclared = matchedDeclared
+                    matchingActual = actualNamed
+                }
+                let declaredArguments = FlatTypeArguments(effectiveDeclared)
+                let actualArguments List[ITypeSymbol]? = if matchingActual != nil {
+                    FlatTypeArguments(matchingActual)
+                } else {
+                    default(List[ITypeSymbol]?)
+                }
+                let containingOffset = if effectiveDeclared.ContainingType != nil {
+                    FlatTypeArguments(effectiveDeclared.ContainingType).Count
+                } else {
+                    0
+                }
+                let view = if positions != nil && actualType != nil {
+                    ViewPositions(actualType, effectiveDeclared.OriginalDefinition, positions)
+                } else {
+                    nil
+                }
+                for var flatIndex = 0; flatIndex < declaredArguments.Count; flatIndex++ {
+                    let declaredArgument = declaredArguments[flatIndex]
+                    let actualArgument ITypeSymbol? = if actualArguments != nil && flatIndex < actualArguments.Count {
+                        actualArguments[flatIndex]
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                    let argumentPositions ObliviousPositionSet? = if view != nil && flatIndex < view.Count {
+                        view[flatIndex].Positions
+                    } else if positions == nil {
+                        default(ObliviousPositionSet?)
+                    } else {
+                        Subtree(positions, IndexPosition(flatIndex))
+                    }
+                    let parameterVariance = if flatIndex < containingOffset {
+                        VarianceKind.None
+                    } else if effectiveDeclared.IsTupleType {
+                        VarianceKind.Out
+                    } else {
+                        effectiveDeclared.TypeParameters[flatIndex - containingOffset].Variance
+                    }
+                    let composedVariance = if variance == VarianceKind.None || parameterVariance == VarianceKind.None {
+                        VarianceKind.None
+                    } else if variance == parameterVariance {
+                        VarianceKind.Out
+                    } else {
+                        VarianceKind.In
+                    }
+                    if ParameterArgumentPreventsNullableInference(
+                        declaredArgument,
+                        actualArgument,
+                        argumentPositions,
+                        target,
+                        composedVariance
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            private func MergeCallableSlotPositions(
+                slotPattern ITypeSymbol,
+                slotActual ITypeSymbol?,
+                slotPositions ObliviousPositionSet?,
+                slotVariance VarianceKind,
+                bindings Dictionary[ITypeParameterSymbol, ObliviousPositionSet],
+                boundParameters HashSet[ITypeParameterSymbol]
+            ) {
+                let mentioned = HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
+                CollectMentionedTypeParameters(slotPattern, mentioned)
+                if mentioned.Count == 0 {
+                    return
+                }
+                let slotBindings = TypeParameterMap()
+                if slotPositions != nil {
+                    Unify(slotPattern, slotActual, slotPositions, slotBindings)
+                }
+                for typeParameter in mentioned {
+                    let incoming = if slotBindings.TryGetValue(typeParameter, out var found) {
+                        found
+                    } else {
+                        ObliviousPositionSet()
+                    }
+                    let covariantTopLevel = slotVariance == VarianceKind.Out && SymbolEqualityComparer.Default.Equals(
+                        slotPattern,
+                        typeParameter
+                    ) &&
+                        slotActual?.IsReferenceType == true
+                    if boundParameters.Add(typeParameter) {
+                        let copy = ObliviousPositionSet()
+                        copy.UnionWith(incoming)
+                        bindings[typeParameter] = copy
+                    } else if bindings.TryGetValue(typeParameter, out var existing) {
+                        let keepTopNullable = covariantTopLevel && existing.Nullable.Contains("")
+                        let keepTopPlatform = covariantTopLevel && existing.Platform.Contains("")
+                        existing.Nullable.IntersectWith(incoming.Nullable)
+                        existing.Platform.IntersectWith(incoming.Platform)
+                        if keepTopNullable {
+                            existing.Nullable.Add("")
+                        }
+                        if keepTopPlatform {
+                            existing.Platform.Add("")
+                        }
+                    }
+                }
+            }
+
+            private func CollectMentionedTypeParameters(type ITypeSymbol?, result HashSet[ITypeParameterSymbol]) {
+                if type == nil {
+                    return
+                }
+                if type is ITypeParameterSymbol typeParameter {
+                    result.Add(typeParameter)
+                    return
+                }
+                let arguments = PositionArguments(type)
+                if arguments == nil {
+                    return
+                }
+                for argument in arguments {
+                    CollectMentionedTypeParameters(argument, result)
+                }
+            }
+
+            private func BindCallableTypeParameters(
+                patternType ITypeSymbol?,
+                actualType ITypeSymbol?,
+                variance VarianceKind,
+                bindings Dictionary[ITypeParameterSymbol, ITypeSymbol],
+                compilation Compilation
+            ) {
+                if patternType == nil || actualType == nil {
+                    return
+                }
+                if patternType is ITypeParameterSymbol typeParameter {
+                    let boundActual = ToCallableBoundType(actualType, variance, compilation)
+                    if bindings.TryGetValue(typeParameter, out var existing) {
+                        bindings[typeParameter] = ReconcileCallableBoundType(existing, boundActual, compilation)
+                    } else {
+                        bindings[typeParameter] = boundActual
+                    }
+                    return
+                }
+                if patternType is IArrayTypeSymbol patternArray && actualType is IArrayTypeSymbol actualArray {
+                    BindCallableTypeParameters(
+                        patternArray.ElementType,
+                        actualArray.ElementType,
+                        VarianceKind.None,
+                        bindings,
+                        compilation
+                    )
+                    return
+                }
+                if patternType is INamedTypeSymbol patternNamed && FlatTypeArguments(patternNamed).Count > 0 {
+                    var effectivePattern INamedTypeSymbol = patternNamed
+                    var matchingActual INamedTypeSymbol? = FindMatchingNamedTypeInHierarchy(
+                        actualType,
+                        patternNamed.OriginalDefinition
+                    )
+                    if matchingActual == nil && actualType is INamedTypeSymbol actualNamed && FlatTypeArguments(
+                        actualNamed
+                    ).Count > 0 &&
+                        FindMatchingNamedTypeInHierarchy(
+                        patternNamed,
+                        actualNamed.OriginalDefinition
+                    ) is {} matchedPattern {
+                        effectivePattern = matchedPattern
+                        matchingActual = actualNamed
+                    }
+                    if matchingActual != nil {
+                        let patternArgs = FlatTypeArguments(effectivePattern)
+                        let actualArgs = FlatTypeArguments(matchingActual)
+                        let containingOffset = if effectivePattern.ContainingType != nil {
+                            FlatTypeArguments(effectivePattern.ContainingType).Count
+                        } else {
+                            0
+                        }
+                        for var i = 0; i < patternArgs.Count && i < actualArgs.Count; i++ {
+                            let parameterVariance = if i < containingOffset {
+                                VarianceKind.None
+                            } else if effectivePattern.IsTupleType {
+                                VarianceKind.Out
+                            } else {
+                                effectivePattern.TypeParameters[i - containingOffset].Variance
+                            }
+                            let composedVariance = if variance == VarianceKind.None ||
+                                parameterVariance == VarianceKind.None {
+                                VarianceKind.None
+                            } else if variance == parameterVariance {
+                                VarianceKind.Out
+                            } else {
+                                VarianceKind.In
+                            }
+                            BindCallableTypeParameters(
+                                patternArgs[i],
+                                actualArgs[i],
+                                composedVariance,
+                                bindings,
+                                compilation
+                            )
+                        }
+                    }
+                }
+            }
+
+            private func ToCallableBoundType(
+                actualType ITypeSymbol,
+                variance VarianceKind,
+                compilation Compilation
+            ) ITypeSymbol {
+                var result = actualType
+                if result is IArrayTypeSymbol arrayType {
+                    let element = ToCallableBoundType(arrayType.ElementType, VarianceKind.None, compilation)
+                    result = compilation.CreateArrayTypeSymbol(element, arrayType.Rank).WithNullableAnnotation(
+                        arrayType.NullableAnnotation
+                    )
+                } else if result is INamedTypeSymbol{IsGenericType: true} namedType &&
+                    namedType
+                    .TypeArguments
+                    .Length == namedType
+                    .TypeParameters
+                    .Length {
+                    let rebuiltContaining = if namedType.ContainingType != nil {
+                        ToCallableBoundType(
+                            namedType.ContainingType,
+                            VarianceKind.None,
+                            compilation
+                        ) as INamedTypeSymbol
+                    } else {
+                        default(INamedTypeSymbol?)
+                    }
+                    let typeArguments = List[ITypeSymbol](namedType.TypeArguments.Length)
+                    for var i = 0; i < namedType.TypeArguments.Length; i++ {
+                        let parameterVariance = if namedType.IsTupleType {
+                            VarianceKind.Out
+                        } else {
+                            namedType.TypeParameters[i].Variance
+                        }
+                        let composedVariance = if variance == VarianceKind.None ||
+                            parameterVariance == VarianceKind.None {
+                            VarianceKind.None
+                        } else if variance == parameterVariance {
+                            VarianceKind.Out
+                        } else {
+                            VarianceKind.In
+                        }
+                        typeArguments.Add(
+                            ToCallableBoundType(namedType.TypeArguments[i], composedVariance, compilation)
+                        )
+                    }
+                    result = ConstructNamedTypeWithContaining(
+                        namedType,
+                        rebuiltContaining,
+                        typeArguments,
+                        namedType.NullableAnnotation
+                    )
+                }
+                return if variance == VarianceKind.Out && result.IsReferenceType {
+                    result.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                } else {
+                    result
+                }
+            }
+
+            private func ReconcileCallableBoundType(
+                existing ITypeSymbol,
+                candidate ITypeSymbol,
+                compilation Compilation
+            ) ITypeSymbol {
+                let reconciledAnnotation = if existing.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    existing.NullableAnnotation
+                } else {
+                    candidate.NullableAnnotation
+                }
+                if existing is IArrayTypeSymbol existingArray &&
+                    candidate is IArrayTypeSymbol candidateArray &&
+                    existingArray.Rank == candidateArray
+                    .Rank {
+                    let reconciledElement = ReconcileCallableBoundType(
+                        existingArray.ElementType,
+                        candidateArray.ElementType,
+                        compilation
+                    )
+                    return compilation.CreateArrayTypeSymbol(reconciledElement, existingArray.Rank)
+                        .WithNullableAnnotation(reconciledAnnotation)
+                }
+                if existing is INamedTypeSymbol{IsGenericType: true} existingNamed &&
+                    candidate is INamedTypeSymbol{IsGenericType: true} candidateNamed &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(existingNamed.OriginalDefinition, candidateNamed.OriginalDefinition) &&
+                    existingNamed
+                    .TypeArguments
+                    .Length == candidateNamed
+                    .TypeArguments
+                    .Length {
+                    let rebuiltContaining = if existingNamed.ContainingType != nil &&
+                        candidateNamed.ContainingType != nil {
+                        ReconcileCallableBoundType(
+                            existingNamed.ContainingType,
+                            candidateNamed.ContainingType,
+                            compilation
+                        ) as INamedTypeSymbol
+                    } else {
+                        existingNamed.ContainingType
+                    }
+                    let typeArguments = List[ITypeSymbol](existingNamed.TypeArguments.Length)
+                    for var i = 0; i < existingNamed.TypeArguments.Length; i++ {
+                        typeArguments.Add(
+                            ReconcileCallableBoundType(
+                                existingNamed.TypeArguments[i],
+                                candidateNamed.TypeArguments[i],
+                                compilation
+                            )
+                        )
+                    }
+                    return ConstructNamedTypeWithContaining(
+                        existingNamed,
+                        rebuiltContaining,
+                        typeArguments,
+                        reconciledAnnotation
+                    )
+                }
+                return existing.WithNullableAnnotation(reconciledAnnotation)
+            }
+
+            private func ConstructNamedTypeWithContaining(
+                template INamedTypeSymbol,
+                rebuiltContaining INamedTypeSymbol?,
+                typeArguments List[ITypeSymbol],
+                annotation Microsoft.CodeAnalysis.NullableAnnotation
+            ) ITypeSymbol {
+                var definition INamedTypeSymbol = template.ConstructedFrom
+                if rebuiltContaining != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    rebuiltContaining,
+                    template.ContainingType
+                ) &&
+                    rebuiltContaining
+                    .GetTypeMembers(template.Name, template.Arity).FirstOrDefault() is {} nestedDefinition {
+                    definition = nestedDefinition
+                }
+                let constructed INamedTypeSymbol = if typeArguments.Count > 0 {
+                    definition.Construct(typeArguments.ToArray())
+                } else {
+                    definition
+                }
+                return constructed.WithNullableAnnotation(annotation)
+            }
+
+            private func FindMatchingNamedTypeInHierarchy(
+                actualType ITypeSymbol?,
+                targetDefinition INamedTypeSymbol,
+                visitedTypeParameters HashSet[ITypeParameterSymbol]? = nil
+            ) INamedTypeSymbol? {
+                switch actualType {
+                    case actualNamed is INamedTypeSymbol {
+                        return ReceiverTypeHierarchy(actualNamed).FirstOrDefault(
+                            (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                candidate.OriginalDefinition,
+                                targetDefinition
+                            )
+                        )
+                    }
+                    case actualArray is IArrayTypeSymbol {
+                        return actualArray.AllInterfaces.FirstOrDefault(
+                            (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                candidate.OriginalDefinition,
+                                targetDefinition
+                            )
+                        )
+                    }
+                    case actualTypeParameter is ITypeParameterSymbol {
+                        let visited = visitedTypeParameters ??
+                            HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
+                        if !visited.Add(actualTypeParameter) {
+                            return nil
+                        }
+                        for constraintType in actualTypeParameter.ConstraintTypes {
+                            if FindMatchingNamedTypeInHierarchy(
+                                constraintType,
+                                targetDefinition,
+                                visited
+                            ) is {} matched {
+                                return matched
+                            }
+                        }
+                        return nil
+                    }
+                    default {
+                        return nil
+                    }
+                }
             }
 
             private func MentionsTypeParameterOnlyInvariantly(
