@@ -4457,6 +4457,419 @@ partial class CSharpToGSharpTranslator {
             return SymbolEqualityComparer.Default.Equals(info.Type, info.ConvertedType)
         }
 
+        /// ADR-0208 R12, R14, R16 and R17 (#5617), the translator side of the compiler's `MayMutateReferenceStorage`
+        /// (`IsMemberStorageWriteExpression`, `SourcePropertyAccessRunsUserCode` and `ClrAccessRunsUserCode` in
+        /// src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs). gsc removes the fact of a by-reference
+        /// variable at a write through a member, an element, an indirection or another by-reference variable, at an
+        /// accessor that can run user code, and at a `base.` access. A plain call keeps the fact (amendment A3). The
+        /// answer is for the G# that the translator emits for the C# node, so `Nullable<T>.Value` and `HasValue`
+        /// (emitted as `!!` and `!= nil`) are not accessors.
+        private func NodeMayWriteReferenceStorage(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            switch node {
+                case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
+                    // A member initializer is part of the construction (#5562): a field keeps the fact, and a
+                    // property follows the accessor rule on the exact type. A `with` initializer writes the copy, which
+                    // gsc counts as a member write.
+                    if assignment.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .InitializerExpressionSyntax initializer &&
+                        initializer.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BaseObjectCreationExpressionSyntax {
+                        return switch this.context.GetSymbolInfo(assignment.Left).Symbol {
+                            case _ is IFieldSymbol: false
+                            case property is IPropertySymbol: !this.IsSourceSymbol(property) ||
+                                this.AccessorRunsUserCode(property, receiverType: nil)
+                            default: true
+                        }
+                    }
+                    return this.WritesThroughStorage(assignment.Left, isArgument: false)
+                }
+                case prefix is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax when prefix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
+                ) ||
+                    prefix
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreDecrementExpression) {
+                    return this.WritesThroughStorage(prefix.Operand, isArgument: false)
+                }
+                case postfix is Microsoft.CodeAnalysis.CSharp.Syntax.PostfixUnaryExpressionSyntax when postfix.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostIncrementExpression
+                ) ||
+                    postfix
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PostDecrementExpression) {
+                    return this.WritesThroughStorage(postfix.Operand, isArgument: false)
+                }
+                case argument is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArgumentSyntax when argument
+                    .RefKindKeyword
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) || argument.RefKindKeyword.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword
+                ) {
+                    return this.WritesThroughStorage(argument.Expression, isArgument: true)
+                }
+                case addressOf is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PrefixUnaryExpressionSyntax when addressOf
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) {
+                    // The address of a member or an element names storage that a later write can change.
+                    return this.WritesThroughStorage(addressOf.Operand, isArgument: true)
+                }
+                case invocation is InvocationExpressionSyntax when invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
+                    this
+                    .context
+                    .GetSymbolInfo(invocation)
+                    .Symbol is IMethodSymbol method &&
+                    method.ReducedFrom != nil &&
+                    method.ReducedFrom!!
+                    .Parameters
+                    .Length > 0 &&
+                    method.ReducedFrom!!
+                    .Parameters[0]
+                    .RefKind == RefKind
+                    .Ref {
+                    // cs2gs passes the receiver of a `this ref` extension as `&receiver`, a writable reference.
+                    return this.WritesThroughStorage(receiverAccess.Expression, isArgument: true)
+                }
+                case reference is Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax {
+                    // A writable `ref` alias of a member or an element names storage that a later write can change.
+                    return !this.IsReadOnlyReference(reference) && this.WritesThroughStorage(
+                        reference.Expression,
+                        isArgument: true
+                    )
+                }
+                case subpattern is Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax {
+                    if this
+                        .context
+                        .SemanticModel
+                        .GetOperation(subpattern) is IPropertySubpatternOperation{
+                        Member: IPropertyReferenceOperation reference
+                    } {
+                        return this.AccessorRunsUserCode(reference.Property, reference.Instance?.Type)
+                    }
+                    return this.PositionalSubpatternRunsUserCode(subpattern)
+                }
+                case listPattern is Microsoft.CodeAnalysis.CSharp.Syntax.ListPatternSyntax {
+                    if this.context.SemanticModel.GetOperation(listPattern) is not IListPatternOperation operation {
+                        return false
+                    }
+                    let readsElement = listPattern.Patterns.Any(
+                        (element Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) -> element is not Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .DiscardPatternSyntax &&
+                            element is not Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .SlicePatternSyntax
+                    )
+                    return (
+                        operation.LengthSymbol is IPropertySymbol length && this.AccessorRunsUserCode(
+                            length,
+                            operation.InputType
+                        )
+                    ) ||
+                        (
+                        readsElement && operation.IndexerSymbol is IPropertySymbol indexer && this.AccessorRunsUserCode(
+                            indexer,
+                            operation.InputType
+                        )
+                    )
+                }
+                case memberAccess is MemberAccessExpressionSyntax when memberAccess.Expression is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseExpressionSyntax {
+                    // A `base.` property or method access is a call node of its own (`VisitBaseClassCallExpression`).
+                    return this.context.GetSymbolInfo(memberAccess).Symbol is IPropertySymbol or IMethodSymbol
+                }
+                case elementAccess is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ElementAccessExpressionSyntax when elementAccess.Expression is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BaseExpressionSyntax {
+                    return true
+                }
+                case identifier is IdentifierNameSyntax when identifier.Parent is MemberAccessExpressionSyntax{
+                    Name: var name
+                } &&
+                    name == identifier ||
+                    identifier.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .MemberBindingExpressionSyntax ||
+                    identifier.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .NameColonSyntax {
+                    // The member access, the member binding or the subpattern classifies the read.
+                    return false
+                }
+                case _ is MemberAccessExpressionSyntax or
+                    _ is IdentifierNameSyntax or
+                    _ is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .MemberBindingExpressionSyntax or
+                    _ is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ElementAccessExpressionSyntax or
+                    _ is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ElementBindingExpressionSyntax {
+                    if (
+                        node is not Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ElementAccessExpressionSyntax &&
+                            node is not Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ElementBindingExpressionSyntax &&
+                            this
+                            .context
+                            .GetSymbolInfo(node)
+                            .Symbol is not IPropertySymbol
+                    ) ||
+                        IsNameofArgument(node as Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) {
+                        return false
+                    }
+                    return switch this.context.SemanticModel.GetOperation(node) {
+                        case reference is IPropertyReferenceOperation: this.AccessorRunsUserCode(
+                            reference.Property,
+                            reference.Instance?.Type
+                        )
+                        case implicitIndexer is IImplicitIndexerReferenceOperation: (
+                            implicitIndexer.LengthSymbol is IPropertySymbol length && this.AccessorRunsUserCode(
+                                length,
+                                implicitIndexer.Instance.Type
+                            )
+                        ) ||
+                            (
+                            implicitIndexer.IndexerSymbol is IPropertySymbol indexer && this.AccessorRunsUserCode(
+                                indexer,
+                                implicitIndexer.Instance.Type
+                            )
+                        )
+                        default: false
+                    }
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        /// Whether the `ref` expression [`reference`](paramref) initializes or reassigns a `ref readonly` local, which
+        /// gsc does not record as a writable reference.
+        private func IsReadOnlyReference(reference Microsoft.CodeAnalysis.CSharp.Syntax.RefExpressionSyntax) bool {
+            var current Microsoft.CodeAnalysis.SyntaxNode = reference
+            while current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedExpressionSyntax ||
+                current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConditionalExpressionSyntax ||
+                current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .RefExpressionSyntax {
+                current = current.Parent!!
+            }
+            let target ISymbol? = switch current.Parent {
+                case initializer is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .EqualsValueClauseSyntax when initializer.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .VariableDeclaratorSyntax declarator: this
+                    .context
+                    .GetDeclaredSymbol(declarator)
+                case assignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when object.ReferenceEquals(assignment.Right, current): this
+                    .context
+                    .GetSymbolInfo(assignment.Left)
+                    .Symbol
+                default: default(ISymbol?)
+            }
+            return target is ILocalSymbol local && local.RefKind == RefKind.RefReadOnly
+        }
+
+        /// Issue #1887: cs2gs lowers a positional subpattern to a read of the member that its slot deconstructs to
+        /// (cref:TryResolvePositionalSlot), so the slot follows the accessor rule of that member. A discard reads
+        /// nothing.
+        private func PositionalSubpatternRunsUserCode(
+            subpattern Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax
+        ) bool {
+            if subpattern.Pattern is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardPatternSyntax ||
+                subpattern.Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PositionalPatternClauseSyntax clause ||
+                clause.Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .RecursivePatternSyntax recursive {
+                return false
+            }
+            let positional PositionalSlots? = this.TryGetPositionalMembers(
+                recursive,
+                clause.Subpatterns.Count,
+                out var positionalFailure
+            )
+            if !this.TryResolvePositionalSlot(
+                subpattern,
+                clause.Subpatterns.IndexOf(subpattern),
+                positional,
+                positionalFailure,
+                nil,
+                out _,
+                out var member,
+                out _
+            ) ||
+                member is not IPropertySymbol property {
+                return false
+            }
+            let operation = this.context.SemanticModel.GetOperation(recursive) as IRecursivePatternOperation
+            return this.AccessorRunsUserCode(property, operation?.NarrowedType)
+        }
+
+        /// Whether a write to [`target`](paramref) can change storage that a by-reference variable names (ADR-0208
+        /// R12). A local or a by-value parameter cannot, a discard or a new variable cannot, and an event subscription
+        /// writes no storage. A `ref` or `out` argument names its variable without a write (`RecordWritableReference`),
+        /// so only a member, element or indirect argument counts ([`isArgument`](paramref)). An assignment to a `ref`
+        /// local or a by-reference parameter writes through the reference.
+        private func WritesThroughStorage(
+            target Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            isArgument bool
+        ) bool {
+            let stripped = StripParentheses(target)
+            if stripped is Microsoft.CodeAnalysis.CSharp.Syntax.DeclarationExpressionSyntax {
+                return false
+            }
+            if stripped is Microsoft.CodeAnalysis.CSharp.Syntax.TupleExpressionSyntax tuple {
+                return tuple.Arguments.Any(
+                    (element Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax) -> this.WritesThroughStorage(
+                        element.Expression,
+                        isArgument
+                    )
+                )
+            }
+            return switch this.context.GetSymbolInfo(stripped).Symbol {
+                case _ is IDiscardSymbol or _ is IEventSymbol: false
+                case local is ILocalSymbol: !isArgument && local.RefKind != RefKind.None
+                case parameter is IParameterSymbol: !isArgument && parameter.RefKind != RefKind.None
+                default: true
+            }
+        }
+
+        private func IsSourceSymbol(symbol ISymbol) bool -> SymbolEqualityComparer.Default.Equals(
+            symbol.OriginalDefinition.ContainingAssembly,
+            this.context.Compilation.Assembly
+        )
+
+        /// ADR-0208 R14, R16 and R17 (#5617): whether a read of [`property`](paramref) through a receiver of static
+        /// type [`receiverType`](paramref) (`null` for an exact type) can run user code in the emitted G#. A source
+        /// property mirrors `SourcePropertyRunsUserCode`: a computed accessor (cref:IsEmittedAsAutoProperty) or an
+        /// interface slot runs user code, and an auto accessor runs none unless it is `open` or an `override` and the
+        /// receiver type can have a subclass. An imported accessor runs user code unless it is on the stable list
+        /// (cref:IsStableImportedGetter) and is not an index read that gsc emits through `IList` or `IDictionary`.
+        private func AccessorRunsUserCode(property IPropertySymbol, receiverType ITypeSymbol?) bool {
+            let definition = property.OriginalDefinition
+            if definition.ContainingType?.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
+                return false
+            }
+            if !this.IsSourceSymbol(definition) {
+                return !IsStableImportedGetter(definition) || this.IsErasedInterfaceIndexRead(definition, receiverType)
+            }
+            if !this.IsEmittedAsAutoProperty(definition) {
+                return true
+            }
+            if definition.IsStatic ||
+                receiverType == nil ||
+                !(definition.IsOverride || this.IsMemberEmittedOpen(definition, isOverride: false)) {
+                return false
+            }
+            var type = receiverType
+            if type is INamedTypeSymbol{OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}} nullable {
+                type = nullable.TypeArguments[0]
+            }
+            // gsc keeps the fact for a value type and for a class that is neither `open` nor `sealed`.
+            if type is INamedTypeSymbol named && this.IsSourceSymbol(named) {
+                return !named.IsValueType && (named.TypeKind != TypeKind.Class || this.IsPrintedTypeOpen(named))
+            }
+            return true
+        }
+
+        /// ADR-0208 R17 (#5532): gsc emits an index read on an imported receiver whose type arguments hold a type
+        /// parameter (`List[T]`, or a type nested in `Outer[T]`, whose CLR type arguments include those of the outer
+        /// type) through the non-generic `IList` (with an `int32` index) or `IDictionary`, which a subclass can
+        /// reimplement. This mirrors `ClrIndexReadIsErasedInterfaceCall`.
+        private func IsErasedInterfaceIndexRead(property IPropertySymbol, receiverType ITypeSymbol?) bool {
+            if !property.IsIndexer ||
+                property
+                .Parameters
+                .Length != 1 ||
+                receiverType is not INamedTypeSymbol named ||
+                this.IsSourceSymbol(named) || !ContainsTypeParameter(named) {
+                return false
+            }
+            let Implements = func (name string) bool {
+                return named.ToDisplayString() == name || named.AllInterfaces.Any(
+                    (contract INamedTypeSymbol) -> contract.ToDisplayString() == name
+                )
+            }
+            return (
+                Implements("System.Collections.IList") &&
+                    property
+                    .Parameters[0]
+                    .Type
+                    .SpecialType == SpecialType.System_Int32
+            ) ||
+                Implements("System.Collections.IDictionary")
+        }
+
         private func ClosureAssignedLocalLosesNarrowing(
             symbol ISymbol?,
             narrowingGuard Microsoft.CodeAnalysis.SyntaxNode,
@@ -4464,18 +4877,21 @@ partial class CSharpToGSharpTranslator {
             $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
             let closureAssigned = this.IsClosureAssignedVariable(symbol)
-            if !closureAssigned && !this.IsByReferenceVariable(symbol) {
+            let byReference = this.IsByReferenceVariable(symbol)
+            if !closureAssigned && !byReference {
                 return false
             }
-            // ADR-0208 R11 and R15 (#5520): a closure-assigned variable loses its fact at every node that may run
-            // source code. A by-reference variable that no closure assigns loses it at a static access of a type whose
-            // initializer runs source code, which gsc treats as a call that can write the storage. (gsc also drops it
-            // at a constructor call, which is not mirrored here: #5562.)
+            // ADR-0208 R15 (#5237): a closure-assigned variable loses its fact at every node that may run source code.
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
-                if closureAssigned && this.NodeMayRunEscapedClosure(node) {
-                    return true
-                }
-                return this.NodeRunsStaticTypeInitializer(node)
+                return closureAssigned && this.NodeMayRunEscapedClosure(node)
+            }
+            // ADR-0208 R11, R12, R14, R16 and R17 (#5520, #5617): a by-reference variable loses its fact at a node
+            // that gsc counts as a write of by-reference storage. (gsc also drops it at a constructor call, which is
+            // not mirrored here: #5562.) gsc applies the effect after the statement that holds it (R18), but the
+            // translator can move an operand into an earlier statement, so every such node before the read counts.
+            let WritesReferenceStorage = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return byReference &&
+                    (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node))
             }
             let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
@@ -4491,6 +4907,15 @@ partial class CSharpToGSharpTranslator {
                 .Any(this.ConstantPatternMayCallEquals) {
                 return true
             }
+            // ADR-0208 R18 (6) (#5617): the guard's own pattern runs its accessors, which can write the storage of a
+            // by-reference variable, so gsc does not narrow on that test either.
+            if narrowingGuard is IsPatternExpressionSyntax ownTest &&
+                ownTest
+                .Pattern
+                .DescendantNodesAndSelf(OutsideNestedFunctions)
+                .Any(WritesReferenceStorage) {
+                return true
+            }
             if $scope.DescendantNodes(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart >= narrowingGuard
                     .Span
@@ -4498,9 +4923,58 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= use.SpanStart &&
-                    RunsSourceCode(node)
+                    (RunsSourceCode(node) || WritesReferenceStorage(node))
             ) {
                 return true
+            }
+            // ADR-0208 (#5629): a `default` section that is not last runs after the case tests and guards of the
+            // later sections, so their effects reach its body.
+            for var enclosing Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = use.Parent;
+                enclosing != nil &&
+                enclosing != $scope;
+                enclosing = enclosing!!
+                .Parent {
+                if enclosing is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchSectionSyntax section &&
+                    !section
+                    .Span
+                    .Contains(narrowingGuard.Span) && section.Labels.Any(
+                    (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .DefaultSwitchLabelSyntax
+                ) &&
+                    section.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchStatementSyntax switchStatement &&
+                    switchStatement
+                    .Sections
+                    .Any(
+                    (
+                        later Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax
+                    ) -> later.SpanStart > section.SpanStart &&
+                        later
+                        .Labels
+                        .Any(
+                        (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label.DescendantNodes(
+                            OutsideNestedFunctions
+                        )
+                            .Any(
+                            (node Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(node) ||
+                                WritesReferenceStorage(node)
+                        )
+                    )
+                ) {
+                    return true
+                }
             }
             // A construction runs before the initializer that holds the read (`new T { { current } }`).
             for var enclosing Microsoft
@@ -4540,7 +5014,10 @@ partial class CSharpToGSharpTranslator {
                     node is ForEachStatementSyntax ||
                     node is ForEachVariableStatementSyntax {
                     if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodesAndSelf(OutsideNestedFunctions)
-                        .Any(RunsSourceCode) {
+                        .Any(
+                        (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||
+                            WritesReferenceStorage(candidate)
+                    ) {
                         return true
                     }
                 }
@@ -8530,6 +9007,50 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 return false
+            }
+
+            /// ADR-0208 R16 and R17 (#5231, #5532): the stable list of imported getters, as `IsStableClrAccessor` in
+            /// src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs gives it. A getter is stable when its type is
+            /// in a core library assembly, it cannot be overridden, and the list names it. Keep the two lists the same.
+            private func IsStableImportedGetter(property IPropertySymbol) bool {
+                let type = property.ContainingType?.OriginalDefinition
+                if type == nil || type.ContainingType != nil {
+                    return false
+                }
+                let typeName = "${type.ContainingNamespace.ToDisplayString()}.${type.MetadataName}"
+                let listed = switch property.MetadataName {
+                    case "Length": typeName is "System.String" or
+                        "System.Text.StringBuilder" or
+                        "System.Array" or
+                        "System.Span`1" or
+                        "System.ReadOnlySpan`1"
+                    case "IsEmpty": typeName is "System.Span`1" or "System.ReadOnlySpan`1"
+                    case "Count": typeName is "System.Collections.Generic.List`1" or
+                        "System.Collections.Generic.Dictionary`2" or
+                        "System.Collections.Generic.HashSet`1"
+                    case "Key", "Value": typeName == "System.Collections.Generic.KeyValuePair`2"
+                    case "HasValue": typeName == "System.Nullable`1"
+                    case "Item": typeName is "System.Collections.Generic.List`1" or
+                        "System.Span`1" or
+                        "System.ReadOnlySpan`1"
+                    case "Chars": typeName is "System.Text.StringBuilder" or "System.String"
+                    default: false
+                }
+                let getter = property.GetMethod
+                if !listed ||
+                    getter == nil ||
+                    (
+                    (getter.IsVirtual || getter.IsAbstract || getter.IsOverride) && !getter.IsSealed && !type.IsSealed
+                ) {
+                    return false
+                }
+                return property
+                    .ContainingAssembly
+                    .Name is "System.Private.CoreLib" or
+                    "System.Runtime" or
+                    "System.Collections" or
+                    "netstandard" or
+                    "mscorlib"
             }
 
             private func StripParentheses(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) Microsoft

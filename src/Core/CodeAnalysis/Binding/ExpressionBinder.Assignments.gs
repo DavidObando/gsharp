@@ -253,6 +253,24 @@ internal partial class ExpressionBinder {
         ) {
             return BindExpression(syntax, nonNullTargetType)
         }
+        // Issue #5635: a block value in parentheses or `checked` binds with no target and converts to the target
+        // below, so the narrowed read that it yields is decided for the target.
+        if targetType is {} blockTargetType && blockTargetType != TypeSymbol.Error && IsBlockValueSyntax(syntax) {
+            var blockRead NarrowedBranchValue? = nil
+            let value = BindBranchValue(
+                syntax,
+                nil,
+                nil,
+                (read NarrowedBranchValue) -> {
+                    blockRead = read
+                }
+            )
+            return if blockRead is {} read {
+                conversions.ResolveNarrowedValue(value, read, blockTargetType)
+            } else {
+                value
+            }
+        }
         return BindExpression(syntax)
     }
 

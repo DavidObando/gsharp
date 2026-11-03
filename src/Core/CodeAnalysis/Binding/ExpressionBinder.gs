@@ -52,8 +52,6 @@ internal partial class ExpressionBinder {
     private let binderCtx BinderContext
     private let memberLookup MemberLookup
     private let conversions ConversionClassifier
-    // Issue #5613: the capture of the block value that BindBranchValue binds next (TakeBlockValueCapture).
-    private var pendingBlockValueCapture((NarrowedBranchValue) -> void)? = nil
     private let overloads OverloadResolver
     private let patterns PatternBinder
     private let lambdas LambdaBinder
@@ -433,6 +431,9 @@ internal partial class ExpressionBinder {
         // re-binds and duplicated diagnostics.
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
+            // Issue #5635: a consumer can decide a narrowed read after later values bind, so the read keeps the
+            // backward `goto` facts where it binds.
+            binderCtx.CaptureNarrowedRead(result, syntax.Location)
         }
         return result
     }
