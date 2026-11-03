@@ -1301,14 +1301,14 @@ partial class CSharpToGSharpTranslator {
             return MemberAccessExpression(target, emittedMemberName, isArrow)
         }
 
-        // Issue #4287: a generic method whose RESULT is its own type parameter,
-        // called with a C# `ref x!` / `out x!` / `in x!` argument whose declared
-        // type is `T?`. C# infers the type argument from the suppressed
-        // (non-null) view, so `Volatile.Read(ref cache!)` is non-null there. A
-        // by-ref argument cannot carry a G# `!!`, so cs2gs emits `&cache` and gsc
-        // infers the argument from the declared `Dictionary?`: the call result
-        // is `T?` in G#. Dereferencing it now reports GS0159, so the receiver
-        // needs the `!!` that re-states the C# author's own suppression.
+        // Issue #4287, #5582: a generic call whose RESULT is its own method type parameter `T`, without
+        // explicit type arguments, is `T?` in G# although C# types it non-null when an argument passes `T?`
+        // storage with no `!!` (`PassesArgumentStorageUnasserted`: a `ref`/`out`/`in` argument, or an
+        // implicit argument at a source-declared `in` parameter) to a parameter that cs2gs emits as a bare
+        // `T`. The storage is `T?` when cs2gs widens it (an `[AllowNull]` field), or when the argument drops
+        // the author's `!` on a declared `T?` value (`ref cache!`, `ref (cache!)`): C# infers `T` from the
+        // suppressed (non-null) view, gsc from the emitted `T?` storage. A parameter that cs2gs emits as `T?`
+        // (`ref T? location`, `[AllowNull] ref T location`) absorbs the `?`, so it does not count.
         /// Translates a member- or element-access [`recv`](paramref) receiver,
         /// wrapping it in G#'s postfix non-null assertion (`recv!!`) when the
         /// receiver is <em>declared</em> nullable (a `T?` reference type or
@@ -1329,10 +1329,13 @@ partial class CSharpToGSharpTranslator {
         /// `.` or `[`).
         /// @returns The translated receiver, wrapped in
         /// (cref:NonNullAssertionExpression) when flow-proven non-null.
-        private func GenericResultInfersNilableThroughDroppedByRefSuppression(
+        private func GenericResultInfersNilableThroughByRefArgument(
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
             if Unparenthesize(recv) is not InvocationExpressionSyntax invocation ||
+                invocation.Expression is GenericNameSyntax or
+                (MemberAccessExpressionSyntax and {Name: GenericNameSyntax}) or
+                (MemberBindingExpressionSyntax and {Name: GenericNameSyntax}) ||
                 this
                 .context
                 .GetSymbolInfo(invocation)
@@ -1344,40 +1347,48 @@ partial class CSharpToGSharpTranslator {
                 returnParameter.TypeParameterKind != TypeParameterKind.Method {
                 return false
             }
-            // Plain comparisons rather than property patterns over Roslyn enums:
-            // cs2gs translates its own source (issue #4167).
             for argument in invocation.ArgumentList.Arguments {
-                if argument
-                    .RefKindKeyword
-                    .RawKind == 0 ||
-                    argument.Expression is not PostfixUnaryExpressionSyntax suppressed ||
-                    !suppressed.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) {
+                if !this.PassesArgumentStorageUnasserted(argument) {
                     continue
                 }
-                // Only the argument that SUPPLIES the returned type parameter
-                // matters: in `Pick<T, U>(ref T value, U result)` a suppressed
-                // `ref x!` fixes T, not the returned U (Copilot review). Map the
-                // argument (named or positional) to its parameter on the
-                // original definition and require that parameter's type to BE
-                // the returned type parameter.
+                // Only the argument that SUPPLIES the returned type parameter matters: in
+                // `Pick<T, U>(ref T value, U result)` a suppressed `ref x!` fixes T, not the returned U.
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
-                if parameter == nil ||
-                    parameter.Ordinal >= method
-                    .OriginalDefinition
-                    .Parameters
-                    .Length ||
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(method.OriginalDefinition.Parameters[parameter.Ordinal].Type, returnParameter) {
+                if parameter == nil || parameter.Ordinal >= method.OriginalDefinition.Parameters.Length {
                     continue
                 }
-                let declared ITypeSymbol? = this.GetDeclaredValueType(suppressed.Operand)
-                if declared != nil &&
-                    declared.IsReferenceType &&
-                    declared.NullableAnnotation == Microsoft
+                let declaredParameter = method.OriginalDefinition.Parameters[parameter.Ordinal]
+                if declaredParameter.Type is not ITypeParameterSymbol parameterType ||
+                    parameterType.NullableAnnotation == Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
-                    .Annotated {
+                    .Annotated ||
+                    !SymbolEqualityComparer
+                    .Default
+                    .Equals(parameterType, returnParameter) || this.IsTranslatorWidenedDeclaration(declaredParameter) {
+                    continue
+                }
+                var storage Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(argument.Expression)
+                if storage is PostfixUnaryExpressionSyntax suppressed && suppressed.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                ) {
+                    let declared ITypeSymbol? = this.GetDeclaredValueType(suppressed.Operand)
+                    if declared != nil &&
+                        declared.IsReferenceType &&
+                        declared.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return true
+                    }
+                    storage = Unparenthesize(suppressed.Operand)
+                }
+                if storage is {} target &&
+                    this
+                    .context
+                    .GetSymbolInfo(target)
+                    .Symbol is {} symbol &&
+                    this.IsTranslatorWidenedDeclaration(symbol) {
                     return true
                 }
             }
@@ -2127,9 +2138,7 @@ partial class CSharpToGSharpTranslator {
             let iteratorForeachReceiverRequiresAssertion = this.IteratorForeachReceiverRequiresAssertion(recv)
             let nullableForEachBindingRequiresAssertion = this.IsNullableForEachBindingUse(recv)
             let importedGenericTupleElementRequiresAssertion = this.ImportedGenericTupleElementRequiresAssertion(recv)
-            let byRefSuppressionDroppedRequiresAssertion = this.GenericResultInfersNilableThroughDroppedByRefSuppression(
-                recv
-            )
+            let byRefSuppressionDroppedRequiresAssertion = this.GenericResultInfersNilableThroughByRefArgument(recv)
             let managedArrayGenericResultRequiresAssertion = this.ManagedReferenceArrayWidenedExpressionMayBeNull(recv)
             let composedReceiverMayBeNull = this.ComposedReceiverMayBeNull(recv)
             if !iteratorForeachReceiverRequiresAssertion &&
@@ -3926,73 +3935,16 @@ partial class CSharpToGSharpTranslator {
         }
 
         /// Issue #5582: whether the emitted G# value of [`expression`](paramref) can be nil although its C#
-        /// type is non-null. A dropped by-ref suppression (`Volatile.Read(ref cache!)`, issue #4287), a
-        /// by-ref argument of widened storage, a widened managed-reference array element and an imported
+        /// type is non-null. A generic result that infers `T?` through a by-ref argument
+        /// (`Volatile.Read(ref cache!)`, issue #4287, or of widened storage), a widened managed-reference array element and an imported
         /// generic tuple element are such values.
         /// The receiver bridge asserts each of them. (cref:GSharpExpressionIsStaticallyNonNull) asks it for each
         /// operand, so a `var` capture of such a value, or of a composed value with such an operand, is `T?`.
         private func EmittedValueIsNilableBeyondItsCSharpType(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) bool -> this.GenericResultInfersNilableThroughDroppedByRefSuppression(expression) ||
+        ) bool -> this.GenericResultInfersNilableThroughByRefArgument(expression) ||
             this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
-            this.ImportedGenericTupleElementRequiresAssertion(expression) ||
-            this.GenericResultInfersNilableThroughWidenedByRefArgument(expression)
-
-        // Issue #5582: a generic call whose result is its own method type parameter, without explicit type
-        // arguments, with an argument for a bare `T` parameter that passes storage cs2gs widens (an
-        // `[AllowNull]` field, for example) with no `!!`: a by-reference argument, or an implicit argument at
-        // a source-declared `in` parameter (`PassesArgumentStorageUnasserted`). G# infers the type argument
-        // from the emitted `T?` storage, so the result is `T?`, although C# infers it from the declared
-        // non-null type. Other generic flows are not projected; a capture over them keeps its previous
-        // translation (#5656).
-        private func GenericResultInfersNilableThroughWidenedByRefArgument(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) bool {
-            if Unparenthesize(expression) is not InvocationExpressionSyntax invocation ||
-                invocation.Expression is GenericNameSyntax or
-                (MemberAccessExpressionSyntax and {Name: GenericNameSyntax}) or
-                (MemberBindingExpressionSyntax and {Name: GenericNameSyntax}) ||
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol method ||
-                !method.IsGenericMethod ||
-                method
-                .OriginalDefinition
-                .ReturnType is not ITypeParameterSymbol returnParameter ||
-                returnParameter.TypeParameterKind != TypeParameterKind.Method {
-                return false
-            }
-            for argument in invocation.ArgumentList.Arguments {
-                if !this.PassesArgumentStorageUnasserted(argument) ||
-                    this
-                    .context
-                    .GetSymbolInfo(argument.Expression)
-                    .Symbol is not{} storage ||
-                    !this.IsTranslatorWidenedDeclaration(storage) {
-                    continue
-                }
-                // A `T?` parameter (`ref T? location`) takes the widened storage with `T` inferred from its
-                // non-null part, so only a bare `T` parameter carries the storage's `?` to the result.
-                let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
-                if parameter != nil &&
-                    parameter.Ordinal < method
-                    .OriginalDefinition
-                    .Parameters
-                    .Length &&
-                    method
-                    .OriginalDefinition
-                    .Parameters[parameter.Ordinal]
-                    .Type is ITypeParameterSymbol parameterType &&
-                    parameterType.NullableAnnotation != NullableAnnotation.Annotated &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(parameterType, returnParameter) {
-                    return true
-                }
-            }
-            return false
-        }
+            this.ImportedGenericTupleElementRequiresAssertion(expression)
 
         // Issue #5582: whether `expression` mentions anywhere (an operand, an argument, a lambda body at any
         // depth, the initializer of a local that it reads, or the scrutinee of a pattern variable that it reads)

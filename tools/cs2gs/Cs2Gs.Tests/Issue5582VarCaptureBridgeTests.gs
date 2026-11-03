@@ -206,13 +206,25 @@ namespace Demo
         }
         static int Is() => Volatile.Read(ref cache!) is var c ? c.Count : -1;
         static int Direct() => Volatile.Read(ref cache!).Count;
-        public static string Run() => Arm() + " " + Case() + " " + Is() + " " + Direct();
+        static int ParenArm() => Volatile.Read(ref (cache!)) switch { var p => p.Count };
+        static int ParenCase()
+        {
+            switch (Volatile.Read(ref (cache!)))
+            {
+                case var q: return q.Count;
+            }
+        }
+        static int ParenDirect() => Volatile.Read(ref (cache!)).Count;
+        public static string Run() => Arm() + " " + Case() + " " + Is() + " " + Direct() + " " + ParenArm() + " " +
+            ParenCase() + " " + ParenDirect();
     }
 }`)
         Assert.Contains("case var c: c!!.Count", printed)
         Assert.Contains("return c!!.Count", printed)
         Assert.Contains("is var c { c!!.Count }", printed)
-        RunsAs(printed, "1 1 1 1")
+        Assert.Contains("case var p: p!!.Count", printed)
+        Assert.Contains("return q!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1")
     }
 
     /// The emitted type of each operand decides a composed input: a conditional or a `??` of two
@@ -646,7 +658,9 @@ namespace Demo
     public class Holder { [AllowNull] public Node Value = new Node(); }
     public static class P
     {
+        private static Node? cache = new Node();
         static T Pick<T>(ref T? ignored, T value) where T : class => value;
+        static T Allow<T>([AllowNull] ref T ignored, T value) where T : class => value;
         static string Take(Node n) => "taken";
         static string Is(Holder h, Node node) => Pick(ref h.Value, node) is var c ? Take(c) : "";
         static string Arm(Holder h, Node node) => Pick(ref h.Value, node) switch { var d => Take(d) };
@@ -657,15 +671,28 @@ namespace Demo
                 case var e: return Take(e);
             }
         }
+        static string SuppressedIs(Node node) => Pick(ref cache!, node) is var f ? Take(f) : "";
+        static string SuppressedArm(Node node) => Pick(ref cache!, node) switch { var g => Take(g) };
+        static string AllowIs(Holder h, Node node) => Allow(ref h.Value, node) is var i ? Take(i) : "";
+        static string AllowArm(Holder h, Node node) => Allow(ref h.Value, node) switch { var j => Take(j) };
+        static string AllowCase(Holder h, Node node)
+        {
+            switch (Allow(ref h.Value, node))
+            {
+                case var k: return Take(k);
+            }
+        }
         public static string Run() => Is(new Holder(), null!) + " " + Arm(new Holder(), null!) + " " +
-            Case(new Holder(), null!);
+            Case(new Holder(), null!) + " " + SuppressedIs(null!) + " " + SuppressedArm(null!) + " " +
+            AllowIs(new Holder(), null!) + " " + AllowArm(new Holder(), null!) + " " + AllowCase(new Holder(), null!);
     }
 }`)
         Assert.Contains("var Value Node?", printed)
-        Assert.DoesNotContain("Take(c!!)", printed)
-        Assert.DoesNotContain("Take(d!!)", printed)
-        Assert.DoesNotContain("Take(e!!)", printed)
-        RunsAs(printed, "taken taken taken")
+        Assert.Contains("Allow[T class](@AllowNull ref ignored T?", printed)
+        for capture in[]string{"c", "d", "e", "f", "g", "i", "j", "k"} {
+            Assert.DoesNotContain("Take(" + capture + "!!)", printed)
+        }
+        RunsAs(printed, "taken taken taken taken taken taken taken taken")
     }
 
     /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
