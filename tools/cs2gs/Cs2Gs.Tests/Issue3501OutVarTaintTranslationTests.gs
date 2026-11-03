@@ -404,18 +404,47 @@ namespace Demo
             return combine();
         }
 
+        private static bool NextThree(out string value)
+        {
+            step++;
+            value = step.ToString();
+            return step <= 2;
+        }
+
+        public static string EscapingClosureInLoopCondition()
+        {
+            step = 0;
+            var readers = new List<Func<string>>();
+            while (NextThree(out string value))
+            {
+                readers.Add(() => value ?? "nil");
+                value = null;
+            }
+
+            step = 0;
+            var forReaders = new List<Func<string>>();
+            for (int i = 0; NextThree(out string value); i++)
+            {
+                forReaders.Add(() => value ?? "nil");
+                value = null;
+            }
+
+            return string.Join(":", readers.Select(r => r())) + "/" + string.Join(":", forReaders.Select(r => r()));
+        }
+
         public static string MainEntry() =>
             RunQuery() + "|" +
             string.Join(",", YieldAfterLoops(true)) + "|" +
             string.Join(",", YieldBeforeLoops(true)) + "|" +
             PatternDesignatorAfterRenamedOut(new Item { Code = 7 }) + "|" +
-            TwoCapturedPromotedOutLocals();
+            TwoCapturedPromotedOutLocals() + "|" +
+            EscapingClosureInLoopCondition();
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "k1:k2:nil|1|10|s1:nil|k1:nil"
+            "k1:k2:nil|1|10|s1:nil|k1:nil|nil:nil/nil:nil"
         )
     }
 

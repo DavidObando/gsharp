@@ -60,7 +60,7 @@ partial class CSharpToGSharpTranslator {
             // ADR-0166: a loop condition whose designations are native pattern
             // variables stays a plain `for cond { }`; the body sees the
             // when-true variables directly.
-            if this.ConditionUsesNativePatternVariables(condition) {
+            if !this.ClauseRequiresOutPredeclaration(condition) && this.ConditionUsesNativePatternVariables(condition) {
                 return false
             }
             if !isDoWhile && this.TryBuildWhileLetLoop(condition, bodyStatement, out var whileLet) {
@@ -71,11 +71,14 @@ partial class CSharpToGSharpTranslator {
                 condition,
                 out var loopCondition,
                 out var hoisted,
-                out var hoistsAssignment
+                out var hoistsAssignment,
+                isDoWhile
             ) {
                 return false
             }
-            if isDoWhile && hoistsAssignment && BodyContainsOwnLoopContinue(bodyStatement) {
+            if isDoWhile &&
+                (hoistsAssignment || OwnLoopContinueCrossesFinally(bodyStatement)) &&
+                BodyContainsOwnLoopContinue(bodyStatement) {
                 // The tail-appended hoist runs where C# evaluates `cond` — AFTER the
                 // body. But G# `do`/`while` lowers `continue` to a goto that lands
                 // right after the whole body (ADR-0070's continueLabel), which is
@@ -90,15 +93,23 @@ partial class CSharpToGSharpTranslator {
                 )
                 return false
             }
-            let originalBody = this.TranslateStatementAsBlock(bodyStatement)
+            var originalBody = this.TranslateStatementAsBlock(bodyStatement)
             let bodyStatements = List[GStatement]()
             if isDoWhile {
                 // C# `do { body } while (cond)` evaluates `cond` AFTER the body runs,
                 // so the hoisted assignment/break-guard must trail the body (not lead
                 // it), or the first body iteration would observe a write that hasn't
                 // happened yet (issue #1723).
+                let hasOwnContinue = BodyContainsOwnLoopContinue(bodyStatement)
+                if hasOwnContinue {
+                    originalBody = cast[BlockStatement](this.RewriteOwnLoopContinue(nil, originalBody, hoisted!!))
+                }
                 bodyStatements.AddRange(originalBody.Statements)
-                bodyStatements.AddRange(hoisted!!)
+                if hasOwnContinue && hoisted!!.Any((s GStatement) -> s is LocalDeclarationStatement) {
+                    bodyStatements.Add(BlockStatement(hoisted!!))
+                } else {
+                    bodyStatements.AddRange(hoisted!!)
+                }
             } else {
                 bodyStatements.AddRange(hoisted!!)
                 bodyStatements.AddRange(originalBody.Statements)
@@ -124,7 +135,8 @@ partial class CSharpToGSharpTranslator {
             condition ExpressionSyntax?,
             out loopCondition GExpression?,
             out hoisted List[GStatement]?,
-            out hoistsAssignment bool
+            out hoistsAssignment bool,
+            isDoWhile bool = false
         ) bool {
             loopCondition = nil
             hoisted = nil
@@ -140,6 +152,9 @@ partial class CSharpToGSharpTranslator {
             }
             if firstHoist < 0 {
                 return false
+            }
+            if isDoWhile {
+                firstHoist = 0
             }
             for var i = firstHoist; i < clauses.Count; i++ {
                 if ClauseContainsAssignment(clauses[i]) {
@@ -185,7 +200,21 @@ partial class CSharpToGSharpTranslator {
                         ExpressionDeclaresOutVar(isPattern.Expression)
                 )
             ) ||
-                ClauseContainsAssignment(clause)
+                ClauseContainsAssignment(clause) ||
+                this.ClauseRequiresOutPredeclaration(clause)
+        }
+
+        private func ClauseRequiresOutPredeclaration(clause ExpressionSyntax?) bool {
+            if clause == nil {
+                return false
+            }
+            for single in EagerExecutionNodes(clause).OfType[SingleVariableDesignationSyntax]() {
+                if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
+                    this.OutDeclarationRequiresPredeclaration(single, local) {
+                    return true
+                }
+            }
+            return false
         }
 
         // Emits the fallback statements for a loop-condition clause that still
@@ -198,11 +227,14 @@ partial class CSharpToGSharpTranslator {
             // would evaluate the operand once, before the loop, instead of once
             // per iteration as C# does).
             let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
+            let outerOutDeclarations List[GStatement]? = this.state.FunctionArgumentOutDeclarations
             this.state.PendingSpillPrologue = into
+            this.state.FunctionArgumentOutDeclarations = into
             try {
                 this.HoistLoopConditionClauseCore(clause, into)
             } finally {
                 this.state.PendingSpillPrologue = outerSpillPrologue
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
             }
         }
 
@@ -1217,7 +1249,9 @@ partial class CSharpToGSharpTranslator {
                 forStatement
                 .Initializers
                 .Concat(forStatement.Incrementors)
-                .Any(ClauseContainsAssignment) ||
+                .Any(
+                (expr ExpressionSyntax) -> ClauseContainsAssignment(expr) || this.ClauseRequiresOutPredeclaration(expr)
+            ) ||
                 this.ForConditionRequiresHoist(forStatement.Condition) {
                 return this.LowerForToWhile(forStatement)
             }
@@ -1277,11 +1311,20 @@ partial class CSharpToGSharpTranslator {
         /// silently reordering that side effect.
         private func LowerForToWhile(forStatement ForStatementSyntax) GStatement {
             let outer = List[GStatement]()
-            if forStatement.Declaration != nil {
-                outer.AddRange(this.TranslateLocalDeclaration(forStatement.Declaration, isConst: false))
-            }
-            for init in forStatement.Initializers {
-                outer.AddRange(this.TranslateExpressionStatements(init)!!)
+            let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
+            let outerOutDeclarations List[GStatement]? = this.state.FunctionArgumentOutDeclarations
+            this.state.PendingSpillPrologue = outer
+            this.state.FunctionArgumentOutDeclarations = outer
+            try {
+                if forStatement.Declaration != nil {
+                    outer.AddRange(this.TranslateLocalDeclaration(forStatement.Declaration, isConst: false))
+                }
+                for init in forStatement.Initializers {
+                    outer.AddRange(this.TranslateExpressionStatements(init)!!)
+                }
+            } finally {
+                this.state.PendingSpillPrologue = outerSpillPrologue
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
             }
             var condition GExpression?
             var conditionPrologue List[GStatement]?
@@ -1302,8 +1345,15 @@ partial class CSharpToGSharpTranslator {
             }
             let incrementorExpressions = forStatement.Incrementors.ToList()
             let incrementorStatements = List[GStatement]()
-            for inc in incrementorExpressions {
-                incrementorStatements.AddRange(this.TranslateExpressionStatements(inc)!!)
+            this.state.PendingSpillPrologue = incrementorStatements
+            this.state.FunctionArgumentOutDeclarations = incrementorStatements
+            try {
+                for inc in incrementorExpressions {
+                    incrementorStatements.AddRange(this.TranslateExpressionStatements(inc)!!)
+                }
+            } finally {
+                this.state.PendingSpillPrologue = outerSpillPrologue
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
             }
             var translatedBody BlockStatement? = this.TranslateStatementAsBlock(forStatement.Statement)
             if incrementorStatements.Count > 0 && BodyContainsOwnLoopContinue(forStatement.Statement) {
@@ -1354,7 +1404,7 @@ partial class CSharpToGSharpTranslator {
         /// leaving a `finally`, so it can never itself contain an own-loop
         /// `continue`.
         private func DuplicateIncrementorsBeforeOwnLoopContinue(
-            forStatement ForStatementSyntax,
+            forStatement ForStatementSyntax?,
             body BlockStatement?,
             incrementorStatements IReadOnlyList[GStatement]
         ) BlockStatement? {
@@ -1362,7 +1412,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func RewriteOwnLoopContinue(
-            forStatement ForStatementSyntax,
+            forStatement ForStatementSyntax?,
             statement GStatement?,
             incrementorStatements IReadOnlyList[GStatement]
         ) GStatement? {
