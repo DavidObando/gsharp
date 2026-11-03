@@ -536,6 +536,32 @@ public class UnrelatedIfaceIdx
     public int this[IB x] => 2;
 }
 
+public class SetOnlyUnrelatedIfaceArityIdx
+{
+    public int Last;
+
+    public int this[in IA x]
+    {
+        set => Last = value + 10;
+    }
+
+    public int this[IB x, int y = 0]
+    {
+        set => Last = value + 20 + y;
+    }
+}
+
+public class ImportedInIdxSource
+{
+    public int Stored;
+
+    public int this[in int k]
+    {
+        get => Stored + k;
+        set => Stored = k * 10 + value;
+    }
+}
+
 public static class MixedInOverloads
 {
     public static int M(in int a, long b) => 1;
@@ -582,6 +608,13 @@ struct Key {
     override func ToString() string -> "K(${Id})"
 }
 
+interface IGsInIdx {
+    prop this[in k int32] int32 {
+        get
+        set
+    }
+}
+
 unsafe func UsePointers() string {
     let pIdx = PtrIdx()
     pIdx[nil] = 9
@@ -603,6 +636,10 @@ let sOnly = SetOnlyArityOverloads()
 var sIdx = 5
 sOnly[sIdx] = 6
 let sOnlyRes = sOnly.Last
+let gsAdapted = adapt[IGsInIdx](ImportedInIdxSource())
+var adaptKey = 3
+gsAdapted[in adaptKey] = 4
+let gsAdaptedRead = gsAdapted[adaptKey]
 let g = OverloadedGenIdx[Key]()
 var key = Key{Id: 7}
 let rVal = g[key]
@@ -611,7 +648,7 @@ g[key] = "A"
 let wVal = g.Last
 g[in key] = "B"
 let wIn = g.Last
-Console.WriteLine("${UsePointers()} | ${sOnlyRes} | ${rVal} ${rIn} ${wVal} ${wIn}")`
+Console.WriteLine("${UsePointers()} | ${sOnlyRes} | ${gsAdaptedRead} | ${rVal} ${rIn} ${wVal} ${wIn}")`
         let tempDir = Directory.CreateTempSubdirectory("gs_4421_rev_").FullName
         try {
             let csLibPath = CompileCSharpUnsafe(tempDir, "InIdxReviewLib", csLibSource)
@@ -620,7 +657,7 @@ Console.WriteLine("${UsePointers()} | ${sOnlyRes} | ${rVal} ${rIn} ${wVal} ${wIn
             Assert.True(File.Exists(appPath), "App must compile. Log:\n$log")
             let (exit, output) = RunDotnet(appPath)
             Assert.True(exit == 0, "App must run. Exit $exit:\n$output")
-            Assert.Equal("-1 40 50 52 53 54 | 111 | val:K(7) in:K(7) val:K(7)=A in:K(7)=B", output.Trim())
+            Assert.Equal("-1 40 50 52 53 54 | 111 | 37 | val:K(7) in:K(7) val:K(7)=A in:K(7)=B", output.Trim())
 
             let ambigIfaceLog = Compile(tempDir, `package P
 import InIdxReviewLib
@@ -629,6 +666,14 @@ let u = UnrelatedIfaceIdx()
 let b = Both()
 let _ = u[b]`, Path.Combine(tempDir, "AmbigIface.dll"), "/target:library", "/reference:" + csLibPath)
             Assert.Contains("GS0266", ambigIfaceLog, StringComparison.Ordinal)
+
+            let ambigSetOnlyIfaceLog = Compile(tempDir, `package P
+import InIdxReviewLib
+class Both : IA, IB { }
+let u = SetOnlyUnrelatedIfaceArityIdx()
+let b = Both()
+u[b] = 1`, Path.Combine(tempDir, "AmbigSetOnlyIface.dll"), "/target:library", "/reference:" + csLibPath)
+            Assert.Contains("GS0266", ambigSetOnlyIfaceLog, StringComparison.Ordinal)
 
             let ambigMethodLog = Compile(tempDir, `package P
 import InIdxReviewLib

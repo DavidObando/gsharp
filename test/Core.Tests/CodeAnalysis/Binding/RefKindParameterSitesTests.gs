@@ -640,6 +640,43 @@ let m = Mixed()
 m[1, 2]
 `)
         Assert.Contains(mixedAmbiguous.Diagnostics, (d Diagnostic) -> d.Id == "GS0266")
+
+        let coalesceResult = Evaluate(`
+class NullableInIdx {
+    var Slot0 string? = nil
+    var Slot1 string? = nil
+    var LastKey int32
+    prop this[in k int32] string? {
+        get {
+            return if k == 0 { Slot0 } else { Slot1 }
+        }
+        set {
+            LastKey = k
+            if k == 0 {
+                Slot0 = value
+            } else {
+                Slot1 = value
+            }
+        }
+    }
+}
+
+func MutateAndReturn(ref x int32, v string) string {
+    x = 9
+    return v
+}
+
+let box = NullableInIdx()
+var k0 = 0
+box[in k0] ??= MutateAndReturn(ref k0, "first")
+let afterStmtKey = box.LastKey
+let afterStmtVal = box.Slot1 ?? ""
+var k1 = 0
+let exprVal = (box[k1] ??= "second")
+"${afterStmtKey}:${afterStmtVal}:${exprVal}:${box.Slot0 ?? ""}"
+`)
+        Assert.Empty(coalesceResult.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("9:first:second:second", coalesceResult.Value)
     }
 
     shared {

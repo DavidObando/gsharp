@@ -57,7 +57,14 @@ internal partial class ExpressionBinder {
             nullableType = NullableTypeSymbol.Get(platformTarget.UnderlyingType)
         }
         let isNonNullableReferenceTarget = nullableType == nil && Conversion.IsReferenceLikeTarget(boundRead.Type) &&
-            (boundRead is BoundIndexExpression or BoundClrIndexExpression)
+            (
+            boundRead is BoundIndexExpression or
+                BoundClrIndexExpression ||
+                (
+                boundRead is BoundUserInstanceCallExpression userIdxRead &&
+                    FindIndexerByGetter(userIdxRead.Receiver.Type, userIdxRead.Method) != nil
+            )
+        )
         if nullableType == nil && !isNonNullableReferenceTarget {
             Diagnostics.ReportNullCoalescingAssignmentTargetNotNullable(syntax.OperatorToken.Location, boundRead.Type)
             let _ = BindExpression(syntax.Value)
@@ -639,7 +646,11 @@ internal partial class ExpressionBinder {
                     let argsBuilder = ImmutableArray.CreateBuilder[BoundExpression](clrIdx.Arguments.Length)
                     for arg in clrIdx.Arguments {
                         argsBuilder.Add(
-                            CaptureReceiver(captureAnchor, arg, preStatements, forceCapture: snapshotReceivers)
+                            if arg is BoundAddressOfExpression or BoundConditionalAddressExpression {
+                                CaptureUserIndexerArgument(arg, preStatements)
+                            } else {
+                                CaptureReceiver(captureAnchor, arg, preStatements, forceCapture: snapshotReceivers)
+                            }
                         )
                     }
                     let args = argsBuilder.ToImmutable()
@@ -674,6 +685,86 @@ internal partial class ExpressionBinder {
                             clrIdx.Type,
                             clrIdx.ConstrainedReceiverTypeParameter,
                             clrIdx.ConstrainedInterfaceType
+                        )
+                    }
+                    return (read, write)
+                }
+            }
+            case BoundUserInstanceCallExpression userIdx when FindIndexerByGetter(
+                userIdx.Receiver.Type,
+                userIdx.Method
+            ) is {} userIndexer {
+                {
+                    if userIndexer.SetterSymbol == nil &&
+                        !(
+                        userIdx
+                            .Receiver
+                            .Type is StructSymbol &&
+                            userIndexer.GetterSymbol is {ReturnRefKind: RefKind.Ref}
+                    ) {
+                        Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, "this[]")
+                        return (nil, nil)
+                    }
+                    if userIndexer.SetterSymbol != nil &&
+                        !CheckUserIndexerAccessibility(
+                        userIndexer,
+                        requireGetter: false,
+                        requireSetter: true,
+                        syntax.OperatorToken.Location
+                    ) {
+                        return (nil, nil)
+                    }
+                    if userIndexer.IsInitOnly {
+                        let fn FunctionSymbol? = this.function
+                        let inInitContext = fn != nil && (fn.Name == ".ctor" || fn.IsInitOnlySetter)
+                        let receiverIsThis = userIdx.Receiver is BoundVariableExpression rbve &&
+                            fn?.ThisParameter != nil &&
+                            object.ReferenceEquals(rbve.Variable, fn!!.ThisParameter)
+                        if !inInitContext || !receiverIsThis {
+                            Diagnostics.ReportInitOnlyPropertyAssignment(syntax.OperatorToken.Location, "this[]")
+                            return (nil, nil)
+                        }
+                    }
+                    if AsyncBoundTreeQueries.HasAwait(boundRhs) {
+                        for arg in userIdx.Arguments {
+                            if RequiresSuspensionFreeAddressCapture(arg) {
+                                Diagnostics.ReportManagedReference(
+                                    arg.Syntax?.Location ?? syntax.OperatorToken.Location,
+                                    "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                                )
+                            }
+                        }
+                    }
+                    let target = CaptureStorageReceiver(
+                        captureAnchor,
+                        userIdx.Receiver,
+                        preStatements,
+                        forceCapture: SnapshotsReference(userIdx.Receiver)
+                    )
+                    if !ReceiverTypeIsReference(target.Type) {
+                        preStatements.Add(
+                            BoundExpressionStatement(captureAnchor, BoundAddressOfExpression(captureAnchor, target))
+                        )
+                    }
+                    let argsBuilder = ImmutableArray.CreateBuilder[BoundExpression](userIdx.Arguments.Length)
+                    for arg in userIdx.Arguments {
+                        argsBuilder.Add(CaptureUserIndexerArgument(arg, preStatements))
+                    }
+                    let args = argsBuilder.ToImmutable()
+                    let read = BoundUserInstanceCallExpression(readAnchor, target, userIdx.Method, args, userIdx.Type)
+                    let write BoundExpression = if userIndexer.SetterSymbol is {} setter {
+                        BoundUserInstanceCallExpression(
+                            writeAnchor,
+                            target,
+                            setter,
+                            args.Add(boundRhs),
+                            TypeSymbol.Void
+                        )
+                    } else {
+                        BoundIndirectAssignmentExpression(
+                            writeAnchor,
+                            BoundAddressOfExpression(writeAnchor, read, unmanaged: false),
+                            boundRhs
                         )
                     }
                     return (read, write)
@@ -942,6 +1033,10 @@ internal partial class ExpressionBinder {
             case property is BoundPropertyAccessExpression: property.Receiver
             case imported is BoundClrPropertyAccessExpression: imported.Receiver
             case index is BoundClrIndexExpression: index.Target
+            case userCall is BoundUserInstanceCallExpression when FindIndexerByGetter(
+                userCall.Receiver.Type,
+                userCall.Method
+            ) != nil: userCall.Receiver
             default: default(BoundExpression?)
         }
 
@@ -1003,6 +1098,39 @@ internal partial class ExpressionBinder {
                 for property in type.Properties {
                     if object.ReferenceEquals(property.GetterSymbol, getter) {
                         return property
+                    }
+                }
+            }
+            return nil
+        }
+
+        private func FindIndexerByGetter(receiverType TypeSymbol, getter FunctionSymbol?) PropertySymbol? {
+            if getter == nil {
+                return nil
+            }
+            let rawType = if receiverType is NullableTypeSymbol nullable {
+                nullable.UnderlyingType
+            } else {
+                receiverType
+            }
+            switch rawType {
+                case structType is StructSymbol {
+                    let definition = structType.Definition ?? structType
+                    for level in definition.GetHierarchy() {
+                        for property in(level.Definition ?? level).Properties {
+                            if property.IsIndexer && object.ReferenceEquals(property.GetterSymbol, getter) {
+                                return property
+                            }
+                        }
+                    }
+                }
+                case interfaceType is InterfaceSymbol {
+                    for level in interfaceType.SelfAndAllBaseInterfaces() {
+                        for property in(level.Definition ?? level).Properties {
+                            if property.IsIndexer && object.ReferenceEquals(property.GetterSymbol, getter) {
+                                return property
+                            }
+                        }
                     }
                 }
             }

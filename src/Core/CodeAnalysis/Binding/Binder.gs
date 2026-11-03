@@ -9793,9 +9793,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             slot.Type
@@ -9834,9 +9832,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             BoundVariableExpression(nil, value),
@@ -9927,9 +9923,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             propertyType
@@ -9968,9 +9962,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             BoundVariableExpression(nil, value),

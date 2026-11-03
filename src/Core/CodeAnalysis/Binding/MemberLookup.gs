@@ -7156,6 +7156,11 @@ internal class MemberLookup {
             if hasBetterConversion {
                 return true
             }
+            for var i = 0; i < arguments.Length; i++ {
+                if !SameTypeSymbol(candidate[i], other[i]) {
+                    return false
+                }
+            }
             let candidateParameters = candidateProperty.GetIndexParameters()
             let otherParameters = otherProperty.GetIndexParameters()
             if candidateParameters.Length != otherParameters.Length {
@@ -7163,9 +7168,6 @@ internal class MemberLookup {
             }
             var hasBetterPassingMode = false
             for var i = 0; i < arguments.Length; i++ {
-                if !SameTypeSymbol(candidate[i], other[i]) {
-                    return false
-                }
                 if arguments[i].Type is ByRefTypeSymbol {
                     continue
                 }
