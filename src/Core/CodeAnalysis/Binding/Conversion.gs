@@ -1020,10 +1020,7 @@ class Conversion {
                     // actual `null` reference and a `HasValue == true` source boxes
                     // its underlying value. `BindConversion` materialises this as a
                     // `BoundConversionExpression` so emit inserts the box.
-                    if (
-                        NullableLifting.IsAnyValueTypeNullable(fromNullable) || fromUnderlying is TypeParameterSymbol
-                    ) &&
-                        IsReferenceLikeTarget(toUnderlying) {
+                    if NullableLifting.IsAnyValueTypeNullable(fromNullable) && IsReferenceLikeTarget(toUnderlying) {
                         let boxedConversion = ClassifyNonStructural(fromUnderlying, toUnderlying)
                         if boxedConversion.Exists && boxedConversion.IsImplicit {
                             return Conversion.Implicit
