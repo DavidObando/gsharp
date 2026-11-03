@@ -6328,6 +6328,172 @@ Run()`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
+    @Fact
+    func NestedFinallyReassignsAfterBodyNilAssignment_EstablishesNarrowingForOuterGotoAndFallthrough() {
+        AssertRuns(`import System
+
+func Run(jump bool) {
+    var x string? = nil
+    try {
+        if jump { goto Done }
+    } finally {
+        try {
+            x = nil
+        } finally {
+            x = "safe"
+        }
+    }
+Done:
+    Console.WriteLine(x.Length)
+}
+
+Run(false)
+Run(true)`, "4", "4")
+    }
+
+    @Fact
+    func FinallyIfBranchReassignsAfterNilAssignment_EstablishesNarrowingForGotoAndFallthrough() {
+        AssertRuns(`import System
+
+func Run(jump bool, resetFirst bool) {
+    var x string? = nil
+    try {
+        if jump { goto Done }
+    } finally {
+        if resetFirst {
+            x = nil
+            x = "safe"
+        } else {
+            x = "safe"
+        }
+    }
+Done:
+    Console.WriteLine(x.Length)
+}
+
+Run(false, true)
+Run(true, true)`, "4", "4")
+    }
+
+    @Fact
+    func NestedFinallyNilAssignmentAfterBodyNonNull_ReportsNullableReceiver() {
+        let result = Evaluate(`func Run(jump bool) int32 {
+    var x string? = nil
+    try {
+        if jump { goto Done }
+    } finally {
+        try {
+            x = "safe"
+        } finally {
+            x = nil
+        }
+    }
+    x = "again"
+Done:
+    return x.Length
+}
+
+Run(true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func ForwardGoto_TryWithFinallyIgnoresExceptionalOnlyCallableAssignment() {
+        AssertRuns(`import System
+
+func Run(callback (() -> void), fail bool) int32 {
+    let failure = Exception()
+    var text string? = nil
+    text = "safe"
+    let clear = func() { text = nil }
+    var action = callback
+    try {
+        if fail {
+            action = clear
+            throw failure
+        }
+    }
+    finally {
+    }
+    try {
+        goto Done
+    }
+    finally {
+        action()
+    }
+Done:
+    return text.Length
+}
+
+Console.WriteLine(Run(func() { }, false))`, "4")
+    }
+
+    @Fact
+    func ForwardGoto_TryCatchFinallyIgnoresExitingCatchCallableAssignment() {
+        AssertRuns(`import System
+
+func Run(callback (() -> void), fail bool) int32 {
+    let failure = Exception()
+    var text string? = nil
+    text = "safe"
+    let clear = func() { text = nil }
+    var action = callback
+    try {
+        if fail {
+            throw failure
+        }
+    }
+    catch {
+        action = clear
+        return 0
+    }
+    finally {
+    }
+    try {
+        goto Done
+    }
+    finally {
+        action()
+    }
+Done:
+    return text.Length
+}
+
+Console.WriteLine(Run(func() { }, false))`, "4")
+    }
+
+    @Fact
+    func ForwardGoto_TryWithFinallyCompletingLocalCallableAssignment_ReportsNullableReceiver() {
+        let result = Evaluate(`func Run(callback (() -> void), reassign bool) int32 {
+    var text string? = nil
+    text = "safe"
+    let clear = func() { text = nil }
+    var action = callback
+    try {
+        if reassign {
+            action = clear
+        }
+    }
+    finally {
+    }
+    try {
+        goto Done
+    }
+    finally {
+        action()
+    }
+Done:
+    return text.Length
+}
+
+Run(func() { }, true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 

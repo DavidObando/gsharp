@@ -1131,26 +1131,7 @@ internal partial class StatementBinder {
     private func ComputeCleanupFallthroughNonNull(
         cleanup BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
-    ) Dictionary[AccessPath, TypeSymbol]? {
-        let state = Dictionary[AccessPath, TypeSymbol]()
-        let aliases = HashSet[VariableSymbol](callableAliases)
-        let statements = if cleanup is BoundBlockStatement block {
-            block.Statements
-        } else {
-            ImmutableArray.Create(cleanup)
-        }
-        for statement in statements {
-            if !ProcessBranchStatement(statement, state, aliases) {
-                return nil
-            }
-            let aliasesAtEntry = aliases.ToArray()
-            let mutations = NewCollector(AssignmentPreservesNarrowing, aliasesAtEntry)
-            mutations.Visit(statement)
-            ApplyMutationsToState(state, mutations)
-            ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations)
-        }
-        return state
-    }
+    ) Dictionary[AccessPath, TypeSymbol]? -> ComputeBranchFallthroughNonNull(cleanup, entry: nil, callableAliases)
 
     private func ApplyMutationsToState(state Dictionary[AccessPath, TypeSymbol], mutations AssignedRootsCollector) {
         for entry in state.ToArray() {
@@ -1459,16 +1440,27 @@ internal partial class StatementBinder {
         entry Dictionary[AccessPath, TypeSymbol]?,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
+        var conditionEntry Dictionary[AccessPath, TypeSymbol]? = nil
+        if entry != nil && entry.Count > 0 {
+            conditionEntry = Dictionary[AccessPath, TypeSymbol](entry)
+            ClearAssignedRoots(ifStmt.Condition, conditionEntry, callableAliases)
+        }
+        let branchAliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        RemoveHeaderAffectedAliases(branchAliases, ifStmt.Condition)
         let (thenNarrow, elseNarrow) = ComputeConditionNarrowing(ifStmt.Condition)
         let thenState Dictionary[AccessPath, TypeSymbol]? = ComputeBranchFallthroughNonNull(
             ifStmt.ThenStatement,
-            MergeLocalNonNull(entry, thenNarrow),
-            callableAliases
+            MergeLocalNonNull(conditionEntry, thenNarrow),
+            branchAliases
         )
         let elseState Dictionary[AccessPath, TypeSymbol]? = if ifStmt.ElseStatement == nil {
-            MergeLocalNonNull(entry, elseNarrow)
+            MergeLocalNonNull(conditionEntry, elseNarrow)
         } else {
-            ComputeBranchFallthroughNonNull(ifStmt.ElseStatement, MergeLocalNonNull(entry, elseNarrow), callableAliases)
+            ComputeBranchFallthroughNonNull(
+                ifStmt.ElseStatement,
+                MergeLocalNonNull(conditionEntry, elseNarrow),
+                branchAliases
+            )
         }
         if thenState == nil && elseState == nil {
             return nil
@@ -1494,7 +1486,8 @@ internal partial class StatementBinder {
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
         let state = entry ?? Dictionary[AccessPath, TypeSymbol]()
-        return if ProcessBranchStatement(branch, state, callableAliases) {
+        let aliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        return if ProcessBranchStatement(branch, state, aliases) {
             state
         } else {
             default(Dictionary[AccessPath, TypeSymbol]?)
@@ -1508,7 +1501,7 @@ internal partial class StatementBinder {
     private func ProcessBranchStatement(
         stmt BoundStatement,
         state Dictionary[AccessPath, TypeSymbol],
-        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+        aliases HashSet[VariableSymbol]
     ) bool {
         switch stmt {
             case BoundReturnStatement, BoundThrowStatement, BoundRethrowStatement, BoundGotoStatement {
@@ -1516,7 +1509,7 @@ internal partial class StatementBinder {
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
                 // The right-hand side can write other roots, aliases included.
-                ClearAssignedRoots(assign, state, callableAliases)
+                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
                     RemoveSharingStorage(
                         state,
@@ -1554,7 +1547,7 @@ internal partial class StatementBinder {
                     let nestedResult Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(
                         nested,
                         Dictionary[AccessPath, TypeSymbol](state),
-                        callableAliases
+                        aliases
                     )
                     if nestedResult == nil {
                         return false
@@ -1563,6 +1556,10 @@ internal partial class StatementBinder {
                     for kv in nestedResult {
                         state[kv.Key] = kv.Value
                     }
+                    let aliasesAtEntry = aliases.ToArray()
+                    let mutations = NewCollector(nil, aliasesAtEntry)
+                    mutations.Visit(nested)
+                    ApplyCallableAliasExitState(aliases, nested, aliasesAtEntry, mutations)
                     return true
                 }
             }
@@ -1570,11 +1567,11 @@ internal partial class StatementBinder {
                 if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
                     // Internal jumps do not exit the branch. Without a CFG,
                     // retain only entry facts untouched by the whole block.
-                    ClearAssignedRoots(inner, state, callableAliases)
+                    ClearAssignedRootsAndUpdateAliases(inner, state, aliases)
                     return true
                 }
                 for s in inner.Statements {
-                    if !ProcessBranchStatement(s, state, callableAliases) {
+                    if !ProcessBranchStatement(s, state, aliases) {
                         return false
                     }
                 }
@@ -1584,7 +1581,12 @@ internal partial class StatementBinder {
                 if EndsInUnconditionalExit(tryStatement) {
                     return false
                 }
-                ClearAssignedRoots(tryStatement, state, callableAliases)
+                let finallyAliases = if tryStatement.FinallyBlock == nil {
+                    default(HashSet[VariableSymbol]?)
+                } else {
+                    ComputeTryFinallyEntryAliases(tryStatement, aliases)
+                }
+                ClearAssignedRootsAndUpdateAliases(tryStatement, state, aliases)
                 if tryStatement.FinallyBlock == nil {
                     return true
                 }
@@ -1599,7 +1601,7 @@ internal partial class StatementBinder {
                         }
                     )
                 } else {
-                    ComputeBranchFallthroughNonNull(tryStatement.FinallyBlock, entry: nil, callableAliases)
+                    ComputeBranchFallthroughNonNull(tryStatement.FinallyBlock, entry: nil, finallyAliases)
                 }
                 if finallyState == nil {
                     return false
@@ -1613,10 +1615,28 @@ internal partial class StatementBinder {
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local
                 // the statement's subtree assigns anywhere.
-                ClearAssignedRoots(stmt, state, callableAliases)
+                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 return true
             }
         }
+    }
+
+    private func ComputeTryFinallyEntryAliases(
+        tryStatement BoundTryStatement,
+        callableAliases IReadOnlyCollection[VariableSymbol]
+    ) HashSet[VariableSymbol] {
+        let aliasesAtEntry = callableAliases.ToArray()
+        let withoutFinally = BoundTryStatement(
+            tryStatement.Syntax,
+            tryStatement.TryBlock,
+            tryStatement.CatchClauses,
+            finallyBlock: nil
+        )
+        let collector = NewCollector(nil, aliasesAtEntry)
+        collector.Visit(withoutFinally)
+        let result = HashSet[VariableSymbol](aliasesAtEntry)
+        ApplyCallableAliasExitState(result, withoutFinally, aliasesAtEntry, collector)
+        return result
     }
 
     /// Issue #2159: recomputes the then / else condition-implied non-null
@@ -2012,6 +2032,18 @@ internal partial class StatementBinder {
         () -> ComputeClosureAssignedNames(anchor)
     )
 
+    private func ClearAssignedRootsAndUpdateAliases(
+        statement BoundStatement,
+        state Dictionary[AccessPath, TypeSymbol],
+        aliases HashSet[VariableSymbol]
+    ) {
+        let aliasesAtEntry = aliases.ToArray()
+        let collector = NewCollector(nil, aliasesAtEntry)
+        collector.Visit(statement)
+        ClearAssignedRoots(statement, state, collector)
+        ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, collector)
+    }
+
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// [`node`](paramref)'s bound subtree assigns anywhere.
     private func ClearAssignedRoots(
@@ -2024,6 +2056,17 @@ internal partial class StatementBinder {
         }
         let collector = NewCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
+        ClearAssignedRoots(node, state, collector)
+    }
+
+    private func ClearAssignedRoots(
+        node BoundNode,
+        state Dictionary[AccessPath, TypeSymbol],
+        collector AssignedRootsCollector
+    ) {
+        if state.Count == 0 {
+            return
+        }
         if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
             let filters = CollectCatchFiltersAbove(syntax)
             if filters.Count > 0 {
@@ -2036,30 +2079,9 @@ internal partial class StatementBinder {
                 }
             }
         }
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
-                state.Remove(path)
-            }
-        }
-        if collector.MayMutateGlobalRoots {
-            for path in state
-                .Keys
-                .Where((path AccessPath) -> path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly)
-                .ToArray() {
-                state.Remove(path)
-            }
-        }
+        ApplyMutationsToState(state, collector)
         for root in collector.Roots {
             RemoveByRoot(state, root)
-        }
-        for path in state
-            .Keys
-            .Where(
-            (path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root) ||
-                DropsOnMemberMutation(path, collector)
-        )
-            .ToArray() {
-            state.Remove(path)
         }
     }
 
@@ -2912,8 +2934,33 @@ internal partial class StatementBinder {
                 }
             }
             if node.FinallyBlock != nil {
+                let labelsBeforeFinally = HashSet[BoundLabel](visitedLabels)
+                let pendingBeforeFinally = HashSet[BoundLabel](pendingConditionalTargets)
+                let countsBeforeFinally = Dictionary[BoundLabel, int32](callableInvocationCountsAtLabel)
+                let invocationsBeforeFinally = callableInvocations.Count
                 RestoreCallableState(finallyEntries)
                 VisitStatement(node.FinallyBlock)
+                if StatementBinder.EndsInUnconditionalExit(node.FinallyBlock, gotoExits: false) {
+                    RestoreCallableState(branchStart)
+                } else {
+                    let normalEntry = joined ?? branchStart
+                    if !CallableStatesEqual(finallyEntries, normalEntry) {
+                        visitedLabels.Clear()
+                        visitedLabels.UnionWith(labelsBeforeFinally)
+                        pendingConditionalTargets.Clear()
+                        pendingConditionalTargets.UnionWith(pendingBeforeFinally)
+                        callableInvocationCountsAtLabel.Clear()
+                        for entry in countsBeforeFinally {
+                            callableInvocationCountsAtLabel.Add(entry.Key, entry.Value)
+                        }
+                        callableInvocations.RemoveRange(
+                            invocationsBeforeFinally,
+                            callableInvocations.Count - invocationsBeforeFinally
+                        )
+                        RestoreCallableState(normalEntry)
+                        VisitStatement(node.FinallyBlock)
+                    }
+                }
             } else {
                 RestoreCallableState(joined ?? branchStart)
             }
