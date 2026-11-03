@@ -121,7 +121,14 @@ open class Adr0212MemberFeatureTests {
 
     @Fact
     func WarmUp_BuildsReferenceIndexAndResolvesTypeAliasDeclaration() {
-        let source = "package Members\ntype IntAlias = int32\nfunc Use(x IntAlias) IntAlias { return x }\n"
+        let source = `/// Type-only package doc.
+package Members
+/// System import alias doc.
+import sys = System
+type IntAlias = int32
+func IntAlias() {}
+func Use(x IntAlias) IntAlias { return x }
+`
         let content = LanguageServerTestHelpers.Content(source)
         let compilation = ServerCompilation.Create(content.SyntaxTree)
         SemanticLookup.WarmUp(compilation)
@@ -137,6 +144,20 @@ open class Adr0212MemberFeatureTests {
         cts.Cancel()
         let references = SemanticLookup.FindReferences(compilation, aliasSymbol, cts.Token).ToArray()
         Assert.Equal(4, references.Length)
+        let importHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "sys"))
+        Assert.NotNull(importHover)
+        Assert.Contains("System import alias doc.", importHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let typeOnlySource = `/// Type-only package doc.
+package TypeOnly
+class Box {}
+`
+        let typeOnlyContent = LanguageServerTestHelpers.Content(typeOnlySource)
+        let packageHover = HoverComputer.ComputeHover(
+            typeOnlyContent,
+            LanguageServerTestHelpers.PositionOf(typeOnlySource, "TypeOnly")
+        )
+        Assert.NotNull(packageHover)
+        Assert.Contains("Type-only package doc.", packageHover!!.Contents.ToString(), StringComparison.Ordinal)
     }
 
     shared {

@@ -936,22 +936,6 @@ shared class SemanticLookup {
     /// @param useIncrementalCaches Whether to read/write the instance-keyed memo caches.
     /// @param ct Token observed between per-file/per-struct build steps.
     /// @returns The semantic model.
-    private let ImportSymbolCache ConditionalWeakTable[ImportSyntax, ImportSymbol] = ConditionalWeakTable[
-        ImportSyntax,
-        ImportSymbol
-    ]()
-
-    private let PackageSymbolCache ConditionalWeakTable[PackageSyntax, PackageSymbol] = ConditionalWeakTable[
-        PackageSyntax,
-        PackageSymbol
-    ]()
-
-    private func CreateImportSymbol(importSyntax ImportSyntax) ImportSymbol {
-        let targetPath = string.Concat(importSyntax.IdentifiersWithDots.Select((i SyntaxToken) -> i.ValueText))
-        let localName = importSyntax.AliasIdentifier?.ValueText ?? targetPath
-        return ImportSymbol(localName, targetPath, importSyntax)
-    }
-
     private func BuildModelUncached(
         compilation Compilation,
         useIncrementalCaches bool,
@@ -979,7 +963,6 @@ shared class SemanticLookup {
         }
         let declarations = Dictionary[SyntaxToken, Symbol]()
         let globals = Dictionary[string, Symbol](StringComparer.Ordinal)
-        let packagesByName = Dictionary[string, PackageSymbol](StringComparer.Ordinal)
         for tree in trees {
             if !coreModels.TryGetValue(tree, out var coreModel) {
                 continue
@@ -1003,9 +986,6 @@ shared class SemanticLookup {
                     if coreModel.GetDeclaredSymbol(fnSyntax, ct) is FunctionSymbol function &&
                         (function.IsExtension || (function.ReceiverType == nil && function.StaticOwnerType == nil)) {
                         globals[function.Name] = function
-                        if function.Package is {Declaration: not nil} fnPackage {
-                            packagesByName.TryAdd(fnPackage.Name, fnPackage)
-                        }
                         if function.Declaration != nil {
                             declarations[function.Declaration!!.Identifier] = function
                             MapParameters(
@@ -1171,40 +1151,23 @@ shared class SemanticLookup {
             }
         }
         for tree in trees {
-            for importSyntax in bucketsByTree[tree].Imports {
-                if importSyntax.AliasIdentifier is {} aliasIdentifier && !aliasIdentifier.IsMissing {
-                    declarations[aliasIdentifier] = ImportSymbolCache.GetValue(
-                        importSyntax,
-                        (syntax ImportSyntax) -> CreateImportSymbol(syntax)
-                    )
-                }
-            }
-        }
-        let seenPackages = HashSet[string](StringComparer.Ordinal)
-        for tree in trees {
-            let packageSyntax PackageSyntax? = bucketsByTree[tree].Packages.FirstOrDefault()
-            if packageSyntax == nil {
-                continue
-            }
-            let packageName = string.Join(".", packageSyntax.Identifiers.Select((i SyntaxToken) -> i.ValueText))
-            if string.IsNullOrEmpty(packageName) || !seenPackages.Add(packageName) {
-                continue
-            }
-            if !packagesByName.TryGetValue(packageName, out var package_) {
-                package_ = PackageSymbolCache.GetValue(
-                    packageSyntax,
-                    (syntax PackageSyntax) -> PackageSymbol(packageName, syntax)
-                )
-            }
-            if package_.Declaration != nil {
-                for identifier in package_.Declaration!!.Identifiers {
-                    declarations[identifier] = package_
-                }
-            }
-        }
-        for tree in trees {
             if !coreModels.TryGetValue(tree, out var coreModel) {
                 continue
+            }
+            for importSyntax in bucketsByTree[tree].Imports {
+                if importSyntax.AliasIdentifier is {} aliasIdentifier &&
+                    !aliasIdentifier.IsMissing &&
+                    coreModel.GetDeclaredSymbol(importSyntax, ct) is ImportSymbol import_ {
+                    declarations[aliasIdentifier] = import_
+                }
+            }
+            for packageSyntax in bucketsByTree[tree].Packages {
+                if coreModel.GetDeclaredSymbol(packageSyntax, ct) is PackageSymbol package_ &&
+                    package_.Declaration != nil {
+                    for identifier in package_.Declaration!!.Identifiers {
+                        declarations[identifier] = package_
+                    }
+                }
             }
             for delegateSyntax in bucketsByTree[tree].DelegateDeclarations {
                 if coreModel.GetDeclaredSymbol(delegateSyntax, ct) is DelegateTypeSymbol delegateSymbol {
@@ -1229,11 +1192,10 @@ shared class SemanticLookup {
             }
             for typeAliasSyntax in bucketsByTree[tree].TypeAliasDeclarations {
                 let aliasId SyntaxToken? = typeAliasSyntax.Identifier
-                if aliasId == nil || aliasId.IsMissing {
-                    continue
-                }
-                let matches = coreModel.LookupSymbols(-1, aliasId.ValueText, ct)
-                if !matches.IsDefaultOrEmpty && matches[0] is TypeSymbol aliasedType {
+                if aliasId != nil && !aliasId.IsMissing && coreModel.GetDeclaredSymbol(
+                    typeAliasSyntax,
+                    ct
+                ) is TypeSymbol aliasedType {
                     globals[aliasId.ValueText] = aliasedType
                     declarations[aliasId] = aliasedType
                 }

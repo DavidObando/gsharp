@@ -544,6 +544,30 @@ partial class SemanticModel {
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
+            for import_ in globalScope.Imports {
+                if import_.Declaration is {} importDeclaration && object.ReferenceEquals(
+                    importDeclaration.SyntaxTree,
+                    tree
+                ) {
+                    declaredBySyntax.TryAdd(importDeclaration, import_)
+                }
+            }
+            for package_ in globalScope.Packages {
+                if package_.Declaration is {} packageDeclaration && object.ReferenceEquals(
+                    packageDeclaration.SyntaxTree,
+                    tree
+                ) {
+                    declaredBySyntax.TryAdd(packageDeclaration, package_)
+                }
+            }
+            for typeAlias in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
+                if !typeAlias.Identifier.IsMissing && globalScope.TypeAliases.TryGetValue(
+                    typeAlias.Identifier.ValueText,
+                    out var aliasedType
+                ) {
+                    declaredBySyntax.TryAdd(typeAlias, aliasedType)
+                }
+            }
             SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
             // A shared class's declaration node is a copy the binder made when it moved the members
             // into the shared block; the identifier token is the same object in both.
