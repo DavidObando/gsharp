@@ -470,7 +470,11 @@ internal partial class MethodBodyEmitter {
         // simple variable (avoids a copy and is verifier-friendly); fall
         // back to value form otherwise (CLI permits ldfld on a value-type
         // value on stack).
-        let receiverIsClass = fa.Receiver!!.Type is StructSymbol rs && rs.IsClass
+        let receiverIsClass = (fa.Receiver!!.Type is StructSymbol rs && rs.IsClass) ||
+            fa.Receiver!!
+            .Type
+            ?.ClrType
+            ?.IsValueType == false
         if !receiverIsClass && fa.Receiver is BoundDereferenceExpression deref && TypeSymbol.IsUnmanagedPointer(
             deref.Operand.Type
         ) {
@@ -1875,7 +1879,11 @@ internal partial class MethodBodyEmitter {
             return
         }
         // Load receiver address, then ldflda.
-        let receiverIsClass = fa.Receiver!!.Type is StructSymbol rs && rs.IsClass
+        let receiverIsClass = (fa.Receiver!!.Type is StructSymbol rs && rs.IsClass) ||
+            fa.Receiver!!
+            .Type
+            ?.ClrType
+            ?.IsValueType == false
         if !receiverIsClass && fa.Receiver is BoundDereferenceExpression deref && TypeSymbol.IsUnmanagedPointer(
             deref.Operand.Type
         ) {

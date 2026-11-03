@@ -1101,11 +1101,19 @@ internal partial class DeclarationBinder {
                     ?.IsPrimitive == true
             )
         ) &&
-            IsSerialisableAttributeConstant(constantType) &&
-            ConstantExpressionEvaluator.TryEvaluate(bound, out var convertedValue) && convertedValue != nil {
-            value = convertedValue
-            type = constantType
-            return true
+            IsSerialisableAttributeConstant(constantType) {
+            if bound is BoundConversionExpression{Expression: BoundLiteralExpression{Value: nil}} &&
+                !constantType.IsValueType {
+                value = nil
+                type = constantType
+                return true
+            }
+            if ConstantExpressionEvaluator.TryEvaluate(bound, out var convertedValue) &&
+                (convertedValue != nil || (bound is BoundConversionExpression && !constantType.IsValueType)) {
+                value = convertedValue
+                type = constantType
+                return true
+            }
         }
         // CLR literal fields already bind through ordinary qualified member lookup.
         // Accept their serialisable types, including string and its null constant.
@@ -1714,7 +1722,16 @@ internal partial class DeclarationBinder {
         // is accepted as an attribute argument only when its static type is one of
         // those serialisable shapes.
         private func IsSerialisableAttributeConstant(type TypeSymbol) bool {
-            if IsValidAttributeParameterType(type) {
+            let unwrapped = if type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(
+                nullable
+            ) {
+                nullable.UnderlyingType
+            } else if type is PlatformTypeSymbol platform {
+                platform.UnderlyingType
+            } else {
+                type
+            }
+            if IsValidAttributeParameterType(unwrapped) {
                 return true
             }
             // `decimal` folds via the same unary/binary constant evaluator as any
@@ -1725,7 +1742,7 @@ internal partial class DeclarationBinder {
             // pre-existing allowance kept as-is rather than folded into the
             // shared predicate below, which #4143/#4144 define against what
             // `csc`/ECMA-335 actually accept.
-            let clr Type? = type?.ClrType
+            let clr Type? = unwrapped?.ClrType
             return clr != nil && clr.IsSameAs(typeof(decimal))
         }
 
@@ -1752,6 +1769,9 @@ internal partial class DeclarationBinder {
         /// type or a multi-dimensional (cref:RectangularArrayTypeSymbol)
         /// (ECMA-335 II.23.3 permits only a 1-D array as an attribute argument).
         private func GetOneDimensionalArrayElementType(type TypeSymbol?) TypeSymbol? -> switch type {
+            case nullable is NullableTypeSymbol when !NullableLifting.IsAnyValueTypeNullable(nullable):
+            GetOneDimensionalArrayElementType(nullable.UnderlyingType)
+            case platform is PlatformTypeSymbol: GetOneDimensionalArrayElementType(platform.UnderlyingType)
             case slice is SliceTypeSymbol: slice.ElementType
             case array is ArrayTypeSymbol: array.ElementType
             default: default(TypeSymbol?)
@@ -1921,14 +1941,26 @@ internal partial class DeclarationBinder {
             !TypeSymbol.ContainsTypeParameter(type)
 
         private func ShouldPreserveBoxedAttributeElementType(value object?, type TypeSymbol) bool {
-            if IsEnumLikeType(type) {
+            let unwrapped = if type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(
+                nullable
+            ) {
+                nullable.UnderlyingType
+            } else if type is PlatformTypeSymbol platform {
+                platform.UnderlyingType
+            } else {
+                type
+            }
+            if IsEnumLikeType(unwrapped) {
                 return true
             }
-            let arrayElementType TypeSymbol? = GetOneDimensionalArrayElementType(type)
+            if value == nil && unwrapped?.ClrType is {} nullScalarClr && nullScalarClr.IsSameAs(typeof(Type)) {
+                return true
+            }
+            let arrayElementType TypeSymbol? = GetOneDimensionalArrayElementType(unwrapped)
             if arrayElementType == nil {
                 return false
             }
-            if IsEnumLikeType(arrayElementType) {
+            if value == nil || IsEnumLikeType(arrayElementType) {
                 return true
             }
             return value is Array array && array.GetType().GetElementType() is {} runtimeElementType &&

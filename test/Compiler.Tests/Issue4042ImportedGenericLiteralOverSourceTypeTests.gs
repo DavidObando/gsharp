@@ -203,6 +203,109 @@ Console.WriteLine(h.Options!!.Name)`)
         }
     }
 
+    /// Issue #4355: member access on a constructor-call or composite-literal
+    /// receiver preserves nullable type arguments across top-level and nested
+    /// imported generics.
+    @Fact
+    func Issue4355_ConstructorAndLiteralReceivers_PreserveNullableTypeArguments() {
+        const GsLibrary = `package GsLib
+
+data class Data[T] {
+    var Field T
+}
+
+data class GsPair[T](First T, Second T)
+
+func MakeNullableData() Data[string?] -> Data[string?]{ Field: "gs-data" }
+
+func MakeNullablePair() GsPair[string?] -> GsPair[string?]("gs-left", "gs-right")`
+        const Rejected = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+import GsLib
+
+Console.WriteLine(PlainBox[List[int32]?]().Value.Capacity)
+Console.WriteLine(Outer.Inner[List[int32]?]().Value.Capacity)
+Console.WriteLine(GenericOuter[List[int32]?].Inner().Value.Capacity)
+Console.WriteLine(GenericOuter[List[int32]?].Inner{}.Value.Capacity)
+let { Field = df } = MakeNullableData()
+Console.WriteLine(df.Length)
+let (pf1, _) = MakeNullablePair()
+Console.WriteLine(pf1.Length)
+let (cf1, _) = PairFactory.MakeNullablePair()
+Console.WriteLine(cf1.Length)`
+        const Accepted = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+import GsLib
+
+class Entry {
+    public var Id int32
+}
+
+Console.WriteLine(PlainBox[List[int32]?](){ Value = List[int32]{1, 2} }.Value!!.Count)
+Console.WriteLine(Outer.Inner[List[int32]?]{ Value: List[int32]{1, 2, 3} }.Value!!.Count)
+Console.WriteLine(GenericOuter[List[int32]?].Inner(){ Value = List[int32]{4} }.Value!!.Count)
+Console.WriteLine(GenericOuter[List[int32]?].Inner{ Value: List[int32]{5, 6} }.Value!!.Count)
+let { Field = de } = Data[Entry]{ Field: Entry(){ Id = 7 } }
+let (pe1, pe2) = Pair[Entry](Entry(){ Id = 8 }, Entry(){ Id = 9 })
+let { Field = df } = MakeNullableData()
+let (pf1, _) = MakeNullablePair()
+let (cf1, _) = PairFactory.MakeNullablePair()
+Console.WriteLine(de.Id)
+Console.WriteLine(pe1.Id)
+Console.WriteLine(pe2.Id)
+Console.WriteLine(df!!.Length)
+Console.WriteLine(pf1!!.Length)
+Console.WriteLine(cf1!!.Length)`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4355_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let gsLibPath = Path.Combine(tempDir, "GsLib.dll")
+            let gsLibLog = Compile(tempDir, "GsLib.gs", GsLibrary, gsLibPath, "/target:library")
+            Assert.DoesNotContain("error GS", gsLibLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(gsLibPath), gsLibLog)
+            let rejectedPath = Path.Combine(tempDir, "Rejected.dll")
+            let rejectedLog = Compile(
+                tempDir,
+                "Rejected.gs",
+                Rejected,
+                rejectedPath,
+                "/target:exe",
+                "/reference:" + libPath,
+                "/reference:" + gsLibPath
+            )
+            Assert.False(File.Exists(rejectedPath), rejectedLog)
+            let gs0158Count = rejectedLog.Split("GS0158", StringSplitOptions.None).Length - 1
+            Assert.Equal(7, gs0158Count)
+            let acceptedPath = Path.Combine(tempDir, "Accepted.dll")
+            let acceptedLog = Compile(
+                tempDir,
+                "Accepted.gs",
+                Accepted,
+                acceptedPath,
+                "/target:exe",
+                "/reference:" + libPath,
+                "/reference:" + gsLibPath
+            )
+            Assert.DoesNotContain("error GS", acceptedLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(acceptedPath), acceptedLog)
+            IlVerifier.Verify(acceptedPath, []string{libPath, gsLibPath})
+            let (exit, output) = RunDotnet(acceptedPath)
+            Assert.Equal(0, exit)
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal([]string{"2", "3", "1", "2", "7", "8", "9", "7", "7", "4"}, lines)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         /// Timeout for running an emitted sample.
         private const RunTimeout int32 = 60_000
@@ -230,6 +333,34 @@ public class Box<T>
     public string Tag { get; set; } = "b";
 
     public T? Value { get; set; }
+}
+
+public class PlainBox<T>
+{
+    public T Value { get; set; } = default!;
+}
+
+public class Outer
+{
+    public class Inner<T>
+    {
+        public T Value { get; set; } = default!;
+    }
+}
+
+public class GenericOuter<T>
+{
+    public class Inner
+    {
+        public T Value { get; set; } = default!;
+    }
+}
+
+public record Pair<T>(T First, T Second);
+
+public static class PairFactory
+{
+    public static Pair<string?> MakeNullablePair() => new("left", "right");
 }`
 
         /// Every literal spelling that must bind, verify and run.

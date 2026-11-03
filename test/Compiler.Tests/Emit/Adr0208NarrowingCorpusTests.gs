@@ -149,6 +149,13 @@ open class Adr0208NarrowingCorpusTests {
                 "a34_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_case",
                 "a35_5629_a_later_guard_block_before_a_default_does_not_reach_an_earlier_arm",
                 "a36_5629_a_guard_block_before_a_default_reaches_the_cases_after_it",
+                "b01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19",
+                "b02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19",
+                "b03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19",
+                "b04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19",
+                "b05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19",
+                "b06_5317_nested_loop_switch_case_on_an_enclosing_pattern_variable_calls_equals_R19",
+                "b07_5317_loop_continue_in_an_int_case_keeps_a_global_fact_R19",
                 "c1_catch_return_finally",
                 "c3a_goto_inside",
                 "c3b_goto_cycle",
@@ -261,11 +268,24 @@ open class Adr0208NarrowingCorpusTests {
                 "p7_5237_iterator_runs_escaped_closure",
                 "p8_5237_call_replaces_a_closure_assigned_callable",
                 "p9_5237_explicit_invoke_of_an_external_callback_keeps_the_fact",
+                "q12_exit_gain",
+                "q13_exit_gain_bang",
+                "q14_enclosing_filter_reenters_loop",
+                "q14b_filter_write_reenters_loop_retested",
                 "q1_5456_closure_own_local_survives_unknown_callable",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
+                "q3_loop_escaped_closure",
                 "q4_5456_initializer_write_names_the_enclosing_variable",
+                "q4_shadow_let_in_loop",
                 "q5_5456_do_condition_is_outside_the_body_declaration",
+                "q5a_source_getter_in_loop",
+                "q5b_imported_getter_in_loop",
+                "q5c_imported_getter_closure_root",
+                "q5d_hidden_field_getter",
+                "q7_while_exit_state",
+                "q8_do_while",
+                "q9_loop_in_goto_span",
                 "r10_5483_static_block_declared_after_the_use",
                 "r1_5482_ref_alias_of_closure_replaced_callable",
                 "r1_5483_static_block_only_construction",
@@ -333,7 +353,7 @@ open class Adr0208NarrowingCorpusTests {
                 "t06_5231_lazy_value_runs_an_escaped_closure_R16",
                 "t07_5231_lazy_value_in_a_condition_R16",
                 "t08_5231_lazy_value_in_a_loop_R16",
-                "t09_5231_string_length_in_a_loop_R16",
+                "t09_5231_string_length_in_a_loop_R16_loop_is_stricter",
                 "t10_5231_interface_count_kills_R16",
                 "t11_5231_static_getter_kills_R16",
                 "t12_5231_lazy_value_in_a_property_pattern_R16",
@@ -470,7 +490,18 @@ open class Adr0208NarrowingCorpusTests {
                 "z15_5599_initializer_of_a_construction_keeps_the_fact_R14",
                 "z16_5599_property_pattern_on_a_sealed_receiver_keeps_the_fact_R14",
                 "z17_5599_constructor_store_of_a_get_only_auto_override_keeps_the_fact_R14",
-                "z18_5599_sealed_hierarchy_receiver_can_have_an_overriding_subclass_R14"
+                "z18_5599_sealed_hierarchy_receiver_can_have_an_overriding_subclass_R14",
+                "z19_5663_function_literal_converted_by_a_user_operator_removes_a_by_reference_fact_R12",
+                "z20_5663_arrow_lambda_converted_by_a_user_operator_removes_a_by_reference_fact_R12",
+                "z21_5663_function_literal_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                "z22_5663_function_literal_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                "z23_5663_function_literal_passed_to_a_delegate_parameter_keeps_a_by_reference_fact_R12",
+                "z24_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                "z25_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                "z26_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_case_removes_a_by_reference_fact_R19",
+                "z27_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_expression_removes_a_by_reference_fact_R19",
+                "z28_5665_relational_pattern_without_a_conversion_operator_keeps_a_by_reference_fact_R12",
+                "z29_5663_lifted_user_conversion_in_an_initializer_removes_a_global_fact_R11"
             },
             names
         )
@@ -602,7 +633,7 @@ func Run(n int32) string {
     }
     return last
 }
-func Main() { Console.WriteLine(Run(2)) }`, "", "run", "animal", ""}
+func Main() { Console.WriteLine(Run(2)) }`, "", "run", "dog", "ADR-0213 R7 (d) (L1)"}
             yield[]object{"cA_filter_write", `func Get() string? { return "a" }
 func Clear(ref s string?) bool {
     s = nil
@@ -961,7 +992,7 @@ func Run(c bool, n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(true, 3)) }`, "", "run", "0", ""}
+func Main() { Console.WriteLine(Run(true, 3)) }`, "GS0158@8:27", "reject", "", "ADR-0213 R7 (a) (L1)"}
             yield[]object{"e2_loop_exitwrite", `func Get() string? { return nil }
 func Run(c bool, n int32) int32 {
     var s string? = Get()
@@ -994,7 +1025,7 @@ func Run(n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(3)) }`, "", "run", "0", ""}
+func Main() { Console.WriteLine(Run(3)) }`, "GS0158@10:30", "reject", "", "ADR-0213 R7 (b) (L1)"}
             yield[]object{"e4_loop_nullable_reassign", `class Node {
     var Value int32
     var Next Node?
@@ -1889,6 +1920,254 @@ Done:
     return settings
 }
 func Main() { Console.WriteLine(Make[Setup](0).Ready) }`, "", "run", "True", ""}
+            yield[]object{"q3_loop_escaped_closure", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) { h.Callback() }
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += x.Value
+        Wrapper(h)
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0129@16:15 GS0158@16:20", "reject", "", "ADR-0213 R7 (c) (L1)"}
+            yield[]object{"q4_shadow_let_in_loop", `import System
+func Get() string? { return "xy" }
+func Consume(n int32) { }
+func Run(n int32) int32 {
+    var s string? = "abc"
+    if s == nil { return 0 }
+    for var i = 0; i < n; i++ {
+        let s string? = Get()
+        if s == nil { continue }
+        Consume(s.Length)
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(Run(2)) }`, "", "run", "3", ""}
+            yield[]object{"q5a_source_getter_in_loop", `import System
+class Pet {
+    prop Name string -> "rex"
+}
+class Box {
+    let Pet Pet?
+    init(pet Pet?) { Pet = pet }
+}
+class Counter {
+    var hits int32 = 0
+    prop Count int32 {
+        get {
+            hits++
+            return hits
+        }
+    }
+}
+func Consume(n int32) { }
+func Run(b Box, x Counter, n int32) int32 {
+    if b.Pet == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        Consume(x.Count)
+        total = total + b.Pet.Name.Length
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(Box(Pet()), Counter(), 2)) }`, "GS0158@24:31", "reject", "", ""}
+            yield[]object{"q5b_imported_getter_in_loop", `import System
+import System.Text
+class Pet {
+    prop Name string -> "rex"
+}
+class Box {
+    let Pet Pet?
+    init(pet Pet?) { Pet = pet }
+}
+func Consume(n int32) { }
+func Run(b Box, sb StringBuilder, n int32) int32 {
+    if b.Pet == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        Consume(sb.Length)
+        total = total + b.Pet.Name.Length
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(Box(Pet()), StringBuilder(), 2)) }`, "GS0158@16:31", "reject", "", ""}
+            yield[]object{"q5c_imported_getter_closure_root", `import System
+import System.Text
+class C {
+    var Value int32 = 1
+}
+func Run(sb StringBuilder, n int32) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        let len = sb.Length
+        total = total + x.Value + len
+    }
+    clear()
+    return total
+}
+func Main() { Console.WriteLine(Run(StringBuilder(), 2)) }`, "GS0158@13:27", "reject", "", "ADR-0213 R7 (e) (L1)"}
+            yield[]object{"q5d_hidden_field_getter", `import System
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    var Count int32 = 1
+}
+class Derived : Base {
+    let clear () -> void
+    init(c () -> void) { clear = c }
+    prop Count int32 {
+        get {
+            clear()
+            return 0
+        }
+    }
+}
+func Run(n int32) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    let b Base = Derived(clear)
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + x.Value
+        if b is Derived {
+            let c = b.Count
+            total = total + c
+        }
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(2)) }`, "GS0158@25:27", "reject", "", "ADR-0213 R7 (e) (L1)"}
+            yield[]object{"q7_while_exit_state", `import System
+func Next(s string) string? { return if s.Length > 3 { nil } else { s + "a" } }
+func Run(c bool) int32 {
+    var s string? = "a"
+    while s != nil {
+        if c { break }
+        s = Next(s)
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(Run(false)) }`, "GS0158@9:14", "reject", "", ""}
+            yield[]object{"q8_do_while", `import System
+func Next(s string) string? { return if s.Length > 3 { nil } else { s + "a" } }
+func Run() int32 {
+    var s string? = "a"
+    if s == nil { return 0 }
+    var n = 0
+    do {
+        n = n + s.Length
+        s = Next(s)
+    } while n < 10
+    return n
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@8:19 GS0154@9:18", "reject", "", ""}
+            yield[]object{"q9_loop_in_goto_span", `import System
+func Get() string? { return "xy" }
+func Run(n int32) int32 {
+    var s string? = "abc"
+    var i = 0
+    if s == nil { return 0 }
+    Again:
+    i = i + s.Length
+    for var k = 0; k < 2; k++ {
+        s = nil
+    }
+    s = Get()
+    if i < n { goto Again }
+    return i
+}
+func Main() { Console.WriteLine(Run(5)) }`, "GS0158@8:15", "reject", "", ""}
+            yield[]object{"q12_exit_gain", `import System
+func Get(c bool) string? { return if c { nil } else { "ab" } }
+func Run(c bool) int32 {
+    var s string? = Get(c)
+    while s == nil {
+        s = "ok"
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "", "run", "2", "ADR-0213 R7 (f) (L1)"}
+            yield[]object{"q13_exit_gain_bang", `import System
+func Get(c bool) string? { return if c { nil } else { "ab" } }
+func Run(c bool) int32 {
+    var s string? = Get(c)
+    while s == nil {
+        s = "ok"
+    }
+    return s!!.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0536@8:13", "run", "2", "ADR-0213 R7 (f) (L1)"}
+            yield[]object{"q14_enclosing_filter_reenters_loop", `import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = "abc"
+    var n = 0
+    if s == nil { return 0 }
+    try {
+        while s.Length > 0 && n < 2 {
+            n++
+            try {
+                try {
+                    throw FormatException("f")
+                } finally {
+                    throw InvalidOperationException("g")
+                }
+            } catch (InvalidOperationException) {
+            }
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+    return n
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@11:17", "reject", "", "#5315, ADR-0213 W8 (L1)"}
+            yield[]object{"q14b_filter_write_reenters_loop_retested", `import System
+func Clear(ref s string?) bool {
+    s = nil
+    return true
+}
+func Run() int32 {
+    var s string? = "abc"
+    var n = 0
+    if s == nil { return 0 }
+    try {
+        while s != nil && s.Length > 0 && n < 2 {
+            n++
+            try {
+                try {
+                    throw FormatException("f")
+                } finally {
+                    throw InvalidOperationException("g")
+                }
+            } catch (InvalidOperationException) {
+            }
+        }
+    } catch (FormatException) when Clear(ref s) {
+        return -1
+    }
+    return n
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", "#5315, ADR-0213 W8 (L1)"}
             yield[]object{"q1_5456_closure_own_local_survives_unknown_callable", `import System
 
 class Rec {
@@ -4463,7 +4742,7 @@ func Run(n int32) int32 {
     return total
 }
 Console.WriteLine(Run(2))`, "GS0158@23:27", "reject", "", "R16"}
-            yield[]object{"t09_5231_string_length_in_a_loop_R16", `import System
+            yield[]object{"t09_5231_string_length_in_a_loop_R16_loop_is_stricter", `import System
 import System.Collections.Generic
 import System.Text
 
@@ -4486,7 +4765,7 @@ func Run(s string) int32 {
     }
     return total
 }
-Console.WriteLine(Run("abc"))`, "", "run", "8", "R16"}
+Console.WriteLine(Run("abc"))`, "GS0158@20:27", "reject", "", "ADR-0213 R7 (e) (L1): R16 is stricter in loops"}
             yield[]object{"t10_5231_interface_count_kills_R16", `import System
 import System.Collections.Generic
 import System.Text
@@ -7457,7 +7736,7 @@ func Run() int32 {
     return k
 }
 var g C? = C{}
-Console.WriteLine(Run())`, "", "run", "2", "R19"}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", "ADR-0213 R7 (c) (L1): the assignment and the member read count as calls for a mutable global (W4, W5); b07 is the L1 form"}
             yield[]object{"a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14", `import System
 
 class C {
@@ -7752,7 +8031,7 @@ func Run(s string?, start int32) int32 {
     }
     return 1
 }
-Console.WriteLine(Run("a", 0))`, "", "run", "1|1|1", ""}
+Console.WriteLine(Run("a", 0))`, "GS0158@8:29", "reject", "", "ADR-0213 R7 (a) (L1)"}
             yield[]object{"a23_5629_continue_under_a_false_guard_is_no_back_edge", `import System
 
 func Run(s string?, k int32) int32 {
@@ -7772,7 +8051,7 @@ func Run(s string?, k int32) int32 {
     }
     return 1
 }
-Console.WriteLine(Run("a", 1))`, "", "run", "1|1", ""}
+Console.WriteLine(Run("a", 1))`, "GS0158@7:19", "reject", "", "ADR-0213 R7 (a) (L1): the walker counts a write under a literal false guard"}
             yield[]object{"a24_5629_guard_effects_reach_the_pattern_proof_of_the_case_body_R18", `import System
 
 func Run(o object) int32 {
@@ -7938,7 +8217,7 @@ func Run(s string?, start int32) int32 {
     }
     return 1
 }
-Console.WriteLine(Run("a", 0))`, "", "run", "1|1|1", ""}
+Console.WriteLine(Run("a", 0))`, "GS0158@8:29", "reject", "", "ADR-0213 R7 (a) (L1)"}
             yield[]object{"a33_5629_an_arm_that_falls_through_to_a_hidden_continue_is_on_the_back_edge", `import System
 
 func Run(s string?, start int32) int32 {
@@ -8008,6 +8287,161 @@ func Run(s string?, k int32) int32 {
     return 0
 }
 Console.WriteLine(Run("ab", 1))`, "GS0158@12:27", "reject", "", ""}
+            yield[]object{"b01_5317_loop_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if o is 1 { }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b02_5317_loop_switch_case_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        switch o { case 1 { } default { } }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b03_5317_loop_named_constant_pattern_equals_removes_a_nullable_value_fact_R19", `import System
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if o is One { }
+        if k > 3 { break }
+    }
+    return k
+}
+const One int32 = 1
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b04_5317_loop_switch_case_on_a_pattern_variable_calls_equals_R19", `import System
+class One { }
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object, p object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if p is int32 One {
+            switch o { case One { } default { } }
+        }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
+            yield[]object{"b05_5317_loop_switch_case_on_an_entry_scope_local_calls_equals_R19", `import System
+class One { }
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object) int32 {
+    if n == nil { return 0 }
+    let One = 1
+    var k = 0
+    while n > 0 {
+        k++
+        switch o { case One { } default { } }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}))`, "", "run", "1", "R19"}
+            yield[]object{"b06_5317_nested_loop_switch_case_on_an_enclosing_pattern_variable_calls_equals_R19", `import System
+class One { }
+class E {
+    override func Equals(o object?) bool {
+        n = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object, p object) int32 {
+    if n == nil { return 0 }
+    var k = 0
+    while n > 0 {
+        k++
+        if p is int32 One {
+            while true {
+                switch o { case One { } default { } }
+                break
+            }
+        }
+        if k > 3 { break }
+    }
+    return k
+}
+var n int32? = 1
+Console.WriteLine(Run(E{}, 1))`, "", "run", "1", "R19"}
+            yield[]object{"b07_5317_loop_continue_in_an_int_case_keeps_a_global_fact_R19", `import System
+
+class C { }
+class E {
+    var Clear () -> void = func() { }
+    override func Equals(o object?) bool {
+        Clear()
+        return false
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(o object, k int32) C {
+    if g == nil { return C() }
+    for i in []int32{1, 2} {
+        switch k { case 1 { continue } default { } }
+        return g
+    }
+    return C()
+}
+let e = E{}
+var g C? = C()
+e.Clear = func() { g = nil }
+Console.WriteLine(Run(e, 2) != nil)`, "", "run", "True", "R19"}
             yield[]object{"y01_5593_constant_pattern_on_object_calls_a_user_equals_in_a_condition_R19", `import System
 
 class C {
@@ -9104,6 +9538,243 @@ func Run(ref text string?, m Mid) int32 {
     return text.Length + n
 }
 Console.WriteLine(Run(ref Box.G, Leaf()))`, "GS0158@23:17", "reject", "", "R14"}
+            yield[]object{"z19_5663_function_literal_converted_by_a_user_operator_removes_a_by_reference_fact_R12", `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    Use(func() int32 { return 1 })
+    return text.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`, "GS0158@13:17", "reject", "", "R12"}
+            yield[]object{"z20_5663_arrow_lambda_converted_by_a_user_operator_removes_a_by_reference_fact_R12", `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    Use(() -> 1)
+    return text.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`, "GS0158@13:17", "reject", "", "R12"}
+            yield[]object{
+                "z21_5663_function_literal_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(func() int32 { return 1 })
+    }
+    return n
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`,
+                "GS0158@13:16",
+                "reject",
+                "",
+                "R12"
+            }
+            yield[]object{
+                "z22_5663_function_literal_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Check(p Payload) bool { return p.Raw > 0 }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    if Check(func() int32 { return 1 }) {
+        return text.Length
+    }
+    return 2
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`,
+                "GS0158@13:21",
+                "reject",
+                "",
+                "R18"
+            }
+            yield[]object{"z23_5663_function_literal_passed_to_a_delegate_parameter_keeps_a_by_reference_fact_R12", `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func UseDelegate(f () -> int32) int32 { return f() }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    let v = UseDelegate(func() int32 { return 1 })
+    return text.Length + v
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`, "", "run", "3", "R12"}
+            yield[]object{
+                "z24_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    var k = 0
+    while text.Length > 0 && k < 3 {
+        k++
+        if n is > threshold { }
+    }
+    return k
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@12:16",
+                "reject",
+                "",
+                "R12"
+            }
+            yield[]object{
+                "z25_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    if n is > threshold {
+        return text.Length
+    }
+    return 2
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@12:21",
+                "reject",
+                "",
+                "R18"
+            }
+            yield[]object{
+                "z26_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_case_removes_a_by_reference_fact_R19",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    switch n {
+        case > threshold {
+            return text.Length
+        }
+        default {
+            return 2
+        }
+    }
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@13:25",
+                "reject",
+                "",
+                "R19"
+            }
+            yield[]object{
+                "z27_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_expression_removes_a_by_reference_fact_R19",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    return switch n {
+        case > threshold: text.Length
+        default: 2
+    }
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@12:32",
+                "reject",
+                "",
+                "R19"
+            }
+            yield[]object{"z28_5665_relational_pattern_without_a_conversion_operator_keeps_a_by_reference_fact_R12", `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, limit int32) int32 {
+    if text == nil { return 0 }
+    if n is > limit {
+        return text.Length
+    }
+    return 0
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, 1))`, "", "run", "2", "R12"}
+            yield[]object{"z29_5663_lifted_user_conversion_in_an_initializer_removes_a_global_fact_R11", `import System
+struct Token {
+    var Raw int32
+}
+struct Payload {
+    var Raw int32
+}
+func operator implicit(t Token) Payload {
+    g = nil
+    return Payload{Raw: t.Raw}
+}
+func Run(t Token?) int32 {
+    if g == nil { return 0 }
+    let p Payload? = t
+    return g.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(Token{Raw: 1}))`, "GS0158@15:14", "reject", "", "R11"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

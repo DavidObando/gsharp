@@ -1181,16 +1181,19 @@ internal partial class ExpressionBinder {
         // here because ordinary name lookup does not materialize their closed
         // CLR type.
         if syntax.NullableQuestionToken != nil && syntax.Arguments.Count == 1 {
-            var checkedTarget = TypeSymbol.FromClrTypeWithoutNullability(
-                resolvedClrType,
-                NullabilityFreeReason.TypeStructure
-            )
-            if ImportedTypeSymbol.TryCreateSemanticAggregate(
+            var checkedTarget = if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
+                cast[TypeSymbol](
+                    ImportedTypeSymbol.GetConstructed(resolvedClrType, openGenericDefinition, symbolicTypeArgs)
+                )
+            } else {
+                TypeSymbol.FromClrTypeWithoutNullability(resolvedClrType, NullabilityFreeReason.TypeStructure)
+            }
+            if openGenericDefinition == nil && ImportedTypeSymbol.TryCreateSemanticAggregate(
                 resolvedClrType,
                 $scope.References,
                 out var nullableAggregate
             ) {
-                checkedTarget = nullableAggregate
+                checkedTarget = nullableAggregate!!
             }
             result = conversions.BindConversion(
                 syntax.Arguments[0],
@@ -1350,7 +1353,11 @@ internal partial class ExpressionBinder {
             clrNoApplicableOverload,
             clrArguments,
             &result,
-            TypeSymbol.FromClrTypeWithoutNullability(resolvedClrType, NullabilityFreeReason.TypeStructure)
+            if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
+                ImportedTypeSymbol.GetConstructed(resolvedClrType, openGenericDefinition, symbolicTypeArgs)
+            } else {
+                TypeSymbol.FromClrTypeWithoutNullability(resolvedClrType, NullabilityFreeReason.TypeStructure)
+            }
         )
     }
 
@@ -1851,7 +1858,13 @@ internal partial class ExpressionBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments)
+                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments),
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    openGenericDefinition: openGenericDefinition,
+                    symbolicTypeArguments: symbolicTypeArgs
+                )
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -1901,8 +1914,18 @@ internal partial class ExpressionBinder {
                 (
                 !hasInvalidExplicitTypedInlineOut &&
                     !hasErrorArgument &&
+                    (
                     inlineOutArguments.Count > 0 &&
-                    TryReportClrConstructorArgumentTypeMismatch(syntax, ctors, argumentNames, boundArguments)
+                        TryReportClrConstructorArgumentTypeMismatch(syntax, ctors, argumentNames, boundArguments) ||
+                        TryReportClrConstructorByRefArgumentStorageMismatch(
+                        syntax,
+                        ctors,
+                        argumentNames,
+                        boundArguments,
+                        openGenericDefinition,
+                        symbolicTypeArgs
+                    )
+                )
             ) {
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
@@ -2057,11 +2080,7 @@ internal partial class ExpressionBinder {
                     symbolicTypeArgs,
                     bestCtor,
                     p,
-                    peelByRef: ctorParameters[p]
-                        .ParameterType
-                        .IsByRef &&
-                        ctorParameters[p].IsIn &&
-                        !ctorParameters[p].IsOut
+                    peelByRef: ctorParameters[p].ParameterType.IsByRef
                 )
                 if recovered == nil {
                     continue
@@ -2109,7 +2128,10 @@ internal partial class ExpressionBinder {
         } else if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
             resultType = ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs)
         } else {
-            resultType = TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            resultType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                clrType,
+                TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            )
         }
         let ctorCall BoundExpression = BoundClrConstructorCallExpression(
             syntax,
@@ -2174,6 +2196,73 @@ internal partial class ExpressionBinder {
                     parameter.Name ?? "value",
                     expectedType,
                     actualType
+                )
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TryReportClrConstructorByRefArgumentStorageMismatch(
+        syntax CallExpressionSyntax,
+        constructors IReadOnlyList[ConstructorInfo],
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        openGenericDefinition Type?,
+        symbolicTypeArguments ImmutableArray[TypeSymbol]
+    ) bool {
+        for var index = 0; index < boundArguments.Count; index++ {
+            if ByRefStorageMatching.TryGetStorageType(boundArguments[index]) is not{} storage {
+                continue
+            }
+            let name string? = if argumentNames.IsDefault {
+                default(string?)
+            } else {
+                argumentNames[index]
+            }
+            for constructor in constructors {
+                let parameters = constructor.GetParameters()
+                if parameters.Length != boundArguments.Count {
+                    continue
+                }
+                let parameterIndex = if name == nil {
+                    index
+                } else {
+                    FindClrParameterIndex(parameters, name)
+                }
+                if parameterIndex < 0 ||
+                    parameterIndex >= parameters.Length ||
+                    !parameters[parameterIndex]
+                    .ParameterType
+                    .IsByRef ||
+                    parameters[parameterIndex]
+                    .ParameterType
+                    .ContainsGenericParameters {
+                    continue
+                }
+                let expectedType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    parameters[parameterIndex].ParameterType,
+                    ResolveConstructorParameterPointeeType(
+                        constructor,
+                        parameterIndex,
+                        openGenericDefinition,
+                        symbolicTypeArguments
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex])
+                )
+                if ByRefStorageMatching.AreSameStorageType(storage, expectedType, out _, out _, out _) {
+                    continue
+                }
+                let location = if index < syntax.Arguments.Count {
+                    syntax.Arguments[index].Location
+                } else {
+                    syntax.Location
+                }
+                conversions.ReportByRefStorageMismatch(
+                    location,
+                    parameters[parameterIndex].Name ?? "value",
+                    expectedType,
+                    storage
                 )
                 return true
             }
@@ -2602,20 +2691,77 @@ internal partial class ExpressionBinder {
     /// resolving `Outer.Middle` as a nested type that becomes the new
     /// classSymbol for the terminal call). This unifies the call-expression
     /// path with the type-clause resolution that #526 added.
-    /// @param containingType The CLR type of the outer class (e.g. `Outer`).
+    /// @param classSymbol The enclosing CLR class symbol (e.g. `Outer` or `Outer[T]`).
     /// @param syntax The call expression (identifier = nested type name, args = ctor args).
     /// @param result The bound constructor call on success.
     /// @returns Whether a nested type was found and a constructor was bound.
     private func TryBindNestedTypeConstructorCall(
-        containingType Type,
+        classSymbol ImportedClassSymbol,
         syntax CallExpressionSyntax,
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        let nestedName = syntax.Identifier.ValueText
-        let arity = syntax.TypeArgumentList?.Arguments.Count ?? 0
+        if !TryResolveClosedNestedClrType(
+            classSymbol,
+            syntax.Identifier.ValueText,
+            syntax.TypeArgumentList,
+            syntax.Identifier.Location,
+            out var nestedType,
+            out var openGenericDefinition,
+            out var symbolicTypeArgs,
+            out var constraintFailed
+        ) {
+            if constraintFailed {
+                result = BoundErrorExpression(syntax)
+                return true
+            }
+            return false
+        }
+        let constructedTarget = if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
+            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(nestedType!!, openGenericDefinition, symbolicTypeArgs))
+        } else {
+            TypeSymbol.FromClrTypeWithoutNullability(nestedType, NullabilityFreeReason.TypeStructure)
+        }
+        let bound = TryBindClrConstructorFromType(
+            nestedType!!,
+            syntax,
+            out result,
+            out var noApplicableOverload,
+            out var boundArguments,
+            openGenericDefinition,
+            symbolicTypeArgs
+        )
+        return bound ||
+            FinishClrConstructorBindingFailure(
+            syntax,
+            nestedType!!.Name,
+            noApplicableOverload,
+            boundArguments,
+            &result,
+            constructedTarget
+        )
+    }
+
+    /// Resolves a nested CLR type under [`classSymbol`](paramref) and closes it
+    /// over both the enclosing type arguments and the nested type's own
+    /// [`typeArgumentList`](paramref), preserving symbolic type arguments.
+    private func TryResolveClosedNestedClrType(
+        classSymbol ImportedClassSymbol,
+        nestedName string,
+        typeArgumentList TypeArgumentListSyntax?,
+        diagnosticLocation TextLocation,
+        @NotNullWhen(true) out closedType Type?,
+        out openGenericDefinition Type?,
+        out symbolicTypeArgs ImmutableArray[TypeSymbol],
+        out constraintFailed bool
+    ) bool {
+        closedType = nil
+        openGenericDefinition = nil
+        symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
+        constraintFailed = false
+        let containingType = classSymbol.ClassType
+        let arity = typeArgumentList?.Arguments.Count ?? 0
         var nestedType Type? = nil
-        // Try arity-mangled name first for generic nested types (e.g. Inner`1).
         if arity > 0 {
             $scope.References!!.TryResolveNestedType(
                 containingType,
@@ -2629,44 +2775,85 @@ internal partial class ExpressionBinder {
         if nestedType == nil {
             return false
         }
-        // Close generic nested type if type arguments were provided.
-        if arity > 0 && nestedType.IsGenericTypeDefinition {
-            if syntax.TypeArgumentList is not TypeArgumentListSyntax typeArguments {
+        if !nestedType.IsGenericTypeDefinition {
+            if arity > 0 {
                 return false
             }
-            let clrArgs = [arity]Type
-            for var i = 0; i < arity; i++ {
-                let ta = bindTypeClause(typeArguments.Arguments[i])
-                if ta?.ClrType == nil {
-                    return false
-                }
-                clrArgs[i] = $scope.References!!.MapClrTypeToReferences(ta!!.ClrType)!!
-            }
-            try {
-                nestedType = nestedType.MakeGenericType(clrArgs)
-            } catch (ArgumentException) {
-                return false
-            }
-        } else if nestedType!!.IsGenericTypeDefinition {
-            // Nested type is generic but no type arguments supplied — cannot construct.
+            closedType = nestedType
+            return true
+        }
+        let outerClrArgs = if containingType.IsConstructedGenericType {
+            containingType.GetGenericArguments()
+        } else {
+            Array.Empty[Type]()
+        }
+        let totalArity = outerClrArgs.Length + arity
+        if nestedType.GetGenericArguments().Length != totalArity {
             return false
         }
-        let bound = TryBindClrConstructorFromType(
-            nestedType!!,
-            syntax,
-            out result,
-            out var noApplicableOverload,
-            out var boundArguments
-        )
-        return bound ||
-            FinishClrConstructorBindingFailure(
-            syntax,
-            nestedType!!.Name,
-            noApplicableOverload,
-            boundArguments,
-            &result,
-            TypeSymbol.FromClrTypeWithoutNullability(nestedType, NullabilityFreeReason.TypeStructure)
-        )
+        var innerClrArgs = Array.Empty[Type]()
+        var innerSymbolicArgs = ImmutableArray[TypeSymbol].Empty
+        var innerHasSymbolic = false
+        if arity > 0 {
+            if typeArgumentList == nil ||
+                !TryResolveClrConstructionTypeArgs(
+                typeArgumentList,
+                out innerClrArgs,
+                out innerSymbolicArgs,
+                out innerHasSymbolic
+            ) {
+                return false
+            }
+        }
+        let outerReceiver = classSymbol.ConstructedReceiver ?? classSymbol.SymbolicReceiver
+        var outerHasSymbolic = classSymbol.SymbolicReceiver != nil
+        let combinedClrArgs = [totalArity]Type
+        let combinedSymbolicBuilder = ImmutableArray.CreateBuilder[TypeSymbol](totalArity)
+        for var i = 0; i < outerClrArgs.Length; i++ {
+            combinedClrArgs[i] = outerClrArgs[i]
+            let outerArg = if outerReceiver != nil &&
+                !outerReceiver
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                i < outerReceiver
+                .TypeArguments
+                .Length {
+                outerReceiver.TypeArguments[i]
+            } else {
+                TypeSymbol.FromClrTypeWithoutNullability(outerClrArgs[i], NullabilityFreeReason.TypeStructure)
+            }
+            if outerArg.ClrType == nil || TypeSymbol.RequiresSymbolicProjection(outerArg) ||
+                outerArg is TupleTypeSymbol ||
+                TypeSymbol.ContainsNamedTupleElements(outerArg) || TypeSymbol.ContainsSourceArrayShape(outerArg) {
+                outerHasSymbolic = true
+            }
+            combinedSymbolicBuilder.Add(outerArg)
+        }
+        for var i = 0; i < arity; i++ {
+            combinedClrArgs[outerClrArgs.Length + i] = innerClrArgs[i]
+            combinedSymbolicBuilder.Add(innerSymbolicArgs[i])
+        }
+        let combinedSymbolic = combinedSymbolicBuilder.MoveToImmutable()
+        if Binder.ReportUnsatisfiedGenericTypeConstraint(
+            Diagnostics,
+            nestedType,
+            combinedClrArgs,
+            combinedSymbolic,
+            typeArgumentList?.Location ?? diagnosticLocation
+        ) {
+            constraintFailed = true
+            return false
+        }
+        try {
+            closedType = nestedType.MakeGenericType(combinedClrArgs)
+            if outerHasSymbolic || innerHasSymbolic {
+                openGenericDefinition = nestedType
+                symbolicTypeArgs = combinedSymbolic
+            }
+            return true
+        } catch (ArgumentException) {
+            return false
+        }
     }
 
     private class SymbolicDelegateTarget {
@@ -3063,11 +3250,14 @@ internal partial class ExpressionBinder {
                 return nil
             }
             let openParameter = openParameters[parameterIndex]
-            return if openParameter.ParameterType.IsByRef {
-                MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
-                    openParameter,
-                    openGenericDefinition,
-                    symbolicTypeArguments
+            return if openParameter.ParameterType.IsByRef && openParameter.ParameterType.ContainsGenericParameters {
+                ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParameter.ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParameter,
+                        openGenericDefinition,
+                        symbolicTypeArguments
+                    )
                 )
             } else {
                 default(TypeSymbol?)

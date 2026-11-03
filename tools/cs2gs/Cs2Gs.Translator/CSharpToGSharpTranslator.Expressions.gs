@@ -2645,9 +2645,22 @@ partial class CSharpToGSharpTranslator {
             // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
             // has no nested reference position is left bare.
             let type ITypeSymbol? = this.context.GetTypeInfo(expression).Type
-            if HasNestedReferencePosition(type) {
+            return !HasNestedReferencePosition(type) && this.ReadsPlatformTypedImportTopLevel(expression)
+        }
+
+        // Whether gsc types the top level of [`expression`](paramref) `T!`: it reads a
+        // frozen oblivious member, or an element of one.
+        private func ReadsPlatformTypedImportTopLevel(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            var expression = expression
+            while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                expression = parenthesized.Expression
+            }
+            if expression == nil {
                 return false
             }
+            let type ITypeSymbol? = this.context.GetTypeInfo(expression).Type
             if expression is ElementAccessExpressionSyntax elementAccess &&
                 !(elementAccess.Expression is ConditionalAccessExpressionSyntax) &&
                 this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(elementAccess.Expression).Symbol) &&
@@ -3611,6 +3624,11 @@ partial class CSharpToGSharpTranslator {
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                 ) {
+                    // Issue #5541: gsc gives `a ?? b` a non-null top level when `b` is a
+                    // platform-typed (`T!`) read of frozen oblivious metadata.
+                    if this.ReadsPlatformTypedImportTopLevel(binary.Right) {
+                        return true
+                    }
                     return if UnwrapTranslatedValue(translated) is BinaryExpression{Operator: "??"} translatedBinary {
                         this.GSharpExpressionIsStaticallyNonNull(binary.Right, translatedBinary.Right)
                     } else {
@@ -3727,6 +3745,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ForEachBindingInfersNonNullElement(local ILocalSymbol) bool {
+            if this.ForEachBindingHasObliviousContainerElements(local) {
+                return true
+            }
             let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope
             // Iterator lowering preserves the source collection's nullable
             // element annotation, so yield seams handle their own proof here.
@@ -3743,7 +3764,8 @@ partial class CSharpToGSharpTranslator {
                     .Equals(this.context.GetDeclaredSymbol(forEach), local) {
                     continue
                 }
-                let elementType ITypeSymbol? = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
+                let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
+                let elementType ITypeSymbol? = forEachInfo.ElementType
                 return if elementType != nil && elementType.IsValueType == true {
                     elementType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
                 } else {

@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Linq
 import Xunit
 
 /// Issue #2943: Emitted-oracle coverage for loop back edge narrowing.
@@ -94,11 +95,25 @@ if c != nil {
 run()`)
         }
         let result = EmittedOracle.Evaluate(source)
-        Assert.True(
-            result.Diagnostics.IsEmpty,
-            "$shape/$$scope: ${string.Join(Environment.NewLine, result.Diagnostics)}"
-        )
-        Assert.Equal(66, result.Value)
+        // ADR-0213: a variable or a call is no proof across the back edge (R7 b), and a member read in a loop
+        // removes the fact of a mutable top-level variable (R7 e). Only a construction in a function keeps it.
+        if shape == "constructor" && $scope == "function" {
+            Assert.True(
+                result.Diagnostics.IsEmpty,
+                "$shape/$$scope: ${string.Join(Environment.NewLine, result.Diagnostics)}"
+            )
+            Assert.Equal(66, result.Value)
+        } else {
+            // The rejection is the narrowing error at the `c.Value` read of the loop body, and nothing else.
+            let errors = result.Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+            let index = source.IndexOf("c.Value", StringComparison.Ordinal) + 2
+            let line = source.Substring(0, index).Count((character char) -> character == '\n') + 1
+            let column = index - source.LastIndexOf('\n', index - 1)
+            Assert.Equal(
+                []string{"GS0158@$line:$column"},
+                errors.Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            )
+        }
     }
 
     @Fact

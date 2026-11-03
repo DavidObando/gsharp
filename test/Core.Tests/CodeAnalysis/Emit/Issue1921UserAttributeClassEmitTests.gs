@@ -173,32 +173,184 @@ run()
     }
 
     @Fact
-    func OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998() {
-        // A `string` overload and an `Object` overload both accept a string
-        // argument (everything is assignable to Object) — genuinely
-        // ambiguous, no argument-type information can disambiguate. Must be
-        // rejected with a diagnostic rather than silently picking whichever
-        // came first in declaration order.
-        const Source = `package Issue1921Ambiguous
+    func Issue4749_OverloadedTypeAndObjectCtors_SelectsMoreSpecificOverload() {
+        const Source = `package Issue4749Specificity
 import System
 
-class TagAttribute : Attribute {
-    init(x string) {
+class MarkerAttribute : Attribute {
+    var Which string = ""
+    init(type Type) {
+        Which = "Type:" + type.Name
     }
-    init(x Object) {
+    init(value Object) {
+        Which = "Object:" + value.ToString()
     }
 }
 
+class TagAttribute : Attribute {
+    var Which string = ""
+    init(x Object) {
+        Which = "Object"
+    }
+    init(x string) {
+        Which = "String:" + x
+    }
+}
+
+class ExpandedTieAttribute : Attribute {
+    var Which string = ""
+    init(values ...Object) {
+        Which = "ParamsOnly"
+    }
+    init(first Object, rest ...Object) {
+        Which = "FixedAndParams:" + first.ToString()
+    }
+}
+
+class Holder[T] {
+    enum E {
+        First,
+        Second
+    }
+}
+
+class GenericEnumMarkerAttribute[T](Value Holder[T].E) : Attribute {
+    var Which string = "Primary"
+    init(fallback Object) {
+        Value = Holder[T].E.First
+        Which = "Object"
+    }
+}
+
+class GenericExplicitEnumMarkerAttribute[T] : Attribute {
+    var Which string = ""
+    init(fallback Object) {
+        Which = "Object"
+    }
+    init(kind Holder[T].E) {
+        Which = "Explicit:" + kind.ToString()
+    }
+}
+
+@Marker(typeof(Owner))
 @Tag("hello")
+@ExpandedTie(1)
+@GenericEnumMarker[int32](Holder[int32].E.Second)
+@GenericExplicitEnumMarker[int32](Holder[int32].E.Second)
+class Owner {
+}
+
+@Tag(cast[Object]("hello"))
+class ExplicitObjectOwner {
+}
+
+func run() {
+    var t Type = typeof(Owner)
+    var attrs = t.GetCustomAttributes(true)
+    for var i int32 = 0; i < attrs.Length; i += 1 {
+        if attrs[i].GetType().Name == "MarkerAttribute" {
+            var m MarkerAttribute = (attrs[i] as MarkerAttribute)!!
+            Console.WriteLine(m.Which)
+        }
+        if attrs[i].GetType().Name == "TagAttribute" {
+            var tag TagAttribute = (attrs[i] as TagAttribute)!!
+            Console.WriteLine(tag.Which)
+        }
+        if attrs[i].GetType().Name == "ExpandedTieAttribute" {
+            var exp ExpandedTieAttribute = (attrs[i] as ExpandedTieAttribute)!!
+            Console.WriteLine(exp.Which)
+        }
+        if attrs[i].GetType().Name.StartsWith("GenericEnumMarkerAttribute") {
+            var gen GenericEnumMarkerAttribute[int32] = (attrs[i] as GenericEnumMarkerAttribute[int32])!!
+            Console.WriteLine("GenericEnum:" + gen.Which + ":" + gen.Value.ToString())
+        }
+        if attrs[i].GetType().Name.StartsWith("GenericExplicitEnumMarkerAttribute") {
+            var genExp GenericExplicitEnumMarkerAttribute[int32] = (
+                attrs[i] as GenericExplicitEnumMarkerAttribute[int32]
+            )!!
+            Console.WriteLine("GenericExplicitEnum:" + genExp.Which)
+        }
+    }
+    var explicitType Type = typeof(ExplicitObjectOwner)
+    var explicitAttrs = explicitType.GetCustomAttributes(true)
+    for var j int32 = 0; j < explicitAttrs.Length; j += 1 {
+        if explicitAttrs[j].GetType().Name == "TagAttribute" {
+            var explicitTag TagAttribute = (explicitAttrs[j] as TagAttribute)!!
+            Console.WriteLine("Explicit:" + explicitTag.Which)
+        }
+    }
+}
+
+run()
+`
+        let output = CompileAndRun(Source, "Issue4749_OverloadedTypeAndObjectCtors_SelectsMoreSpecificOverload")
+        Assert.Contains("Type:Owner", output)
+        Assert.Contains("String:hello", output)
+        Assert.Contains("FixedAndParams:1", output)
+        Assert.Contains("GenericEnum:Primary:Second", output)
+        Assert.Contains("GenericExplicitEnum:Explicit:Second", output)
+        Assert.Contains("Explicit:Object", output)
+    }
+
+    @Fact
+    func OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998_AndExplicitConversionDisambiguates() {
+        const AmbiguousSource = `package Issue1921Ambiguous
+import System
+
+class TagAttribute : Attribute {
+    init(x string?) {
+    }
+    init(x Type?) {
+    }
+}
+
+@Tag(nil)
 class Widget {
 }
 `
         using let peStream = MemoryStream()
-        let tree = SyntaxTree.Parse(SourceText.From(Source))
+        let tree = SyntaxTree.Parse(SourceText.From(AmbiguousSource))
         let compilation = Compilation(tree)
         let result = compilation.Emit(peStream)
         Assert.False(result.Success)
-        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+        Assert.Contains("Add an explicit conversion", diagnostic.Message)
+
+        const DisambiguatedSource = `package Issue1921Disambiguated
+import System
+
+class TagAttribute : Attribute {
+    var Which string = ""
+    init(x string?) {
+        Which = "string"
+    }
+    init(x Type?) {
+        Which = "Type"
+    }
+}
+
+@Tag(cast[Type?](nil))
+class Widget {
+}
+
+func run() {
+    var t Type = typeof(Widget)
+    var attrs = t.GetCustomAttributes(true)
+    for var i int32 = 0; i < attrs.Length; i += 1 {
+        if attrs[i].GetType().Name == "TagAttribute" {
+            var a TagAttribute = (attrs[i] as TagAttribute)!!
+            Console.WriteLine("Disambiguated:" + a.Which)
+        }
+    }
+}
+
+run()
+`
+        let output = CompileAndRun(
+            DisambiguatedSource,
+            "OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998_AndExplicitConversionDisambiguates"
+        )
+        Assert.Contains("Disambiguated:Type", output)
     }
 
     shared {

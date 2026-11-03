@@ -683,7 +683,7 @@ partial class CSharpToGSharpTranslator {
                 this.EmittedName(symbol, node.Identifier.ValueText),
                 type,
                 eventVisibility,
-                this.MapAttributes(node.AttributeLists),
+                this.MapPropertyAttributes(node),
                 addBody,
                 removeBody,
                 explicitInterfaceType: explicitInterfaceEventType,

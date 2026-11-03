@@ -1861,11 +1861,16 @@ partial class CSharpToGSharpTranslator {
             } else {
                 targetRequiresNonNull = !analyzerNullableArgument
             }
+            let hasUserDefinedConversion = this.GetUserDefinedConversionInputOperator(
+                argument.Expression,
+                targetType,
+                out _
+            ) != nil
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
                 targetRequiresNonNull &&
                 !isFlowNarrowedLocal &&
-                this.GetUserDefinedConversionInputOperator(argument.Expression, targetType, out _) == nil &&
+                !hasUserDefinedConversion &&
                 this
                 .ReceiverNeedsNullForgiveness(
                 argument.Expression,
@@ -1904,7 +1909,7 @@ partial class CSharpToGSharpTranslator {
             )
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
-                targetRequiresNonNull &&
+                (targetRequiresNonNull || hasUserDefinedConversion) &&
                 targetParameter is {} parameter &&
                 targetType != nil {
                 // A warning-level C# null passed through a substituted generic
@@ -3160,6 +3165,13 @@ partial class CSharpToGSharpTranslator {
             targetType ITypeSymbol?,
             targetSymbolForPromotionCheck ISymbol?
         ) GExpression? {
+            var targetType = targetType
+            var targetSymbolForPromotionCheck = targetSymbolForPromotionCheck
+            if this.GetUserDefinedConversionInputOperator(valueExpression, targetType, out _) is {} conversionOperator {
+                let parameter = conversionOperator.Parameters[0]
+                targetType = parameter.Type
+                targetSymbolForPromotionCheck = parameter
+            }
             // ADR-0186 step 6 (PR 0): a `T!` element or member value is checked
             // by gsc at the non-null target.
             if translatedValue is NonNullAssertionExpression ||
@@ -4325,13 +4337,17 @@ partial class CSharpToGSharpTranslator {
                 // rewrote `IsType<EventHandler>` into `IsType<Action<object,
                 // EventArgs>>`, a different runtime type, defeating exactly the
                 // identity check the call was making.
-                result.Add(
-                    if symbol != nil {
-                        this.typeMapper.MapExplicitType(symbol, this.context, argument.GetLocation())
-                    } else {
-                        cast[GTypeReference](NamedTypeReference(argument.ToString()))
-                    }
-                )
+                var mapped GTypeReference? = if symbol != nil {
+                    this.typeMapper.MapExplicitType(symbol, this.context, argument.GetLocation())
+                } else {
+                    cast[GTypeReference](NamedTypeReference(argument.ToString()))
+                }
+                // Issue #5541: a stated type argument spells the nullable positions
+                // that an oblivious container argument gives it.
+                if GetContainingInvocation(generic) is {} call {
+                    mapped = this.PromoteObliviousTypeArgument(mapped, symbol, call, i)
+                }
+                result.Add(mapped!!)
             }
             return result
         }

@@ -105,10 +105,9 @@ func Use(value object) int32 {
 
     @Fact
     func AssigningPatternVariableAcrossLoopBackEdge_KeepsTargetNarrowing() {
-        // A pattern variable is proven non-nil by its match, so `access = inner`
-        // on the loop back-edge preserves the smart cast of `access` obtained
-        // from the early-exit nil guard (the same rule as a `let` local with a
-        // non-nil initializer).
+        // A pattern variable is proven non-nil by its match, so `access = inner` on the loop back-edge
+        // preserves the smart cast of `access` obtained from the early-exit nil guard. ADR-0213 question 4
+        // (decided for slice L1: the self-migration corpus has this shape).
         let diagnostics = Bind(`class Node {
     prop Receiver Node? { get; init; }
     prop IsStatic bool { get; init; }

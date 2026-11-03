@@ -1342,9 +1342,10 @@ partial class CSharpToGSharpTranslator {
             return attributes
         }
 
-        /// ADR-0184/#4294: maps a property/indexer's own attribute lists,
-        /// hoists an accessor-level `[UnscopedRef]` when equivalent, and
-        /// reports every other accessor attribute that cannot be represented.
+        /// ADR-0184/#4294/#4523: maps a property, indexer, or explicit-event
+        /// declaration's own attribute lists, hoists an accessor-level
+        /// `[UnscopedRef]` when equivalent, and reports every other accessor
+        /// attribute that cannot be represented.
         /// @remarks C# accepts `[UnscopedRef]` on either the property/indexer
         /// or its `get` accessor and treats the two identically — an
         /// expression-bodied indexer emits it on the property row, an
@@ -1359,7 +1360,7 @@ partial class CSharpToGSharpTranslator {
         /// `[UnscopedRef]` is hoisted: for any other accessor attribute
         /// (say `[MethodImpl]`) moving it to the property would change what
         /// it means, so it is dropped with a visible warning.
-        /// @param node The property or indexer declaration.
+        /// @param node The property, indexer, or explicit-event declaration.
         /// @returns The member's attribute list, including any hoisted `@UnscopedRef`.
         private func MapPropertyAttributes(node BasePropertyDeclarationSyntax) List[AttributeUse] {
             let attributes = this.MapAttributes(node.AttributeLists)
@@ -1394,14 +1395,14 @@ partial class CSharpToGSharpTranslator {
                             continue
                         }
                         let attributeName = attributeType?.ToDisplayString() ?? attribute.Name.ToString()
-                        let member = if node is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .PropertyDeclarationSyntax property {
-                            "property '${property.Identifier.ValueText}'"
-                        } else {
-                            "indexer"
+                        let member = switch node {
+                            case property is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .PropertyDeclarationSyntax: "property '${property.Identifier.ValueText}'"
+                            case eventDeclaration is EventDeclarationSyntax: "event '${eventDeclaration.Identifier.ValueText}'"
+                            default: "indexer"
                         }
                         let reason = if isUnscopedRef && hasUnscopedRef {
                             "the $member already has @UnscopedRef, so another member annotation cannot preserve this '${accessor.Keyword.ValueText}'-specific placement"
@@ -3968,7 +3969,8 @@ partial class CSharpToGSharpTranslator {
                             declaredBindingType
                         )
                     )
-                    let nullableElement = (
+                    let nullableElement = !this.ForEachBindingHasObliviousContainerElements(loopSymbol) &&
+                        (
                         projectedBindingType &&
                             (
                             this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression) ||

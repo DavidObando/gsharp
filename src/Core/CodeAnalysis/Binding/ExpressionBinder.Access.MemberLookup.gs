@@ -703,6 +703,39 @@ internal partial class ExpressionBinder {
                 )
                 return BindCollectionInitializerSuffix(collection, collectionReceiver)
             }
+            case structLiteral is StructLiteralExpressionSyntax when classSymbol != nil {
+                if !TryResolveClosedNestedClrType(
+                    classSymbol!!,
+                    structLiteral.TypeIdentifier.ValueText,
+                    structLiteral.TypeArgumentList,
+                    structLiteral.TypeIdentifier.Location,
+                    out var nestedLiteralClrType,
+                    out var nestedLiteralOpenDef,
+                    out var nestedLiteralSymbolicArgs,
+                    out var nestedLiteralConstraintFailed
+                ) {
+                    if !nestedLiteralConstraintFailed {
+                        Diagnostics.ReportUnableToFindType(
+                            structLiteral.TypeIdentifier.Location,
+                            structLiteral.TypeIdentifier.ValueText
+                        )
+                    }
+                    return BoundErrorExpression(structLiteral)
+                }
+                return BindImportedTypeLiteralExpression(
+                    structLiteral,
+                    nestedLiteralClrType!!,
+                    if nestedLiteralOpenDef != nil && !nestedLiteralSymbolicArgs.IsDefaultOrEmpty {
+                        ImportedTypeSymbol.GetConstructed(
+                            nestedLiteralClrType!!,
+                            nestedLiteralOpenDef,
+                            nestedLiteralSymbolicArgs
+                        )
+                    } else {
+                        nil
+                    }
+                )
+            }
             case ix is IndexExpressionSyntax {
                 let indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target)
                 if indexTarget is BoundErrorExpression {
@@ -1441,31 +1474,64 @@ internal partial class ExpressionBinder {
             }
             return false
         }
+        if leftPart is (GenericNameExpressionSyntax or IndexExpressionSyntax) &&
+            TryGetGenericSegmentNameAndArity(leftPart, out var genericIdentifier, out var genericArity) {
+            let genericName = genericIdentifier!!.ValueText
+            if classSymbol.TryLookupMember(genericName, nil, out _) || !classSymbol.GetStaticMethodGroup(genericName)
+                .IsEmpty ||
+                !$scope.References!!
+                .TryResolveNestedType(
+                classSymbol.ClassType,
+                genericName + "`" + genericArity.ToString(),
+                out var nestedGenericType
+            ) {
+                return false
+            }
+            let diagMark = Diagnostics.Count
+            if !TryBindGenericImportSegmentTypeArguments(leftPart, genericArity, out var segmentTypeArgs) {
+                Diagnostics.TruncateTo(diagMark)
+                return false
+            }
+            let outerClrArgs = if classSymbol.ClassType.IsConstructedGenericType {
+                classSymbol.ClassType.GetGenericArguments()
+            } else {
+                Array.Empty[Type]()
+            }
+            if nestedGenericType!!.GetGenericArguments().Length != outerClrArgs.Length + segmentTypeArgs.Length {
+                return false
+            }
+            let outerReceiver = classSymbol.ConstructedReceiver ?? classSymbol.SymbolicReceiver
+            let combinedArgs = ImmutableArray.CreateBuilder[TypeSymbol](outerClrArgs.Length + segmentTypeArgs.Length)
+            for var i = 0; i < outerClrArgs.Length; i++ {
+                combinedArgs.Add(
+                    if outerReceiver != nil &&
+                        !outerReceiver
+                        .TypeArguments
+                        .IsDefaultOrEmpty &&
+                        i < outerReceiver
+                        .TypeArguments
+                        .Length {
+                        outerReceiver.TypeArguments[i]
+                    } else {
+                        TypeSymbol.FromClrTypeWithoutNullability(outerClrArgs[i], NullabilityFreeReason.TypeStructure)
+                    }
+                )
+            }
+            combinedArgs.AddRange(segmentTypeArgs)
+            return TryCloseImportedGenericTypeReceiver(
+                nestedGenericType!!,
+                combinedArgs.MoveToImmutable(),
+                leftPart,
+                out nestedClassSymbol
+            )
+        }
         if leftPart is AccessorExpressionSyntax accessor {
             // Multi-level nesting: recursively resolve the left side first,
             // then resolve the right side as a nested type of that.
             if !TryResolveNestedTypeFromAccessorLeft(classSymbol, accessor.LeftPart, out var intermediateSymbol) {
                 return false
             }
-            if accessor.RightPart is NameExpressionSyntax innerName {
-                let innerNameText = innerName.IdentifierToken.ValueText
-                if $scope.References!!.TryResolveNestedType(
-                    intermediateSymbol!!.ClassType,
-                    innerNameText,
-                    out var deepNested
-                ) {
-                    let nested = ImportedClassSymbol(deepNested!!, innerName, references: $scope.References)
-                    nestedClassSymbol = CloseImportedNestedType(
-                        intermediateSymbol!!.ClassType,
-                        nested,
-                        innerName,
-                        intermediateSymbol!!.SymbolicReceiver,
-                        intermediateSymbol!!.ConstructedReceiver
-                    )
-                    return true
-                }
-            }
-            return false
+            return TryResolveNestedTypeFromAccessorLeft(intermediateSymbol!!, accessor.RightPart, out nestedClassSymbol)
         }
         return false
     }
@@ -4508,7 +4574,8 @@ internal partial class ExpressionBinder {
             symbolicArgTypes: symbolicArgTypes,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                 arguments,
-                nativeConversions: conversions
+                nativeConversions: conversions,
+                receiverType: constraintType
             )
         )
         if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {
