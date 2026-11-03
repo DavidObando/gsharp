@@ -6385,14 +6385,18 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func EnsureProjectedBaseCompilationIndex() ProjectedBaseCompilationIndex {
+            if this.state.ManagedReferenceArrayNullable.ProjectedBaseIndex is {} activeIndex {
+                return activeIndex
+            }
             let knownCompilations = this.KnownCompilations().ToArray()
-            let index = this
-                .state
-                .ManagedReferenceArrayNullable
-                .ProjectedBaseIndex ??
-                ProjectedBaseCompilationIndex.For(this.context.Compilation)
+            let index = ProjectedBaseCompilationIndex.For(this.context.Compilation)
             this.state.ManagedReferenceArrayNullable.ProjectedBaseIndex = index
-            if index.IsIndexed && index.IndexedCompilationCount >= knownCompilations.Length {
+            if index.IsIndexed && index.IndexedCompilations.Count == knownCompilations.Length && knownCompilations.All(
+                (compilation CSharpCompilation) -> index.IndexedCompilations.Contains(
+                    compilation,
+                    ReferenceEqualityComparer.Instance
+                )
+            ) {
                 return index
             }
             index.MemberConsumersByCandidate.Clear()
@@ -6461,6 +6465,56 @@ partial class CSharpToGSharpTranslator {
             ) {
                 AddConversionCandidatesCore(type, expression, HashSet[ITypeSymbol](SymbolEqualityComparer.Default))
             }
+            let AddGenericInstantiationCandidates = func (
+                type ITypeSymbol?,
+                tree Microsoft.CodeAnalysis.SyntaxTree,
+                typeParameters ImmutableArray[ITypeParameterSymbol],
+                typeArguments ImmutableArray[ITypeSymbol],
+                visited HashSet[ITypeSymbol]
+            ) {
+                if type == nil || !visited.Add(type) {
+                    return
+                }
+                if type is IArrayTypeSymbol array {
+                    AddGenericInstantiationCandidates(array.ElementType, tree, typeParameters, typeArguments, visited)
+                    return
+                }
+                if UnwrapNamedOrConstrainedClassType(type) is not{} named {
+                    return
+                }
+                for var current INamedTypeSymbol? = named; current != nil; current = current!!.BaseType {
+                    let candidate = this.ResolveCanonicalCandidate(current)
+                    if candidate == nil ||
+                        candidate.BaseType == nil ||
+                        !CSharpToGSharpTranslator
+                        .TypeContainsRecognizedManagedReferenceConsumer(candidate.BaseType, this.context.Compilation) {
+                        continue
+                    }
+                    if !index.GenericInstantiationsByCandidate.TryGetValue(candidate, out var instantiations) {
+                        instantiations = List[
+                            (
+                                Microsoft.CodeAnalysis.SyntaxTree,
+                                ImmutableArray[ITypeParameterSymbol],
+                                ImmutableArray[ITypeSymbol]
+                            )
+                        ]()
+                        index.GenericInstantiationsByCandidate.Add(candidate, instantiations)
+                    }
+                    instantiations.Add((tree, typeParameters, typeArguments))
+                }
+                for argument in named.TypeArguments {
+                    AddGenericInstantiationCandidates(argument, tree, typeParameters, typeArguments, visited)
+                }
+                if named.ContainingType != nil {
+                    AddGenericInstantiationCandidates(
+                        named.ContainingType,
+                        tree,
+                        typeParameters,
+                        typeArguments,
+                        visited
+                    )
+                }
+            }
             let AddGenericInstantiation = func (
                 tree Microsoft.CodeAnalysis.SyntaxTree,
                 typeParameters ImmutableArray[ITypeParameterSymbol],
@@ -6475,32 +6529,13 @@ partial class CSharpToGSharpTranslator {
                     if typeParameters[i].ConstraintTypes.IsDefaultOrEmpty {
                         continue
                     }
-                    if UnwrapNamedOrConstrainedClassType(typeArguments[i]) is not{} namedArg {
-                        continue
-                    }
-                    for var current INamedTypeSymbol? = namedArg; current != nil; current = current!!.BaseType {
-                        let candidate = this.ResolveCanonicalCandidate(current)
-                        if candidate == nil ||
-                            candidate.BaseType == nil ||
-                            !CSharpToGSharpTranslator
-                            .TypeContainsRecognizedManagedReferenceConsumer(
-                            candidate.BaseType,
-                            this.context.Compilation
-                        ) {
-                            continue
-                        }
-                        if !index.GenericInstantiationsByCandidate.TryGetValue(candidate, out var instantiations) {
-                            instantiations = List[
-                                (
-                                    Microsoft.CodeAnalysis.SyntaxTree,
-                                    ImmutableArray[ITypeParameterSymbol],
-                                    ImmutableArray[ITypeSymbol]
-                                )
-                            ]()
-                            index.GenericInstantiationsByCandidate.Add(candidate, instantiations)
-                        }
-                        instantiations.Add((tree, typeParameters, typeArguments))
-                    }
+                    AddGenericInstantiationCandidates(
+                        typeArguments[i],
+                        tree,
+                        typeParameters,
+                        typeArguments,
+                        HashSet[ITypeSymbol](SymbolEqualityComparer.Default)
+                    )
                 }
             }
             let AddTypeGenericInstantiations = func (
@@ -6755,7 +6790,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             index.IsIndexed = true
-            index.IndexedCompilationCount = knownCompilations.Length
+            index.IndexedCompilations = knownCompilations
             return index
         }
 
@@ -7530,7 +7565,11 @@ partial class CSharpToGSharpTranslator {
                         replacements.Add(containingTypeParameters[i], projectedContainingArguments.GetValue(i))
                     }
                 }
-                if this.OverrideUsesReplacedTypeParameter(definition, openDefinitionBase, replacements, index) {
+                if this.OverrideUsesReplacedTypeParameter(definition, openDefinitionBase, replacements, index) ||
+                    !this
+                    .ConstructedNamedTypeSatisfiesConstraints(
+                    this.ProjectNamedTypeWithReplacements(definitionBase, replacements)
+                ) {
                     DiscardSpeculativeProjections()
                     index.ReplacementsByType[definition] = nil
                     return nil
@@ -7638,6 +7677,9 @@ partial class CSharpToGSharpTranslator {
                 var effectiveMember IMethodSymbol = projectedMember
                 if invokedMethod.IsGenericMethod {
                     effectiveMember = projectedMember.ConstructedFrom.Construct(invokedMethod.TypeArguments.ToArray())
+                    if !this.ConstructedMethodSatisfiesConstraints(effectiveMember) {
+                        return false
+                    }
                 }
                 return this.ArgumentsMatchProjectedBaseMethod(
                     invocation,
@@ -7711,6 +7753,9 @@ partial class CSharpToGSharpTranslator {
                         effectiveMethodGroup = projectedMethodGroup.ConstructedFrom.Construct(
                             methodGroupSymbol.TypeArguments.ToArray()
                         )
+                        if !this.ConstructedMethodSatisfiesConstraints(effectiveMethodGroup) {
+                            return false
+                        }
                     }
                     if GetDelegateInvokeMethod(
                         this.context.GetTypeInfo(memberRefExpr).ConvertedType
@@ -8115,6 +8160,178 @@ partial class CSharpToGSharpTranslator {
                 outerIsPattern.Expression == directParent {
                 return this.PatternMatchesProjectedInput(outerIsPattern.Pattern, originalType, projectedType)
             }
+            if directParent!!.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchStatementSyntax outerSwitchStatement &&
+                outerSwitchStatement.Expression == directParent {
+                for section in outerSwitchStatement.Sections {
+                    for label in section.Labels {
+                        if label is CasePatternSwitchLabelSyntax patternLabel && !this.PatternMatchesProjectedInput(
+                            patternLabel.Pattern,
+                            originalType,
+                            projectedType
+                        ) {
+                            return false
+                        }
+                        if label is CaseSwitchLabelSyntax constantLabel && !this.ValueFitsProjectedBaseTarget(
+                            constantLabel.Value,
+                            projectedType
+                        ) {
+                            return false
+                        }
+                    }
+                }
+                return true
+            }
+            if directParent!!.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchExpressionSyntax governingSwitchExpression &&
+                governingSwitchExpression.GoverningExpression == directParent {
+                for arm in governingSwitchExpression.Arms {
+                    if !this.PatternMatchesProjectedInput(arm.Pattern, originalType, projectedType) {
+                        return false
+                    }
+                }
+                return true
+            }
+            if directParent!!.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax coalesce &&
+                coalesce
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                let otherArm = if coalesce.Left == directParent {
+                    coalesce.Right
+                } else {
+                    coalesce.Left
+                }
+                let effectiveOther ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(otherArm) ??
+                    this
+                    .context
+                    .GetTypeInfo(otherArm)
+                    .Type ??
+                    this
+                    .context
+                    .GetTypeInfo(otherArm)
+                    .ConvertedType
+                let projectedCoalesceType ITypeSymbol = if coalesce.Left == directParent && effectiveOther != nil {
+                    projectedType.WithNullableAnnotation(effectiveOther.NullableAnnotation)
+                } else {
+                    projectedType
+                }
+                if effectiveOther != nil && !this.CompositeArmFitsProjectedDestination(
+                    otherArm,
+                    effectiveOther,
+                    projectedCoalesceType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                ) {
+                    return false
+                }
+                let originalCoalesceType ITypeSymbol? = this.context.GetTypeInfo(coalesce).Type ?? originalType
+                return this.ProjectedValueFitsConsumerDestination(coalesce, originalCoalesceType, projectedCoalesceType)
+            }
+            if directParent!!.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConditionalExpressionSyntax outerConditionalExpr &&
+                (outerConditionalExpr.WhenTrue == directParent || outerConditionalExpr.WhenFalse == directParent) {
+                let otherArm = if outerConditionalExpr.WhenTrue == directParent {
+                    outerConditionalExpr.WhenFalse
+                } else {
+                    outerConditionalExpr.WhenTrue
+                }
+                let effectiveOther ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(otherArm) ??
+                    this
+                    .context
+                    .GetTypeInfo(otherArm)
+                    .Type ??
+                    this
+                    .context
+                    .GetTypeInfo(otherArm)
+                    .ConvertedType
+                let originalConditionalType ITypeSymbol? = this
+                    .context
+                    .GetTypeInfo(outerConditionalExpr)
+                    .Type ??
+                    originalType
+                let projectedConditionalType ITypeSymbol = if effectiveOther != nil &&
+                    effectiveOther.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    projectedType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                } else {
+                    projectedType
+                }
+                if effectiveOther != nil && !this.CompositeArmFitsProjectedDestination(
+                    otherArm,
+                    effectiveOther,
+                    projectedConditionalType
+                ) {
+                    return false
+                }
+                return this.ProjectedValueFitsConsumerDestination(
+                    outerConditionalExpr,
+                    originalConditionalType,
+                    projectedConditionalType
+                )
+            }
+            if directParent!!.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchExpressionArmSyntax outerSwitchArm &&
+                outerSwitchArm.Expression == directParent &&
+                outerSwitchArm.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchExpressionSyntax armSwitchExpression {
+                var projectedSwitchType ITypeSymbol = projectedType
+                for arm in armSwitchExpression.Arms {
+                    if arm == outerSwitchArm {
+                        continue
+                    }
+                    let effectiveArm ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
+                        arm.Expression
+                    ) ??
+                        this
+                        .context
+                        .GetTypeInfo(arm.Expression)
+                        .Type ??
+                        this
+                        .context
+                        .GetTypeInfo(arm.Expression)
+                        .ConvertedType
+                    if effectiveArm != nil &&
+                        effectiveArm.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        projectedSwitchType = projectedSwitchType.WithNullableAnnotation(
+                            Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                        )
+                    }
+                    if effectiveArm != nil && !this.CompositeArmFitsProjectedDestination(
+                        arm.Expression,
+                        effectiveArm,
+                        projectedSwitchType
+                    ) {
+                        return false
+                    }
+                }
+                let originalSwitchType ITypeSymbol? = this.context.GetTypeInfo(armSwitchExpression).Type ?? originalType
+                return this.ProjectedValueFitsConsumerDestination(
+                    armSwitchExpression,
+                    originalSwitchType,
+                    projectedSwitchType
+                )
+            }
             if directParent!!.Parent is ArgumentSyntax refArgument &&
                 (
                 refArgument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
@@ -8506,6 +8723,9 @@ partial class CSharpToGSharpTranslator {
                     effectiveOuterMethod = projectedOuterMethod.ConstructedFrom.Construct(
                         invokedMethod.TypeArguments.ToArray()
                     )
+                    if !this.ConstructedMethodSatisfiesConstraints(effectiveOuterMethod) {
+                        return false
+                    }
                 }
                 if !this.ProjectedCallableResultsMatch(outerInvocation, effectiveOuterMethod, out _) ||
                     !this.ProjectedByRefArgumentsMatch(outerInvocation, effectiveOuterMethod, out _) {
@@ -8631,6 +8851,9 @@ partial class CSharpToGSharpTranslator {
                     effectiveMethodGroup = projectedMethodGroup.ConstructedFrom.Construct(
                         methodGroupSymbol.TypeArguments.ToArray()
                     )
+                    if !this.ConstructedMethodSatisfiesConstraints(effectiveMethodGroup) {
+                        return false
+                    }
                 }
                 return !(
                     GetDelegateInvokeMethod(this.context.GetTypeInfo(memberNode).ConvertedType) is {} invokeMethod
@@ -9913,30 +10136,94 @@ partial class CSharpToGSharpTranslator {
             typeArguments ImmutableArray[ITypeSymbol],
             definition INamedTypeSymbol
         ) bool {
+            if typeParameters.Length != typeArguments.Length || !typeArguments.Any(
+                (argument ITypeSymbol) -> this.FindDerivedInstance(argument, definition) != nil
+            ) {
+                return true
+            }
+            return this.ConstructedTypeParametersSatisfyConstraints(typeParameters, typeArguments)
+        }
+
+        private func ConstructedNamedTypeSatisfiesConstraints(type INamedTypeSymbol?) bool {
+            if type == nil {
+                return true
+            }
+            let enclosingMap = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+            for owner in NamedTypeAndContainingTypes(type) {
+                for var i = 0;
+                    i < owner
+                    .OriginalDefinition
+                    .TypeParameters
+                    .Length &&
+                    i < owner
+                    .TypeArguments
+                    .Length;
+                    i++ {
+                    enclosingMap[owner.OriginalDefinition.TypeParameters[i]] = owner.TypeArguments[i]
+                }
+            }
+            for owner in NamedTypeAndContainingTypes(type) {
+                if owner.Arity > 0 && !this.ConstructedTypeParametersSatisfyConstraints(
+                    owner.OriginalDefinition.TypeParameters,
+                    owner.TypeArguments,
+                    enclosingMap
+                ) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func ConstructedMethodSatisfiesConstraints(method IMethodSymbol) bool {
+            if !method.IsGenericMethod {
+                return true
+            }
+            let enclosingMap = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+            if method.ContainingType != nil {
+                for owner in NamedTypeAndContainingTypes(method.ContainingType) {
+                    for var i = 0;
+                        i < owner
+                        .OriginalDefinition
+                        .TypeParameters
+                        .Length &&
+                        i < owner
+                        .TypeArguments
+                        .Length;
+                        i++ {
+                        enclosingMap[owner.OriginalDefinition.TypeParameters[i]] = owner.TypeArguments[i]
+                    }
+                }
+            }
+            return this.ConstructedTypeParametersSatisfyConstraints(
+                method.OriginalDefinition.TypeParameters,
+                method.TypeArguments,
+                enclosingMap
+            )
+        }
+
+        private func ConstructedTypeParametersSatisfyConstraints(
+            typeParameters ImmutableArray[ITypeParameterSymbol],
+            typeArguments ImmutableArray[ITypeSymbol],
+            enclosingSubstitution IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]? = nil
+        ) bool {
             if typeParameters.Length != typeArguments.Length {
                 return true
             }
             let typeParamMap = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+            if enclosingSubstitution != nil {
+                for entry in enclosingSubstitution {
+                    typeParamMap[entry.Key.OriginalDefinition] = entry.Value
+                }
+            }
             for var k = 0; k < typeParameters.Length; k++ {
                 typeParamMap[typeParameters[k].OriginalDefinition] = typeArguments[k]
             }
             for var i = 0; i < typeParameters.Length; i++ {
-                if UnwrapNamedOrConstrainedClassType(typeArguments[i]) is not{} namedArg ||
-                    !DerivesFromOrEquals(namedArg, definition) {
-                    continue
-                }
-                for constraint in typeParameters[i].ConstraintTypes {
+                let typeParam = typeParameters[i]
+                let typeArg = typeArguments[i]
+                for constraint in typeParam.ConstraintTypes {
                     let substitutedConstraint = this.SubstituteTypeParameters(constraint, typeParamMap)
-                    if UnwrapNamedOrConstrainedClassType(substitutedConstraint) is not{} expectedNamed {
-                        continue
-                    }
-                    if DerivesFromOrEquals(expectedNamed, definition) {
-                        continue
-                    }
-                    let matchingActual INamedTypeSymbol? = this.GetReceiverTypeHierarchy(namedArg).FirstOrDefault(
-                        (candidate INamedTypeSymbol) -> SameTypeDefinition(candidate, expectedNamed)
-                    )
-                    if matchingActual == nil || !this.NestedProjectionFitsDestination(matchingActual, expectedNamed) {
+                    if !this.NestedProjectionFitsDestination(typeArg, substitutedConstraint) {
                         return false
                     }
                 }

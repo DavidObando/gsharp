@@ -73,6 +73,7 @@ internal class ProjectedBaseCompilationIndex {
         ReplacementsByType = Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?](
             SymbolEqualityComparer.Default
         )
+        IndexedCompilations = Array.Empty[Compilation]()
     }
 
     prop MemberConsumersByCandidate Dictionary[INamedTypeSymbol, List[SyntaxNode]] {
@@ -103,7 +104,7 @@ internal class ProjectedBaseCompilationIndex {
         set;
     }
 
-    prop IndexedCompilationCount int32 {
+    prop IndexedCompilations IReadOnlyList[Compilation] {
         get;
         set;
     }

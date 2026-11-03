@@ -7525,6 +7525,7 @@ public class Base<T> {
     public Base(ref T value) { }
     public virtual void Add(T value) { }
     public void Use(Box<T> box) { }
+    public void UseConstrained<U>(U box) where U : Box<T> { }
     public void Replace(ref T value) { }
     public T Get() => default;
     public Task<Box<T>> GetAsync() => Task.FromResult(this.Value);
@@ -7532,6 +7533,9 @@ public class Base<T> {
         get => 0;
         set { }
     }
+}
+public class ConstrainedPairBase<T, U> where U : Box<T> {
+    public void Add(T value) { }
 }
 public class Mid<U> : Base<U> { }
 public class Derived : Base<ManagedRef<int>> { }
@@ -7587,12 +7591,18 @@ public class AwaitDerived : Base<ManagedRef<int>> { }
 public class PatternDerived : Base<ManagedRef<int>> { }
 public class SuppressDerived : Base<ManagedRef<int>> { }
 public class CrossProjectDerived : Base<ManagedRef<int>> { }
+public class NestedConstraintInstantiationDerived : Base<ManagedRef<int>> { }
+public class MethodConstraintDerived : Base<ManagedRef<int>> { }
+public class SwitchPatternDerived : Base<ManagedRef<int>> { }
+public class CoalesceValueDerived : Base<ManagedRef<int>> { }
+public class ConstrainedPairDerived : ConstrainedPairBase<ManagedRef<int>, Box<ManagedRef<int>>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
     private static void AcceptBox(Box<ManagedRef<int>> value) { }
     private static void RequireBase<T>() where T : Base<ManagedRef<int>> { }
+    private static void RequireBaseEnumerable<U>() where U : IEnumerable<Base<ManagedRef<int>>> { }
     private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
     private static void ReadConstrainedBox<U>(U item) where U : ConstrainedDerived => AcceptBox(item.Value);
 
@@ -7756,7 +7766,33 @@ public class Probe {
         AcceptBox(suppressDerived.Value!);
 
         new CrossProjectDerived().Add(source[0]);
+
+        RequireBaseEnumerable<List<NestedConstraintInstantiationDerived>>();
+        new NestedConstraintInstantiationDerived().Add(source[0]);
+
+        var methodConstraintDerived = new MethodConstraintDerived();
+        methodConstraintDerived.UseConstrained<Box<ManagedRef<int>>>(FixedBox);
+        methodConstraintDerived.Add(source[0]);
+
+        var switchPatternDerived = new SwitchPatternDerived();
+        switch (switchPatternDerived.Value) {
+            case var switchBox:
+                AcceptBox(switchBox);
+                break;
+        }
+        switchPatternDerived.Add(source[0]);
+
+        var coalesceValueDerived = new CoalesceValueDerived();
+        coalesceValueDerived.Add(source[0]);
+        AcceptBox(coalesceValueDerived.NullableBox ?? FixedBox);
+
+        new ConstrainedPairDerived().Add(source[0]);
     }
+}`
+        const benignConsumerSource = `using ManagedArrayInheritedGenericBaseFixedDestination;
+namespace BenignConsumer;
+public class BenignProbe {
+    public static CrossProjectDerived Create() => new CrossProjectDerived();
 }`
         const consumerSource = `using Gsharp.Values;
 using ManagedArrayInheritedGenericBaseFixedDestination;
@@ -7773,6 +7809,15 @@ public class ConsumerProbe {
         )
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
         let consumerReferences = List[MetadataReference](references){project.Compilation.ToMetadataReference()}
+        let benignConsumerProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("BenignConsumer.cs", benignConsumerSource)},
+            consumerReferences,
+            assemblyName: "BenignConsumer"
+        )
+        Assert.True(
+            benignConsumerProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, benignConsumerProject.ErrorDiagnostics)
+        )
         let consumerProject = CSharpProjectLoader.LoadInMemory(
             [](string, source string){("Consumer.cs", consumerSource)},
             consumerReferences,
@@ -7783,6 +7828,17 @@ public class ConsumerProbe {
             string.Join(Environment.NewLine, consumerProject.ErrorDiagnostics)
         )
         let document = Assert.Single(project.Documents)
+        let benignContext = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{project.Compilation, benignConsumerProject.Compilation}
+        )
+        let benignText = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, benignContext))
+        Assert.Contains("open class CrossProjectDerived : Base[managed[int32]?]", benignText, StringComparison.Ordinal)
         let context = TranslationContext(
             project.Compilation,
             document.SemanticModel,
@@ -7794,7 +7850,7 @@ public class ConsumerProbe {
         )
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            40,
+            45,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7871,6 +7927,19 @@ public class ConsumerProbe {
         Assert.Contains("open class PatternDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class SuppressDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class CrossProjectDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class NestedConstraintInstantiationDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class MethodConstraintDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SwitchPatternDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class CoalesceValueDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class ConstrainedPairDerived : ConstrainedPairBase[managed[int32], Box[managed[int32]]]",
+            text,
+            StringComparison.Ordinal
+        )
     }
 
     shared {
