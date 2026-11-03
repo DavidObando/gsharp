@@ -253,10 +253,26 @@ namespace App
 
         public static T TakeFromGetterParams<T>(System.Func<T[]> get, params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T TakeFromAsyncGetterParams<T>(System.Func<System.Threading.Tasks.Task<T[]>> get, params System.ReadOnlySpan<T> values) => values[0];
+
         public static string[] GetPromotedArray() => ObLib.Node.Holes();
 
         public static string PromotedMethodGroupReturnAllowsInference(Model.Arg argument, int i) =>
             TakeFromGetterParams(GetPromotedArray, i > 0 ? argument.Value : argument.Name, "tail");
+
+        public static string PromotedBlockLambdaReturnAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return TakeFromGetterParams(() => { return lines; }, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedAsyncLambdaReturnAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return TakeFromAsyncGetterParams(async () => { await System.Threading.Tasks.Task.Yield(); return lines; }, i > 0 ? argument.Value : argument.Name, "tail");
+        }
 
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
@@ -443,12 +459,18 @@ namespace App
 
         public static T FixedByPairConsumerParams<T>(PairConsumer<T> consume, params System.ReadOnlySpan<T> values) => values[0];
 
+        public delegate void JaggedPairConsumer<T>(T[][] first, T[][] second);
+
+        public static T FixedByJaggedPairConsumerParams<T>(JaggedPairConsumer<T> consume, params System.ReadOnlySpan<T> values) => values[0];
+
         public static void Consume(string s) { }
 
         public static void Consume(int n) { }
 
 #nullable enable
         public static void ConsumePair(string? first, string second) { }
+
+        public static void ConsumeJaggedPair(string?[][] first, string[][] second) { }
 #nullable restore
 
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
@@ -508,6 +530,12 @@ namespace App
         public static string FixedByNonNullArrayMethodGroupParamsCall(Model.Arg argument, int i) =>
             TakeFromGetterParams(GetNonNullArray, i > 19 ? "s" : argument.Name, "tail");
 
+        public static string FixedByImplicitLambdaParamsCall(Model.Arg argument, int i) =>
+            FixedByActionParams(s => { }, i > 20 ? "t" : argument.Name, "tail");
+
+        public static string FixedByReconciledJaggedMethodGroupParamsCall(Model.Arg argument, int i) =>
+            FixedByJaggedPairConsumerParams(ConsumeJaggedPair, i > 21 ? "u" : argument.Name, "tail");
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
         public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
@@ -555,6 +583,8 @@ namespace App
         )
         Assert.Contains("if i > 18 { \"r\" } else { argument.Name!! }", printed)
         Assert.Contains("if i > 19 { \"s\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 20 { \"t\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 21 { \"u\" } else { argument.Name!! }", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -592,11 +622,13 @@ namespace App
             var missing = new Arg("v");
             string ok = FixedByListParams(list, 0 > 1 ? "b" : present.Name, "tail") + ":" +
                 list.FixedByReceiverParams(0 > 1 ? "c" : present.Name, "tail") + ":" +
-                FixedByActionParams(Consume, 0 > 1 ? "d" : present.Name, "tail");
+                FixedByActionParams(Consume, 0 > 1 ? "d" : present.Name, "tail") + ":" +
+                FixedByActionParams(s => { }, 0 > 1 ? "e" : present.Name, "tail");
             int throwsCount = 0;
             try { FixedByListParams(list, 0 > 1 ? "b" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
             try { list.FixedByReceiverParams(0 > 1 ? "c" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
             try { FixedByActionParams(Consume, 0 > 1 ? "d" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            try { FixedByActionParams(s => { }, 0 > 1 ? "e" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
             return ok + ":" + throwsCount;
         }
     }
@@ -604,7 +636,7 @@ namespace App
         let (library, consumer) = TranslateBothProjects(app)
         Assert.Contains("present.Name!!", consumer)
         Assert.Contains("missing.Name!!", consumer)
-        Assert.Equal("named:named:named:3", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
+        Assert.Equal("named:named:named:named:4", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
     }
 
     /// A `var` local is not a nil-accepting target, even though

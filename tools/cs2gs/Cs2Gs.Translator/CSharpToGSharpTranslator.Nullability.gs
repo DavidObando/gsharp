@@ -1465,14 +1465,24 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     boundParameters
                 )
-            } else if unwrapped is AnonymousFunctionExpressionSyntax{ExpressionBody: {} body} &&
+            } else if unwrapped is AnonymousFunctionExpressionSyntax anonymousFunction &&
                 !invokeDefinition
                 .ReturnsVoid {
-                let bodyPositions = this.ObliviousValuePositions(body)
+                var returnPositions ObliviousPositionSet? = nil
+                for returnExpression in GetLambdaResultExpressions(anonymousFunction) {
+                    if this.GetExpressionNullablePositions(returnExpression) is {} expressionPositions {
+                        returnPositions ??= ObliviousPositionSet()
+                        returnPositions!!.UnionWith(expressionPositions)
+                    }
+                }
+                if anonymousFunction.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword) &&
+                    returnPositions != nil {
+                    returnPositions = Prefixed(returnPositions, "0")
+                }
                 MergeCallableSlotPositions(
                     invokeDefinition.ReturnType,
                     callableMethod.ReturnType,
-                    bodyPositions,
+                    returnPositions,
                     bindings,
                     boundParameters
                 )
@@ -1491,7 +1501,14 @@ partial class CSharpToGSharpTranslator {
 
         private func GetCallableSymbolNullablePositions(symbol ISymbol) ObliviousPositionSet? {
             var result ObliviousPositionSet? = nil
-            if this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) {
+            let promotedTopLevel = if symbol is IParameterSymbol{
+                ContainingSymbol: IMethodSymbol{MethodKind: MethodKind.AnonymousFunction}
+            } {
+                this.IsTranslatorWidenedDeclaration(symbol)
+            } else {
+                this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol)
+            }
+            if promotedTopLevel {
                 result ??= ObliviousPositionSet()
                 result!!.Nullable.Add("")
             }
@@ -1561,16 +1578,10 @@ partial class CSharpToGSharpTranslator {
             if current.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression) {
                 return typeInfo.ConvertedType
             }
-            let isExplicitCallable = (
-                current is ParenthesizedLambdaExpressionSyntax lambda &&
-                    lambda
-                    .ParameterList
-                    .Parameters
-                    .All((p ParameterSyntax) -> p.Type != nil)
-            ) ||
-                (current is AnonymousMethodExpressionSyntax anonymousMethod && anonymousMethod.ParameterList != nil) ||
-                !(current is AnonymousFunctionExpressionSyntax)
-            if isExplicitCallable && this.context.GetSymbolInfo(current).Symbol is IMethodSymbol callableMethod {
+            let hasCallableParameters = !(
+                current is AnonymousMethodExpressionSyntax anonymousMethod && anonymousMethod.ParameterList == nil
+            )
+            if hasCallableParameters && this.context.GetSymbolInfo(current).Symbol is IMethodSymbol callableMethod {
                 return this.ConstructDelegateFromCallableMethod(
                     typeInfo.ConvertedType,
                     callableMethod,
@@ -1645,14 +1656,24 @@ partial class CSharpToGSharpTranslator {
                 let bindings = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
                 for var i = 0; i < invokeDefinition.Parameters.Length; i++ {
                     let parameterSymbol = callableMethod.Parameters[i]
-                    let parameterType = if this.ShouldPromoteToNullableReference(parameterSymbol) ||
-                        this
-                        .IsTranslatorWidenedDeclaration(parameterSymbol) {
+                    let isPromotedParameter = if callableMethod.MethodKind == MethodKind.AnonymousFunction {
+                        this.IsTranslatorWidenedDeclaration(parameterSymbol)
+                    } else {
+                        this.ShouldPromoteToNullableReference(parameterSymbol) || this.IsTranslatorWidenedDeclaration(
+                            parameterSymbol
+                        )
+                    }
+                    let parameterType = if isPromotedParameter {
                         parameterSymbol.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
                     } else {
                         parameterSymbol.Type
                     }
-                    BindCallableTypeParameters(invokeDefinition.Parameters[i].Type, parameterType, bindings)
+                    BindCallableTypeParameters(
+                        invokeDefinition.Parameters[i].Type,
+                        parameterType,
+                        bindings,
+                        this.context.Compilation
+                    )
                 }
                 if includeReturn && !invokeDefinition.ReturnsVoid {
                     let returnType = if this.ShouldPromoteToNullableReference(callableMethod) ||
@@ -1664,7 +1685,12 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         callableMethod.ReturnType
                     }
-                    BindCallableTypeParameters(invokeDefinition.ReturnType, returnType, bindings)
+                    BindCallableTypeParameters(
+                        invokeDefinition.ReturnType,
+                        returnType,
+                        bindings,
+                        this.context.Compilation
+                    )
                 }
                 let typeArguments = List[ITypeSymbol](definition.TypeParameters.Length)
                 for var i = 0; i < definition.TypeParameters.Length; i++ {
@@ -2685,21 +2711,22 @@ partial class CSharpToGSharpTranslator {
             private func BindCallableTypeParameters(
                 patternType ITypeSymbol?,
                 actualType ITypeSymbol?,
-                bindings Dictionary[ITypeParameterSymbol, ITypeSymbol]
+                bindings Dictionary[ITypeParameterSymbol, ITypeSymbol],
+                compilation Compilation
             ) {
                 if patternType == nil || actualType == nil {
                     return
                 }
                 if patternType is ITypeParameterSymbol typeParameter {
                     if bindings.TryGetValue(typeParameter, out var existing) {
-                        bindings[typeParameter] = ReconcileCallableBoundType(existing, actualType)
+                        bindings[typeParameter] = ReconcileCallableBoundType(existing, actualType, compilation)
                     } else {
                         bindings[typeParameter] = actualType
                     }
                     return
                 }
                 if patternType is IArrayTypeSymbol patternArray && actualType is IArrayTypeSymbol actualArray {
-                    BindCallableTypeParameters(patternArray.ElementType, actualArray.ElementType, bindings)
+                    BindCallableTypeParameters(patternArray.ElementType, actualArray.ElementType, bindings, compilation)
                     return
                 }
                 if patternType is INamedTypeSymbol patternNamed && FlatTypeArguments(patternNamed).Count > 0 {
@@ -2722,13 +2749,17 @@ partial class CSharpToGSharpTranslator {
                         let patternArgs = FlatTypeArguments(effectivePattern)
                         let actualArgs = FlatTypeArguments(matchingActual)
                         for var i = 0; i < patternArgs.Count && i < actualArgs.Count; i++ {
-                            BindCallableTypeParameters(patternArgs[i], actualArgs[i], bindings)
+                            BindCallableTypeParameters(patternArgs[i], actualArgs[i], bindings, compilation)
                         }
                     }
                 }
             }
 
-            private func ReconcileCallableBoundType(existing ITypeSymbol, candidate ITypeSymbol) ITypeSymbol {
+            private func ReconcileCallableBoundType(
+                existing ITypeSymbol,
+                candidate ITypeSymbol,
+                compilation Compilation
+            ) ITypeSymbol {
                 let reconciledAnnotation = if existing.NullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
@@ -2737,17 +2768,17 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     candidate.NullableAnnotation
                 }
-                if existing is IArrayTypeSymbol existingArray && candidate is IArrayTypeSymbol candidateArray {
+                if existing is IArrayTypeSymbol existingArray &&
+                    candidate is IArrayTypeSymbol candidateArray &&
+                    existingArray.Rank == candidateArray
+                    .Rank {
                     let reconciledElement = ReconcileCallableBoundType(
                         existingArray.ElementType,
-                        candidateArray.ElementType
+                        candidateArray.ElementType,
+                        compilation
                     )
-                    if !SymbolEqualityComparer.Default.Equals(reconciledElement, existingArray.ElementType) ||
-                        reconciledElement.NullableAnnotation != existingArray
-                        .ElementType
-                        .NullableAnnotation {
-                        return candidate.WithNullableAnnotation(reconciledAnnotation)
-                    }
+                    return compilation.CreateArrayTypeSymbol(reconciledElement, existingArray.Rank)
+                        .WithNullableAnnotation(reconciledAnnotation)
                 }
                 if existing is INamedTypeSymbol{IsGenericType: true} existingNamed &&
                     candidate is INamedTypeSymbol{IsGenericType: true} candidateNamed &&
@@ -2762,7 +2793,11 @@ partial class CSharpToGSharpTranslator {
                     let typeArguments = List[ITypeSymbol](existingNamed.TypeArguments.Length)
                     for var i = 0; i < existingNamed.TypeArguments.Length; i++ {
                         typeArguments.Add(
-                            ReconcileCallableBoundType(existingNamed.TypeArguments[i], candidateNamed.TypeArguments[i])
+                            ReconcileCallableBoundType(
+                                existingNamed.TypeArguments[i],
+                                candidateNamed.TypeArguments[i],
+                                compilation
+                            )
                         )
                     }
                     return existingNamed
