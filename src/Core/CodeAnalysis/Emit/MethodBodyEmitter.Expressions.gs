@@ -676,6 +676,27 @@ internal partial class MethodBodyEmitter {
                 // MethodBase.GetMethodFromHandle(...) ; castclass MethodInfo`.
                 this.EmitMethodInfoLiteral(method)
             }
+            case conversion is BoundClrConversionCallExpression {
+                let method = Invariant.Required(
+                    conversion.Method,
+                    "a CLR conversion literal carries a method",
+                    expression: "conversion.Method"
+                )
+                let owner = SymbolicConversionOwner(
+                    method,
+                    UnwrapNullable(conversion.Source.Type),
+                    UnwrapNullable(conversion.Type)
+                )
+                this.EmitMethodInfoLiteral(
+                    method,
+                    if method.DeclaringType is {IsGenericTypeDefinition: true} ||
+                        ConversionClassifier.NeedsSymbolicConversion(owner) {
+                        owner
+                    } else {
+                        default(TypeSymbol?)
+                    }
+                )
+            }
             case member is BoundClrPropertyAccessExpression {
                 let receiverType = member.ConstrainedInterfaceType ??
                     member.StaticContainerType ??

@@ -1133,7 +1133,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         let methodInfo BoundExpression? = switch conversion {
             case BoundConversionExpression{
                 Expression: BoundClrConversionCallExpression clrConversion
-            } when clrConversion.Method != nil: BuildMethodInfoConstant(clrConversion.Method!!)
+            } when clrConversion.Method != nil: BuildConversionMethodInfoConstant(clrConversion)
             default: default(BoundExpression?)
         }
         if methodInfo != nil {
@@ -1165,7 +1165,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
     ) BoundExpression {
         var methodInfo BoundExpression
         if conversion.Method != nil {
-            methodInfo = BuildMethodInfoConstant(conversion.Method)
+            methodInfo = BuildConversionMethodInfoConstant(conversion)
         } else {
             let function = conversion.Function ??
                 throw NotSupportedException("A same-compilation expression-tree conversion requires a function symbol.")
@@ -2144,6 +2144,32 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             method,
             ReflectionMethodInfoTypeSymbol
         )
+
+        private func BuildConversionMethodInfoConstant(conversion BoundClrConversionCallExpression) BoundExpression {
+            let method = Invariant.Required(
+                conversion.Method,
+                "an imported conversion carries a CLR method",
+                expression: "conversion.Method"
+            )
+            let source = if conversion.Source.Type is NullableTypeSymbol sourceNullable {
+                sourceNullable.UnderlyingType
+            } else {
+                conversion.Source.Type
+            }
+            let target = if conversion.Type is NullableTypeSymbol targetNullable {
+                targetNullable.UnderlyingType
+            } else {
+                conversion.Type
+            }
+            return if method.DeclaringType is {IsGenericTypeDefinition: true} ||
+                ConversionClassifier.NeedsSymbolicConversion(source) || ConversionClassifier.NeedsSymbolicConversion(
+                target
+            ) {
+                BoundLiteralExpression(nil, conversion, ReflectionMethodInfoTypeSymbol)
+            } else {
+                BuildMethodInfoConstant(method)
+            }
+        }
 
         private func BuildUserOperatorMethodInfoLookup(expression BoundClrBinaryOperatorExpression) BoundExpression {
             let function = expression.Function ??

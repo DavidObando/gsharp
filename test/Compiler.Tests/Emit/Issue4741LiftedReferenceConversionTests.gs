@@ -425,6 +425,27 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         "111,111"
     )
     @InlineData(
+        "int32?",
+        "EvalTree[GenericOpaqueValueToken[LocalItem], int32?]((v GenericOpaqueValueToken[LocalItem]) -> int32?(v), Probe.ReadValue[GenericOpaqueValueToken[LocalItem]]())",
+        "int?",
+        "EvalTree<GenericOpaqueValueToken<int>, int?>(v => (int?)v, Probe.ReadValue<GenericOpaqueValueToken<int>>())",
+        "111,111"
+    )
+    @InlineData(
+        "int32",
+        "EvalTree[GenericNullAwareValueToken[LocalItem]?, int32]((v GenericNullAwareValueToken[LocalItem]?) -> int32(v), Probe.Read[GenericNullAwareValueToken[LocalItem]](present))",
+        "int",
+        "EvalTree<GenericNullAwareValueToken<int>?, int>(v => (int)v, Probe.Read<GenericNullAwareValueToken<int>>(present))",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "EvalTree[GenericNullAwareValueToken[LocalItem], int32]((v GenericNullAwareValueToken[LocalItem]) -> int32(v), Probe.ReadValue[GenericNullAwareValueToken[LocalItem]]())",
+        "int",
+        "EvalTree<GenericNullAwareValueToken<int>, int>(v => (int)v, Probe.ReadValue<GenericNullAwareValueToken<int>>())",
+        "119,119"
+    )
+    @InlineData(
         "int32",
         "Probe.AcceptSpan(Span[uint8]([]uint8{1, 2, 3})) + (if present { 0 } else { 0 }) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
         "int",
