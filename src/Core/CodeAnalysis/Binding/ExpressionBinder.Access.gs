@@ -70,8 +70,10 @@ internal partial class ExpressionBinder {
             for p in only.Parameters {
                 paramTypes.Add(owner?.SubstituteMemberType(p.Type) ?? p.Type)
             }
-            var returnType = this.MethodGroupObservableReturnType(only)
-            returnType = owner?.SubstituteMemberType(returnType) ?? returnType
+            let returnType = this.GetMethodGroupObservableReturnType(
+                only,
+                owner?.SubstituteMemberType(only.Type) ?? only.Type
+            )
             let fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), returnType)
             return BoundMethodGroupExpression(nil, receiver, only, fnType){
                 ForceNonVirtualDispatch = forceNonVirtualDispatch
@@ -85,8 +87,14 @@ internal partial class ExpressionBinder {
     // a Void result for "async no-result" but the emitted state machine returns
     // Task, so the method-group natural delegate is Func&lt;Task&gt; (not Action).
     // Async iterators keep their IAsyncEnumerable return unchanged.
-    private func MethodGroupObservableReturnType(function FunctionSymbol) TypeSymbol {
-        let declared = function.Type ?? TypeSymbol.Void
+    private func MethodGroupObservableReturnType(function FunctionSymbol) TypeSymbol ->
+    this.GetMethodGroupObservableReturnType(function, function.Type)
+
+    private func GetMethodGroupObservableReturnType(
+        function FunctionSymbol,
+        declaredOrSubstituted TypeSymbol?
+    ) TypeSymbol {
+        let declared = declaredOrSubstituted ?? TypeSymbol.Void
         if function.IsAsyncOrSuspending && !function.IsAsyncVoid && !isAsyncIteratorReturnType(declared) {
             return lambdas.WrapAsTask(declared, function.AsyncReturnsValueTask)
         }

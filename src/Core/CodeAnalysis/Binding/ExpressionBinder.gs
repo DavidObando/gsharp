@@ -3077,6 +3077,45 @@ internal partial class ExpressionBinder {
             return Conversion.ClassifyNonStructural(source, target).IsImplicit
         }
 
+        private func ProjectMethodGroupReturnClrType(
+            candidate FunctionSymbol,
+            declaredReturn TypeSymbol?,
+            projectType(TypeSymbol) -> Type?
+        ) Type? {
+            let returnSymbol = declaredReturn ?? TypeSymbol.Void
+            if !candidate.IsAsyncOrSuspending || candidate.IsAsyncVoid {
+                return projectType(returnSymbol)
+            }
+            if returnSymbol == TypeSymbol.Void {
+                return if candidate.AsyncReturnsValueTask || candidate.IsSuspending {
+                    typeof(System.Threading.Tasks.ValueTask)
+                } else {
+                    typeof(System.Threading.Tasks.Task)
+                }
+            }
+            let projected Type? = projectType(returnSymbol)
+            if projected == nil {
+                return nil
+            }
+            if projected.IsGenericType && projected.GetGenericTypeDefinition()
+                .FullName == "System.Collections.Generic.IAsyncEnumerable`1" {
+                return projected
+            }
+            let openTask = if candidate.AsyncReturnsValueTask || candidate.IsSuspending {
+                typeof(System.Threading.Tasks.ValueTask[object]).GetGenericTypeDefinition()
+            } else {
+                typeof(System.Threading.Tasks.Task[object]).GetGenericTypeDefinition()
+            }
+            let targetOpenTask = if projected.Assembly != typeof(object).Assembly && projected.Assembly.GetType(
+                openTask.FullName!!
+            ) is {} foreignOpenTask {
+                foreignOpenTask
+            } else {
+                openTask
+            }
+            return targetOpenTask.MakeGenericType(projected)
+        }
+
         private func ResolveMethodGroupInferenceSignature(
             argument BoundExpression,
             delegateParameterTypes IReadOnlyList[Type],
@@ -3209,7 +3248,7 @@ internal partial class ExpressionBinder {
                 if !compatible {
                     continue
                 }
-                let returnType Type? = projectType(closedReturn)
+                let returnType Type? = ProjectMethodGroupReturnClrType(candidate, closedReturn, projectType)
                 if returnType == nil {
                     continue
                 }
@@ -3348,11 +3387,8 @@ internal partial class ExpressionBinder {
                 }
                 projectedParameters[i] = projected
             }
-            if candidate.IsAsyncOrSuspending && !candidate.IsAsyncVoid {
-                return nil
-            }
             let returnType = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void
-            return if projectType(returnType) is {} projectedReturn {
+            return if ProjectMethodGroupReturnClrType(candidate, returnType, projectType) is {} projectedReturn {
                 (projectedParameters, projectedReturn)
             } else {
                 nil

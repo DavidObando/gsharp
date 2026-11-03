@@ -8,6 +8,8 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.Core.Tests
+import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
@@ -119,6 +121,131 @@ let conditional = maybe?.Checksum32()
 Console.WriteLine(checksum())
 Console.WriteLine(conditional)`
         AssertCompilesWithoutErrors(source)
+    }
+
+    @Fact
+    func AsyncExtensionMethodGroups_ConvertToTaskAndValueTaskDelegatesAndRun() {
+        let source = `package Repro
+import System
+import System.Threading.Tasks
+
+async func (value string) LengthAsync() int32 {
+    await Task.Yield()
+    return value.Length
+}
+
+async func (value string) DelayTextAsync() {
+    await Task.Yield()
+    Console.WriteLine(value)
+}
+
+async func (value string) ValueLengthAsync() ValueTask[int32] {
+    await Task.Yield()
+    return value.Length
+}
+
+async func (value string) ValueDelayAsync() ValueTask {
+    await Task.Yield()
+    Console.WriteLine("vt:" + value)
+}
+
+async func (value int32) ValueAsync() ValueTask[int32] {
+    await Task.Yield()
+    return value + 1
+}
+
+async func (value int32) DelayNumberAsync() {
+    await Task.Yield()
+    Console.WriteLine(value)
+}
+
+async func (value T) DelayIdentityAsync[T]() T {
+    await Task.Yield()
+    return value
+}
+
+async func (value string) ComputeAsync() int32 {
+    await Task.Yield()
+    return value.Length
+}
+
+async func (value string) ComputeAsync(delta int32) int32 {
+    await Task.Yield()
+    return value.Length + delta
+}
+
+delegate AsyncInt() Task[int32];
+
+func MakeIdentity[T](value T) () -> Task[T] -> value.DelayIdentityAsync
+
+func RunTask[T](step () -> Task[T]) T -> step().GetAwaiter().GetResult()
+
+let lengthAsync async () -> int32 = "four".LengthAsync
+let explicitTask () -> Task[int32] = "seven".LengthAsync
+let clrFunc Func[Task[int32]] = "three".LengthAsync
+let namedDelegate AsyncInt = "four".LengthAsync
+let inferred = "eight".LengthAsync
+let delayAsync async () -> void = "later".DelayTextAsync
+let valueLengthAsync () -> ValueTask[int32] = "five".ValueLengthAsync
+let valueDelayAsync () -> ValueTask = "soon".ValueDelayAsync
+let intValueAsync () -> ValueTask[int32] = (9).ValueAsync
+let intDelayAsync async () -> void = (10).DelayNumberAsync
+let genericRef async () -> string = "echo".DelayIdentityAsync
+let genericVal async () -> int32 = (6).DelayIdentityAsync
+let openGenericRef = MakeIdentity("open")
+let openGenericVal = MakeIdentity(21)
+let overloadZero async () -> int32 = "four".ComputeAsync
+let overloadOne async (int32) -> int32 = "four".ComputeAsync
+
+Console.WriteLine(lengthAsync().GetAwaiter().GetResult())
+Console.WriteLine(explicitTask().GetAwaiter().GetResult())
+Console.WriteLine(clrFunc().GetAwaiter().GetResult())
+Console.WriteLine(namedDelegate().GetAwaiter().GetResult())
+Console.WriteLine(inferred().GetAwaiter().GetResult())
+delayAsync().GetAwaiter().GetResult()
+Console.WriteLine(valueLengthAsync().AsTask().GetAwaiter().GetResult())
+valueDelayAsync().AsTask().GetAwaiter().GetResult()
+Console.WriteLine(intValueAsync().AsTask().GetAwaiter().GetResult())
+intDelayAsync().GetAwaiter().GetResult()
+Console.WriteLine(genericRef().GetAwaiter().GetResult())
+Console.WriteLine(genericVal().GetAwaiter().GetResult())
+Console.WriteLine(openGenericRef().GetAwaiter().GetResult())
+Console.WriteLine(openGenericVal().GetAwaiter().GetResult())
+Console.WriteLine(overloadZero().GetAwaiter().GetResult())
+Console.WriteLine(overloadOne(3).GetAwaiter().GetResult())
+Console.WriteLine(RunTask("six".LengthAsync))
+Console.WriteLine(RunTask((12).DelayIdentityAsync))
+Console.WriteLine(Task.Run("nine".LengthAsync).GetAwaiter().GetResult())
+Console.WriteLine(Task.Run((15).DelayIdentityAsync).GetAwaiter().GetResult())`
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "4",
+                "5",
+                "5",
+                "4",
+                "5",
+                "later",
+                "4",
+                "vt:soon",
+                "10",
+                "10",
+                "echo",
+                "6",
+                "open",
+                "21",
+                "4",
+                "7",
+                "3",
+                "12",
+                "4",
+                "15"
+            ) +
+                Environment.NewLine,
+            result.Output
+        )
     }
 
     shared {

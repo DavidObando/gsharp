@@ -278,6 +278,12 @@ internal partial class MethodBodyEmitter {
             return
         }
         if source is BoundMethodGroupExpression methodGroup {
+            if this.TryEmitClosedExtensionMethodGroup(
+                methodGroup,
+                this.outer.memberRefs.GetElementTypeToken(targetDelegate)
+            ) {
+                return
+            }
             this.EmitMethodGroupToNamedDelegate(methodGroup, ctorHandle)
             return
         }
@@ -952,25 +958,12 @@ internal partial class MethodBodyEmitter {
             (functionType.ClrType != nil && !this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(functionType)) {
             delegateType = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(functionType)
         }
-        if function.IsExtension && methodGroup.Receiver != nil {
-            if !this
-                .outer
-                .cache
-                .FunctionHandles
-                .TryGetValue(function, out var methodHandle) &&
-                !this
-                .outer
-                .cache
-                .MethodHandles
-                .TryGetValue(function, out methodHandle) {
-                throw InvalidOperationException("Extension method group '${function.Name}' has no emitted MethodDef.")
-            }
-            let delegateTypeHandle = if delegateType == nil {
-                this.outer.memberRefs.GetFunctionDelegateTypeSpec(functionType)
-            } else {
-                this.outer.memberRefs.GetTypeHandleForMember(delegateType)
-            }
-            this.EmitClosedStaticMethodGroup(methodGroup.Receiver!!, methodHandle, delegateTypeHandle)
+        let delegateTypeHandle = if delegateType == nil {
+            this.outer.memberRefs.GetFunctionDelegateTypeSpec(functionType)
+        } else {
+            this.outer.memberRefs.GetTypeHandleForMember(delegateType)
+        }
+        if this.TryEmitClosedExtensionMethodGroup(methodGroup, delegateTypeHandle) {
             return
         }
         // Shared prologue: resolves the (interface/generic-aware) function
@@ -984,6 +977,48 @@ internal partial class MethodBodyEmitter {
         } else {
             this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateType))
         }
+    }
+
+    private func TryEmitClosedExtensionMethodGroup(
+        methodGroup BoundMethodGroupExpression,
+        delegateTypeHandle EntityHandle
+    ) bool {
+        if methodGroup.Function is not{IsExtension: true} function || methodGroup.Receiver is not{} receiver {
+            return false
+        }
+        if !this
+            .outer
+            .cache
+            .FunctionHandles
+            .TryGetValue(function, out var methodHandle) &&
+            !this
+            .outer
+            .cache
+            .MethodHandles
+            .TryGetValue(function, out methodHandle) {
+            throw InvalidOperationException("Extension method group '${function.Name}' has no emitted MethodDef.")
+        }
+        var targetMethodHandle EntityHandle = methodHandle
+        if function.IsGeneric {
+            let ownTypeArgumentCount = if methodGroup.MethodTypeArguments.IsDefault {
+                0
+            } else {
+                methodGroup.MethodTypeArguments.Length
+            }
+            let ownTypeParameterCount = function.TypeParameters.Length -
+            this.outer.userTokens.GetPromotedExtras(function).Length
+            if ownTypeArgumentCount != ownTypeParameterCount {
+                throw InvalidOperationException(
+                    "Generic method group '${function.Name}' has no inferred type arguments."
+                )
+            }
+            targetMethodHandle = this
+                .outer
+                .userTokens
+                .BuildMethodSpecForGenericMethodGroup(targetMethodHandle, methodGroup)
+        }
+        this.EmitClosedStaticMethodGroup(receiver, targetMethodHandle, delegateTypeHandle)
+        return true
     }
 
     // Issue #337: emit a resolved CLR member method group as a delegate over

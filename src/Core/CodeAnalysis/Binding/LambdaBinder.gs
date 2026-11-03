@@ -2072,7 +2072,17 @@ internal class LambdaBinder {
         )
         let needsValueTypeExtensionAdapter = function.IsExtension &&
             group.Receiver != nil &&
-            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type)
+            (
+            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type) ||
+                (
+                group
+                    .Receiver
+                    .Type is TypeParameterSymbol receiverTp &&
+                    !receiverTp.HasReferenceTypeConstraint &&
+                    receiverTp.ClassConstraint == nil &&
+                    !receiverTp.DependentBoundProvesReferenceType
+            )
+        )
         if function.HiddenContextParameter == nil &&
             function.SuspendingKind != SuspendingKind.Inferred &&
             !needsValueTypeExtensionAdapter {
