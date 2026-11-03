@@ -2027,6 +2027,7 @@ internal class ReflectionMetadataEmitter {
             }
             methodRow += this.interfaceImpls.PlanInheritedEventBridges(c, methodRow)
             methodRow += this.interfaceImpls.PlanImportedAccessorBridges(c, methodRow)
+            methodRow += this.interfaceImpls.PlanInheritedStaticVirtualBridges(c, methodRow)
             // ADR-0053: plan method rows for static methods on classes.
             if !c.StaticMethods.IsDefaultOrEmpty {
                 for m in c.StaticMethods {
@@ -3394,6 +3395,7 @@ internal class ReflectionMetadataEmitter {
             this.memberDefEmitter.EmitEventAccessors(c)
             this.interfaceImpls.EmitInheritedEventBridges(c)
             this.interfaceImpls.EmitImportedAccessorBridges(c)
+            this.interfaceImpls.EmitInheritedStaticVirtualBridges(c)
             // ADR-0053: emit static methods for classes.
             if !c.StaticMethods.IsDefaultOrEmpty {
                 for m in c.StaticMethods {

@@ -117,6 +117,48 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
         expectedLines
     )
 
+    /// Issue #4620: static members inherited from a G# base class bind to
+    /// static-virtual interface slots through a synthesized private static
+    /// bridge on the derived class.
+    /// @param name The case name.
+    /// @param source The G# source.
+    /// @param expectedLines The expected stdout lines.
+    @Theory
+    @MemberData("InheritedFromGSharpBaseCases")
+    func InheritedStaticMember_FromGSharpBaseClass_BindsThroughBridge(
+        name string,
+        source string,
+        expectedLines[]string
+    ) -> CompileVerifyAndRun(name, source, expectedLines)
+
+    /// Issue #4618: a missing or mismatched implementation of an imported
+    /// interface's static abstract member is diagnosed at compile time.
+    /// @param name The case name.
+    /// @param source The G# source.
+    /// @param expectedDiagnosticId The expected diagnostic ID.
+    /// @param expectedFragment A substring expected in the diagnostic message.
+    @Theory
+    @MemberData("MissingOrMismatchedClrStaticCases")
+    func MissingOrMismatchedClrStaticSlot_ReportsDiagnostic(
+        name string,
+        source string,
+        expectedDiagnosticId string,
+        expectedFragment string
+    ) {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4618_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let appPath = Path.Combine(tempDir, name + ".dll")
+            let log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(File.Exists(appPath), (`'` + "$name" + `' must not emit an assembly. Log:
+` + "$log"))
+            Assert.Contains("error " + expectedDiagnosticId + ":", log, StringComparison.Ordinal)
+            Assert.Contains(expectedFragment, log, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const RunTimeout int32 = 60_000
 
@@ -474,6 +516,223 @@ struct VN : ISV2 {
 }
 
 Console.WriteLine(Probe.V[VN]())`, []string{"100"}}
+        }
+
+        /// Issue #4620: static methods, properties and events inherited from a
+        /// G# base class (including generic base classes and multi-hop chains)
+        /// bind to static-virtual interface slots via synthesized private static
+        /// bridges on the implementing derived class.
+        /// @returns Case name, G# source, expected stdout lines.
+        func InheritedFromGSharpBaseCases() sequence[[]object] {
+            yield[]object{"inherited-static-method-from-gs-base", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        func Z() int32 { return 21 }
+    }
+}
+class D : B, IS {
+}
+class D2 : B, IS2 {
+}
+
+Console.WriteLine(Probe.Z[D]())
+Console.WriteLine(Probe.Z[D2]())`, []string{"21", "21"}}
+            yield[]object{"inherited-from-generic-gs-base-and-symbolic-interface", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape {
+    prop N int32 { get { return 11 } }
+}
+open class BGen[T] {
+    shared {
+        func H(x T) int32 { return 33 }
+        func Count[U](u U) int32 { return 44 }
+    }
+}
+class DGen : BGen[Shape], IH2[Shape], IGen {
+}
+
+let iface = typeof(DGen).GetInterfaces().Where((i Type) -> i.Name == "IH` + "`" + `1").First()
+Console.WriteLine(typeof(DGen).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))
+Console.WriteLine(Probe.Count[DGen]())`), []string{"33", "44"}}
+            yield[]object{"inherited-static-property-and-event-from-gs-base", `package P
+import System
+import Clib
+
+open class BProp {
+    shared {
+        var store int32 = 9
+        prop P int32 { get { return 19 } }
+        prop Q int32 {
+            get { return store }
+            set { store = value * 3 }
+        }
+        var hooked int32 = 0
+        event Changed Action? {
+            add { hooked = hooked + 10 }
+            remove { }
+        }
+    }
+}
+class DProp : BProp, IP2, IPS, IEv2 {
+}
+
+Console.WriteLine(Probe.P[DProp]())
+Console.WriteLine(Probe.SetThenGet[DProp](7))
+Probe.Hook[DProp](() -> {})
+Console.WriteLine(BProp.hooked)`, []string{"19", "21", "10"}}
+            yield[]object{"derived-and-mid-level-static-member-precedence", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        func Z() int32 { return 21 }
+    }
+}
+class DOverride : B, IS {
+    shared {
+        func Z() int32 { return 99 }
+    }
+}
+open class Mid : B {
+    shared {
+        func Z() int32 { return 55 }
+    }
+}
+class Leaf : Mid, IS2 {
+}
+
+Console.WriteLine(Probe.Z[DOverride]())
+Console.WriteLine(Probe.Z[Leaf]())`, []string{"99", "55"}}
+            yield[]object{"inherited-static-member-for-gsharp-declared-interface", `package P
+import System
+import Clib
+
+interface IGs {
+    shared {
+        func Z() int32;
+        prop P int32 { get }
+    }
+}
+open class BGs {
+    shared {
+        func Z() int32 { return 71 }
+        prop P int32 { get { return 72 } }
+    }
+}
+class DGs : BGs, IGs {
+}
+
+Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[0].Invoke(nil, []object?{}))
+Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[1].Invoke(nil, []object?{}))`, []string{
+                    "71",
+                    "72"
+                }}
+        }
+
+        /// Issue #4618: missing or mismatched implementations of imported
+        /// static-abstract members are diagnosed at compile time.
+        /// @returns Case name, G# source, expected diagnostic ID, expected message fragment.
+        func MissingOrMismatchedClrStaticCases() sequence[[]object] {
+            yield[]object{"missing-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS {
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"missing-inherited-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS2 {
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"mismatched-return-type-on-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS {
+    shared {
+        func Z() int64 { return 1 }
+    }
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"instance-method-instead-of-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS {
+    func Z() int32 { return 1 }
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0332", "'Clib.IS.Z'"}
+            yield[]object{"private-base-static-method-does-not-satisfy-slot", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        private func Z() int32 { return 21 }
+    }
+}
+class D : B, IS {
+}
+Console.WriteLine(Probe.Z[D]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"missing-symbolic-generic-static-abstract-method", `package P
+import System
+import Clib
+
+class Shape { }
+struct SM : IH2[Shape] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IH[Shape].H(T)'"}
+            yield[]object{"missing-static-abstract-property", `package P
+import System
+import Clib
+
+struct SM : IP2 {
+}
+Console.WriteLine(Probe.P[SM]())`, "GS0397", "'Clib.IP.P' (missing static property)"}
+            yield[]object{"getter-only-for-get-set-static-abstract-property", `package P
+import System
+import Clib
+
+struct SM : IPS {
+    shared {
+        prop Q int32 {
+            get { return 1 }
+        }
+    }
+}
+Console.WriteLine(Probe.SetThenGet[SM](1))`, "GS0397", "'Clib.IPS.Q' (setter)"}
+            yield[]object{"private-base-setter-for-get-set-static-abstract-property", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        prop Q int32 {
+            get { return 1 }
+            private set { }
+        }
+    }
+}
+class D : B, IPS {
+}
+Console.WriteLine(Probe.SetThenGet[D](1))`, "GS0397", "'Clib.IPS.Q' (setter)"}
+            yield[]object{"missing-static-abstract-event", `package P
+import System
+import Clib
+
+struct SM : IEv2 {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IEv.Changed'"}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {
