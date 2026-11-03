@@ -484,8 +484,10 @@ class ImportedTypeSymbol : TypeSymbol {
             let annotated NullabilityAnnotatedTypeSymbol? = unwrapped as NullabilityAnnotatedTypeSymbol
             let baseType = annotated?.BaseType ?? unwrapped
             // The CLR-keyed aggregate cannot retain unreified generic arguments.
-            if baseType is not ImportedTypeSymbol || TypeSymbol.ContainsTypeParameter(baseType) ||
-                TypeSymbol.ContainsSameCompilationUserType(baseType) ||
+            if baseType is not ImportedTypeSymbol imported ||
+                !imported
+                .TypeArguments
+                .IsDefaultOrEmpty ||
                 !TryCreateSemanticAggregate(clrType, references, out var aggregate) {
                 return type
             }

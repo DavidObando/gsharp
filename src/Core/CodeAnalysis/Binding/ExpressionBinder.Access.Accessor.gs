@@ -830,16 +830,8 @@ internal partial class ExpressionBinder {
         try {
             let closedType = nestedType.MakeGenericType(outerArguments)
             var symbolicNested ImportedTypeSymbol? = nil
-            if symbolicOuter?.HasTypeParameterArgument == true &&
-                symbolicOuter!!
-                .TypeArguments
-                .Length == nestedType
-                .GetGenericArguments().Length {
-                symbolicNested = ImportedTypeSymbol.GetConstructed(
-                    closedType,
-                    nestedType,
-                    symbolicOuter!!.TypeArguments
-                )
+            if symbolicOuter != nil && symbolicOuter.TypeArguments.Length == nestedType.GetGenericArguments().Length {
+                symbolicNested = ImportedTypeSymbol.GetConstructed(closedType, nestedType, symbolicOuter.TypeArguments)
             }
             let constructedNested = if constructedOuterSymbol != nil &&
                 constructedOuterSymbol

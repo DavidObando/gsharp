@@ -4247,11 +4247,12 @@ internal partial class StatementBinder {
             }
             return BoundBlockStatement(syntax, statements.ToImmutable())
         }
-        if initializer.Type is StructSymbol structType && (structType.IsData || structType.IsInline) {
-            let members = if structType.IsData {
-                TypeMemberModel.GetDataDeconstructionMembers(structType)
+        if TryResolveDeconstructionAggregate(initializer.Type, out var structType) {
+            let aggregate = structType!!
+            let members = if aggregate.IsData {
+                TypeMemberModel.GetDataDeconstructionMembers(aggregate)
             } else {
-                structType.Fields.Cast[Symbol]().ToImmutableArray()
+                aggregate.Fields.Cast[Symbol]().ToImmutableArray()
             }
             if syntax.Identifiers.Count != members.Length {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
@@ -4261,8 +4262,9 @@ internal partial class StatementBinder {
                 )
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
+            let receiverType = initializer.Type
             let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-            let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, structType)
+            let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
             $scope.TryDeclareVariable(tempVar)
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
@@ -4272,8 +4274,14 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let elemVar = bindLocalVariable(idTok, isReadOnly, GetDeconstructionMemberType(member))
-                let access = BindDeconstructionMemberAccess(BoundVariableExpression(nil, tempVar), structType, member)
+                let memberType = GetDeconstructionMemberType(receiverType, member, $scope.References)
+                let elemVar = bindLocalVariable(idTok, isReadOnly, memberType)
+                let access = BindDeconstructionMemberAccess(
+                    BoundVariableExpression(nil, tempVar),
+                    aggregate,
+                    member,
+                    memberType
+                )
                 statements.Add(BoundVariableDeclaration(syntax, elemVar, access))
             }
             return BoundBlockStatement(syntax, statements.ToImmutable())
@@ -4384,11 +4392,12 @@ internal partial class StatementBinder {
             }
             return statements.ToImmutable()
         }
-        if elementType is StructSymbol structType && (structType.IsData || structType.IsInline) {
-            let members = if structType.IsData {
-                TypeMemberModel.GetDataDeconstructionMembers(structType)
+        if TryResolveDeconstructionAggregate(elementType, out var structType) {
+            let aggregate = structType!!
+            let members = if aggregate.IsData {
+                TypeMemberModel.GetDataDeconstructionMembers(aggregate)
             } else {
-                structType.Fields.Cast[Symbol]().ToImmutableArray()
+                aggregate.Fields.Cast[Symbol]().ToImmutableArray()
             }
             if identifiers.Count != members.Length {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
@@ -4405,8 +4414,9 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let elemVar = bindLocalVariable(identifiers[i], true, GetDeconstructionMemberType(member))
-                let access = BindDeconstructionMemberAccess(elementAccessBase, structType, member)
+                let memberType = GetDeconstructionMemberType(elementType, member, $scope.References)
+                let elemVar = bindLocalVariable(identifiers[i], true, memberType)
+                let access = BindDeconstructionMemberAccess(elementAccessBase, aggregate, member, memberType)
                 // LanguageServer fix: see the matching comment in the tuple
                 // branch above.
                 statements.Add(BoundVariableDeclaration(identifiers[i], elemVar, access))
@@ -4646,12 +4656,14 @@ internal partial class StatementBinder {
         // StructSymbol, so `let { X = x } = obliviousCall()` reported GS0164
         // where `DPt` compiled.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
-        if !(initializer.Type is StructSymbol structType) || (!structType.IsData && !structType.IsInline) {
+        if !TryResolveDeconstructionAggregate(initializer.Type, out var structType) {
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type)
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
+        let aggregate = structType!!
+        let receiverType = initializer.Type
         let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, structType)
+        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
         $scope.TryDeclareVariable(tempVar)
         let seen = HashSet[string]()
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -4663,7 +4675,7 @@ internal partial class StatementBinder {
                 continue
             }
             if !TypeMemberModel.TryGetFieldIncludingInherited(
-                structType,
+                aggregate,
                 fieldName,
                 MemberQuery.Instance(MemberKinds.Field),
                 out var field,
@@ -4675,11 +4687,39 @@ internal partial class StatementBinder {
             if IsDiscard(fieldSyntax.LocalIdentifier) {
                 continue
             }
-            let variable = bindLocalVariable(fieldSyntax.LocalIdentifier, true, field.Type)
-            let access = BoundFieldAccessExpression(nil, BoundVariableExpression(nil, tempVar), declaringType, field)
+            let fieldType = GetDeconstructionMemberType(receiverType, field, $scope.References)
+            let variable = bindLocalVariable(fieldSyntax.LocalIdentifier, true, fieldType)
+            let access = BindDeconstructionMemberAccess(
+                BoundVariableExpression(nil, tempVar),
+                declaringType,
+                field,
+                fieldType
+            )
             statements.Add(BoundVariableDeclaration(syntax, variable, access))
         }
         return BoundBlockStatement(syntax, statements.ToImmutable())
+    }
+
+    private func TryResolveDeconstructionAggregate(type TypeSymbol, out structType StructSymbol?) bool {
+        structType = nil
+        if type.ReferenceNullability == ReferenceNullabilityKind.Nullable || NullableLifting.IsAnyValueTypeNullable(
+            type.StripToBareShape() as NullableTypeSymbol
+        ) {
+            return false
+        }
+        structType = switch type {
+            case direct is StructSymbol: direct
+            case NullabilityAnnotatedTypeSymbol{BaseType: StructSymbol annotated}: annotated
+            default: default(StructSymbol?)
+        }
+        if structType == nil && type.ClrType is {} clrType && ImportedTypeSymbol.TryCreateSemanticAggregate(
+            clrType,
+            $scope.References,
+            out var importedAggregate
+        ) {
+            structType = importedAggregate
+        }
+        return structType != nil && (structType.IsData || structType.IsInline)
     }
 
     shared {
@@ -5926,21 +5966,83 @@ internal partial class StatementBinder {
             return names.MoveToImmutable()
         }
 
-        private func GetDeconstructionMemberType(member Symbol) TypeSymbol -> switch member {
-            case field is FieldSymbol: field.Type
-            case property is PropertySymbol: property.Type
+        private func GetDeconstructionMemberType(
+            receiverType TypeSymbol,
+            member Symbol,
+            references ReferenceResolver?
+        ) TypeSymbol -> switch member {
+            case field is FieldSymbol: if field.ImportedMember is FieldInfo importedField {
+                ImportedTypeSymbol.NormalizeSemanticAggregate(
+                    MemberLookup.GetClrFieldTypeSymbol(receiverType, importedField),
+                    importedField.FieldType,
+                    references
+                )
+            } else {
+                field.Type
+            }
+            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+                let projected = MemberLookup.GetClrPropertyTypeSymbol(receiverType, importedProperty)
+                let pointee = if projected is ByRefTypeSymbol byRefProperty {
+                    byRefProperty.PointeeType
+                } else {
+                    projected
+                }
+                let clrPropertyType = if importedProperty.PropertyType.IsByRef {
+                    importedProperty.PropertyType.GetElementType()
+                } else {
+                    importedProperty.PropertyType
+                }
+                ImportedTypeSymbol.NormalizeSemanticAggregate(pointee, clrPropertyType, references)
+            } else {
+                property.Type
+            }
             default: TypeSymbol.Error
         }
 
         private func BindDeconstructionMemberAccess(
             receiver BoundExpression,
             type StructSymbol,
-            member Symbol
+            member Symbol,
+            memberType TypeSymbol? = nil
         ) BoundExpression -> switch member {
-            case field is FieldSymbol: cast[BoundExpression](BoundFieldAccessExpression(nil, receiver, type, field))
-            case property is PropertySymbol: cast[BoundExpression](
-                BoundPropertyAccessExpression(nil, receiver, type, property)
-            )
+            case field is FieldSymbol: if field.ImportedMember is FieldInfo importedField {
+                cast[BoundExpression](
+                    BoundClrPropertyAccessExpression(nil, receiver, importedField, memberType ?? field.Type)
+                )
+            } else {
+                cast[BoundExpression](
+                    BoundFieldAccessExpression(
+                        nil,
+                        receiver,
+                        type,
+                        field,
+                        substitutedType: memberType,
+                        narrowedType: nil
+                    )
+                )
+            }
+            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+                let effectiveType = memberType ?? property.Type
+                let accessType = if property.ReturnRefKind != RefKind.None && effectiveType is not ByRefTypeSymbol {
+                    cast[TypeSymbol](ByRefTypeSymbol.Get(effectiveType))
+                } else {
+                    effectiveType
+                }
+                ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrPropertyAccessExpression(nil, receiver, importedProperty, accessType)
+                )
+            } else {
+                cast[BoundExpression](
+                    BoundPropertyAccessExpression(
+                        nil,
+                        receiver,
+                        type,
+                        property,
+                        substitutedType: memberType,
+                        narrowedType: nil
+                    )
+                )
+            }
             default: cast[BoundExpression](BoundErrorExpression(nil))
         }
     }
