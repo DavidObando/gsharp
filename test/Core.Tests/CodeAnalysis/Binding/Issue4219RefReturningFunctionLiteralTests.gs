@@ -186,4 +186,55 @@ Run()`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
+
+    @Fact
+    func GenericClassAndStructEncloser_CaptureFreeRefReturningLocal_WritesThroughAlias() {
+        // Issue #4655: a capture-free ref-returning `let` local function inside
+        // a member of a generic class or struct failed with GS9998 ("Call to
+        // function 'At' has no emitted MethodDef").
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(data []int32) int32 {
+        let At = func (xs []int32, index int32) ref int32 { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = 35
+        return data[0]
+    }
+    func RunGenericElement(data []T, replacement T) T {
+        let At = func (xs []T, index int32) ref T { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = replacement
+        return data[0]
+    }
+}
+struct SBox[T] {
+    func Run(data []int32) int32 {
+        let At = func (xs []int32, index int32) ref int32 { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = 7
+        return data[0]
+    }
+}
+let s = SBox[string]{}
+Box[string]().Run([]int32{1}) + s.Run([]int32{2}) + Box[int32]().RunGenericElement([]int32{3}, 100)`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(142, result.Value)
+    }
+
+    @Fact
+    func GenericClassEncloser_CapturingRefReturningLocalWithNestedLambda_CompilesAndRuns() {
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(data []int32) int32 {
+        let At = func (index int32) ref int32 {
+            let nested = func () int32 { return index }
+            return ref data[nested()]
+        }
+        var ref a = At(0)
+        a = 35
+        return data[0]
+    }
+}
+Box[string]().Run([]int32{1})`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(35, result.Value)
+    }
 }

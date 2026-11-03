@@ -472,7 +472,14 @@ internal partial class MethodBodyEmitter {
             ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(methodGroup.StaticOwnerType, function)
         }
         if function.IsGeneric {
-            if methodGroup.MethodTypeArguments.Length != function.TypeParameters.Length {
+            let ownTypeArgumentCount = if methodGroup.MethodTypeArguments.IsDefault {
+                0
+            } else {
+                methodGroup.MethodTypeArguments.Length
+            }
+            let ownTypeParameterCount = function.TypeParameters.Length -
+            this.outer.userTokens.GetPromotedExtras(function).Length
+            if ownTypeArgumentCount != ownTypeParameterCount {
                 throw InvalidOperationException(
                     "Generic method group '${function.Name}' has no inferred type arguments."
                 )
