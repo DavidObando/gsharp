@@ -464,9 +464,14 @@ internal shared class RefCapabilities {
     /// @param fallbackName The name to use when metadata has no parameter name.
     /// @returns The imported parameter symbol.
     internal func CreateParameterSymbol(parameter ParameterInfo, type TypeSymbol, fallbackName string) ParameterSymbol {
+        let pointeeType = if type is ByRefTypeSymbol byRef {
+            byRef.PointeeType
+        } else {
+            type
+        }
         let symbol = ParameterSymbol(
             parameter.Name ?? fallbackName,
-            type,
+            pointeeType,
             isScoped: IsScoped(parameter),
             refKind: GetParameterRefKind(parameter)
         )

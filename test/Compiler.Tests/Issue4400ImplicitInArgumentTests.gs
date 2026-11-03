@@ -385,6 +385,308 @@ Console.WriteLine(StaticCaller[StaticIn]())`
         }
     }
 
+    /// Issue #4421: a G#-declared user indexer with an `in` parameter emits a
+    /// by-ref parameter carrying `ParameterAttributes.In` and
+    /// `IsReadOnlyAttribute` on both `PropertyDef` and `get_Item`/`set_Item`,
+    /// so Roslyn sees `this[in int]` rather than `this[int]` and a
+    /// cross-assembly consumer can call and implement the `in` indexer.
+    @Fact
+    func UserDeclaredInIndexer_MetadataAndCSharpConsumer_VerifyAndRun() {
+        const gsLibSource = `package GsInIdx
+
+public interface IInIndexer {
+    prop this[in k int32] int32 { get; set; }
+}
+
+public class GsIndexer : IInIndexer {
+    private var store []int32 = []int32{10, 20, 30}
+
+    public prop this[in k int32] int32 {
+        get { return store[k] }
+        set { store[k] = value }
+    }
+}`
+        const gsConsumerSource = `package GsConsumer
+import System
+import GsInIdx
+
+class CrossImpl : IInIndexer {
+    private var v int32 = 100
+    public prop this[in k int32] int32 {
+        get { return v + k }
+        set { v = value - k }
+    }
+}
+
+let g = GsIndexer()
+var idx = 1
+g[in idx] = 55
+g[2] += 5
+let a = g[in idx] + g[2]
+let iface IInIndexer = CrossImpl()
+iface[in idx] = 70
+iface[2] += 3
+let b = iface[in idx]
+Console.WriteLine("${a} ${b}")`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4421_meta_").FullName
+        try {
+            let gsLibPath = Path.Combine(tempDir, "GsInIdx.dll")
+            let log = Compile(tempDir, gsLibSource, gsLibPath, "/target:library")
+            Assert.True(File.Exists(gsLibPath), "GsInIdx must compile. Log:\n$log")
+            IlVerifier.Verify(gsLibPath)
+
+            let gsAppPath = Path.Combine(tempDir, "GsConsumer.dll")
+            let appLog = Compile(tempDir, gsConsumerSource, gsAppPath, "/reference:" + gsLibPath)
+            Assert.True(File.Exists(gsAppPath), "GsConsumer must compile. Log:\n$appLog")
+            IlVerifier.Verify(gsAppPath, []string{gsLibPath})
+            let (exit, output) = RunDotnet(gsAppPath)
+            Assert.True(exit == 0, "GsConsumer must run. Exit $exit:\n$output")
+            Assert.Equal("90 73", output.Trim())
+
+            let tpa = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!!))
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
+                .Append(MetadataReference.CreateFromFile(gsLibPath))
+            let csCompilation = CSharpCompilation.Create(
+                "Inspect",
+                syntaxTrees: nil,
+                references: tpa,
+                options: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            for typeName in[]string{"GsInIdx.GsIndexer", "GsInIdx.IInIndexer"} {
+                let csType = csCompilation.GetTypeByMetadataName(typeName)!!
+                let csIndexer = csType.GetMembers("this[]").OfType[IPropertySymbol]().Single()
+                Assert.Single(csIndexer.Parameters)
+                Assert.Equal(Microsoft.CodeAnalysis.RefKind.In, csIndexer.Parameters[0].RefKind)
+            }
+
+            let context = AssemblyLoadContext("gs_4421_meta", isCollectible: true)
+            try {
+                using let gsStream = MemoryStream(File.ReadAllBytes(gsLibPath))
+                let gsAsm = context.LoadFromStream(gsStream)
+
+                for typeName in[]string{"GsInIdx.GsIndexer", "GsInIdx.IInIndexer"} {
+                    let gsType = gsAsm.GetType(typeName, throwOnError: true)!!
+                    let prop = gsType.GetProperty("Item")!!
+                    let propParams = prop.GetIndexParameters()
+                    Assert.Single(propParams)
+                    Assert.True(propParams[0].ParameterType.IsByRef)
+                    Assert.True(propParams[0].IsIn)
+                    Assert.Contains(
+                        propParams[0].GetRequiredCustomModifiers(),
+                        (t Type) -> t.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+
+                    let getterParams = prop.GetMethod!!.GetParameters()
+                    Assert.Single(getterParams)
+                    Assert.True(getterParams[0].ParameterType.IsByRef)
+                    Assert.True(getterParams[0].IsIn)
+                    Assert.Contains(
+                        getterParams[0].CustomAttributes,
+                        (a CustomAttributeData) -> a
+                            .AttributeType
+                            .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+
+                    let setterParams = prop.SetMethod!!.GetParameters()
+                    Assert.Equal(2, setterParams.Length)
+                    Assert.True(setterParams[0].ParameterType.IsByRef)
+                    Assert.True(setterParams[0].IsIn)
+                    Assert.Contains(
+                        setterParams[0].CustomAttributes,
+                        (a CustomAttributeData) -> a
+                            .AttributeType
+                            .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+                }
+            } finally {
+                context.Unload()
+            }
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// Issue #4421 review: imported pointer-valued indexers (`this[int*]` and
+    /// `this[in int*, int]`) keep their pointer layer, and imported generic
+    /// indexers overloaded by `this[T]` vs `this[in T]` resolve explicit `in`
+    /// to `this[in T]` and omitted `in` to `this[T]` for a same-compilation `T`.
+    @Fact
+    func ImportedPointerAndGenericInOverloadedIndexers_VerifyAndRun() {
+        const csLibSource = `namespace InIdxReviewLib;
+
+public unsafe class PtrIdx
+{
+    public int Last;
+
+    public int this[int* p]
+    {
+        set => Last = p == null ? -1 : *p;
+    }
+
+    public int this[in int* p, int bias] => (p == null ? 0 : *p) + bias;
+}
+
+public interface IA { }
+public interface IB { }
+
+public class UnrelatedIfaceIdx
+{
+    public int this[in IA x] => 1;
+    public int this[IB x] => 2;
+}
+
+public class SetOnlyUnrelatedIfaceArityIdx
+{
+    public int Last;
+
+    public int this[in IA x]
+    {
+        set => Last = value + 10;
+    }
+
+    public int this[IB x, int y = 0]
+    {
+        set => Last = value + 20 + y;
+    }
+}
+
+public class ImportedInIdxSource
+{
+    public int Stored;
+
+    public int this[in int k]
+    {
+        get => Stored + k;
+        set => Stored = k * 10 + value;
+    }
+}
+
+public static class MixedInOverloads
+{
+    public static int M(in int a, long b) => 1;
+    public static int M(long a, int b) => 2;
+}
+
+public class SetOnlyArityOverloads
+{
+    public int Last;
+
+    public int this[in int x]
+    {
+        set => Last = x + 100 + value;
+    }
+
+    public int this[int x, int y = 0]
+    {
+        set => Last = x + 10 + y + value;
+    }
+}
+
+public class OverloadedGenIdx<T>
+{
+    public string Last = "";
+
+    public string this[T k]
+    {
+        get => "val:" + k;
+        set => Last = "val:" + k + "=" + value;
+    }
+
+    public string this[in T k]
+    {
+        get => "in:" + k;
+        set => Last = "in:" + k + "=" + value;
+    }
+}`
+        const gsAppSource = `package P
+import System
+import InIdxReviewLib
+
+struct Key {
+    var Id int32
+    override func ToString() string -> "K(${Id})"
+}
+
+interface IGsInIdx {
+    prop this[in k int32] int32 {
+        get
+        set
+    }
+}
+
+unsafe func UsePointers() string {
+    let pIdx = PtrIdx()
+    pIdx[nil] = 9
+    let nullWrite = pIdx.Last
+    var cell = 40
+    pIdx[&cell] = 5
+    let addrWrite = pIdx.Last
+    cell = 50
+    var ptr *int32 = &cell
+    pIdx[ptr] = 1
+    let valWrite = pIdx.Last
+    let readInPtr = pIdx[in ptr, 2]
+    let readOmittedInPtr = pIdx[ptr, 3]
+    let readAddrInPtr = pIdx[&cell, 4]
+    return "${nullWrite} ${addrWrite} ${valWrite} ${readInPtr} ${readOmittedInPtr} ${readAddrInPtr}"
+}
+
+let sOnly = SetOnlyArityOverloads()
+var sIdx = 5
+sOnly[sIdx] = 6
+let sOnlyRes = sOnly.Last
+let gsAdapted = adapt[IGsInIdx](ImportedInIdxSource())
+var adaptKey = 3
+gsAdapted[in adaptKey] = 4
+let gsAdaptedRead = gsAdapted[adaptKey]
+let g = OverloadedGenIdx[Key]()
+var key = Key{Id: 7}
+let rVal = g[key]
+let rIn = g[in key]
+g[key] = "A"
+let wVal = g.Last
+g[in key] = "B"
+let wIn = g.Last
+Console.WriteLine("${UsePointers()} | ${sOnlyRes} | ${gsAdaptedRead} | ${rVal} ${rIn} ${wVal} ${wIn}")`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4421_rev_").FullName
+        try {
+            let csLibPath = CompileCSharpUnsafe(tempDir, "InIdxReviewLib", csLibSource)
+            let appPath = Path.Combine(tempDir, "App.dll")
+            let log = Compile(tempDir, gsAppSource, appPath, "/reference:" + csLibPath)
+            Assert.True(File.Exists(appPath), "App must compile. Log:\n$log")
+            let (exit, output) = RunDotnet(appPath)
+            Assert.True(exit == 0, "App must run. Exit $exit:\n$output")
+            Assert.Equal("-1 40 50 52 53 54 | 111 | 37 | val:K(7) in:K(7) val:K(7)=A in:K(7)=B", output.Trim())
+
+            let ambigIfaceLog = Compile(tempDir, `package P
+import InIdxReviewLib
+class Both : IA, IB { }
+let u = UnrelatedIfaceIdx()
+let b = Both()
+let _ = u[b]`, Path.Combine(tempDir, "AmbigIface.dll"), "/target:library", "/reference:" + csLibPath)
+            Assert.Contains("GS0266", ambigIfaceLog, StringComparison.Ordinal)
+
+            let ambigSetOnlyIfaceLog = Compile(tempDir, `package P
+import InIdxReviewLib
+class Both : IA, IB { }
+let u = SetOnlyUnrelatedIfaceArityIdx()
+let b = Both()
+u[b] = 1`, Path.Combine(tempDir, "AmbigSetOnlyIface.dll"), "/target:library", "/reference:" + csLibPath)
+            Assert.Contains("GS0266", ambigSetOnlyIfaceLog, StringComparison.Ordinal)
+
+            let ambigMethodLog = Compile(tempDir, `package P
+import InIdxReviewLib
+let _ = MixedInOverloads.M(1, 2)`, Path.Combine(
+                    tempDir,
+                    "AmbigMethod.dll"
+                ), "/target:library", "/reference:" + csLibPath)
+            Assert.Contains("GS0160", ambigMethodLog, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const RunTimeout int32 = 60_000
 
@@ -794,9 +1096,9 @@ Console.WriteLine(TopG("s"))
 Console.WriteLine(callback(local))
 Console.WriteLine(callback(4))`, []string{"4", "4", "3", "s", "9", "12"}}
             // Constructors: direct, convenience-init chaining, `: base(...)`; an
-            // extension; a struct passing `this` and its own readonly field; and a
-            // call inside an async function. (A user indexer's `in` parameter is
-            // dropped at declaration, #4421, so it has no row here.)
+            // extension; a struct passing `this` and its own readonly field; a
+            // user indexer with `in` parameters (#4421); and a call inside an
+            // async function.
             yield[]object{"constructor-extension-struct-async", `package P
 import System
 import System.Threading.Tasks
@@ -811,6 +1113,18 @@ struct Pt {
     func Read(in p Pt) int32 -> p.X + p.Y
     func Self() int32 -> this.Read(this)
     func FromField() int32 -> Take(Y) + Take(X)
+}
+
+class Idx {
+    var scale int32 = 10
+    prop this[in i int32] int32 {
+        get { return i * scale }
+        set { scale = value + i }
+    }
+    prop this[in r int32, c int32 = 2] int32 {
+        get { return r * 10 + c }
+        set { scale = r + c + value }
+    }
 }
 
 func Take(in x int32) int32 -> x
@@ -841,6 +1155,9 @@ async func Later() int32 {
 
 let p = Pt(1, 2)
 var i = 4
+let idx = Idx()
+idx[3] = 7
+idx[in i] += 2
 Console.WriteLine(p.Self())
 Console.WriteLine(p.FromField())
 Console.WriteLine(GDerived(4).V)
@@ -848,7 +1165,8 @@ Console.WriteLine(Chained().V)
 Console.WriteLine(GBase(i).V)
 Console.WriteLine(p.Ext(5))
 Console.WriteLine(p.Ext(i))
-Console.WriteLine(Later().Result)`, []string{"3", "3", "5", "21", "4", "6", "5", "10"}}
+Console.WriteLine(Later().Result)
+Console.WriteLine(idx[in i] + idx[2] + idx[i, 3])`, []string{"3", "3", "5", "21", "4", "6", "5", "10", "319"}}
             // Forwarding storage that is ALREADY a reference: an `in`, `ref` or
             // `out` parameter and a `ref`/`ref readonly` alias local pass their
             // existing address (the slot's own `T&`, never the address of it).
@@ -1112,16 +1430,35 @@ let r = C().F((x int32) -> x + 1, 2)`, "GS0235"}
             .Where((line string) -> line.Length > 0)
             .ToArray()
 
-        private func CompileCSharp(tempDir string, assemblyName string, source string) string {
-            let references = TrustedPlatformAssemblies().Select(
-                (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
-            )
+        private func CompileCSharp(tempDir string, assemblyName string, source string) string -> CompileCSharpWithRef(
+            tempDir,
+            assemblyName,
+            source,
+            allowUnsafe: false
+        )
+
+        private func CompileCSharpUnsafe(
+            tempDir string,
+            assemblyName string,
+            source string
+        ) string -> CompileCSharpWithRef(tempDir, assemblyName, source, allowUnsafe: true)
+
+        private func CompileCSharpWithRef(
+            tempDir string,
+            assemblyName string,
+            source string,
+            allowUnsafe bool = false,
+            extraRefs ...string
+        ) string {
+            let references = TrustedPlatformAssemblies()
+                .Concat(extraRefs)
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
                 .ToList()
             let compilation = CSharpCompilation.Create(
                 assemblyName,
                 []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: allowUnsafe)
             )
             let path = Path.Combine(tempDir, assemblyName + ".dll")
             let result = compilation.Emit(path)

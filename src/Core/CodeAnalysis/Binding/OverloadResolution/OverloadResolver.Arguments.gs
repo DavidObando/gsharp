@@ -539,7 +539,7 @@ internal partial class OverloadResolver {
     }
 
     // Issue #4400: re-roots an address on captured inputs.
-    private class CapturedInputRewriter : BoundTreeRewriter {
+    internal class CapturedInputRewriter : BoundTreeRewriter {
         private let replacements Dictionary[BoundExpression, BoundExpression]
 
         init(replacements Dictionary[BoundExpression, BoundExpression]) {
@@ -1342,7 +1342,7 @@ internal partial class OverloadResolver {
         // Issue #4400: recognises the spill ConversionClassifier.CreateImplicitInReference
         // builds for an rvalue at an `in` slot — `&{ let <inArgumentN> = value; <inArgumentN> }`
         // — and returns the spilled value.
-        private func TryGetImplicitInSpilledValue(
+        internal func TryGetImplicitInSpilledValue(
             argument BoundExpression,
             @NotNullWhen(true) out value BoundExpression?
         ) bool {
@@ -1389,7 +1389,7 @@ internal partial class OverloadResolver {
         // which the callee then sees exactly as in C#), a static field, or a
         // value-type field chain rooted in such storage — may stay in its
         // parameter slot when the arguments are reordered.
-        private func IsFixedStorageAddress(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
+        internal func IsFixedStorageAddress(argument BoundExpression) bool -> argument is BoundAddressOfExpression{
             IsUnmanaged: false
         } address &&
             IsFixedStorage(address.Operand)
@@ -1411,7 +1411,7 @@ internal partial class OverloadResolver {
         // them in source order and re-taking the address from the captured values
         // passes exactly the storage C# passes, even when a later argument
         // reassigns `h`, `xs` or `i`, and keeps the aliasing.
-        private func TryGetAddressInputs(
+        internal func TryGetAddressInputs(
             argument BoundExpression,
             @NotNullWhen(true) out address BoundAddressOfExpression?,
             out inputs ImmutableArray[BoundExpression]

@@ -2592,6 +2592,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Invalid UTF-8 span literal: {0}"
     )
+    internal let RefOrOutOnIndexerParameter DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0633",
+        DiagnosticSeverity.Error,
+        "'{0}' is not a legal modifier on indexer parameter '{1}'; only 'in' is allowed on indexer parameters."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,
