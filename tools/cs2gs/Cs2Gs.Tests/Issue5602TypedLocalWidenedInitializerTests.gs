@@ -241,6 +241,23 @@ namespace Demo
         Assert.Contains("        n = entry.Item!!\n        return n.ToString()\n    }\n\n    func Converted", printed)
     }
 
+    /// A local that its own initializer assigns asks the local query about itself. The inner
+    /// question answers no, so the translation finishes, and the store keeps `main`'s decision.
+    @Fact
+    func SelfAssigningInitializer_Translates() {
+        let (printed, compilation) = Translate(`
+namespace Demo
+{
+    public static class Use
+    {
+        public static string Self() { object n = (n = new object()); return n.ToString(); }
+        public static string Run() => Self();
+    }
+}`)
+        Assert.Equal("System.Object", RunCSharp(compilation).Trim())
+        Assert.Contains("        var n = (n = SystemObject())\n        return n.ToString()\n", printed)
+    }
+
     shared {
         private func Translate(source string)(Printed string, Compilation CSharpCompilation) {
             let tree = CSharpSyntaxTree.ParseText(

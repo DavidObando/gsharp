@@ -716,7 +716,17 @@ partial class CSharpToGSharpTranslator {
             if this.state.LocalHoldsPromotedValueAnswers.TryGetValue(local, out var answer) {
                 return answer
             }
-            let result = this.LocalHoldsPromotedValueCore(local)
+            // A local that its own initializer assigns (`object n = (n = e)`) asks about itself. The
+            // inner question adds no evidence, so it answers no and the outer question decides.
+            if !this.state.LocalHoldsPromotedValueInProgress.Add(local) {
+                return false
+            }
+            var result = false
+            try {
+                result = this.LocalHoldsPromotedValueCore(local)
+            } finally {
+                this.state.LocalHoldsPromotedValueInProgress.Remove(local)
+            }
             this.state.LocalHoldsPromotedValueAnswers[local] = result
             return result
         }

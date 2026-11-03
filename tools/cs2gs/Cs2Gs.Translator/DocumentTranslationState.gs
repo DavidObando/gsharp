@@ -71,6 +71,7 @@ internal class DocumentTranslationState {
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         LocalHoldsPromotedValueAnswers = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
@@ -432,6 +433,11 @@ internal class DocumentTranslationState {
     // Issue #5602: the answers of `LocalHoldsPromotedValue`. An answer depends only on the
     // emitted-storage records and on the declarations, so a new record clears the answers.
     prop LocalHoldsPromotedValueAnswers Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5602: the locals whose `LocalHoldsPromotedValue` question is being answered.
+    prop LocalHoldsPromotedValueInProgress HashSet[ILocalSymbol] {
         get;
     }
 
