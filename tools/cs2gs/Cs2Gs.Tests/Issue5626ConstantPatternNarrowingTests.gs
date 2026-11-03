@@ -1,0 +1,220 @@
+// <copyright file="Issue5626ConstantPatternNarrowingTests.gs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package Cs2Gs.Tests
+
+import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Translator
+import Cs2Gs.Translator.Loading
+import System
+import System.IO
+import System.Runtime.Loader
+import Xunit
+
+/// Issue #5626: gsc narrows a nullable local by the native form of a constant pattern (`x is "a"`), but not by
+/// the equality (`x == "a"`) that cs2gs lowered it to, while the translator still read the local as narrowed. The
+/// translated read failed with GS0158. Now one decision gives the form of a boolean `is` test and the narrowing
+/// that the translator assumes for it: the test keeps its native form where only that form narrows. The same
+/// model of gsc's native narrowing decides the case of a switch section and a switch arm, and `Nullable<T>.Value`
+/// reads a narrowed local without an assertion. Each row runs the C# and its translation and compares the output.
+/// @remarks Mutation witnesses (ADR-0154): on 1da01cc5d (before this fix) the `is` and combination rows do not
+/// compile (GS0158), the switch rows contain `!!`, and the nullable value row prints `0` for `long?` and `byte?`
+/// (#5676). With the native form refused (`RequiresNativePatternNarrowing` false), the `is`, combination and
+/// nullable value rows keep the lowered form. With the narrowing of the lowered form for every test, they contain
+/// `!!`. With a native model that flips a nested `not`, the `is not "a" and not "bb"` row and the `case not null`
+/// row do not compile (GS0158). Without the parentheses in `GSharpPrinter`, the `&&` row does not compile. With
+/// `IsGSharpSwitchNarrowedLocal` false, the switch rows contain `!!`. Without its closure check, the closure row
+/// does not compile (GS0158). With `.Value` always asserted, the `.Value` rows contain `!!`.
+open class Issue5626ConstantPatternNarrowingTests {
+    /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
+    @Fact
+    func AStringConstantPattern_KeepsTheNativeFormInEveryBooleanPosition() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int Is(string? seed) { string? current = seed; if (current is "a") { return current.Length; } return 0; }
+        static int Parameter(string? current) { if (current is "a") { return current.Length; } return 0; }
+        static int EarlyExit(string? current) { if (current is not "a") { return 0; } return current.Length; }
+        static int Negated(string? current) { if (!(current is "a")) { return 0; } return current.Length; }
+        static int Conditional(string? current) => current is "a" ? current.Length : 0;
+        static int AndAlso(string? current) { if (current is "a" && current.Length > 0) { return current.Length; } return 0; }
+        static int Loop(string? current) { int n = 0; while (current is "a") { n += current.Length; current = null; } return n; }
+        public static string Run() =>
+            Is("a") + " " + Is("b") + " " + Is(null) + " " + Parameter("a") + " " + EarlyExit("a") + " " + EarlyExit(null) + " " +
+            Negated("a") + " " + Conditional("a") + " " + AndAlso("a") + " " + Loop("a");
+    }
+}`)
+        Assert.Contains("if current is \"a\" {\n            return current.Length\n", printed)
+        Assert.Contains(
+            "if current is not \"a\" {\n            return 0\n        }\n        return current.Length\n",
+            printed
+        )
+        Assert.Contains("if (current is \"a\") && current.Length > 0 {", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
+    /// `and` and `or` combinations: a combination that only the native form narrows keeps it. A combination whose
+    /// lowered form narrows by its `!= nil` test is unchanged. gsc does not narrow `is not "a" and not "bb"` where it
+    /// fails, so that read keeps its assertion.
+    @Fact
+    func ACombinedConstantPattern_KeepsTheFormThatNarrows() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int Or(string? current) { if (current is "a" or "bb") { return current.Length; } return 0; }
+        static int AndNot(string? current) { if (current is "a" and not "b") { return current.Length; } return 0; }
+        static int NotNullAndNot(string? current) { if (current is not null and not "a") { return current.Length; } return 0; }
+        static int NotAndNot(string? current) { if (current is not "a" and not "bb") { return 0; } return current.Length; }
+        public static string Run() =>
+            Or("bb") + " " + Or(null) + " " + AndNot("a") + " " + NotNullAndNot("ccc") + " " + NotNullAndNot(null) + " " +
+            NotAndNot("bb") + " " + NotAndNot(null);
+    }
+}`)
+        Assert.Contains("if (current is \"a\" or \"bb\") {\n            return current.Length\n", printed)
+        Assert.Contains("if (current is \"a\" and not \"b\") {\n            return current.Length\n", printed)
+        Assert.Contains("if current != nil && current != \"a\" {\n            return current.Length\n", printed)
+        Assert.Contains(
+            "if current != \"a\" && current != \"bb\" {\n            return 0\n        }\n        return current!!.Length\n",
+            printed
+        )
+    }
+
+    /// A switch section and a switch arm narrow the switched local in gsc, so their reads need no assertion. gsc
+    /// does not narrow a `default` section after `case null` or a `case not null` section, so those keep it.
+    @Fact
+    func ASwitchConstantCase_NarrowsTheSwitchedLocal() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int Case(string? current) { switch (current) { case "a": return current.Length; default: return 0; } }
+        static int Stacked(string? current) { switch (current) { case "a": case "bb": return current.Length; default: return 0; } }
+        static int When(string? current) { switch (current) { case "a" when current.Length > 0: return current.Length; default: return 0; } }
+        static int Arm(string? current) => current switch { "a" => current.Length, _ => 0 };
+        static int ArmOr(string? current) => current switch { "a" or "bb" => current.Length, _ => 0 };
+        static int CaseNull(string? current) { switch (current) { case null: return 0; default: return current.Length; } }
+        static int CaseNotNull(string? current) { switch (current) { case not null: return current.Length; default: return 0; } }
+        public static string Run() =>
+            Case("a") + " " + Case(null) + " " + Stacked("bb") + " " + When("a") + " " + Arm("a") + " " + ArmOr("bb") + " " +
+            ArmOr(null) + " " + CaseNull("ccc") + " " + CaseNull(null) + " " + CaseNotNull("dd");
+    }
+}`)
+        Assert.Contains("case \"a\" {\n                return current.Length\n", printed)
+        Assert.Contains("case \"a\", \"bb\" {\n                return current.Length\n", printed)
+        Assert.Contains("case \"a\" when current.Length > 0 {\n                return current.Length\n", printed)
+        Assert.Contains("case \"a\": current.Length\n", printed)
+        Assert.Contains("case \"a\" or \"bb\": current.Length\n", printed)
+        Assert.Contains("default {\n                return current!!.Length\n", printed)
+        Assert.Contains("case not nil {\n                return current!!.Length\n", printed)
+    }
+
+    /// Nullable value types and enum constants: the native test narrows `int32?`, `int64?`, `uint8?`, `char?`,
+    /// `decimal?` and `Color?` to the underlying value, so `.Value` reads the local without an assertion. A null
+    /// test narrows `.Value` too.
+    @Fact
+    func ANullableValueConstantPattern_NarrowsTheValueRead() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public enum Color { Red, Green }
+    public static class P
+    {
+        static int Int(int? current) { if (current is 1) { return current.Value + 1; } return 0; }
+        static int Long(long? current) { if (current is 3) { return (int)current.Value; } return 0; }
+        static int Byte(byte? current) { if (current is 11) { return current.Value; } return 0; }
+        static int Char(char? current) { if (current is 'q') { return current.Value; } return 0; }
+        static int Decimal(decimal? current) { if (current is 2.5m) { return (int)(current.Value * 2); } return 0; }
+        static int NotEnum(Color? current) { if (current is not Color.Green) { return 0; } return (int)current.Value; }
+        static int OrEnum(Color? current) { if (current is Color.Green or Color.Red) { return (int)current.Value + 1; } return 0; }
+        static int CaseInt(int? current) { switch (current) { case 1: return current.Value + 1; default: return 0; } }
+        static int ArmEnum(Color? current) => current switch { Color.Green => (int)current.Value + 5, _ => 0 };
+        static int NullTest(int? current) { if (current != null) { return current.Value + 1; } return 0; }
+        public static string Run() =>
+            Int(1) + " " + Int(null) + " " + Long(3) + " " + Byte(11) + " " + Char('q') + " " + Decimal(2.5m) + " " +
+            NotEnum(Color.Green) + " " + NotEnum(null) + " " + OrEnum(Color.Red) + " " + OrEnum(null) + " " + CaseInt(1) + " " +
+            ArmEnum(Color.Green) + " " + ArmEnum(null) + " " + NullTest(4);
+    }
+}`)
+        Assert.Contains("if current is 1 {\n            return current + 1\n", printed)
+        Assert.Contains(
+            "if current is not Color.Green {\n            return 0\n        }\n        return int32(current)\n",
+            printed
+        )
+        Assert.Contains("case 1 {\n                return current + 1\n", printed)
+        Assert.Contains("case Color.Green: int32(current) + 5\n", printed)
+        Assert.Contains("if current != nil {\n            return current + 1\n", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
+    /// Control: a closure can clear a local when a call runs between the case and the read, and gsc does not narrow
+    /// the local there (ADR-0208 R15). The switch row keeps its assertion. `null` and `not null` tests keep their
+    /// lowered form.
+    @Fact
+    func AClosureAssignedLocalAndNullTests_KeepTheirForm() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static int Closure(string? current)
+        {
+            Action keep = () => current = "a";
+            switch (current) { case "a": keep(); return current.Length; }
+            return 0;
+        }
+        static int Null(string? current) { if (current is null) { return 0; } return current.Length; }
+        static int NotNull(string? current) { if (current is not null) { return current.Length; } return 0; }
+        public static string Run() => Closure("a") + " " + Null("dd") + " " + Null(null) + " " + NotNull("eee");
+    }
+}`)
+        Assert.Contains("keep()\n                return current!!.Length\n", printed)
+        Assert.Contains(
+            "if current == nil {\n            return 0\n        }\n        return current.Length\n",
+            printed
+        )
+        Assert.Contains("if current != nil {\n            return current.Length\n", printed)
+    }
+
+    shared {
+        // Runs `P.Run()` of the C# and of its translation, compares the output, and returns the translation.
+        private func AssertRunsLikeCSharp(source string) string {
+            let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippet should bind with no C# errors: " + string.Join(Environment.NewLine, project.ErrorDiagnostics)
+            )
+            using let peStream = MemoryStream()
+            let emitted = project.Compilation.Emit(peStream)
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            let loadContext = AssemblyLoadContext("Issue5626", isCollectible: true)
+            var expected string
+            try {
+                peStream.Position = 0
+                expected = cast[string](
+                    loadContext.LoadFromStream(peStream).GetType("Demo.P", throwOnError: true)!!.GetMethod(
+                        "Run"
+                    )!!.Invoke(nil, nil)
+                )
+            } finally {
+                loadContext.Unload()
+            }
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            LocalFunctionHoistTranslationTests.CompileAndRun(printed, "System.Console.WriteLine(P.Run())", expected)
+            return printed
+        }
+    }
+}

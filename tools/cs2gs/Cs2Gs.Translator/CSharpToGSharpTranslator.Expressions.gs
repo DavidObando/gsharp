@@ -1184,8 +1184,11 @@ partial class CSharpToGSharpTranslator {
                 switch member.Name.Identifier.Text {
                     case "Value" {
                         let nullableValue GExpression? = this.TranslateExpression(member.Expression)
+                        // Issue #5626: a local that gsc narrows is already the underlying value.
                         return if this.IsWithinExpressionTreeLambda(member.Expression) {
                             cast[GExpression](MemberAccessExpression(nullableValue, "Value"))
+                        } else if this.IsGSharpFlowNarrowedLocal(member.Expression) {
+                            nullableValue
                         } else {
                             EnsureNonNullAssertion(nullableValue)
                         }
@@ -4282,6 +4285,111 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 return true
+            }
+            return this.IsGSharpSwitchNarrowedLocal(expression, symbol, scope_)
+        }
+
+        /// Issue #5626: gsc narrows the switched local in the guard and the body of a switch section or arm, by
+        /// the native pattern of its case (cref:GetNativePatternNarrowedType). A section with more than one label
+        /// narrows its body only when each label narrows. A test or guard of a closure-assigned or by-reference
+        /// local can remove the fact (ADR-0208 R19, #5629), so such a local is not narrowed here.
+        private func IsGSharpSwitchNarrowedLocal(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            symbol ISymbol?,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if this.IsClosureAssignedVariable(symbol) || this.IsByReferenceVariable(symbol) {
+                return false
+            }
+            let underlyingType ITypeSymbol? = this.GetPatternScrutineeUnderlyingType(expression)
+            let Narrows = func (pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) bool {
+                return this.IsTestOnlyPattern(pattern) && this.GetNativePatternNarrowedType(
+                    pattern,
+                    underlyingType,
+                    whenTrue: true
+                ) != nil
+            }
+            let LabelNarrows = func (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) bool {
+                return switch label {
+                    case caseLabel is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CaseSwitchLabelSyntax: !this.IsNullPatternValue(caseLabel.Value)
+                    case patternLabel is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CasePatternSwitchLabelSyntax: Narrows(patternLabel.Pattern)
+                    default: false
+                }
+            }
+            for var node Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = expression.Parent;
+                node != nil &&
+                node != $scope;
+                node = node!!
+                .Parent {
+                if node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax {
+                    return false
+                }
+                var guard_ Microsoft.CodeAnalysis.SyntaxNode? = nil
+                var governing Microsoft.CodeAnalysis.SyntaxNode? = nil
+                switch node {
+                    case section is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax {
+                        if section.Parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .SwitchStatementSyntax switchStatement &&
+                            this
+                            .BindsToGuardSymbol(switchStatement.Expression, symbol) {
+                            let label = section.Labels.FirstOrDefault(
+                                (candidate Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> candidate
+                                    .Span
+                                    .Contains(expression.Span)
+                            )
+                            if (label != nil && LabelNarrows(label)) ||
+                                (
+                                label == nil && section.Labels.Count > 0 && section.Labels.All(
+                                    (candidate Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> LabelNarrows(
+                                        candidate
+                                    )
+                                )
+                            ) {
+                                guard_ = label ?? section.Labels.Last()
+                                governing = switchStatement.Expression
+                            }
+                        }
+                    }
+                    case arm is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax {
+                        if arm.Parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .SwitchExpressionSyntax switchExpression &&
+                            this.BindsToGuardSymbol(switchExpression.GoverningExpression, symbol) &&
+                            !arm
+                            .Pattern
+                            .Span
+                            .Contains(expression.Span) &&
+                            Narrows(arm.Pattern) {
+                            guard_ = arm.Pattern
+                            governing = switchExpression.GoverningExpression
+                        }
+                    }
+                }
+                // A write after the switched value (also in an earlier case's guard) makes the case test another value.
+                if guard_ != nil && governing != nil && !this.SymbolIsWrittenBetween(
+                    symbol,
+                    governing,
+                    expression,
+                    $scope
+                ) &&
+                    !this.HasLoopCarriedWrite(expression, symbol, $scope, guard_) {
+                    return true
+                }
             }
             return false
         }

@@ -314,7 +314,11 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
-        private func RequiresNativeDisjunctiveNarrowing(isPattern IsPatternExpressionSyntax) bool {
+        /// Issue #5626: whether a boolean `is` test must keep its native G# form, so that gsc narrows its
+        /// nullable scrutinee as C# does. gsc narrows a native constant pattern (`x is "a"`), not the equality
+        /// (`x == "a"`) that (cref:TranslatePatternTest) lowers it to. A disjunction that proves non-null when
+        /// it matches keeps the native form too (issues #3347/#3424).
+        private func RequiresNativePatternNarrowing(isPattern IsPatternExpressionSyntax) bool {
             var pattern = isPattern.Pattern
             while pattern is ParenthesizedPatternSyntax parenthesized {
                 pattern = parenthesized.Pattern
@@ -333,22 +337,68 @@ partial class CSharpToGSharpTranslator {
                     .OriginalDefinition
                     .SpecialType == SpecialType.System_Nullable_T
             )
-            return nullableScrutinee && this.IsSmartCastableScrutinee(isPattern.Expression) &&
-                !PatternIntroducesBinding(isPattern.Pattern) &&
-                !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) &&
-                this.IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) &&
-                pattern is BinaryPatternSyntax binary &&
-                binary.IsKind(SyntaxKind.OrPattern) &&
-                TryGetPatternNonNullPolarity(pattern, out var whenTrue) &&
-                whenTrue
+            if !nullableScrutinee || !this.IsSmartCastableScrutinee(isPattern.Expression) ||
+                PatternIntroducesBinding(isPattern.Pattern) ||
+                this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) ||
+                !this.IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) ||
+                !TryGetPatternNonNullPolarity(pattern, out var whenTrue) {
+                return false
+            }
+            if whenTrue && pattern is BinaryPatternSyntax binary && binary.IsKind(SyntaxKind.OrPattern) {
+                return true
+            }
+            let underlyingType = this.GetPatternScrutineeUnderlyingType(isPattern.Expression)
+            return this.GetNativePatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) != nil &&
+                this.GetGSharpPatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) == nil
         }
 
+        /// Whether gsc narrows the scrutinee of [`isPattern`](paramref) to non-null where the test is
+        /// [`whenTrue`](paramref). The answer is for the form that (cref:TranslateIsPattern) emits.
         private func GSharpPatternPreservesNonNullNarrowing(isPattern IsPatternExpressionSyntax, whenTrue bool) bool {
-            let declaredType ITypeSymbol? = this.ResolveDeclaredReceiverType(
-                this.context.GetTypeInfo(isPattern.Expression).Type,
-                isPattern.Expression
+            let underlyingType = this.GetPatternScrutineeUnderlyingType(isPattern.Expression)
+            let native = (
+                PatternUsesNativeVariableSyntax(isPattern.Pattern) && this.ConditionUsesNativePatternVariables(
+                    GetConditionRoot(isPattern)
+                )
+            ) ||
+                this.UsesNativeBooleanPatternTest(isPattern)
+            return if native {
+                this.GetNativePatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) != nil
+            } else {
+                this.GetGSharpPatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) != nil
+            }
+        }
+
+        // A pattern that the switch translation emits as one native G# pattern: constants, relational and type
+        // tests, `not`, `and` and `or`, with no designation, property or list subpattern.
+        private func IsTestOnlyPattern(pattern PatternSyntax) bool -> switch pattern {
+            case parenthesized is ParenthesizedPatternSyntax: this.IsTestOnlyPattern(parenthesized.Pattern)
+            case unary is UnaryPatternSyntax: this.IsTestOnlyPattern(unary.Pattern)
+            case binary is BinaryPatternSyntax: this.IsTestOnlyPattern(binary.Left) && this.IsTestOnlyPattern(
+                binary.Right
             )
-            let underlyingType ITypeSymbol? = if declaredType is INamedTypeSymbol nullableValue &&
+            case constant is ConstantPatternSyntax: !this.PatternMentionsConditionalAccessType(constant, out _)
+            case typePattern is TypePatternSyntax: !this.PatternMentionsConditionalAccessType(typePattern, out _)
+            case RelationalPatternSyntax: true
+            default: false
+        }
+
+        // A constant pattern value that is null: the `null` literal, or a constant or `default` whose value is null.
+        private func IsNullPatternValue(value ExpressionSyntax) bool {
+            if IsNullLiteral(value) {
+                return true
+            }
+            let constant = this.context.SemanticModel.GetConstantValue(value)
+            return constant.HasValue && constant.Value == nil
+        }
+
+        // The declared type of a pattern input, without its nullable annotation or `Nullable<T>` wrapper.
+        private func GetPatternScrutineeUnderlyingType(scrutinee ExpressionSyntax) ITypeSymbol? {
+            let declaredType ITypeSymbol? = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(scrutinee).Type,
+                scrutinee
+            )
+            return if declaredType is INamedTypeSymbol nullableValue &&
                 nullableValue
                 .OriginalDefinition
                 .SpecialType == SpecialType.System_Nullable_T {
@@ -356,9 +406,12 @@ partial class CSharpToGSharpTranslator {
             } else {
                 declaredType?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
             }
-            return this.GetGSharpPatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) != nil
         }
 
+        /// The narrowed type of the lowered test of [`pattern`](paramref) (cref:TranslatePatternTest) where it is
+        /// [`whenTrue`](paramref), or `nil`. The lowering emits `== nil` for `null`, an `is` type test for a type,
+        /// and `&&`, `||` and `!` for `and`, `or` and `not`. It emits an equality for any other constant, which
+        /// does not narrow, except on an `object` input, where it keeps the `is` test.
         private func GetGSharpPatternNarrowedType(
             pattern PatternSyntax,
             underlyingType ITypeSymbol?,
@@ -394,7 +447,8 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 let isNull = IsNullLiteral(constant.Expression)
-                return if whenTrue != isNull {
+                let narrows = isNull || underlyingType?.SpecialType == SpecialType.System_Object
+                return if narrows && whenTrue != isNull {
                     underlyingType
                 } else {
                     default(ITypeSymbol?)
@@ -403,12 +457,72 @@ partial class CSharpToGSharpTranslator {
             if !whenTrue {
                 return nil
             }
-            return switch pattern {
-                case typePattern is TypePatternSyntax: this.context.GetTypeInfo(typePattern.Type).Type
-                case declaration is DeclarationPatternSyntax: this.context.GetTypeInfo(declaration.Type).Type
-                case RecursivePatternSyntax{Type: not nil} recursive: this.context.GetTypeInfo(recursive.Type).Type
-                default: default(ITypeSymbol?)
+            return this.GetTypeTestNarrowedType(pattern)
+        }
+
+        /// The narrowed type of the native G# test of [`pattern`](paramref) where it is [`whenTrue`](paramref),
+        /// or `nil`: the mirror of gsc's `TryClassifyPatternNarrowing` and its `is` and `is not` callers. A
+        /// pattern narrows only where it matches, and a top-level `not` only where it fails. A non-nil constant
+        /// narrows a nullable input to its underlying type, `and` keeps either narrowing, and `or` keeps one
+        /// that both sides prove. A nested `not`, `nil`, a relational and a property pattern do not narrow.
+        private func GetNativePatternNarrowedType(
+            pattern PatternSyntax,
+            underlyingType ITypeSymbol?,
+            whenTrue bool
+        ) ITypeSymbol? {
+            var pattern = pattern
+            while pattern is ParenthesizedPatternSyntax parenthesized {
+                pattern = parenthesized.Pattern
             }
+            if pattern is UnaryPatternSyntax unary && unary.IsKind(SyntaxKind.NotPattern) {
+                return if whenTrue {
+                    default(ITypeSymbol?)
+                } else {
+                    this.ClassifyNativePatternNarrowing(unary.Pattern, underlyingType)
+                }
+            }
+            return if whenTrue {
+                this.ClassifyNativePatternNarrowing(pattern, underlyingType)
+            } else {
+                default(ITypeSymbol?)
+            }
+        }
+
+        private func ClassifyNativePatternNarrowing(pattern PatternSyntax, underlyingType ITypeSymbol?) ITypeSymbol? {
+            var pattern = pattern
+            while pattern is ParenthesizedPatternSyntax parenthesized {
+                pattern = parenthesized.Pattern
+            }
+            if pattern is BinaryPatternSyntax binary {
+                let left ITypeSymbol? = this.ClassifyNativePatternNarrowing(binary.Left, underlyingType)
+                let right ITypeSymbol? = this.ClassifyNativePatternNarrowing(binary.Right, underlyingType)
+                if binary.IsKind(SyntaxKind.AndPattern) {
+                    return left ?? right
+                }
+                return if left != nil && right != nil && SymbolEqualityComparer.Default.Equals(left, right) {
+                    left
+                } else {
+                    default(ITypeSymbol?)
+                }
+            }
+            if pattern is ConstantPatternSyntax constant {
+                if this.context.GetSymbolInfo(constant.Expression).Symbol is ITypeSymbol constantType {
+                    return constantType
+                }
+                return if this.IsNullPatternValue(constant.Expression) {
+                    default(ITypeSymbol?)
+                } else {
+                    underlyingType
+                }
+            }
+            return this.GetTypeTestNarrowedType(pattern)
+        }
+
+        private func GetTypeTestNarrowedType(pattern PatternSyntax) ITypeSymbol? -> switch pattern {
+            case typePattern is TypePatternSyntax: this.context.GetTypeInfo(typePattern.Type).Type
+            case declaration is DeclarationPatternSyntax: this.context.GetTypeInfo(declaration.Type).Type
+            case RecursivePatternSyntax{Type: not nil} recursive: this.context.GetTypeInfo(recursive.Type).Type
+            default: default(ITypeSymbol?)
         }
 
         /// Structural mirror of (cref:BuildNativePattern): true when the

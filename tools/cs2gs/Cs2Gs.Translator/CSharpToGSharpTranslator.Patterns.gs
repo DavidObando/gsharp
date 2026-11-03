@@ -732,6 +732,44 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        // Whether TranslateIsPattern emits the native boolean pattern test.
+        // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
+        // pattern subject exactly once. Use that form when C# introduces no
+        // pattern local and gsc cannot smart-cast the original scrutinee.
+        // An implicit property/field can translate to a bare identifier, but
+        // only bare locals and parameters are smart-castable (ADR-0069).
+        // Issue #3555: a property subpattern whose VALUE is itself a
+        // type-matching pattern with further subpatterns (`ContainingSymbol:
+        // IMethodSymbol { MethodKind: … }`) cannot be guard-lowered even
+        // over a smart-castable scrutinee — gsc narrows only the scrutinee
+        // local, never member CHAINS, so the lowered
+        // `x.Prop is T && x.Prop.M == …` fails GS0158 on the unnarrowed
+        // second read. Such shapes must take the native pattern form.
+        // Issue #4173 round 3: a CAE-mentioning pattern has no sound native
+        // G# pattern form (its faithful rewrite is a PREDICATE, not a type
+        // test) — TranslatePattern builds a native GPattern, so a
+        // CAE-mentioning pattern must be refused here too and fall through
+        // to the final legacy boolean lowering (TranslatePatternTest),
+        // where BuildTypeTestExpression's leaf hook handles it soundly.
+        // Issue #5626: gsc narrows the native form of a constant pattern (`x is "a"`), not its lowered
+        // equality (`x == "a"`). (cref:RequiresNativePatternNarrowing) decides when that difference matters.
+        // (cref:GSharpPatternPreservesNonNullNarrowing) asks this same predicate, so the narrowing that the
+        // translator assumes is the narrowing of the emitted test.
+        private func UsesNativeBooleanPatternTest(
+            isPattern IsPatternExpressionSyntax
+        ) bool -> !PatternIntroducesBinding(isPattern.Pattern) &&
+            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) &&
+            (
+            this.RequiresNativePatternNarrowing(isPattern) ||
+                (
+                !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.IsSmartCastableScrutinee(
+                    isPattern.Expression
+                )
+            ) ||
+                PatternRequiresNestedTypeNarrowing(isPattern.Pattern) ||
+                this.PatternTestsMembersOfNullableMember(isPattern.Pattern)
+        )
+
         private func TranslateIsPattern(isPattern IsPatternExpressionSyntax) GExpression? {
             // ADR-0169 analyzer mode: the C# base-call detection idiom has no
             // direct G# counterpart (#3536).
@@ -765,39 +803,7 @@ partial class CSharpToGSharpTranslator {
             }
             var receiver GExpression? = this.TranslateExpression(isPattern.Expression)
             let receiverType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
-            // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
-            // pattern subject exactly once. Use that form when C# introduces no
-            // pattern local and gsc cannot smart-cast the original scrutinee.
-            // An implicit property/field can translate to a bare identifier, but
-            // only bare locals and parameters are smart-castable (ADR-0069).
-            // Issue #3555: a property subpattern whose VALUE is itself a
-            // type-matching pattern with further subpatterns (`ContainingSymbol:
-            // IMethodSymbol { MethodKind: … }`) cannot be guard-lowered even
-            // over a smart-castable scrutinee — gsc narrows only the scrutinee
-            // local, never member CHAINS, so the lowered
-            // `x.Prop is T && x.Prop.M == …` fails GS0158 on the unnarrowed
-            // second read. Such shapes must take the native pattern form.
-            // Issue #4173 round 3: a CAE-mentioning pattern has no sound native
-            // G# pattern form (its faithful rewrite is a PREDICATE, not a type
-            // test) — TranslatePattern below builds a native GPattern, so a
-            // CAE-mentioning pattern must be refused here too and fall through
-            // to the final legacy boolean lowering (TranslatePatternTest),
-            // where BuildTypeTestExpression's leaf hook handles it soundly.
-            let requiresNativeDisjunctiveNarrowing = this.RequiresNativeDisjunctiveNarrowing(isPattern)
-            if !PatternIntroducesBinding(isPattern.Pattern) && !this.PatternMentionsConditionalAccessType(
-                isPattern.Pattern,
-                out _
-            ) &&
-                (
-                requiresNativeDisjunctiveNarrowing ||
-                    (
-                    !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.IsSmartCastableScrutinee(
-                        isPattern.Expression
-                    )
-                ) ||
-                    PatternRequiresNestedTypeNarrowing(isPattern.Pattern) ||
-                    this.PatternTestsMembersOfNullableMember(isPattern.Pattern)
-            ) {
+            if this.UsesNativeBooleanPatternTest(isPattern) {
                 let bindings = List[(Symbol ISymbol, Replacement GExpression)]()
                 let guards = List[GExpression]()
                 let outerBooleanPattern = this.state.TranslatingBooleanPattern
@@ -1554,9 +1560,10 @@ partial class CSharpToGSharpTranslator {
                     return BinaryExpression(receiver, "is", this.TranslateExpression(constant.Expression))
                 }
                 case constant is ConstantPatternSyntax {
-                    // `x is 0` / `x is "moov"` / `x is true`. G# `is` only tests a
-                    // type, so a constant pattern lowers to an equality test
-                    // (ADR-0115 §B). A numeric literal is retyped to the receiver's
+                    // `x is 0` / `x is "moov"` / `x is true` lowers to an equality
+                    // test (ADR-0115 §B). gsc does not narrow it, so a test whose
+                    // narrowing C# relies on keeps the native form instead
+                    // (RequiresNativePatternNarrowing, issue #5626). A numeric literal is retyped to the receiver's
                     // type so `uint8? is 11` → `b == (11 as uint8?)` (G# has no
                     // implicit numeric promotion: a bare `b == 11` is GS0129).
                     return BinaryExpression(
