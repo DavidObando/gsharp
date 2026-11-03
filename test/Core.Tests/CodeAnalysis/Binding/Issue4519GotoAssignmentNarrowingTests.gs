@@ -6494,6 +6494,105 @@ Run(func() { }, true)`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
+    @Fact
+    func FinallyIfConditionRightOperandInvalidatesLeftNilGuard_ReportsNullableReceiver() {
+        let result = Evaluate(`func Run() int32 {
+    var x string? = "seed"
+    try {
+        goto Done
+    } finally {
+        if x != nil && (x = nil) == nil {
+        } else {
+            x = "safe"
+        }
+    }
+Done:
+    return x.Length
+}
+
+Run()`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func FinallyIfConditionRightOperandClosureCallInvalidatesLeftNilGuard_ReportsNullableReceiver() {
+        let result = Evaluate(`func Run() int32 {
+    var x string? = "seed"
+    let clear = func() bool {
+        x = nil
+        return true
+    }
+    try {
+        goto Done
+    } finally {
+        if x != nil && clear() {
+        } else {
+            x = "safe"
+        }
+    }
+Done:
+    return x.Length
+}
+
+Run()`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func TryFinallyBreakFromReturningTry_DoesNotExportPreTryExternalCallableAlias() {
+        let result = Evaluate(`func Run(callback (() -> void)) int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var action = callback
+    for {
+        try {
+            action = clear
+            return 0
+        } finally {
+            break
+        }
+    }
+    text = "safe"
+    action()
+    return text.Length
+}
+
+Run(func() { })`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func DeeplyNestedTryFinallyWithCallableAssignment_CompletesWithoutExponentialWalk() {
+        var nested = "action = callback"
+        for var i = 0; i < 25; i++ {
+            nested = "try { action = callback } finally { $nested }"
+        }
+        AssertRuns(`import System
+
+func Run(callback (() -> void)) {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var action = clear
+    ` + nested + `
+    try {
+        goto Done
+    } finally {
+        text = "safe"
+        action()
+    }
+Done:
+    Console.WriteLine(text.Length)
+}
+
+Run(func() { })`, "4")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 
