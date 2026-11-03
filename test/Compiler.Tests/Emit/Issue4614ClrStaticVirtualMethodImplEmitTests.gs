@@ -701,6 +701,23 @@ Console.WriteLine("x")`, fixedMismatchPath, "/target:exe", "/reference:" + libPa
             )
             Assert.Contains(" error GS", fixedMismatchLog, StringComparison.Ordinal)
 
+            let enumerableMismatchPath = Path.Combine(tempDir, "EnumerableMismatch.dll")
+            let enumerableMismatchLog = Compile(tempDir, "EnumerableMismatch.gs", `package P
+import System
+import System.Collections.Generic
+import NonSzLib
+
+class Shape { }
+func CheckEnumerable(x INonSz[Shape]) IEnumerable[Shape] {
+    return x.R()
+}
+Console.WriteLine("x")`, enumerableMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(enumerableMismatchPath),
+                "Rank-1 non-SZ array T[*] must not convert to IEnumerable[T]. Log:\n" + enumerableMismatchLog
+            )
+            Assert.Contains(" error GS", enumerableMismatchLog, StringComparison.Ordinal)
+
             let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
             let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
 import System
@@ -1929,6 +1946,16 @@ class BadInheritedRefTup : IRefTupDerived[Shape] {
     func M(v (Shape, (int32, int32))) int32 { return 1 }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IRefTupBase"}
+            yield[]object{"nullable-task-factory-slot-rejects-erased-object-async-return", `package P
+import System
+import System.Threading.Tasks
+import Clib
+
+class Shape { }
+class BadNullableTaskFactory : IFactory[Task[Shape]?] {
+    async func Create() object { return Shape() }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IFactory[System.Threading.Tasks.Task[Shape]?].Create"}
         }
 
         /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
@@ -1964,6 +1991,10 @@ class TaskFactoryImpl : IFactory[Task[Shape]] {
     async func Create() Shape { return Shape{Tag: 17} }
 }
 
+class NullableTaskFactoryImpl : IFactory[Task[Shape]?] {
+    async func Create() Shape { return Shape{Tag: 18} }
+}
+
 struct A2 : ISAs[Shape] {
     shared {
         async func MakeS() Shape { return Shape{Tag: 14} }
@@ -1987,6 +2018,7 @@ Console.WriteLine(Probe.CallMake[Shape](SA1{}).Tag)
 Console.WriteLine(Probe.CallMake[Shape](EA1()).Tag)
 Console.WriteLine(Probe.CallMakeVt[Shape](AVt1()).Tag)
 Console.WriteLine(Probe.CallFactoryTask[Shape](TaskFactoryImpl()).Tag)
+Console.WriteLine(Probe.CallFactoryTask[Shape](NullableTaskFactoryImpl()).Tag)
 let ifaceTask = typeof(A2).GetInterfaces().Where((i Type) -> i.Name == "ISAs` + "`" + `1").First()
 let taskRes = cast[Task[Shape]](typeof(A2).GetInterfaceMap(ifaceTask).TargetMethods[0].Invoke(nil, []object?{})!!)
 Console.WriteLine(taskRes.GetAwaiter().GetResult().Tag)
@@ -1996,7 +2028,7 @@ Console.WriteLine(vtRes.GetAwaiter().GetResult().Tag)
 let streamEnum = StreamImpl().Stream(Shape{Tag: 16}).GetAsyncEnumerator()
 if streamEnum.MoveNextAsync().AsTask().GetAwaiter().GetResult() {
     Console.WriteLine(streamEnum.Current.Tag)
-}`), []string{"10", "11", "12", "13", "17", "14", "15", "16"}}
+}`), []string{"10", "11", "12", "13", "17", "18", "14", "15", "16"}}
             yield[]object{"symbolic-tuples-long-tuples-and-open-generic-rows", (`package P
 import System
 import System.Linq

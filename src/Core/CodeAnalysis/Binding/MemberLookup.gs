@@ -6810,9 +6810,7 @@ internal class MemberLookup {
             source TypeSymbol,
             targetOpenDefinition Type
         ) sequence[ImmutableArray[TypeSymbol]] {
-            if source.ClrType is {IsArray: true} sourceArray && sourceArray.GetArrayRank() == 1 &&
-                Conversion
-                .IsArrayElementInterface(targetOpenDefinition) {
+            if source.ClrType is {IsSZArray: true} && Conversion.IsArrayElementInterface(targetOpenDefinition) {
                 let positions = source.GetElementPositions()
                 if positions.Length == 1 {
                     yield positions
