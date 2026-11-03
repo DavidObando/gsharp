@@ -1315,7 +1315,11 @@ partial class CSharpToGSharpTranslator {
                 if otherParameter == nil || otherParameter.Name == parameter.Name {
                     continue
                 }
-                let argumentType ITypeSymbol? = this.GetExpressionInferenceType(otherArgument.Expression)
+                let argumentType ITypeSymbol? = this.GetExpressionInferenceType(
+                    otherArgument.Expression,
+                    otherArgument,
+                    otherParameter
+                )
                 if argumentType == nil {
                     continue
                 }
@@ -1348,20 +1352,51 @@ partial class CSharpToGSharpTranslator {
         private func GetExpressionNullablePositions(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) ObliviousPositionSet? {
-            if expression == nil {
+            var unwrapped = expression
+            var suppressedTopLevel = false
+            while (
+                unwrapped is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax or
+                    PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) {
+                if unwrapped is PostfixUnaryExpressionSyntax {
+                    suppressedTopLevel = true
+                }
+                unwrapped = switch unwrapped {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    case postfix is PostfixUnaryExpressionSyntax: postfix.Operand
+                    default: unwrapped
+                }
+            }
+            if unwrapped == nil {
                 return nil
             }
             var result ObliviousPositionSet? = nil
-            if this.ObliviousValuePositions(expression) is {} valuePositions {
+            if this.ObliviousValuePositions(unwrapped) is {} valuePositions {
                 result = ObliviousPositionSet()
                 result.UnionWith(valuePositions)
             }
-            var unwrapped = expression
-            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
-                unwrapped = parenthesized.Expression
-            }
             let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
-            if symbol != nil &&
+            if !suppressedTopLevel &&
+                symbol != nil &&
                 (this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol)) {
                 result ??= ObliviousPositionSet()
                 result!!.Nullable.Add("")
@@ -1373,11 +1408,17 @@ partial class CSharpToGSharpTranslator {
                     result!!.Nullable.UnionWith(declared)
                 }
             }
+            if suppressedTopLevel && result != nil {
+                result.Nullable.Remove("")
+                result.Platform.Remove("")
+            }
             return result
         }
 
         private func GetExpressionInferenceType(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            argument ArgumentSyntax? = nil,
+            parameter IParameterSymbol? = nil
         ) ITypeSymbol? {
             var current = expression
             while (
@@ -1409,8 +1450,17 @@ partial class CSharpToGSharpTranslator {
                     default: current
                 }
             }
-            if current == nil || IsNullOrSuppressedNull(current) {
+            if current == nil {
                 return nil
+            }
+            if IsNullOrSuppressedNull(current) {
+                return if argument != nil && this.LowersNullArgumentToTypedDefault(argument, parameter) {
+                    (this.context.GetTypeInfo(current).ConvertedType ?? parameter?.Type)?.WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                    )
+                } else {
+                    default(ITypeSymbol?)
+                }
             }
             let typeInfo = this.context.GetTypeInfo(current)
             if typeInfo.Type != nil {
@@ -1436,6 +1486,45 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return nil
+        }
+
+        private func LowersNullArgumentToTypedDefault(argument ArgumentSyntax, targetParameter IParameterSymbol?) bool {
+            let targetType ITypeSymbol? = targetParameter?.Type
+            if targetParameter == nil ||
+                targetType == nil ||
+                !IsNullOrSuppressedNull(argument.Expression) ||
+                !targetType.IsReferenceType ||
+                targetParameter
+                .OriginalDefinition
+                .Type is ITypeParameterSymbol {
+                return false
+            }
+            if targetParameter
+                .ContainingAssembly
+                ?.Name != "Gsharp.Runtime.Values" &&
+                !ContainsTypeParameter(targetParameter.OriginalDefinition.Type) {
+                return false
+            }
+            let targetIsPromotedMigratedSibling = !SymbolEqualityComparer.Default.Equals(
+                targetParameter.ContainingAssembly,
+                this.context.Compilation.Assembly
+            ) &&
+                targetParameter
+                .ContainingAssembly
+                ?.Name is {} targetAssemblyName &&
+                targetAssemblyName != this
+                .context
+                .Compilation
+                .AssemblyName &&
+                (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
+                (compilation CSharpCompilation) -> compilation.AssemblyName == targetAssemblyName
+            ) == true &&
+                this.ShouldPromoteToNullableReference(targetParameter)
+            return !targetIsPromotedMigratedSibling && !this.IsObliviousImportedInferredTypeParameterTarget(
+                targetParameter,
+                argument.Expression
+            ) &&
+                this.TargetWillRemainNonNullableReference(targetType, targetParameter, argument.Expression)
         }
 
         private func ConstructDelegateFromCallableMethod(
@@ -2360,7 +2449,7 @@ partial class CSharpToGSharpTranslator {
                             Subtree(positions, "0")
                         },
                         target,
-                        variance
+                        VarianceKind.None
                     )
                 }
                 if declaredType is IPointerTypeSymbol declaredPointer {
@@ -2372,39 +2461,61 @@ partial class CSharpToGSharpTranslator {
                         VarianceKind.None
                     )
                 }
-                if declaredType is not INamedTypeSymbol{IsGenericType: true} declaredNamed {
+                if declaredType is not INamedTypeSymbol declaredNamed || FlatTypeArguments(declaredNamed).Count == 0 {
                     return false
                 }
-                let matchingActual INamedTypeSymbol? = FindMatchingNamedTypeInHierarchy(
+                var effectiveDeclared INamedTypeSymbol = declaredNamed
+                var matchingActual INamedTypeSymbol? = FindMatchingNamedTypeInHierarchy(
                     actualType,
                     declaredNamed.OriginalDefinition
                 )
+                if matchingActual == nil &&
+                    variance == VarianceKind.In &&
+                    actualType is INamedTypeSymbol actualNamed &&
+                    FlatTypeArguments(actualNamed).Count > 0 &&
+                    FindMatchingNamedTypeInHierarchy(
+                    declaredNamed,
+                    actualNamed.OriginalDefinition
+                ) is {} matchedDeclared {
+                    effectiveDeclared = matchedDeclared
+                    matchingActual = actualNamed
+                }
+                let declaredArguments = FlatTypeArguments(effectiveDeclared)
+                let actualArguments List[ITypeSymbol]? = if matchingActual != nil {
+                    FlatTypeArguments(matchingActual)
+                } else {
+                    default(List[ITypeSymbol]?)
+                }
+                let containingOffset = if effectiveDeclared.ContainingType != nil {
+                    FlatTypeArguments(effectiveDeclared.ContainingType).Count
+                } else {
+                    0
+                }
                 let view = if positions != nil && actualType != nil {
-                    ViewPositions(actualType, declaredNamed.OriginalDefinition, positions)
+                    ViewPositions(actualType, effectiveDeclared.OriginalDefinition, positions)
                 } else {
                     nil
                 }
-                for var i = 0; i < declaredNamed.TypeArguments.Length; i++ {
-                    let declaredArgument = declaredNamed.TypeArguments[i]
-                    let actualArgument ITypeSymbol? = if matchingActual != nil &&
-                        i < matchingActual
-                        .TypeArguments
-                        .Length {
-                        matchingActual.TypeArguments[i]
+                for var flatIndex = 0; flatIndex < declaredArguments.Count; flatIndex++ {
+                    let declaredArgument = declaredArguments[flatIndex]
+                    let actualArgument ITypeSymbol? = if actualArguments != nil && flatIndex < actualArguments.Count {
+                        actualArguments[flatIndex]
                     } else {
                         default(ITypeSymbol?)
                     }
-                    let argumentPositions ObliviousPositionSet? = if view != nil && i < view.Count {
-                        view[i].Positions
+                    let argumentPositions ObliviousPositionSet? = if view != nil && flatIndex < view.Count {
+                        view[flatIndex].Positions
                     } else if positions == nil {
                         default(ObliviousPositionSet?)
                     } else {
-                        Subtree(positions, IndexPosition(i))
+                        Subtree(positions, IndexPosition(flatIndex))
                     }
-                    let parameterVariance = if declaredNamed.IsTupleType {
+                    let parameterVariance = if flatIndex < containingOffset {
+                        VarianceKind.None
+                    } else if effectiveDeclared.IsTupleType {
                         VarianceKind.Out
                     } else {
-                        declaredNamed.TypeParameters[i].Variance
+                        effectiveDeclared.TypeParameters[flatIndex - containingOffset].Variance
                     }
                     let composedVariance = if variance == VarianceKind.None || parameterVariance == VarianceKind.None {
                         VarianceKind.None
@@ -2423,14 +2534,7 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                 }
-                return declaredNamed.ContainingType != nil &&
-                    ParameterArgumentPreventsNullableInference(
-                    declaredNamed.ContainingType,
-                    matchingActual?.ContainingType,
-                    nil,
-                    target,
-                    VarianceKind.None
-                )
+                return false
             }
 
             private func BindCallableTypeParameters(
@@ -2442,7 +2546,9 @@ partial class CSharpToGSharpTranslator {
                     return
                 }
                 if patternType is ITypeParameterSymbol typeParameter {
-                    if !bindings.ContainsKey(typeParameter) {
+                    if bindings.TryGetValue(typeParameter, out var existing) {
+                        bindings[typeParameter] = ReconcileCallableBoundType(existing, actualType)
+                    } else {
                         bindings[typeParameter] = actualType
                     }
                     return
@@ -2451,16 +2557,75 @@ partial class CSharpToGSharpTranslator {
                     BindCallableTypeParameters(patternArray.ElementType, actualArray.ElementType, bindings)
                     return
                 }
-                if patternType is INamedTypeSymbol{IsGenericType: true} patternNamed &&
-                    FindMatchingNamedTypeInHierarchy(actualType, patternNamed.OriginalDefinition) is {} actualNamed {
-                    for var i = 0; i < patternNamed.TypeArguments.Length && i < actualNamed.TypeArguments.Length; i++ {
-                        BindCallableTypeParameters(
-                            patternNamed.TypeArguments[i],
-                            actualNamed.TypeArguments[i],
-                            bindings
-                        )
+                if patternType is INamedTypeSymbol patternNamed && FlatTypeArguments(patternNamed).Count > 0 {
+                    var effectivePattern INamedTypeSymbol = patternNamed
+                    var matchingActual INamedTypeSymbol? = FindMatchingNamedTypeInHierarchy(
+                        actualType,
+                        patternNamed.OriginalDefinition
+                    )
+                    if matchingActual == nil && actualType is INamedTypeSymbol actualNamed && FlatTypeArguments(
+                        actualNamed
+                    ).Count > 0 &&
+                        FindMatchingNamedTypeInHierarchy(
+                        patternNamed,
+                        actualNamed.OriginalDefinition
+                    ) is {} matchedPattern {
+                        effectivePattern = matchedPattern
+                        matchingActual = actualNamed
+                    }
+                    if matchingActual != nil {
+                        let patternArgs = FlatTypeArguments(effectivePattern)
+                        let actualArgs = FlatTypeArguments(matchingActual)
+                        for var i = 0; i < patternArgs.Count && i < actualArgs.Count; i++ {
+                            BindCallableTypeParameters(patternArgs[i], actualArgs[i], bindings)
+                        }
                     }
                 }
+            }
+
+            private func ReconcileCallableBoundType(existing ITypeSymbol, candidate ITypeSymbol) ITypeSymbol {
+                let reconciledAnnotation = if existing.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    existing.NullableAnnotation
+                } else {
+                    candidate.NullableAnnotation
+                }
+                if existing is IArrayTypeSymbol existingArray && candidate is IArrayTypeSymbol candidateArray {
+                    let reconciledElement = ReconcileCallableBoundType(
+                        existingArray.ElementType,
+                        candidateArray.ElementType
+                    )
+                    if !SymbolEqualityComparer.Default.Equals(reconciledElement, existingArray.ElementType) ||
+                        reconciledElement.NullableAnnotation != existingArray
+                        .ElementType
+                        .NullableAnnotation {
+                        return candidate.WithNullableAnnotation(reconciledAnnotation)
+                    }
+                }
+                if existing is INamedTypeSymbol{IsGenericType: true} existingNamed &&
+                    candidate is INamedTypeSymbol{IsGenericType: true} candidateNamed &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(existingNamed.OriginalDefinition, candidateNamed.OriginalDefinition) &&
+                    existingNamed
+                    .TypeArguments
+                    .Length == candidateNamed
+                    .TypeArguments
+                    .Length {
+                    let typeArguments = List[ITypeSymbol](existingNamed.TypeArguments.Length)
+                    for var i = 0; i < existingNamed.TypeArguments.Length; i++ {
+                        typeArguments.Add(
+                            ReconcileCallableBoundType(existingNamed.TypeArguments[i], candidateNamed.TypeArguments[i])
+                        )
+                    }
+                    return existingNamed
+                        .OriginalDefinition
+                        .Construct(typeArguments.ToArray())
+                        .WithNullableAnnotation(reconciledAnnotation)
+                }
+                return existing.WithNullableAnnotation(reconciledAnnotation)
             }
 
             private func FindMatchingNamedTypeInHierarchy(

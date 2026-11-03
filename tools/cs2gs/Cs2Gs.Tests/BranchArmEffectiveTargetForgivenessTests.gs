@@ -210,6 +210,8 @@ namespace App
         public static string NullListAllowsInference(Model.Arg argument, int i) => FixedByListOrNullParams(null, i > 0 ? argument.Value : argument.Name, "tail");
 
 #nullable enable annotations
+        public static T NestedInnerParams<T>(ObLib.Outer<int>.Inner<T> inner, params System.ReadOnlySpan<T> values) => values[0];
+
         public static string PromotedListArgumentAllowsInference(Model.Arg argument, int i)
         {
             string[] lines;
@@ -218,12 +220,35 @@ namespace App
             return FixedByListOrNullParams(list, i > 0 ? argument.Value : argument.Name, "tail");
         }
 
+        public static string PromotedCheckedListArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return FixedByListOrNullParams(checked(list), i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
         public static string PromotedReceiverAllowsInference(Model.Arg argument, int i)
         {
             string[] lines;
             lines = ObLib.Node.Holes();
             var list = new System.Collections.Generic.List<string>(lines);
             return list.PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedCheckedReceiverAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return unchecked(list).PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedNestedInnerArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            ObLib.Outer<int>.Inner<string> inner;
+            inner = ObLib.Node.NestedInner();
+            return NestedInnerParams(inner, i > 0 ? argument.Value : argument.Name, "tail");
         }
 
 #nullable enable
@@ -395,9 +420,21 @@ namespace App
 
         public static T FixedByIListParams<T>(System.Collections.Generic.IList<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T FixedByArrayParams<T>(T[] fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByActionIListParams<T>(System.Action<System.Collections.Generic.IList<T>> action, params System.ReadOnlySpan<T> values) => values[0];
+
+        public delegate void PairConsumer<T>(T first, T second);
+
+        public static T FixedByPairConsumerParams<T>(PairConsumer<T> consume, params System.ReadOnlySpan<T> values) => values[0];
+
         public static void Consume(string s) { }
 
         public static void Consume(int n) { }
+
+#nullable enable
+        public static void ConsumePair(string? first, string second) { }
+#nullable restore
 
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
 
@@ -436,6 +473,18 @@ namespace App
 
         public static string FixedByConstrainedTypeParameterCall<U>(U list, Model.Arg argument, int i) where U : System.Collections.Generic.IList<string> =>
             FixedByIListParams(list, i > 14 ? "m" : argument.Name, "tail");
+
+        public static string FixedByTypedNullImportedListParamsCall(Model.Arg argument, int i) =>
+            ObLib.Node.ImportedListParams(null!, i > 15 ? "n" : argument.Name, "tail");
+
+        public static string FixedByArrayParamsCall(string[] array, Model.Arg argument, int i) =>
+            FixedByArrayParams(array, i > 16 ? "p" : argument.Name, "tail");
+
+        public static string FixedByContravariantHierarchyParamsCall(System.Action<System.Collections.Generic.IEnumerable<string>> action, Model.Arg argument, int i) =>
+            FixedByActionIListParams(action, i > 17 ? "q" : argument.Name, "tail");
+
+        public static string FixedByReconciledMethodGroupParamsCall(Model.Arg argument, int i) =>
+            FixedByPairConsumerParams(ConsumePair, i > 18 ? "r" : argument.Name, "tail");
 
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
@@ -476,6 +525,13 @@ namespace App
         Assert.Contains("if i > 12 { \"j\" } else { argument.Name!! }", printed)
         Assert.Contains("if i > 13 { \"k\" } else { argument.Name!! }", printed)
         Assert.Contains("FixedByIListParams(list, if i > 14 { \"m\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("if i > 15 { \"n\" } else { argument.Name!! }", printed)
+        Assert.Contains("FixedByArrayParams(array, if i > 16 { \"p\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains(
+            "FixedByActionIListParams(action, if i > 17 { \"q\" } else { argument.Name!! }, \"tail\")",
+            printed
+        )
+        Assert.Contains("if i > 18 { \"r\" } else { argument.Name!! }", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -565,9 +621,18 @@ namespace Model
         private const ObLibSource string = `
 namespace ObLib
 {
+    public sealed class Outer<TOuter>
+    {
+        public sealed class Inner<TInner> { }
+    }
+
     public static class Node
     {
         public static string[] Holes() => new string[] { null };
+        public static Outer<int>.Inner<string> NestedInner() => new Outer<int>.Inner<string>();
+#nullable enable
+        public static T ImportedListParams<T>(System.Collections.Generic.List<T> fixedValues, params T[] values) => values[0];
+#nullable restore
     }
 }`
 
