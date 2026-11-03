@@ -692,12 +692,14 @@ public class Demo
     }
 
     /// gsc iterates a single-dimensional array and a `string` by index, which runs no user code, also with a typed
-    /// loop variable that widens, wraps or boxes the element and with a tuple-target loop over value tuples (ADR-0213
-    /// table T5). A loop that holds a `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
+    /// loop variable that widens, wraps or boxes the element, with a tuple-target loop over value tuples and with a
+    /// deconstruction of a record into discards only, which reads no member (ADR-0213 table T5). A loop that holds a
+    /// `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
     @Fact
     func RefParameter_ReadAfterAForEachOverAnArrayOrAString_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
 using System.Text;
+public record Point(int X, int Y);
 public class Demo
 {
     public static int Arrays(ref string? s, int[] items)
@@ -717,7 +719,7 @@ public class Demo
         foreach (var part in "a,b".Split(',')) total += 1;
         return s.Length + total;
     }
-    public static int Typed(ref string? s, int[] items, (int, int)[] pairs)
+    public static int Typed(ref string? s, int[] items, (int, int)[] pairs, Point[] points)
     {
         if (s == null) return 0;
         long sum = 0;
@@ -726,6 +728,7 @@ public class Demo
         foreach (int? item in items) n += 1;
         foreach (object item in items) n += 1;
         foreach (var (a, b) in pairs) n += s.Length;
+        foreach (var (_, _) in points) n += 1;
         return s.Length + n + (int)sum;
     }
     public static int InnerWhile(ref string? s, int[] items)
@@ -744,7 +747,7 @@ public class Demo
         string? text = "abc";
         var items = new[] { 1, 2 };
         return Arrays(ref text, items) + "," + Strings(ref text, "xy", new StringBuilder("q")) + "," +
-            Typed(ref text, items, new[] { (1, 2) }) + "," + InnerWhile(ref text, items);
+            Typed(ref text, items, new[] { (1, 2) }, new[] { new Point(3, 4) }) + "," + InnerWhile(ref text, items);
     }
 }`)
         Assert.DoesNotContain("s!!", printed)
@@ -770,6 +773,13 @@ public class Demo
         if (s == null) return 0;
         var total = 0;
         foreach (var (x, y) in items) total += s.Length;
+        return s.Length + total;
+    }
+    public static int FirstOfRecords(ref string? s, Point[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (x, _) in items) total += 1;
         return s.Length + total;
     }
     public static int Pairs(ref string? s, Dictionary<int, int> items)
@@ -803,14 +813,14 @@ public class Demo
     public static string Run()
     {
         string? text = "abc";
-        return Records(ref text, new[] { new Point(1, 2) }) + "," +
-            Pairs(ref text, new Dictionary<int, int> { [1] = 2 }) + "," + Converted(ref text, new[] { 7 }) + "," +
+        return Records(ref text, new[] { new Point(1, 2) }) + "," + FirstOfRecords(ref text, new[] { new Point(5, 6) }) +
+            "," + Pairs(ref text, new Dictionary<int, int> { [1] = 2 }) + "," + Converted(ref text, new[] { 7 }) + "," +
             Tuples(ref text, new[] { (1, 2) }) + "," + Unwrapped(ref text, new int?[] { 3 });
     }
 }`)
         Assert.Contains("total += s!!.Length\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("total += s!!.Length + 1", printed)
-        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(8, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// gsc scans a loop's region without types, so a `for ... in` nested in a loop counts as an iteration that runs
@@ -934,6 +944,78 @@ public class Demo
         Assert.Contains("total += s.Length + 3", printed)
         Assert.Contains("return total + s.Length", printed)
         Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// gsc binds the `else` branch of an `if` from the state before the `then` branch for the effects of a loop, so
+    /// a loop in the `then` branch leaves a read in the `else` branch bare. A field write there removes the fact for
+    /// the `else` branch too, and a loop in an earlier `switch` section reaches a later section.
+    @Fact
+    func RefParameter_ReadInAnElseAfterALoopInTheThenBranch_StaysBare() {
+        let printed = AssertRunsLikeCSharp(`
+using System.Collections.Generic;
+public sealed class Box
+{
+    public int F;
+}
+public class Demo
+{
+    public static int Loop(ref string? s, List<int> items, bool flag)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        if (flag)
+        {
+            foreach (var item in items) total += item;
+        }
+        else if (total == 0)
+        {
+            return s.Length + 1;
+        }
+        else
+        {
+            return s.Length + 2;
+        }
+        return total;
+    }
+    public static int Write(ref string? s, Box box, bool flag)
+    {
+        if (s == null) return 0;
+        if (flag)
+        {
+            box.F = 1;
+        }
+        else
+        {
+            return s.Length + 3;
+        }
+        return box.F;
+    }
+    public static int Section(ref string? s, List<int> items, int k)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        switch (k)
+        {
+            case 1:
+                foreach (var item in items) total += item;
+                break;
+            default:
+                return s.Length + 4;
+        }
+        return total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var items = new List<int> { 1 };
+        return Loop(ref text, items, false) + "," + Loop(ref text, items, true) + "," +
+            Write(ref text, new Box(), false) + "," + Section(ref text, items, 2);
+    }
+}`)
+        Assert.Contains("return s.Length + 1", printed)
+        Assert.Contains("return s.Length + 2", printed)
+        Assert.Contains("return s!!.Length + 3", printed)
+        Assert.Contains("return s!!.Length + 4", printed)
     }
 
     /// The collection of a `for ... in` and the initializer of a `for` run once, before the loop's region, so effects

@@ -5166,14 +5166,124 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if forEach is ForEachVariableStatementSyntax deconstructing {
-                return this.DeconstructionCallsMember(this.context.SemanticModel.GetDeconstructionInfo(deconstructing))
+                return this.DeconstructionCallsMember(
+                    this.context.SemanticModel.GetDeconstructionInfo(deconstructing),
+                    deconstructing.Variable
+                )
             }
             return false
         }
 
-        private func DeconstructionCallsMember(info DeconstructionInfo) bool {
-            return info.Method != nil || info.Conversion?.IsUserDefined == true || info.Nested.Any(
-                (nested DeconstructionInfo) -> this.DeconstructionCallsMember(nested)
+        /// Whether the deconstruction [`info`](paramref) of [`target`](paramref) runs code in gsc. An imported
+        /// `Deconstruct` is a call. gsc deconstructs a record of this compilation (a G# `data` type) through its data
+        /// members and skips a discard, so it reads nothing when every element is a discard.
+        private func DeconstructionCallsMember(
+            info DeconstructionInfo,
+            target Microsoft.CodeAnalysis.SyntaxNode?
+        ) bool {
+            let elements = this.DeconstructionElements(target)
+            if info.Method is {} method &&
+                (
+                !(method.ContainingType.IsRecord && this.IsSourceSymbol(method.ContainingType)) ||
+                    elements == nil ||
+                    elements.Any((element Microsoft.CodeAnalysis.SyntaxNode) -> !this.IsDiscardTarget(element))
+            ) {
+                return true
+            }
+            if info.Conversion?.IsUserDefined == true {
+                return true
+            }
+            for var i = 0; i < info.Nested.Length; i++ {
+                let nestedTarget Microsoft.CodeAnalysis.SyntaxNode? = if elements != nil && i < elements.Count {
+                    elements[i]
+                } else {
+                    nil
+                }
+                if this.DeconstructionCallsMember(info.Nested[i], nestedTarget) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func DeconstructionElements(target Microsoft.CodeAnalysis.SyntaxNode?) IReadOnlyList[
+            Microsoft.CodeAnalysis.SyntaxNode
+        ]? {
+            return switch target {
+                case declaration is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .DeclarationExpressionSyntax: this.DeconstructionElements(declaration.Designation)
+                case designation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedVariableDesignationSyntax: designation
+                    .Variables
+                    .Cast[Microsoft.CodeAnalysis.SyntaxNode]()
+                    .ToList()
+                case tuple is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .TupleExpressionSyntax: tuple
+                    .Arguments
+                    .Select((argument ArgumentSyntax) -> cast[Microsoft.CodeAnalysis.SyntaxNode](argument.Expression))
+                    .ToList()
+                default: nil
+            }
+        }
+
+        private func IsDiscardTarget(element Microsoft.CodeAnalysis.SyntaxNode) bool {
+            return element is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardDesignationSyntax ||
+                element is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DeclarationExpressionSyntax{
+                Designation: Microsoft.CodeAnalysis.CSharp.Syntax.DiscardDesignationSyntax
+            } ||
+                (element is IdentifierNameSyntax && this.context.GetSymbolInfo(element).Symbol is IDiscardSymbol)
+        }
+
+        /// ADR-0208 (#5650): gsc binds the `else` branch of an `if` from the state before the `then` branch for the
+        /// effects of a loop, so a loop in the `then` branch does not reach a read in the `else` branch. A write or an
+        /// accessor in the `then` branch does reach it, and a loop in an earlier `switch` section reaches a later one.
+        private func IsLoopInThenBranchOfElseRead(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if !(
+                node is CommonForEachStatementSyntax ||
+                    node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WhileStatementSyntax ||
+                    node is DoStatementSyntax ||
+                    node is ForStatementSyntax
+            ) {
+                return false
+            }
+            return node.Ancestors().Any(
+                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .IfStatementSyntax ifStatement &&
+                    ifStatement.Else != nil &&
+                    ifStatement
+                    .Statement
+                    .Span
+                    .Contains(node.Span) &&
+                    ifStatement.Else!!
+                    .Span
+                    .Contains(use.Span)
             )
         }
 
@@ -5446,7 +5556,10 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= use.SpanStart &&
-                    (RunsSourceCode(node) || WritesReferenceStorage(node))
+                    (
+                    RunsSourceCode(node) ||
+                        (WritesReferenceStorage(node) && !this.IsLoopInThenBranchOfElseRead(node, use))
+                )
             ) {
                 return true
             }
