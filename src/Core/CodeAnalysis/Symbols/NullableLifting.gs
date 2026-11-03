@@ -24,11 +24,9 @@ shared class NullableLifting {
     /// @returns The CLR (cref:Type) to use for overload resolution, or `null` if [`typeSymbol`](paramref)
     /// is `null`.
     func GetEffectiveClrType(typeSymbol TypeSymbol?) Type? {
-        if typeSymbol is NullableTypeSymbol nullable {
-            let innerVt = nullable.UnderlyingType?.ClrType
-            if innerVt?.IsValueType == true {
-                return typeof(Nullable[_]).MakeGenericType(innerVt!!)
-            }
+        if typeSymbol is NullableTypeSymbol nullable &&
+            TryMakeNullableClrType(nullable.UnderlyingType?.ClrType) is {} nullableClr {
+            return nullableClr
         }
         // Issue #4422: the address of value-type `int32?` storage is a
         // `Nullable<int32>&`. The by-ref symbol's own ClrType is built from its
@@ -40,6 +38,18 @@ shared class NullableLifting {
             return nullablePointee.MakeByRefType()
         }
         return typeSymbol?.ClrType
+    }
+
+    internal func TryMakeNullableClrType(underlying Type?) Type? {
+        if underlying is not{IsValueType: true} valueType || ClrTypeUtilities.IsByRefLike(valueType) ||
+            ClrTypeUtilities.AreSame(valueType, typeof(void)) || IsValueTypeNullableClr(valueType) {
+            return nil
+        }
+        try {
+            return typeof(Nullable[_]).MakeGenericType(valueType)
+        } catch (ArgumentException) {
+            return nil
+        }
     }
 
     /// Constructs `Nullable<TUnderlying>` projected onto

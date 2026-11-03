@@ -396,6 +396,41 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         "(int?)Probe.ReadValue<GenericOpaqueValueToken<int>>()",
         "111,111"
     )
+    @InlineData(
+        "int32",
+        "EvalTree[NullAwareValueToken, int32]((v NullAwareValueToken) -> int32(v), Probe.ReadValue[NullAwareValueToken]())",
+        "int",
+        "EvalTree<NullAwareValueToken, int>(v => (int)v, Probe.ReadValue<NullAwareValueToken>())",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[NullAwareValueToken, int32?]((v NullAwareValueToken) -> int32?(v), Probe.ReadValue[NullAwareValueToken]())",
+        "int?",
+        "EvalTree<NullAwareValueToken, int?>(v => (int?)v, Probe.ReadValue<NullAwareValueToken>())",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[NullAwareValueToken?, int32?]((v NullAwareValueToken?) -> int32?(v), Probe.Read[NullAwareValueToken](present))",
+        "int?",
+        "EvalTree<NullAwareValueToken?, int?>(v => (int?)v, Probe.Read<NullAwareValueToken>(present))",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[OpaqueValueToken, int32?]((v OpaqueValueToken) -> int32?(v), Probe.ReadValue[OpaqueValueToken]())",
+        "int?",
+        "EvalTree<OpaqueValueToken, int?>(v => (int?)v, Probe.ReadValue<OpaqueValueToken>())",
+        "111,111"
+    )
+    @InlineData(
+        "int32",
+        "Probe.AcceptSpan(Span[uint8]([]uint8{1, 2, 3})) + (if present { 0 } else { 0 }) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
+        "int",
+        "Probe.AcceptSpan(new System.Span<byte>(new byte[] { 1, 2, 3 })) + (present ? 0 : 0) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
+        "13,13"
+    )
     func ImportedNullableValueSignature_MatchesRoslynAndVerifies(
         gsharpResult string,
         gsharpBody string,
@@ -403,14 +438,15 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         csharpBody string,
         expectedOutput string
     ) {
-        RunValuePair((`struct LocalItem {}
+        RunValuePair((`import System.Linq.Expressions
+struct LocalItem {}
+func EvalTree[T, TResult](expr Expression[Func[T, TResult]], value T) TResult -> expr.Compile()(value)
 func OpenNullAware[T](value GenericNullAwareValueToken[T]?) int32 -> int32(value)
 func OpenOpaque[T](value GenericOpaqueValueToken[T]) int32? -> int32?(value)
 func Raw(present bool) ` + "$gsharpResult" + ` -> ` + "$gsharpBody" + `
-func Convert(present bool) int32? -> Raw(present)`), (
-                `static ` + "$csharpResult" + ` Raw(bool present) => ` + "$csharpBody" + `;
-static int? Convert(bool present) => Raw(present);`
-            ), expectedOutput)
+func Convert(present bool) int32? -> Raw(present)`), (`static TResult EvalTree<T, TResult>(System.Linq.Expressions.Expression<System.Func<T, TResult>> expr, T value) => expr.Compile()(value);
+static ` + "$csharpResult" + ` Raw(bool present) => ` + "$csharpBody" + `;
+static int? Convert(bool present) => Raw(present);`), expectedOutput)
     }
 
     @Theory
@@ -419,6 +455,7 @@ static int? Convert(bool present) => Raw(present);`
     @InlineData("int32(Probe.Read[NullAwareOpaqueValueToken](present))")
     @InlineData("Probe.Read[NullAwareImplicitOpaqueValueToken](present)")
     @InlineData("int32(Probe.Read[NumericToken](present))")
+    @InlineData("([]uint8(Span[uint8]([]uint8{1}))).Length")
     func ImportedNullableValueSignature_RejectsNonNullableValueTarget(gsharpBody string) {
         RunValuePair((`func Raw(present bool) int32 -> ` + "$gsharpBody" + `
 func Convert(present bool) int32? -> Raw(present)`), `static int? Convert(bool present) => null;`, expectedOutput: "1,1", expectedDiagnostic: "GS0155")
@@ -765,6 +802,8 @@ public static class Probe {
         Reads++;
         return new T();
     }
+    public static int AcceptSpan(byte[] values) => values.Length + 100;
+    public static int AcceptSpan(System.ReadOnlySpan<byte> values) => values.Length;
     public static void Reset() { Calls = 0; Reads = 0; }
 }
 public static class Oracle {

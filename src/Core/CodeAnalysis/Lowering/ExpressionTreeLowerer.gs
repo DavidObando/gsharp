@@ -1176,16 +1176,41 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
             )
         }
-        return BoundClrStaticCallExpression(
+        let unaryExpressionType = TypeSymbol.FromClrTypeWithoutNullability(
+            typeof(UnaryExpression),
+            NullabilityFreeReason.TypeLiteral
+        )
+        let conversionTarget = if !conversion.IsLifted &&
+            conversion.Type is NullableTypeSymbol targetNullable &&
+            NullableLifting.IsAnyValueTypeNullable(targetNullable) &&
+            conversion.Method is {} method &&
+            !NullableLifting.IsValueTypeNullableClr(method.ReturnType) {
+            targetNullable.UnderlyingType
+        } else {
+            conversion.Type
+        }
+        let converted BoundExpression = BoundClrStaticCallExpression(
             conversion.Syntax,
             ExpressionConvertWithMethodMethod,
-            TypeSymbol.FromClrTypeWithoutNullability(typeof(UnaryExpression), NullabilityFreeReason.TypeLiteral),
+            unaryExpressionType,
             ImmutableArray.Create[BoundExpression](
                 UpcastToExpression(this.TranslateExpression(conversion.Source, parameterMap)),
-                CreateTypeOf(conversion.Type),
+                CreateTypeOf(conversionTarget),
                 methodInfo
             )
         )
+        return if object.ReferenceEquals(conversionTarget, conversion.Type) {
+            converted
+        } else {
+            cast[BoundExpression](
+                BoundClrStaticCallExpression(
+                    conversion.Syntax,
+                    ExpressionConvertMethod,
+                    unaryExpressionType,
+                    ImmutableArray.Create[BoundExpression](UpcastToExpression(converted), CreateTypeOf(conversion.Type))
+                )
+            )
+        }
     }
 
     private func BuildImportedInstanceCallExpression(

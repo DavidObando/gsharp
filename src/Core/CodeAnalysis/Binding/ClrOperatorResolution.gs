@@ -213,8 +213,8 @@ internal shared class ClrOperatorResolution {
             TryResolveConversion(effectiveSource, targetType?.ClrType, allowExplicit, out method, out isExplicit) {
             return true
         }
-        if sourceType is not NullableTypeSymbol && sourceType is {ClrType: {IsValueType: true}} nonNullSource {
-            let nullableSource = NullableLifting.GetEffectiveClrType(NullableTypeSymbol.Get(nonNullSource))
+        if sourceType is not NullableTypeSymbol && !TypeSymbol.IsByRefLike(sourceType) &&
+            NullableLifting.TryMakeNullableClrType(sourceType?.ClrType) is {} nullableSource {
             return TryResolveConversion(nullableSource, effectiveTarget, allowExplicit, out method, out isExplicit) ||
                 TryResolveConversion(nullableSource, targetType?.ClrType, allowExplicit, out method, out isExplicit)
         }
@@ -239,8 +239,7 @@ internal shared class ClrOperatorResolution {
             return true
         }
         let sourceUnderlying = NullableLifting.GetValueTypeNullableUnderlyingClr(sourceType)
-        if sourceUnderlying == nil && sourceType is {IsValueType: true} nonNullSource {
-            let nullableSource = typeof(Nullable[_]).MakeGenericType(nonNullSource)
+        if sourceUnderlying == nil && NullableLifting.TryMakeNullableClrType(sourceType) is {} nullableSource {
             return TryResolveConversion(nullableSource, targetType, allowExplicit: false, out _, out _) ||
                 (
                 targetUnderlying != nil &&

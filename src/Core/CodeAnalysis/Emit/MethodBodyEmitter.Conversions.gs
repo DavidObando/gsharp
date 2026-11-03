@@ -1342,12 +1342,6 @@ internal partial class MethodBodyEmitter {
             expression: "conv.Method"
         )
         this.EmitExpression(conv.Source)
-        if conv.Source.Type is not NullableTypeSymbol && method.GetParameters() is {Length: 1} parameters &&
-            NullableLifting
-            .IsValueTypeNullableClr(parameters[0].ParameterType) {
-            this.il.OpCode(ILOpCode.Newobj)
-            this.il.Token(this.GetNullableResultConstructor(NullableTypeSymbol.Get(conv.Source.Type)))
-        }
         this.EmitCallResolvedConversion(conv)
         this.EmitErasedObjectReturnWidening(method.ReturnType, conv.Type)
         // Issue #663: when the operator returns a non-nullable value type T but the
