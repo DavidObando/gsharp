@@ -956,22 +956,10 @@ internal class PatternBinder {
             return BoundRelationalPattern(syntax, discriminantType, op, value)
         }
         let inputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, discriminantType)
-        // A literal (`nil`, `3`, `"abc"`) stays in the test, so the operator binding sees it as the expression does.
-        let valueVariable = if value is BoundLiteralExpression {
-            default(LocalVariableSymbol?)
-        } else {
-            LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, value.Type)
-        }
+        // The value is the right operand itself, so the operator binding sees constants, tuple elements, and `nil` as
+        // the expression does, and the test evaluates the converted input before the value.
         let mark = Diagnostics.Count
-        let test = bindEqualityOperation(
-            syntax,
-            BoundPatternOperandExpression(inputVariable),
-            if valueVariable != nil {
-                BoundPatternOperandExpression(valueVariable)
-            } else {
-                value
-            }
-        )
+        let test = bindEqualityOperation(syntax, BoundPatternOperandExpression(inputVariable), value)
         if test is BoundErrorExpression || test.Type != TypeSymbol.Bool {
             // An operator that is undefined for the tested type keeps the pattern diagnostic. A value of another
             // type keeps the binary-operator diagnostic, which names both types.
@@ -985,7 +973,7 @@ internal class PatternBinder {
             }
             return BoundRelationalPattern(syntax, discriminantType, op, value)
         }
-        return BoundRelationalPattern(syntax, discriminantType, op, value, inputVariable, valueVariable, test)
+        return BoundRelationalPattern(syntax, discriminantType, op, value, inputVariable, test)
     }
 
     private func BindListPattern(

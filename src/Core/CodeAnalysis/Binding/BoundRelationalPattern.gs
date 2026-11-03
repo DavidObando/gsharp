@@ -30,13 +30,12 @@ class BoundRelationalPattern : BoundPattern {
     }
 
     /// Initializes a `==` or `!=` relational pattern whose test is a bound binary operation.
-    /// Issue #5688: the test reads the input and the value through (cref:BoundPatternOperandExpression) nodes.
+    /// Issue #5688: the test reads the input through a (cref:BoundPatternOperandExpression) and contains the value.
     /// @param syntax The originating syntax.
     /// @param type The discriminant type.
     /// @param op The operator.
-    /// @param value The right-hand value.
+    /// @param value The right-hand value, as bound before the operator binding.
     /// @param inputVariable The temporary that holds the input.
-    /// @param valueVariable The temporary that holds the value, or `nil` when the test contains the literal value.
     /// @param test The operation `input op value`, of type `bool`.
     internal init(
         syntax SyntaxNode?,
@@ -44,13 +43,11 @@ class BoundRelationalPattern : BoundPattern {
         op BoundBinaryOperator,
         value BoundExpression,
         inputVariable LocalVariableSymbol,
-        valueVariable LocalVariableSymbol?,
         test BoundExpression
     ) : base(syntax, type) {
         Op = op
         Value = value
         InputVariable = inputVariable
-        ValueVariable = valueVariable
         Test = test
     }
 
@@ -66,6 +63,7 @@ class BoundRelationalPattern : BoundPattern {
 
     /// Gets the right-hand value expression.
     /// For a value-type `T?` input, the value has type `T` when the binder can compare the underlying values.
+    /// For a pattern with a (cref:Test), the test contains the value; walkers and rewriters visit only the test.
     prop Value BoundExpression {
         get;
     }
@@ -76,7 +74,6 @@ class BoundRelationalPattern : BoundPattern {
     }
 
     /// Gets the temporary that holds a value that is not a literal, or a `T?` value, for a value-type `T?` input.
-    /// A pattern with a (cref:Test) has this temporary when its value is not a literal.
     internal prop ValueVariable LocalVariableSymbol? {
         get;
     }

@@ -785,8 +785,8 @@ abstract class BoundTreeWalker {
     }
 
     protected open func VisitRelationalPattern(node BoundRelationalPattern) {
-        VisitExpression(node.Value)
-        VisitExpression(node.Test)
+        // Issue #5688: the test contains the value of a `==` or `!=` pattern.
+        VisitExpression(node.Test ?? node.Value)
     }
 
     protected open func VisitTypePattern(node BoundTypePattern) {

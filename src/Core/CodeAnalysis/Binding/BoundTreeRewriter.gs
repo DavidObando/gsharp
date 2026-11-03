@@ -881,10 +881,10 @@ abstract class BoundTreeRewriter {
             }
             case BoundNodeKind.RelationalPattern {
                 let relational = cast[BoundRelationalPattern](node)
-                let relValue = RewriteExpression(relational.Value)
+                // Issue #5688: the test contains the value of a `==` or `!=` pattern, so only the test is rewritten.
                 if relational.Test is {} test {
                     let relTest = RewriteExpression(test)
-                    return if relValue == relational.Value && relTest == test {
+                    return if relTest == test {
                         node
                     } else {
                         cast[BoundPattern](
@@ -892,14 +892,14 @@ abstract class BoundTreeRewriter {
                                 node.Syntax,
                                 node.Type,
                                 relational.Op,
-                                relValue,
+                                relational.Value,
                                 relational.InputVariable!!,
-                                relational.ValueVariable,
                                 relTest
                             )
                         )
                     }
                 }
+                let relValue = RewriteExpression(relational.Value)
                 return if relValue == relational.Value {
                     node
                 } else {

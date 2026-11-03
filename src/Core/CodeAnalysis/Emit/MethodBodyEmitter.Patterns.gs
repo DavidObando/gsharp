@@ -615,15 +615,10 @@ internal partial class MethodBodyEmitter {
 
     private func EmitRelationalPattern(rp BoundRelationalPattern, loadValue() -> void, failLabel LabelHandle) {
         if rp.Test is {} test {
-            // Issue #5688: the input and the value are evaluated once, in source order. The test then applies the
-            // operator that the binary expression `input op value` uses.
+            // Issue #5688: the test is the binary operation `input op value`. It converts the stored input, evaluates
+            // the value, and applies the operator in the order of the expression.
             loadValue()
             this.il.StoreLocal(this.locals[rp.InputVariable!!])
-            // A literal value is part of the test.
-            if rp.ValueVariable is {} valueVariable {
-                this.EmitExpression(rp.Value)
-                this.il.StoreLocal(this.locals[valueVariable])
-            }
             this.EmitExpression(test)
             this.il.Branch(ILOpCode.Brfalse, failLabel)
             return

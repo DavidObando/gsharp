@@ -201,6 +201,57 @@ System.Console.Write(Bit(Zero(uint8(0))) + Bit(Default(0)) + Bit(Default(1)))
     }
 
     @Fact
+    func ConstantAndTupleValues_BindAsTheExpressionDoes() {
+        const source = `enum Color { Red, Green }
+func Bit(value bool) string -> if value { "1" } else { "0" }
+func Zero(c Color) bool -> c is == -0
+func ZeroExpression(c Color) bool -> c == -0
+func Pair(t (uint64?, int32)) bool -> t is == (0, 9)
+func PairExpression(t (uint64?, int32)) bool -> t == (0, 9)
+System.Console.Write(Bit(Zero(Color.Red)) + Bit(ZeroExpression(Color.Red)) + Bit(Zero(Color.Green)) + "|")
+System.Console.Write(Bit(Pair((uint64(0), 9))) + Bit(PairExpression((uint64(0), 9))) + Bit(Pair((nil, 9))))
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "110|110", "5688")
+    }
+
+    @Fact
+    func ImportedOperatorWithConvertedInput_ConvertsBeforeTheValue() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "ConvertedEquality.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`namespace ConvertedEquality {
+public static class Trace { public static string Events = ""; }
+public struct Meters {
+    public int Value;
+    public Meters(int value) { Value = value; }
+    public static implicit operator int(Meters m) { Trace.Events += "c"; return m.Value; }
+    public static bool operator ==(int left, Meters right) { Trace.Events += "o"; return left == right.Value; }
+    public static bool operator !=(int left, Meters right) { Trace.Events += "n"; return left != right.Value; }
+    public override bool Equals(object? other) => false;
+    public override int GetHashCode() => 0;
+}
+}`, "ConvertedEquality", reference)
+        const source = `import ConvertedEquality
+func Bit(value bool) string -> if value { "1" } else { "0" }
+func Next() Meters {
+    Trace.Events += "v"
+    return Meters(5)
+}
+let pattern = Bit(Meters(5) is == Next())
+let patternTrace = Trace.Events
+Trace.Events = ""
+let expression = Bit(Meters(5) == Next())
+System.Console.Write(pattern + patternTrace + "|" + expression + Trace.Events)
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
+            source,
+            "1cvo|1cvo",
+            "5688",
+            reference,
+            implementation
+        )
+    }
+
+    @Fact
     func UndefinedEquality_ReportsThePatternOrOperatorDiagnostic() {
         const source = `struct Plain {
     var Value int32
