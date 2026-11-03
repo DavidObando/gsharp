@@ -321,7 +321,7 @@ function and method calls only: a property or indexer accessor call (a
 source indexer setter, `box[0] = 1`) and a conversion operator (`op_Implicit` or
 `op_Explicit`, imported or declared in source, at a call argument such as a
 converted function literal or on a relational pattern operand: #5663, #5665,
-corpus rows z19 to z28) keep the full storage invalidation.
+corpus rows z19 to z29) keep the full storage invalidation.
 
 **Known limitations of the call rule.** Because a plain call does not kill
 the fact, the rule does not cover a callee that writes the storage by a path

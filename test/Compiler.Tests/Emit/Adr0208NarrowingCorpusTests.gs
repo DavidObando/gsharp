@@ -480,7 +480,8 @@ open class Adr0208NarrowingCorpusTests {
                 "z25_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
                 "z26_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_case_removes_a_by_reference_fact_R19",
                 "z27_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_expression_removes_a_by_reference_fact_R19",
-                "z28_5665_relational_pattern_without_a_conversion_operator_keeps_a_by_reference_fact_R12"
+                "z28_5665_relational_pattern_without_a_conversion_operator_keeps_a_by_reference_fact_R12",
+                "z29_5663_lifted_user_conversion_in_an_initializer_removes_a_global_fact_R11"
             },
             names
         )
@@ -9333,6 +9334,24 @@ func Run(ref text string?, n int32, limit int32) int32 {
 }
 var g string? = "ab"
 Console.WriteLine(Run(ref g, 5, 1))`, "", "run", "2", "R12"}
+            yield[]object{"z29_5663_lifted_user_conversion_in_an_initializer_removes_a_global_fact_R11", `import System
+struct Token {
+    var Raw int32
+}
+struct Payload {
+    var Raw int32
+}
+func operator implicit(t Token) Payload {
+    g = nil
+    return Payload{Raw: t.Raw}
+}
+func Run(t Token?) int32 {
+    if g == nil { return 0 }
+    let p Payload? = t
+    return g.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(Token{Raw: 1}))`, "GS0158@15:14", "reject", "", "R11"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
