@@ -7332,6 +7332,7 @@ public class Base<T> {
         this.ValueBox = new Box<T>(new[] { value });
     }
     public T Get() => this.stored;
+    public void UseConstrained<U>(U box) where U : Box<T> { }
     public string Describe() => "ok";
     public void AcceptObject(object value) { }
     public U Echo<U>(U value) => value;
@@ -7373,6 +7374,7 @@ public class Probe {
         var derived = new Derived();
         derived.Flag = 0;
         derived.BaseAdd(emptySource);
+        derived.UseConstrained(new Box<ManagedRef<int>>(emptySource));
         derived.Data.UseFirst(emptySource[0]);
         derived[emptySource[0]] = emptySource[0];
         _ = derived[emptySource[0]];
@@ -7442,6 +7444,7 @@ public class Probe {
         Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
         Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("item.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("derived.UseConstrained(Box[managed[int32]?](emptySource))", text, StringComparison.Ordinal)
         Assert.Contains("derived.Data.UseFirst(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains("derived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
         Assert.Contains("_ = derived[emptySource[0]]", text, StringComparison.Ordinal)
@@ -7489,6 +7492,7 @@ public class Box<T> {
     public Box() { }
     public Box(T[] items) { }
     public void Add(T value) { }
+    public Box<T> Next() => this;
 }
 public class Holder<T> {
     public Box<T> Value = new();
@@ -7528,6 +7532,7 @@ public class Base<T> {
     public void UseConstrained<U>(U box) where U : Box<T> { }
     public void Replace(ref T value) { }
     public T Get() => default;
+    public (Box<T>, int) Pair() => (this.Value, 0);
     public Task<Box<T>> GetAsync() => Task.FromResult(this.Value);
     public int this[Box<T> key] {
         get => 0;
@@ -7596,6 +7601,8 @@ public class MethodConstraintDerived : Base<ManagedRef<int>> { }
 public class SwitchPatternDerived : Base<ManagedRef<int>> { }
 public class CoalesceValueDerived : Base<ManagedRef<int>> { }
 public class ConstrainedPairDerived : ConstrainedPairBase<ManagedRef<int>, Box<ManagedRef<int>>> { }
+public class NestedConditionalDerived : Base<ManagedRef<int>> { }
+public class DeconstructDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
@@ -7787,6 +7794,15 @@ public class Probe {
         AcceptBox(coalesceValueDerived.NullableBox ?? FixedBox);
 
         new ConstrainedPairDerived().Add(source[0]);
+
+        NestedConditionalDerived? nestedCondDerived = new();
+        AcceptBox(nestedCondDerived?.NullableBox?.Next());
+        nestedCondDerived.Add(source[0]);
+
+        var deconstructDerived = new DeconstructDerived();
+        Box<ManagedRef<int>> deconstructedBox;
+        (deconstructedBox, _) = deconstructDerived.Pair();
+        deconstructDerived.Add(source[0]);
     }
 }`
         const benignConsumerSource = `using ManagedArrayInheritedGenericBaseFixedDestination;
@@ -7843,14 +7859,16 @@ public class ConsumerProbe {
             project.Compilation,
             document.SemanticModel,
             document.FilePath,
-            repositoryCompilations: []Microsoft
-                .CodeAnalysis
-                .CSharp
-                .CSharpCompilation{project.Compilation, consumerProject.Compilation}
+            repositoryCompilations: []Microsoft.CodeAnalysis.CSharp.CSharpCompilation{consumerProject.Compilation}
         )
+        {
+            using let outerScope = context.UseSemanticModelFor(consumerProject.Compilation.SyntaxTrees[0])
+            using let innerScope = context.UseSemanticModelFor(document.SyntaxTree)
+            Assert.Same(project.Compilation, context.Compilation)
+        }
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            45,
+            47,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7940,6 +7958,8 @@ public class ConsumerProbe {
             text,
             StringComparison.Ordinal
         )
+        Assert.Contains("open class NestedConditionalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class DeconstructDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

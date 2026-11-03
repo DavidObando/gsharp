@@ -51,6 +51,8 @@ class TranslationContext {
 
     private let repositoryCompilations IReadOnlyList[CSharpCompilation]?
 
+    private let rootCompilation CSharpCompilation
+
     /// Initializes a new instance of the (cref:TranslationContext) class.
     /// @param compilation The owning C# compilation.
     /// @param semanticModel The active semantic model for the file being translated.
@@ -86,7 +88,9 @@ class TranslationContext {
         repositoryCompilations IReadOnlyList[CSharpCompilation]? = nil
     ) {
         this.Compilation = compilation ?? throw ArgumentNullException("compilation")
+        this.rootCompilation = this.Compilation
         this.SemanticModel = semanticModel ?? throw ArgumentNullException("semanticModel")
+        this.modelsByTree[this.SemanticModel.SyntaxTree] = this.SemanticModel
         this.FilePath = filePath
         this.siblingCompilations = siblingCompilations
         this.repositoryCompilations = repositoryCompilations
@@ -150,18 +154,25 @@ class TranslationContext {
         if tree == nil || tree == this.SemanticModel.SyntaxTree {
             return NoOpScope.Instance
         }
+        this.modelsByTree.TryAdd(this.SemanticModel.SyntaxTree, this.SemanticModel)
         var ownerCompilation CSharpCompilation = this.Compilation
-        if !ownerCompilation.ContainsSyntaxTree(tree) {
-            for candidate in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
-                this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
-            ) {
-                if candidate != nil && candidate.ContainsSyntaxTree(tree) {
-                    ownerCompilation = candidate
-                    break
+        if this.modelsByTree.TryGetValue(tree, out var model) {
+            ownerCompilation = (model.Compilation as CSharpCompilation) ?? ownerCompilation
+        } else {
+            if !ownerCompilation.ContainsSyntaxTree(tree) {
+                if this.rootCompilation.ContainsSyntaxTree(tree) {
+                    ownerCompilation = this.rootCompilation
+                } else {
+                    for candidate in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
+                        this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
+                    ) {
+                        if candidate != nil && candidate.ContainsSyntaxTree(tree) {
+                            ownerCompilation = candidate
+                            break
+                        }
+                    }
                 }
             }
-        }
-        if !this.modelsByTree.TryGetValue(tree, out var model) {
             model = ownerCompilation.GetSemanticModel(tree)
             this.modelsByTree[tree] = model
         }
