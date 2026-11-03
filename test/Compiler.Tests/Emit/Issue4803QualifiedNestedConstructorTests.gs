@@ -326,6 +326,24 @@ public class Outer[T] {
             Value = value
         }
     }
+    public open class GenericBase[U] {
+        public var Saved U
+        public init(value U) {
+            Saved = value
+        }
+    }
+    public class GenericDerived[V] : GenericBase[V] {
+        public init(value V) : base(value) { }
+    }
+    public class GenericBox[U] {
+        public prop Echo U { get; set; }
+    }
+    public class GenericCaller[V] {
+        public func RoundTrip(box GenericBox[V], seed V) V {
+            box.Echo = seed
+            return box.Echo
+        }
+    }
     public class Middle {
         public class DeepInner { }
     }
@@ -350,7 +368,9 @@ public class Probe {
             let deep = Probe.ConsumeDeep(Outer[int32].Middle.DeepInner())
             let importedDefault = NativeOuter[int32].NativeInner().Seed
             let importedArg = NativeOuter[int32].NativeInner(19).Seed
-            return direct + viaFactory + echoed + inferred + primary + explicitCtor + sub.Value + deep + importedDefault + importedArg
+            let siblingDerived = Outer[int32].GenericDerived[string]("ab").Saved.Length
+            let siblingProp = Outer[int32].GenericCaller[string]().RoundTrip(Outer[int32].GenericBox[string](), "cde").Length
+            return direct + viaFactory + echoed + inferred + primary + explicitCtor + sub.Value + deep + importedDefault + importedArg + siblingDerived + siblingProp
         }
     }
 }`, "Nested4750", executable: false, "/r:" + contract.AssemblyPath)
@@ -360,7 +380,26 @@ public class Probe {
         let probe = assemblies[1].GetType("Nested4750.Probe") ??
             throw InvalidOperationException("Missing Nested4750.Probe.")
         Assert.Equal(42, Invoke(probe, "Run"))
-        Assert.Equal(42 + 42 + 5 + 3 + 11 + 13 + 17 + 10 + 0 + 19, Invoke(probe, "RunAll"))
+        Assert.Equal(42 + 42 + 5 + 3 + 11 + 13 + 17 + 10 + 0 + 19 + 2 + 3, Invoke(probe, "RunAll"))
+    }
+
+    @Fact
+    func Issue4750_ImportedNestedConstructor_ValidatesGenericTypeConstraints() {
+        using let contract = CSharpFixture(`namespace NativeConstrained4750;
+public sealed class ConstrainedOuter<T> where T : struct {
+    public sealed class ConstrainedInner<U> where U : struct {
+    }
+}`)
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package RejectedImportedNested4750
+import NativeConstrained4750
+func Bad() {
+    let rejected = ConstrainedOuter[int32].ConstrainedInner[string]()
+}`, "RejectedImportedNested4750", executable: false, "/r:" + contract.AssemblyPath)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0152", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS0130", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS0159", output, StringComparison.Ordinal)
     }
 
     shared {

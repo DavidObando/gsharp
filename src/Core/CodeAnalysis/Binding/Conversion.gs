@@ -3471,9 +3471,6 @@ class Conversion {
         ) bool {
             projected = ImmutableArray[TypeSymbol].Empty
             let targetArgs = GetEffectiveStructTypeArguments(toClass)
-            // Maps each visited class's declaration type parameters onto concrete
-            // type arguments resolved in fromClass's context, composed across hops.
-            var running Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
             for c in GetStructHierarchy(fromClass) {
                 // The most-derived class itself is the identity case (handled by the
                 // caller); only its base chain is an upcast target.
@@ -3482,53 +3479,8 @@ class Conversion {
                     if currentArgs.IsDefaultOrEmpty {
                         return targetArgs.IsDefaultOrEmpty
                     }
-                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](currentArgs.Length)
-                    for argument in currentArgs {
-                        builder.Add(
-                            if running == nil {
-                                argument
-                            } else {
-                                Binder.SubstituteType(argument, running)
-                            }
-                        )
-                    }
-                    projected = builder.MoveToImmutable()
+                    projected = currentArgs
                     return true
-                }
-                if !c.EnclosingTypeArguments.IsDefaultOrEmpty {
-                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(c)
-                    let enclosingCount = Math.Min(enclosingParams.Length, c.EnclosingTypeArguments.Length)
-                    for var i = 0; i < enclosingCount; i++ {
-                        let arg = if running == nil {
-                            c.EnclosingTypeArguments[i]
-                        } else {
-                            Binder.SubstituteType(c.EnclosingTypeArguments[i], running)
-                        }
-                        running ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                        running!![enclosingParams[i]] = arg
-                    }
-                }
-                // Extend the running map with this class's own declaration
-                // parameters -> (resolved) arguments, so a deeper base whose type
-                // arguments reference these parameters can be substituted.
-                if c.Definition != nil &&
-                    !c
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    !c.Definition!!
-                    .DeclaredTypeParameters
-                    .IsDefaultOrEmpty {
-                    let defParams = c.Definition!!.DeclaredTypeParameters
-                    let count = Math.Min(defParams.Length, c.TypeArguments.Length)
-                    for var i = 0; i < count; i++ {
-                        let arg = if running == nil {
-                            c.TypeArguments[i]
-                        } else {
-                            Binder.SubstituteType(c.TypeArguments[i], running)
-                        }
-                        running ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
-                        running!![defParams[i]] = arg
-                    }
                 }
             }
             return false

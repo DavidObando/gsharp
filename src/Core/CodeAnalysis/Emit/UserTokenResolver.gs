@@ -1374,13 +1374,12 @@ internal class UserTokenResolver {
             }
         ) +
             defProp.Name
-        using let _ = this.remaps.PushSmRemap(defType)
-        return this.GetUserStructMethodRef(
-            containingType,
-            accessor,
-            accessorName,
-            this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter)
-        )
+        var sigBlob BlobBuilder
+        {
+            using let _ = this.remaps.PushSmRemap(defType)
+            sigBlob = this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter)
+        }
+        return this.GetUserStructMethodRef(containingType, accessor, accessorName, sigBlob)
     }
 
     /// Resolves a user-interface property accessor against its effective
@@ -1687,19 +1686,24 @@ internal class UserTokenResolver {
             }
         }
         let sigBlob = BlobBuilder()
-        using let _ = this.remaps.PushSmRemap(constructedBase.Definition ?? constructedBase)
-        BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
-            paramCount,
-            (r ReturnTypeEncoder) -> r.Void(),
-            (ps ParametersEncoder) -> {
-                for p in function.Parameters {
-                    if object.ReferenceEquals(p, function.ThisParameter) {
-                        continue
+        {
+            using let _ = this.remaps.PushSmRemap(constructedBase.Definition ?? constructedBase)
+            BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
+                paramCount,
+                (r ReturnTypeEncoder) -> r.Void(),
+                (ps ParametersEncoder) -> {
+                    for p in function.Parameters {
+                        if object.ReferenceEquals(p, function.ThisParameter) {
+                            continue
+                        }
+                        this.signatures.EncodeTypeSymbol(
+                            ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
+                            p.Type
+                        )
                     }
-                    this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type)
                 }
-            }
-        )
+            )
+        }
         return this.GetUserStructMethodRef(constructedBase, ctorDef, ".ctor", sigBlob)
     }
 

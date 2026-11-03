@@ -203,6 +203,27 @@ func AcceptGood(v Issue4750DSub) Issue4750DOuter[int32].Issue4750DInner -> v
 func AcceptBad(v Issue4750DSub) Issue4750DOuter[string].Issue4750DInner -> v`)
         let derivedError = Assert.Single(derivedMismatchDiagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal("GS0155", derivedError.Id)
+
+        let siblingUpcastGoodDiagnostics = GetDiagnostics(`package Issue4750BinderSiblingUpcastGood
+class Issue4750SliceGoodOuter[T] {
+    open class Base { }
+    class Derived : Base { }
+    shared {
+        func UpcastGood(value Issue4750SliceGoodOuter[[]T].Derived) Issue4750SliceGoodOuter[[]T].Base -> value
+    }
+}`)
+        Assert.Empty(siblingUpcastGoodDiagnostics)
+
+        let siblingUpcastBadDiagnostics = GetDiagnostics(`package Issue4750BinderSiblingUpcastBad
+class Issue4750SliceBadOuter[T] {
+    open class Base { }
+    class Derived : Base { }
+    shared {
+        func UpcastBad(value Issue4750SliceBadOuter[[]T].Derived) Issue4750SliceBadOuter[[][]T].Base -> value
+    }
+}`)
+        let siblingError = Assert.Single(siblingUpcastBadDiagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0155", siblingError.Id)
     }
 
     @Fact
