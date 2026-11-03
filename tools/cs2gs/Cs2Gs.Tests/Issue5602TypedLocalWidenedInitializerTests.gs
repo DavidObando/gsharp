@@ -123,6 +123,8 @@ namespace Demo
         public static bool TypedProperty(Entry entry) { Node n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
         public static bool InferredProperty(Entry entry) { var n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
         public static bool Coalesced(Entry entry) { var n = entry.Item ?? entry.Item; var item = entry.Item; n = item; return ReferenceEquals(n, item); }
+        public static bool Checked(Entry entry) { var n = checked(entry.Item ?? entry.Item); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
+        public static bool Unchecked(Entry entry) { var n = unchecked(entry.Item ?? entry.Item); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
         public static bool Conditional(Entry entry, bool flag) { var n = flag ? entry.Item : new Node(); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
         public static bool Chained(Entry entry)
         {
@@ -142,12 +144,13 @@ namespace Demo
         public static string Run() =>
             Typed(Empty()) + " " + Inferred(Empty()) + " " + TypedProperty(Empty()) + " " +
             InferredProperty(Empty()) + " " + Coalesced(Empty()) + " " + Conditional(Empty(), true) + " " +
+            Checked(Empty()) + " " + Unchecked(Empty()) + " " +
             Chained(Empty()) + " " + Convert(Empty()) + " " +
             Convert(new Entry(new Node(), null, 1));
     }
 }`)
-        Assert.Equal("True True True True True True True nre node", RunCSharp(compilation).Trim())
-        Assert.Equal("True True True True True True True nre node", CompileAndRun(printed).Trim())
+        Assert.Equal("True True True True True True True True True nre node", RunCSharp(compilation).Trim())
+        Assert.Equal("True True True True True True True True True nre node", CompileAndRun(printed).Trim())
         Assert.Contains(
             "func Typed(entry Entry) bool {\n        var n = entry.Item\n        let item = entry.Item\n        n = item\n",
             printed
@@ -178,32 +181,54 @@ namespace Demo
         Assert.Contains("let o object = a64\n", translation.Result)
     }
 
-    /// A composed initializer whose arms G# types non-null (a checked cast `cast[Node](entry.Item)`
-    /// and an un-widened parameter) gives the local non-null storage, so a widened value stored into
-    /// it keeps its bridge, as before. The bridge throws if the value is null, as `n = entry.Item!!`
-    /// does for any non-null local.
+    /// A composed initializer whose arms G# types non-null (a checked cast `cast[Node](entry.Item)`, an
+    /// un-widened parameter, or a widened value that a user-defined conversion with a non-null result
+    /// converts) gives the local non-null storage, so a widened value stored into it keeps its bridge,
+    /// as before. The bridge throws if the value is null, as `n = entry.Item!!` does for any non-null
+    /// local.
     @Fact
     func StoreIntoALocalOfNonNullComposedStorage_KeepsItsBridge() {
         let (printed, compilation) = Translate(`
 namespace Demo
 {
     public class Node { public override string ToString() => "node"; }
-    public record Entry(Node Item, int Id);
+    public class Box
+    {
+        public string Name = "box";
+        public static implicit operator Box(Node node) => node == null ? new Box() : new Box();
+    }
+    public record Entry(Node Item, Box Wrap, int Id);
     public static class Use
     {
-        public static Entry Empty() => new Entry(null, 0);
+        public static Entry Empty() => new Entry(null, null, 0);
+        public static Entry Full() => new Entry(new Node(), new Box(), 1);
         public static string Mixed(Entry entry, Node fallback, bool flag)
         {
             var n = flag ? (Node)entry.Item : fallback;
             n = entry.Item;
             return n.ToString();
         }
-        public static string Run() => Mixed(new Entry(new Node(), 1), new Node(), false) + " " + Mixed(new Entry(new Node(), 1), new Node(), true);
+        public static string Converted(Entry entry, Box fallback, bool flag)
+        {
+            var b = flag ? entry.Item : fallback;
+            b = entry.Wrap;
+            return b.Name;
+        }
+        public static string ConvertedArm(Entry entry, Box fallback, bool flag)
+        {
+            var b = flag switch { true => entry.Item, _ => fallback };
+            b = entry.Wrap;
+            return b.Name;
+        }
+        public static string Run() =>
+            Mixed(Full(), new Node(), false) + " " + Mixed(Full(), new Node(), true) + " " +
+            Converted(Full(), new Box(), true) + " " + ConvertedArm(Full(), new Box(), true);
     }
 }`)
-        Assert.Equal("node node", RunCSharp(compilation).Trim())
-        Assert.Equal("node node", CompileAndRun(printed).Trim())
+        Assert.Equal("node node box box", RunCSharp(compilation).Trim())
+        Assert.Equal("node node box box", CompileAndRun(printed).Trim())
         Assert.Contains("        n = entry.Item!!\n        return n.ToString()\n", printed)
+        Assert.Equal(2, printed.Split("b = entry.Wrap!!\n").Length - 1)
     }
 
     shared {

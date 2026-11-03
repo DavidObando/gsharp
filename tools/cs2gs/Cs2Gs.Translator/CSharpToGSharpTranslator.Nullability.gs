@@ -706,8 +706,8 @@ partial class CSharpToGSharpTranslator {
         /// Issue #5602: whether [`local`](paramref) holds a value that G# types `T?` in an oblivious
         /// compilation. The receiver rule, the value rules and the store bridge ask this one question.
         /// @remarks A local whose declaration emitted non-null storage (`EmittedLocalStorageAcceptsNil`)
-        /// holds a non-null value: the declaration bridged its initializer. G# infers any other
-        /// declared local from its initializer. A local that a deconstruction or an `out` argument
+        /// holds a non-null value: the declaration bridged its initializer. A local whose type clause is
+        /// `T?` holds a `T?` value. G# infers any other declared local from its initializer. A local that a deconstruction or an `out` argument
         /// declares holds the widened declaration it receives (#5561).
         private func LocalHoldsPromotedValue(local ILocalSymbol) bool {
             // A composed initializer can name the same local in more than one arm, so the answers
@@ -721,8 +721,14 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func LocalHoldsPromotedValueCore(local ILocalSymbol) bool {
-            if this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) && !acceptsNil {
-                return false
+            // A type clause fixes the storage, so its nullability is the answer. Without a clause, only a
+            // certainly non-null initializer gives a certain answer.
+            if this
+                .state
+                .EmittedLocalStorageAcceptsNil
+                .TryGetValue(local, out var acceptsNil) &&
+                (!acceptsNil || this.state.EmittedLocalTypeClauses.Contains(local)) {
+                return acceptsNil
             }
             if !this.ShouldPromoteToNullableReference(local) &&
                 local
@@ -737,11 +743,15 @@ partial class CSharpToGSharpTranslator {
         // Issue #5602: whether G# infers `T?` from the initializer of a local. A composed initializer
         // (`a ?? b`, `c ? a : b`, a switch expression) takes the type of its result arms, so each arm
         // is asked `IsNullablePromotedValue`, which reads its taint. A checked cast arm is `T` in G#
-        // whatever its operand is (#3843).
+        // whatever its operand is (#3843). An arm that a user-defined conversion converts has the type
+        // of the operator's result, as `CoerceReferenceValueTo` emits it.
         private func InitializerHoldsPromotedValue(initializer ExpressionSyntax) bool {
             switch initializer {
                 case parenthesized is ParenthesizedExpressionSyntax {
                     return this.InitializerHoldsPromotedValue(parenthesized.Expression)
+                }
+                case checkedExpression is CheckedExpressionSyntax {
+                    return this.InitializerHoldsPromotedValue(checkedExpression.Expression)
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                     return this.InitializerHoldsPromotedValue(coalesce.Right)
@@ -756,6 +766,19 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 default {
+                    if this.GetUserDefinedConversionInputOperator(
+                        initializer,
+                        this.context.GetTypeInfo(initializer).ConvertedType,
+                        out var convertsValue
+                    ) is {} conversionOperator &&
+                        convertsValue {
+                        return this.MapDelegateLikeReturnType(
+                            conversionOperator,
+                            isAsync: false,
+                            initializer.GetLocation()
+                        )
+                            ?.IsNullable == true
+                    }
                     return this.IsNullablePromotedValue(initializer)
                 }
             }

@@ -369,6 +369,9 @@ partial class CSharpToGSharpTranslator {
                 if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
                     (type != nil || initializer != nil) {
                     this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    if type != nil {
+                        this.state.EmittedLocalTypeClauses.Add(storageLocal)
+                    }
                     this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
                         type.IsNullable
                     } else {
