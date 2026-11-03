@@ -1146,6 +1146,26 @@ open partial class TypeSymbol : Symbol {
                     )
                 )
             }
+            if left is ImportedTypeSymbol leftPlain && right is ImportedTypeSymbol rightPlain {
+                if !ContainsTypeParameter(leftPlain) &&
+                    !ContainsTypeParameter(rightPlain) &&
+                    !ContainsSameCompilationUserType(leftPlain) &&
+                    !ContainsSameCompilationUserType(rightPlain) &&
+                    !ContainsFixedLengthArray(leftPlain) &&
+                    !ContainsFixedLengthArray(rightPlain) &&
+                    leftPlain
+                    .ClrType
+                    ?.ContainsGenericParameters != true &&
+                    rightPlain
+                    .ClrType
+                    ?.ContainsGenericParameters != true {
+                    return leftPlain.ClrType != nil && rightPlain.ClrType != nil && ClrTypeUtilities.AreSame(
+                        leftPlain.ClrType,
+                        rightPlain.ClrType
+                    )
+                }
+                return false
+            }
             if left.GetType() != right.GetType() {
                 return MemberLookup.IsNaturalStructuralDelegateTarget(left, right) ||
                     MemberLookup.IsNaturalStructuralDelegateTarget(right, left)

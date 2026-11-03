@@ -1338,6 +1338,69 @@ class BadStaticRefTup : IRefTup[Shape] {
     }
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IRefTup[Shape].MakeS"}
+            yield[]object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-slot", `package P
+import System
+import System.Collections.Generic
+import Clib
+
+class BadRefTupMap : IMapAndSeq[Tuple[int32, int32]] {
+    func CountMap(m map[(int32, int32), int32]) int32 { return m.Count }
+    func CountSeq(s sequence[Tuple[int32, int32]]) int32 { return 0 }
+    shared {
+        func MakeMap(key Tuple[int32, int32], value int32) map[Tuple[int32, int32], int32] {
+            return map[Tuple[int32, int32], int32]{key: value}
+        }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IMapAndSeq[System.Tuple[int32, int32]].CountMap"}
+            yield[]object{"value-tuple-sequence-does-not-satisfy-reference-tuple-enumerable-slot", `package P
+import System
+import System.Collections.Generic
+import Clib
+
+class BadRefTupSeq : IMapAndSeq[Tuple[int32, int32]] {
+    func CountMap(m Dictionary[Tuple[int32, int32], int32]) int32 { return m.Count }
+    func CountSeq(s sequence[(int32, int32)]) int32 { return 0 }
+    shared {
+        func MakeMap(key Tuple[int32, int32], value int32) map[Tuple[int32, int32], int32] {
+            return map[Tuple[int32, int32], int32]{key: value}
+        }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IMapAndSeq[System.Tuple[int32, int32]].CountSeq"}
+            yield[]object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-property", `package P
+import System
+import System.Collections.Generic
+
+interface IRefTupDictProp {
+    prop Items Dictionary[Tuple[int32, int32], int32] { get }
+}
+class BadRefTupDictProp : IRefTupDictProp {
+    prop Items map[(int32, int32), int32] { get { return map[(int32, int32), int32]{} } }
+}
+Console.WriteLine("x")`, "GS0504", "'IRefTupDictProp.Items'"}
+            yield[]object{"slice-does-not-satisfy-fixed-array-equatable-slot", `package P
+import System
+
+class BadFixedEq : IEquatable[[3]int32] {
+    func Equals(other []int32) bool { return true }
+}
+Console.WriteLine("x")`, "GS0187", "'System.IEquatable[[3]int32].Equals"}
+            yield[]object{"wrong-length-fixed-array-does-not-satisfy-fixed-array-equatable-slot", `package P
+import System
+
+class BadFixedLenEq : IEquatable[[3]int32] {
+    func Equals(other [4]int32) bool { return true }
+}
+Console.WriteLine("x")`, "GS0187", "'System.IEquatable[[3]int32].Equals"}
+            yield[]object{"nested-slice-does-not-satisfy-nested-fixed-array-equatable-slot", `package P
+import System
+import System.Collections.Generic
+
+class BadNestedFixedEq : IEquatable[List[[3]int32]] {
+    func Equals(other List[[]int32]) bool { return true }
+}
+Console.WriteLine("x")`, "GS0187", "'System.IEquatable[System.Collections.Generic.List[[3]int32]].Equals"}
         }
 
         /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
@@ -1490,6 +1553,7 @@ Console.WriteLine(Probe.CallRefTup[Shape, RefTupImpl](RefTupImpl(), Shape{Tag: 6
                 }}
             yield[]object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
 import System
+import System.Collections.Generic
 import System.Linq
 import Clib
 
@@ -1540,6 +1604,22 @@ class MapSeqImpl : IMapAndSeq[Shape] {
     }
 }
 
+class RefTupMapSeqImpl : IMapAndSeq[Tuple[int32, int32]] {
+    func CountMap(m Dictionary[Tuple[int32, int32], int32]) int32 -> m.Count + 5
+    func CountSeq(s IEnumerable[Tuple[int32, int32]]) int32 -> s.Count()
+    shared {
+        func MakeMap(key Tuple[int32, int32], value int32) Dictionary[Tuple[int32, int32], int32] -> map[Tuple[int32, int32], int32]{key: value}
+    }
+}
+
+class FixedEqImpl : IEquatable[[3]int32] {
+    func Equals(other [3]int32) bool -> other[0] == 7 && other[2] == 9
+}
+
+class NestedFixedEqImpl : IEquatable[List[[3]int32]] {
+    func Equals(other List[[3]int32]) bool -> other.Count == 1 && other[0][1] == 8
+}
+
 let fn = FnImpl()
 Console.WriteLine(Probe.CallFnApply[Shape](fn, (s Shape) -> s.Tag * 5))
 var seen = 0
@@ -1556,7 +1636,12 @@ Console.WriteLine(cast[int32](ptrMap[0].Invoke(PtrImpl{}, []object?{nil})!!) + c
 Console.WriteLine(Probe.CallMixedPtr[Shape](MixedPtrImpl(), Shape{Tag: 15}, 36))
 Console.WriteLine(Probe.CallNullablePair[Shape](NullableImpl(), (Shape{Tag: 30}, cast[int32?](nil))))
 Console.WriteLine(Probe.CallNullablePair[Shape](NullableImpl(), (Shape{Tag: 30}, cast[int32?](7))))
-Console.WriteLine(Probe.CallMapAndSeq[Shape, MapSeqImpl](MapSeqImpl(), Shape{Tag: 1}, 99))`), []string{
+Console.WriteLine(Probe.CallMapAndSeq[Shape, MapSeqImpl](MapSeqImpl(), Shape{Tag: 1}, 99))
+Console.WriteLine(Probe.CallMapAndSeq[Tuple[int32, int32], RefTupMapSeqImpl](RefTupMapSeqImpl(), Tuple[int32, int32](3, 4), 77))
+let fixedEq IEquatable[[3]int32] = FixedEqImpl()
+Console.WriteLine(fixedEq.Equals([3]int32{7, 8, 9}))
+let nestedFixedEq IEquatable[List[[3]int32]] = NestedFixedEqImpl()
+Console.WriteLine(nestedFixedEq.Equals(List[[3]int32]{[3]int32{7, 8, 9}}))`), []string{
                     "30",
                     "8",
                     "4-k-3",
@@ -1566,7 +1651,10 @@ Console.WriteLine(Probe.CallMapAndSeq[Shape, MapSeqImpl](MapSeqImpl(), Shape{Tag
                     "51",
                     "35",
                     "37",
-                    "101"
+                    "101",
+                    "601",
+                    "True",
+                    "True"
                 }}
         }
 

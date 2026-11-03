@@ -4963,12 +4963,12 @@ internal class MemberLookup {
 
         /// Issue #949: a type argument is "symbolic" (preserved rather than erased
         /// to `object`) when it is a user-defined G# type, a generic type
-        /// parameter, or a constructed generic mentioning one of those. Mirrors the
-        /// emitter's `ArgIsSymbolicUserDefined` so binding and emit agree on
-        /// which arguments survive erasure.
+        /// parameter, a fixed-length array (whose length is erased in `T[]`),
+        /// or a constructed generic mentioning one of those.
         /// @param arg The type argument to classify.
         /// @returns `true` when the argument is symbolic.
-        func IsSymbolicTypeArgument(arg TypeSymbol) bool -> ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(arg)
+        func IsSymbolicTypeArgument(arg TypeSymbol) bool -> ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(arg) ||
+            TypeSymbol.ContainsFixedLengthArray(arg)
 
         /// Looks up a user-declared property on [`structSymbol`](paramref)
         /// whose name and CLR-projected type match [`clrProp`](paramref).
@@ -5002,6 +5002,9 @@ internal class MemberLookup {
             clrProperty PropertyInfo
         ) bool {
             if GetProjectionReceiverImportedType(slotOwner) is ImportedTypeSymbol imported &&
+                !imported
+                .TypeArguments
+                .IsDefaultOrEmpty &&
                 TryGetSymbolicDeclaringContext(
                 imported,
                 clrProperty.DeclaringType,
@@ -5205,7 +5208,7 @@ internal class MemberLookup {
             )
         }
 
-        private func ContainsReferenceTuple(type TypeSymbol) bool {
+        internal func ContainsReferenceTuple(type TypeSymbol) bool {
             if type is ImportedTypeSymbol imported {
                 let openDef = imported.OpenDefinition ??
                     (

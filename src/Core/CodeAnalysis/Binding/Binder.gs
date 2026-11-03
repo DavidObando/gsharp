@@ -5791,7 +5791,9 @@ partial class Binder {
         if TypeSymbol.RequiresSymbolicProjection(type) ||
             type.ClrType == nil ||
             type is TupleTypeSymbol ||
-            TypeSymbol.ContainsNamedTupleElements(type) || TypeSymbol.ContainsSourceArrayShape(type) {
+            TypeSymbol.ContainsNamedTupleElements(type) || TypeSymbol.ContainsSourceArrayShape(type) ||
+            MemberLookup
+            .ContainsReferenceTuple(type) {
             hasSymbolicArgument = true
             // Issue #2919 follow-up: a nullable source enum keeps the same
             // caller-selected leaf surrogate as the bare enum. A caller that
