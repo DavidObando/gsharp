@@ -44,6 +44,10 @@ class GsStubRenderer {
     // The data types the last render projects as C# records: see PlanRecords.
     private var recordTypes HashSet[StructSymbol] = HashSet[StructSymbol]()
 
+    // Issue #4748: classes in a data-class hierarchy that render as C# classes
+    // and require an explicit copy constructor in the stub.
+    private var copyConstructorTypes HashSet[StructSymbol] = HashSet[StructSymbol]()
+
     // Identifier locations gsc reported GS0610 (wrong partial part count) at.
     // PartialMethodMerger's error recovery keeps one bodiless declaring part
     // when a group has several and no implementation; that survivor must not
@@ -119,6 +123,7 @@ class GsStubRenderer {
         this.dataTypes.Clear()
         this.semanticOnlyAbstractTypes.Clear()
         this.recordTypes = PlanRecords($scope.Structs)
+        this.copyConstructorTypes = PlanCopyConstructors($scope.Structs, this.recordTypes)
         let builder = StringBuilder()
         builder.AppendLine("#nullable enable")
         // Group every top-level user type by its package (namespace). A type
@@ -498,11 +503,12 @@ class GsStubRenderer {
         if structSymbol.ExplicitConstructors.IsDefaultOrEmpty {
             if structSymbol.IsClass {
                 // Match ReflectionMetadataEmitter.EmitClassMethodBodies: a
-                // forwarding primary constructor suppresses the default one.
-                if !structSymbol.HasPrimaryConstructor || structSymbol.BaseConstructorInitializer == nil {
+                // forwarding or data primary constructor suppresses the default one.
+                if !structSymbol.HasPrimaryConstructor ||
+                    (structSymbol.BaseConstructorInitializer == nil && !structSymbol.IsData) {
                     let emptyPrimary = !structSymbol.HasPrimaryConstructor &&
                         (structSymbol.Declaration?.HasPrimaryConstructor ?? false)
-                    let accessibility = if structSymbol.IsDeclaredAbstract && !emptyPrimary {
+                    let accessibility = if IsExplicitlyAbstract(structSymbol) && !emptyPrimary {
                         Accessibility.Protected
                     } else {
                         (
@@ -527,29 +533,89 @@ class GsStubRenderer {
                         sb,
                         indent,
                         structSymbol,
-                        Accessibility.Public,
+                        PrimaryConstructorAccessibility(structSymbol),
                         structSymbol.PrimaryConstructorParameters,
                         structSymbol.BaseConstructorInitializer
                     )
                 }
             }
-            return
-        }
-        for ctor in structSymbol.ExplicitConstructors {
-            let function FunctionSymbol? = ctor.Function
-            RenderAttributes(
-                sb,
-                indent,
-                function?.Attributes ?? ImmutableArray[GSharp.Core.CodeAnalysis.Binding.BoundAttribute].Empty
-            )
-            let accessibility = function?.Accessibility ?? Accessibility.Public
-            let baseInitializer BaseConstructorInitializer? = if ctor.IsSynthesizedFromPrimaryConstructor {
-                structSymbol.BaseConstructorInitializer
-            } else {
-                ctor.BaseInitializer
+        } else {
+            for ctor in structSymbol.ExplicitConstructors {
+                let function FunctionSymbol? = ctor.Function
+                RenderAttributes(
+                    sb,
+                    indent,
+                    function?.Attributes ?? ImmutableArray[GSharp.Core.CodeAnalysis.Binding.BoundAttribute].Empty
+                )
+                let accessibility = ExplicitConstructorAccessibility(structSymbol, ctor)
+                let baseInitializer BaseConstructorInitializer? = if ctor.IsSynthesizedFromPrimaryConstructor {
+                    structSymbol.BaseConstructorInitializer
+                } else if ctor.IsConvenience {
+                    FallbackBaseInitializer(structSymbol)
+                } else {
+                    ctor.BaseInitializer
+                }
+                RenderConstructor(sb, indent, structSymbol, accessibility, ctor.Parameters, baseInitializer)
             }
-            RenderConstructor(sb, indent, structSymbol, accessibility, ctor.Parameters, baseInitializer)
         }
+        if copyConstructorTypes.Contains(structSymbol) && !HasDeclaredCopyConstructor(structSymbol) {
+            RenderCopyConstructor(sb, indent, structSymbol)
+        }
+    }
+
+    private func RenderCopyConstructor(sb StringBuilder, indent string, structSymbol StructSymbol) {
+        let accessibility = CopyConstructorAccessibility(structSymbol)
+        let selfType = SelfType(structSymbol)
+        sb.Append(indent).Append(AccessibilityKeyword(accessibility)).Append(' ')
+        sb.Append(structSymbol.Name).Append('(').Append(speller.Spell(selfType)).Append(" original)")
+        if TryGetAccessibleBaseCopyConstructorType(structSymbol) is {} baseType {
+            sb.Append(" : base((").Append(speller.Spell(baseType)).Append(")original)")
+        } else {
+            RenderBaseInitializer(sb, FallbackBaseInitializer(structSymbol))
+        }
+        sb.AppendLine(" => throw null!;")
+    }
+
+    private func TryGetAccessibleBaseCopyConstructorType(structSymbol StructSymbol) TypeSymbol? {
+        if structSymbol.BaseClass is {} baseClass {
+            if CountAccessibleBaseCopyConstructors(baseClass) == 1 {
+                return baseClass
+            }
+            return nil
+        }
+        if structSymbol.ImportedBaseType is {} importedBase && HasImportedCopyConstructor(importedBase) {
+            return importedBase
+        }
+        return nil
+    }
+
+    private func CountAccessibleBaseCopyConstructors(baseClass StructSymbol) int32 {
+        let baseDefinition = DefinitionOf(baseClass)!!
+        var matches = 0
+        if baseDefinition.ExplicitConstructors.IsDefaultOrEmpty {
+            if baseDefinition.HasPrimaryConstructor &&
+                PrimaryConstructorAccessibility(baseDefinition) != Accessibility.Private &&
+                IsCopyConstructorSignature(baseClass, baseDefinition.PrimaryConstructorParameters) {
+                matches++
+            }
+        } else {
+            for ctor in baseDefinition.ExplicitConstructors {
+                if ExplicitConstructorAccessibility(baseDefinition, ctor) != Accessibility.Private &&
+                    IsCopyConstructorSignature(baseClass, ctor.Parameters) {
+                    matches++
+                }
+            }
+        }
+        if !HasDeclaredCopyConstructor(baseDefinition) {
+            if recordTypes.Contains(baseDefinition) ||
+                (
+                copyConstructorTypes.Contains(baseDefinition) &&
+                    CopyConstructorAccessibility(baseDefinition) != Accessibility.Private
+            ) {
+                matches++
+            }
+        }
+        return matches
     }
 
     private func RenderConstructor(
@@ -562,6 +628,19 @@ class GsStubRenderer {
     ) {
         sb.Append(indent).Append(AccessibilityKeyword(accessibility)).Append(' ')
         sb.Append(structSymbol.Name).Append('(').Append(RenderParameters(parameters)).Append(')')
+        RenderBaseInitializer(sb, baseInitializer)
+        // A value struct cannot carry a body-less expression ctor; give it an
+        // empty block. Classes get the elided throwing body.
+        sb.AppendLine(
+            if structSymbol.IsClass {
+                " => throw null!;"
+            } else {
+                " { }"
+            }
+        )
+    }
+
+    private func RenderBaseInitializer(sb StringBuilder, baseInitializer BaseConstructorInitializer?) {
         if baseInitializer != nil &&
             !baseInitializer
             .Arguments
@@ -587,15 +666,6 @@ class GsStubRenderer {
             )
                 .Append(')')
         }
-        // A value struct cannot carry a body-less expression ctor; give it an
-        // empty block. Classes get the elided throwing body.
-        sb.AppendLine(
-            if structSymbol.IsClass {
-                " => throw null!;"
-            } else {
-                " { }"
-            }
-        )
     }
 
     private func RenderMethods(
@@ -1033,6 +1103,133 @@ class GsStubRenderer {
                 }
             }
             return records
+        }
+
+        private func PlanCopyConstructors(
+            structs ImmutableArray[StructSymbol],
+            recordTypes HashSet[StructSymbol]
+        ) HashSet[StructSymbol] {
+            let classes = HashSet[StructSymbol]()
+            for dataClass in structs.Where((type StructSymbol) -> type.IsClass && type.IsData && !SkipType(type.Name)) {
+                for current in dataClass.GetHierarchy() {
+                    let definition = DefinitionOf(current)!!
+                    if !recordTypes.Contains(definition) {
+                        classes.Add(definition)
+                    }
+                }
+            }
+            return classes
+        }
+
+        private func IsExplicitlyAbstract(structSymbol StructSymbol) bool -> structSymbol.IsDeclaredAbstract ||
+            structSymbol
+            .Definition
+            ?.IsDeclaredAbstract == true
+
+        private func PrimaryConstructorAccessibility(
+            structSymbol StructSymbol
+        ) Accessibility -> if structSymbol.IsData &&
+            IsExplicitlyAbstract(structSymbol) &&
+            structSymbol.BaseConstructorInitializer == nil {
+            Accessibility.Protected
+        } else {
+            Accessibility.Public
+        }
+
+        private func ExplicitConstructorAccessibility(
+            structSymbol StructSymbol,
+            ctor ConstructorSymbol
+        ) Accessibility -> if ctor.IsSynthesizedFromPrimaryConstructor &&
+            structSymbol.IsClass {
+            PrimaryConstructorAccessibility(structSymbol)
+        } else {
+            ctor.Function?.Accessibility ?? Accessibility.Public
+        }
+
+        private func CopyConstructorAccessibility(structSymbol StructSymbol) Accessibility -> if !structSymbol.IsOpen &&
+            !structSymbol.IsSealedHierarchy {
+            Accessibility.Private
+        } else {
+            Accessibility.Protected
+        }
+
+        private func SelfType(structSymbol StructSymbol) TypeSymbol -> if structSymbol.TypeParameters.IsDefaultOrEmpty {
+            structSymbol
+        } else {
+            StructSymbol.Construct(structSymbol, structSymbol.TypeParameters.Cast[TypeSymbol]().ToImmutableArray())
+        }
+
+        private func FallbackBaseInitializer(structSymbol StructSymbol) BaseConstructorInitializer? {
+            if structSymbol.BaseConstructorInitializer != nil {
+                return structSymbol.BaseConstructorInitializer
+            }
+            if !structSymbol.ExplicitConstructors.IsDefaultOrEmpty {
+                for ctor in structSymbol.ExplicitConstructors {
+                    if !ctor.IsConvenience && ctor.BaseInitializer == nil {
+                        return nil
+                    }
+                }
+                for ctor in structSymbol.ExplicitConstructors {
+                    if ctor.BaseInitializer != nil {
+                        return ctor.BaseInitializer
+                    }
+                }
+            }
+            return nil
+        }
+
+        private func HasDeclaredCopyConstructor(structSymbol StructSymbol) bool {
+            if structSymbol.ExplicitConstructors.IsDefaultOrEmpty {
+                return structSymbol.HasPrimaryConstructor &&
+                    IsCopyConstructorSignature(structSymbol, structSymbol.PrimaryConstructorParameters)
+            }
+            return structSymbol.ExplicitConstructors.Any(
+                (ctor ConstructorSymbol) -> IsCopyConstructorSignature(structSymbol, ctor.Parameters)
+            )
+        }
+
+        private func IsCopyConstructorSignature(
+            structSymbol StructSymbol,
+            parameters ImmutableArray[ParameterSymbol]
+        ) bool {
+            if parameters.IsDefaultOrEmpty ||
+                parameters.Length != 1 ||
+                parameters[0].RefKind != RefKind.None ||
+                parameters[0].IsVariadic {
+                return false
+            }
+            return string.Equals(
+                GsToCSharpTypeSpeller.SpellErased(structSymbol.SubstituteMemberType(parameters[0].Type)),
+                GsToCSharpTypeSpeller.SpellErased(SelfType(structSymbol)),
+                StringComparison.Ordinal
+            )
+        }
+
+        private func HasImportedCopyConstructor(importedBase TypeSymbol?) bool {
+            if !(importedBase?.ClrType is {} clrBase) || ClrTypeUtilities.AreSame(clrBase, typeof(object)) {
+                return false
+            }
+            var matches = 0
+            for constructor in ClrTypeUtilities.SafeGetConstructors(
+                clrBase,
+                System
+                    .Reflection
+                    .BindingFlags
+                    .Instance | System
+                    .Reflection
+                    .BindingFlags
+                    .Public | System
+                    .Reflection
+                    .BindingFlags
+                    .NonPublic
+            ) {
+                let parameters = constructor.GetParameters()
+                if parameters.Length == 1 && ClrTypeUtilities.AreSame(parameters[0].ParameterType, clrBase) &&
+                    (constructor.IsPublic || constructor.IsFamily || constructor.IsFamilyOrAssembly) {
+                    matches++
+                }
+            }
+            return matches == 1
         }
 
         private func DefinitionOf(type StructSymbol?) StructSymbol? -> type!!.Definition ?? type

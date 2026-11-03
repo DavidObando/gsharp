@@ -470,7 +470,18 @@ open class Adr0208NarrowingCorpusTests {
                 "z15_5599_initializer_of_a_construction_keeps_the_fact_R14",
                 "z16_5599_property_pattern_on_a_sealed_receiver_keeps_the_fact_R14",
                 "z17_5599_constructor_store_of_a_get_only_auto_override_keeps_the_fact_R14",
-                "z18_5599_sealed_hierarchy_receiver_can_have_an_overriding_subclass_R14"
+                "z18_5599_sealed_hierarchy_receiver_can_have_an_overriding_subclass_R14",
+                "z19_5663_function_literal_converted_by_a_user_operator_removes_a_by_reference_fact_R12",
+                "z20_5663_arrow_lambda_converted_by_a_user_operator_removes_a_by_reference_fact_R12",
+                "z21_5663_function_literal_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                "z22_5663_function_literal_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                "z23_5663_function_literal_passed_to_a_delegate_parameter_keeps_a_by_reference_fact_R12",
+                "z24_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                "z25_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                "z26_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_case_removes_a_by_reference_fact_R19",
+                "z27_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_expression_removes_a_by_reference_fact_R19",
+                "z28_5665_relational_pattern_without_a_conversion_operator_keeps_a_by_reference_fact_R12",
+                "z29_5663_lifted_user_conversion_in_an_initializer_removes_a_global_fact_R11"
             },
             names
         )
@@ -9104,6 +9115,243 @@ func Run(ref text string?, m Mid) int32 {
     return text.Length + n
 }
 Console.WriteLine(Run(ref Box.G, Leaf()))`, "GS0158@23:17", "reject", "", "R14"}
+            yield[]object{"z19_5663_function_literal_converted_by_a_user_operator_removes_a_by_reference_fact_R12", `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    Use(func() int32 { return 1 })
+    return text.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`, "GS0158@13:17", "reject", "", "R12"}
+            yield[]object{"z20_5663_arrow_lambda_converted_by_a_user_operator_removes_a_by_reference_fact_R12", `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    Use(() -> 1)
+    return text.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`, "GS0158@13:17", "reject", "", "R12"}
+            yield[]object{
+                "z21_5663_function_literal_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(func() int32 { return 1 })
+    }
+    return n
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`,
+                "GS0158@13:16",
+                "reject",
+                "",
+                "R12"
+            }
+            yield[]object{
+                "z22_5663_function_literal_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Check(p Payload) bool { return p.Raw > 0 }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    if Check(func() int32 { return 1 }) {
+        return text.Length
+    }
+    return 2
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`,
+                "GS0158@13:21",
+                "reject",
+                "",
+                "R18"
+            }
+            yield[]object{"z23_5663_function_literal_passed_to_a_delegate_parameter_keeps_a_by_reference_fact_R12", `import System
+struct Payload {
+    var Raw int32
+}
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func UseDelegate(f () -> int32) int32 { return f() }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    let v = UseDelegate(func() int32 { return 1 })
+    return text.Length + v
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g))`, "", "run", "3", "R12"}
+            yield[]object{
+                "z24_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_loop_removes_a_by_reference_fact_R12",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    var k = 0
+    while text.Length > 0 && k < 3 {
+        k++
+        if n is > threshold { }
+    }
+    return k
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@12:16",
+                "reject",
+                "",
+                "R12"
+            }
+            yield[]object{
+                "z25_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_condition_removes_a_by_reference_fact_R18",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    if n is > threshold {
+        return text.Length
+    }
+    return 2
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@12:21",
+                "reject",
+                "",
+                "R18"
+            }
+            yield[]object{
+                "z26_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_case_removes_a_by_reference_fact_R19",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    switch n {
+        case > threshold {
+            return text.Length
+        }
+        default {
+            return 2
+        }
+    }
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@13:25",
+                "reject",
+                "",
+                "R19"
+            }
+            yield[]object{
+                "z27_5665_relational_pattern_operand_converted_by_a_user_operator_in_a_switch_expression_removes_a_by_reference_fact_R19",
+                `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    return switch n {
+        case > threshold: text.Length
+        default: 2
+    }
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, Threshold{Raw: 1}))`,
+                "GS0158@12:32",
+                "reject",
+                "",
+                "R19"
+            }
+            yield[]object{"z28_5665_relational_pattern_without_a_conversion_operator_keeps_a_by_reference_fact_R12", `import System
+struct Threshold {
+    var Raw int32
+}
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, limit int32) int32 {
+    if text == nil { return 0 }
+    if n is > limit {
+        return text.Length
+    }
+    return 0
+}
+var g string? = "ab"
+Console.WriteLine(Run(ref g, 5, 1))`, "", "run", "2", "R12"}
+            yield[]object{"z29_5663_lifted_user_conversion_in_an_initializer_removes_a_global_fact_R11", `import System
+struct Token {
+    var Raw int32
+}
+struct Payload {
+    var Raw int32
+}
+func operator implicit(t Token) Payload {
+    g = nil
+    return Payload{Raw: t.Raw}
+}
+func Run(t Token?) int32 {
+    if g == nil { return 0 }
+    let p Payload? = t
+    return g.Length
+}
+var g string? = "ab"
+Console.WriteLine(Run(Token{Raw: 1}))`, "GS0158@15:14", "reject", "", "R11"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -765,6 +765,9 @@ class Conversion {
             ) == true {
                 return Conversion.Implicit
             }
+            if from is ByRefTypeSymbol || to is ByRefTypeSymbol {
+                return Conversion.None
+            }
             // ADR-0122 / issue #1014: unmanaged pointer conversions.
             // * pointer -> pointer: explicit reinterpret (e.g. `(byte*)p`).
             // * pointer <-> nint/nuint: explicit round-trip (IntPtr.ToPointer()).

@@ -5483,10 +5483,8 @@ partial class Binder {
         }
         try {
             let closed = clrType.MakeGenericType(clrArgs)
-            if hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(
-                closed,
-                out _
-            ) {
+            if hasSymbolicArg || clrType.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true ||
+                NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable())
             }
             return ResolveClrTypeClauseSymbol(closed)
