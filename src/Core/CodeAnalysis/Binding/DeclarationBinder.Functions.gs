@@ -3007,6 +3007,7 @@ internal partial class DeclarationBinder {
         /// @param baseProperty The matched base property.
         /// @returns `true` when a candidate was found.
         internal func TryGetOverriddenPropertyCandidate(
+            derived StructSymbol,
             baseClass StructSymbol,
             propName string,
             isIndexer bool,
@@ -3016,9 +3017,11 @@ internal partial class DeclarationBinder {
             if !isIndexer {
                 return TypeMemberModel.TryGetProperty(baseClass, propName, out baseProperty)
             }
+            let substitution = BuildBaseTypeArgumentSubstitution(derived)
             for level in baseClass.GetHierarchy() {
                 for candidate in level.Properties {
-                    if candidate.IsIndexer && HaveSameIndexerSignature(candidate.Parameters, indexerParameters) {
+                    if candidate.IsIndexer &&
+                        HaveSameIndexerSignature(candidate.Parameters, indexerParameters, substitution) {
                         baseProperty = candidate
                         return true
                     }
@@ -3026,7 +3029,16 @@ internal partial class DeclarationBinder {
             }
             for level in baseClass.GetHierarchy() {
                 for candidate in level.Properties {
-                    if candidate.IsIndexer && HaveSameIndexerParameterTypes(candidate.Parameters, indexerParameters) {
+                    if candidate.IsIndexer &&
+                        HaveSameIndexerParameterTypes(candidate.Parameters, indexerParameters, substitution) {
+                        baseProperty = candidate
+                        return true
+                    }
+                }
+            }
+            for level in baseClass.GetHierarchy() {
+                for candidate in level.Properties {
+                    if candidate.IsIndexer {
                         baseProperty = candidate
                         return true
                     }
@@ -3037,15 +3049,16 @@ internal partial class DeclarationBinder {
             return TypeMemberModel.TryGetProperty(baseClass, propName, out baseProperty)
         }
 
-        private func HaveSameIndexerParameterTypes(
+        internal func HaveSameIndexerParameterTypes(
             left ImmutableArray[ParameterSymbol],
-            right ImmutableArray[ParameterSymbol]
+            right ImmutableArray[ParameterSymbol],
+            substitution IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? = nil
         ) bool {
             if left.Length != right.Length {
                 return false
             }
             for var i = 0; i < left.Length; i++ {
-                if !TypeSignaturesEquivalent(left[i].Type, right[i].Type) {
+                if !ConformanceSignaturesEquivalent(left[i].Type, right[i].Type, substitution) {
                     return false
                 }
             }
@@ -3106,13 +3119,15 @@ internal partial class DeclarationBinder {
         /// @returns `true` when the signatures are identical.
         internal func HaveSameIndexerSignature(
             left ImmutableArray[ParameterSymbol],
-            right ImmutableArray[ParameterSymbol]
+            right ImmutableArray[ParameterSymbol],
+            substitution IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? = nil
         ) bool {
             if left.Length != right.Length {
                 return false
             }
             for var i = 0; i < left.Length; i++ {
-                if left[i].RefKind != right[i].RefKind || !TypeSignaturesEquivalent(left[i].Type, right[i].Type) {
+                if left[i].RefKind != right[i].RefKind ||
+                    !ConformanceSignaturesEquivalent(left[i].Type, right[i].Type, substitution) {
                     return false
                 }
             }

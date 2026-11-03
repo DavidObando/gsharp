@@ -196,10 +196,25 @@ internal class MemberLookup {
                 var candidateApplicable = true
                 for var i = 0; i < boundArguments.Length; i++ {
                     var parameterType = GetIndexerParameterTypeSymbol(targetType, property, i)
-                    if TypeSymbol.TryGetPointeeType(parameterType, out var pointeeType) {
-                        parameterType = pointeeType
+                    if parameterType is ByRefTypeSymbol parameterByRef && parameters[i].ParameterType.IsByRef {
+                        parameterType = parameterByRef.PointeeType
                     }
                     parameterTypes.Add(parameterType)
+                    let parameterRefKind = RefCapabilities.GetParameterRefKind(parameters[i])
+                    if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
+                        if parameterRefKind == RefKind.None || ByRefStorageMatching.IsExactStorageMatch(
+                            storageType,
+                            parameterType
+                        ) == nil {
+                            candidateApplicable = false
+                            break
+                        }
+                        continue
+                    }
+                    if parameterRefKind != RefKind.None && parameterRefKind != RefKind.In {
+                        candidateApplicable = false
+                        break
+                    }
                     let conversion = ClassifySymbolicIndexerConversion(boundArguments[i], parameterType)
                     if !conversion.IsImplicit {
                         candidateApplicable = false
@@ -219,7 +234,9 @@ internal class MemberLookup {
                             continue
                         }
                         if !IsBetterSymbolicIndexerCandidate(
+                            candidate.Property,
                             candidate.ParameterTypes,
+                            other.Property,
                             other.ParameterTypes,
                             boundArguments
                         ) {
@@ -7082,12 +7099,25 @@ internal class MemberLookup {
         }
 
         private func IsBetterSymbolicIndexerCandidate(
+            candidateProperty PropertyInfo,
             candidate ImmutableArray[TypeSymbol],
+            otherProperty PropertyInfo,
             other ImmutableArray[TypeSymbol],
             arguments ImmutableArray[BoundExpression]
         ) bool {
             var hasBetterConversion = false
             for var i = 0; i < arguments.Length; i++ {
+                if ByRefStorageMatching.TryGetStorageType(arguments[i]) is {} storageType {
+                    let candidateExact = ByRefStorageMatching.IsExactStorageMatch(storageType, candidate[i]) == true
+                    let otherExact = ByRefStorageMatching.IsExactStorageMatch(storageType, other[i]) == true
+                    if candidateExact != otherExact {
+                        if !candidateExact {
+                            return false
+                        }
+                        hasBetterConversion = true
+                    }
+                    continue
+                }
                 let numericTarget = ClrOverloadResolution.CompareNumericConversionTargets(
                     NullableLifting.GetEffectiveClrType(candidate[i]),
                     NullableLifting.GetEffectiveClrType(other[i]),
@@ -7119,7 +7149,32 @@ internal class MemberLookup {
                 }
                 hasBetterConversion = true
             }
-            return hasBetterConversion
+            if hasBetterConversion {
+                return true
+            }
+            let candidateParameters = candidateProperty.GetIndexParameters()
+            let otherParameters = otherProperty.GetIndexParameters()
+            var hasBetterPassingMode = false
+            for var i = 0; i < arguments.Length; i++ {
+                if ByRefStorageMatching.TryGetStorageType(arguments[i]) != nil {
+                    continue
+                }
+                let candidateIsByValue = RefCapabilities.GetParameterRefKind(candidateParameters[i]) == RefKind.None
+                let otherIsByValue = RefCapabilities.GetParameterRefKind(otherParameters[i]) == RefKind.None
+                if candidateIsByValue != otherIsByValue {
+                    if !candidateIsByValue {
+                        return false
+                    }
+                    hasBetterPassingMode = true
+                }
+            }
+            if hasBetterPassingMode {
+                return true
+            }
+            if candidateParameters.Length != otherParameters.Length {
+                return candidateParameters.Length < otherParameters.Length
+            }
+            return false
         }
 
         private func ClassifySymbolicIndexerConversion(source BoundExpression, target TypeSymbol)(
@@ -7127,8 +7182,8 @@ internal class MemberLookup {
             IsIdentity bool
         ) {
             var sourceType = source.Type
-            if TypeSymbol.TryGetPointeeType(sourceType, out var pointeeType) {
-                sourceType = pointeeType
+            if sourceType is ByRefTypeSymbol sourceByRef {
+                sourceType = sourceByRef.PointeeType
             }
             let conversion = ClassifySymbolicIndexerConversion(sourceType, target)
             return if !conversion.IsImplicit && ExpressionBinder.IsImplicitConstantNarrowingArgument(source, target) {

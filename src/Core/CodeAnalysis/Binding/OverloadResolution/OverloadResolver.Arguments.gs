@@ -539,7 +539,7 @@ internal partial class OverloadResolver {
     }
 
     // Issue #4400: re-roots an address on captured inputs.
-    private class CapturedInputRewriter : BoundTreeRewriter {
+    internal class CapturedInputRewriter : BoundTreeRewriter {
         private let replacements Dictionary[BoundExpression, BoundExpression]
 
         init(replacements Dictionary[BoundExpression, BoundExpression]) {
@@ -1425,11 +1425,6 @@ internal partial class OverloadResolver {
             inputs = default(ImmutableArray[BoundExpression])
             return false
         }
-
-        internal func RewriteAddressInputs(
-            operand BoundExpression,
-            replacements Dictionary[BoundExpression, BoundExpression]
-        ) BoundExpression -> CapturedInputRewriter(replacements).Rewrite(operand)
 
         // Walks an lvalue through value-type field links (`holder.Cell.Value`,
         // `grid[i, j].Value`) down to what actually selects its storage: a

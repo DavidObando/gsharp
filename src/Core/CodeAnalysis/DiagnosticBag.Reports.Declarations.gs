@@ -660,12 +660,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The ref-kind modifier location.
     /// @param modifier The rejected modifier (`"ref"` or `"out"`).
     /// @param parameterName The parameter name.
-    func ReportRefOrOutOnIndexerParameter(location TextLocation, modifier string, parameterName string) -> Report(
-        location,
-        DiagnosticDescriptors.RefOrOutOnIndexerParameter,
-        modifier,
-        parameterName
-    )
+    internal func ReportRefOrOutOnIndexerParameter(
+        location TextLocation,
+        modifier string,
+        parameterName string
+    ) -> Report(location, DiagnosticDescriptors.RefOrOutOnIndexerParameter, modifier, parameterName)
 
     /// ADR-0060 §10: reports a ref-kind parameter on an `async`, `sequence`, or
     /// `async sequence` function. The state-machine rewriter cannot hoist a managed

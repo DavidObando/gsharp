@@ -2324,7 +2324,14 @@ internal partial class ExpressionBinder {
                 }
                 return indexRead
             }
-            if sharedIndex == nil && TryCaptureCompoundIndexArgument(&indexRead, statements, out var capturedIndex) {
+            var indexRequiresSuspensionFreeCapture = false
+            if sharedIndex == nil &&
+                TryCaptureCompoundIndexArgument(
+                &indexRead,
+                statements,
+                out var capturedIndex,
+                out indexRequiresSuspensionFreeCapture
+            ) {
                 sharedIndex = capturedIndex
             } else if sharedIndex == nil &&
                 !(indexSyntax is DefaultExpressionSyntax) &&
@@ -2333,6 +2340,7 @@ internal partial class ExpressionBinder {
                 if boundIndex is BoundErrorExpression {
                     return boundIndex
                 }
+                indexRequiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(boundIndex)
                 let indexLocal = DeclareRangeTemp("index", boundIndex.Type, boundIndex, statements)
                 sharedIndex = BoundVariableExpression(nil, indexLocal)
                 indexRead = BindIndexAgainstTarget(tempRef, indexSyntax, diagnosticLocation, sharedIndex)
@@ -2347,6 +2355,13 @@ internal partial class ExpressionBinder {
             let rhsBound = BindExpression(resolvedCompoundRhsSyntax)
             if rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
+            }
+            if indexRequiresSuspensionFreeCapture && AsyncBoundTreeQueries.HasAwait(rhsBound) {
+                Diagnostics.ReportManagedReference(
+                    resolvedCompoundRhsSyntax.Location,
+                    "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                )
+                return BoundErrorExpression(outerSyntax)
             }
             // A user-defined `operator op=` mutates its receiver in place, so a
             // NON-addressable element read (a map or indexer `get` returns a
@@ -2559,14 +2574,14 @@ internal partial class ExpressionBinder {
     private func TryCaptureCompoundIndexArgument(
         ref indexRead BoundExpression,
         statements ImmutableArray[BoundStatement].Builder,
-        @NotNullWhen(true) out capturedIndex BoundExpression?
+        @NotNullWhen(true) out capturedIndex BoundExpression?,
+        out requiresSuspensionFreeCapture bool
     ) bool {
-        let Capture = func (argument BoundExpression) BoundExpression {
-            return CaptureUserIndexerArgument(argument, statements)
-        }
+        requiresSuspensionFreeCapture = false
         switch indexRead {
             case clrIndex is BoundClrIndexExpression when clrIndex.Arguments.Length == 1 {
-                capturedIndex = Capture(clrIndex.Arguments[0])
+                requiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(clrIndex.Arguments[0])
+                capturedIndex = CaptureUserIndexerArgument(clrIndex.Arguments[0], statements)
                 indexRead = BoundClrIndexExpression(
                     nil,
                     clrIndex.Target,
@@ -2579,7 +2594,8 @@ internal partial class ExpressionBinder {
             case BoundDereferenceExpression{Operand: BoundClrIndexExpression clrRefIndex} when clrRefIndex
                 .Arguments
                 .Length == 1 {
-                capturedIndex = Capture(clrRefIndex.Arguments[0])
+                requiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(clrRefIndex.Arguments[0])
+                capturedIndex = CaptureUserIndexerArgument(clrRefIndex.Arguments[0], statements)
                 indexRead = BoundDereferenceExpression(
                     nil,
                     BoundClrIndexExpression(
@@ -2593,12 +2609,14 @@ internal partial class ExpressionBinder {
                 return true
             }
             case builtInIndex is BoundIndexExpression {
-                capturedIndex = Capture(builtInIndex.Index)
+                requiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(builtInIndex.Index)
+                capturedIndex = CaptureUserIndexerArgument(builtInIndex.Index, statements)
                 indexRead = BoundIndexExpression(nil, builtInIndex.Target, capturedIndex!!, builtInIndex.Type)
                 return true
             }
             case userIndex is BoundUserInstanceCallExpression when userIndex.Arguments.Length >= 1 {
-                capturedIndex = Capture(userIndex.Arguments[0])
+                requiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(userIndex.Arguments[0])
+                capturedIndex = CaptureUserIndexerArgument(userIndex.Arguments[0], statements)
                 indexRead = BoundUserInstanceCallExpression(
                     nil,
                     userIndex.Receiver,
@@ -2744,6 +2762,15 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                 return BoundErrorExpression(indexSyntax)
             }
+            for argument in arguments {
+                if RequiresSuspensionFreeAddressCapture(argument) && AsyncBoundTreeQueries.HasAwait(value) {
+                    Diagnostics.ReportManagedReference(
+                        diagnosticLocation,
+                        "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                    )
+                    return BoundErrorExpression(indexSyntax)
+                }
+            }
             return if hasNarrowedTarget {
                 BoundClrIndexAssignmentExpression.WithExpressionTarget(
                     nil,
@@ -2777,6 +2804,13 @@ internal partial class ExpressionBinder {
         ) BoundExpression {
             if isReadOnlyReceiver {
                 Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
+                return BoundErrorExpression(indexSyntax)
+            }
+            if RequiresSuspensionFreeAddressCapture(index) && AsyncBoundTreeQueries.HasAwait(value) {
+                Diagnostics.ReportManagedReference(
+                    diagnosticLocation,
+                    "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                )
                 return BoundErrorExpression(indexSyntax)
             }
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -3110,7 +3144,7 @@ internal partial class ExpressionBinder {
                         selectedIndexer!!
                         .Parameters[0]
                         .RefKind == RefKind.In &&
-                        boundIndexOverride is BoundAddressOfExpression {
+                        (boundIndexOverride is BoundAddressOfExpression || boundIndexOverride.Type is ByRefTypeSymbol) {
                         return boundIndexOverride
                     }
                     return BindUserIndexerArgument(
@@ -3260,8 +3294,8 @@ internal partial class ExpressionBinder {
             // an explicit `in x` / `&x` address argument is validated against the
             // pointee storage type and kept as an address.
             if i < indexParameters.Length && indexParameters[i].ParameterType.IsByRef {
-                let inPointee = if TypeSymbol.TryGetPointeeType(parameterType, out var substitutedPointee) {
-                    substitutedPointee!!
+                let inPointee = if parameterType is ByRefTypeSymbol substitutedByRef {
+                    substitutedByRef.PointeeType
                 } else {
                     parameterType
                 }

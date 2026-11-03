@@ -4811,7 +4811,7 @@ internal class ConversionClassifier {
             )
         ) &&
             !(argument is BoundInterpolatedStringExpression && argument.Handler != nil) &&
-            argument.Type is not(ByRefTypeSymbol or PointerTypeSymbol) &&
+            argument.Type is not ByRefTypeSymbol &&
             (argument.Type != TypeSymbol.Error || argument is BoundDefaultExpression)
 
         /// Issue #4400: the pointee type an implicit `in` argument converts to

@@ -418,14 +418,26 @@ internal partial class ExpressionBinder {
         statements ImmutableArray[BoundStatement].Builder
     ) BoundExpression {
         if !(argument is BoundAddressOfExpression address) {
+            if argument is BoundVariableExpression && argument.Type is ByRefTypeSymbol {
+                return argument
+            }
+            if argument is BoundConditionalAddressExpression condAddress {
+                let condReference = BoundAddressOfExpression(
+                    condAddress.Syntax,
+                    BoundDereferenceExpression(condAddress.Syntax, condAddress),
+                    unmanaged: false,
+                    isReadOnly: true
+                )
+                let condLocal = DeclareRangeTemp("index", condReference.Type, condReference, statements)
+                return BoundVariableExpression(condAddress.Syntax, condLocal)
+            }
             let argumentLocal = DeclareRangeTemp("index", argument.Type, argument, statements)
             return BoundVariableExpression(nil, argumentLocal)
         }
         var spilledValue BoundExpression? = nil
         if OverloadResolver.TryGetImplicitInSpilledValue(address, out spilledValue) && spilledValue != nil {
-            var pointeeType TypeSymbol? = nil
-            let tempType TypeSymbol = if TypeSymbol.TryGetPointeeType(address.Type, out pointeeType) {
-                pointeeType ?? spilledValue.Type
+            let tempType TypeSymbol = if address.Type is ByRefTypeSymbol addressByRef {
+                addressByRef.PointeeType
             } else {
                 spilledValue.Type
             }
@@ -437,32 +449,49 @@ internal partial class ExpressionBinder {
                 address.IsReadOnly
             )
         }
-        if OverloadResolver.IsFixedStorageAddress(address) {
-            return address
+        let referenceLocal = DeclareRangeTemp("index", address.Type, address, statements)
+        return BoundVariableExpression(address.Syntax, referenceLocal)
+    }
+
+    private func RequiresSuspensionFreeAddressCapture(argument BoundExpression) bool {
+        if argument is BoundConditionalAddressExpression condAddress {
+            return RefCapabilities.IsBorrowedLocation(condAddress) ||
+                !CanReconstructAddressAcrossSuspension(condAddress.WhenTrueOperand) ||
+                !CanReconstructAddressAcrossSuspension(condAddress.WhenFalseOperand)
         }
-        var inputAddress BoundAddressOfExpression? = nil
-        var inputs = default(ImmutableArray[BoundExpression])
-        if OverloadResolver.TryGetAddressInputs(address, out inputAddress, out inputs) && inputAddress != nil {
-            let inputTemps = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
-            for var i = 0; i < inputs.Length; i++ {
-                let input = inputs[i]
-                let inputLocal = DeclareRangeTemp("index", input.Type, input, statements)
-                inputTemps[input] = BoundVariableExpression(input.Syntax, inputLocal)
-            }
-            return BoundAddressOfExpression(
-                inputAddress.Syntax,
-                OverloadResolver.RewriteAddressInputs(inputAddress.Operand, inputTemps),
-                unmanaged: false,
-                inputAddress.IsReadOnly
-            )
+        if !(argument is BoundAddressOfExpression address) {
+            return argument.Type is ByRefTypeSymbol
         }
-        let valueLocal = DeclareRangeTemp("index", address.Operand.Type, address.Operand, statements)
-        return BoundAddressOfExpression(
-            address.Syntax,
-            BoundVariableExpression(address.Syntax, valueLocal),
-            unmanaged: false,
-            address.IsReadOnly
+        var spilledValue BoundExpression? = nil
+        if OverloadResolver.TryGetImplicitInSpilledValue(address, out spilledValue) && spilledValue != nil {
+            return false
+        }
+        return RefCapabilities.IsBorrowedLocation(address) || !CanReconstructAddressAcrossSuspension(address.Operand)
+    }
+
+    private func CanReconstructAddressAcrossSuspension(operand BoundExpression) bool -> switch operand {
+        case BoundVariableExpression{Variable: var variable} when operand.Type is not ByRefTypeSymbol: variable is not(
+            LocalVariableSymbol and {RefKind: not RefKind.None}
+        ) &&
+            variable is not(ParameterSymbol and {RefKind: not RefKind.None})
+        case BoundFieldAccessExpression{Receiver: nil}: true
+        case BoundFieldAccessExpression{Receiver: {} receiver}: Binder.IsReferenceTypeForConstraint(receiver.Type) ||
+            CanReconstructAddressAcrossSuspension(receiver)
+        case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: nil}: true
+        case BoundClrPropertyAccessExpression{
+            Member: FieldInfo,
+            Receiver: {} receiver
+        }: Binder.IsReferenceTypeForConstraint(receiver.Type) || CanReconstructAddressAcrossSuspension(receiver)
+        case BoundIndexExpression{IsArrayBackedElementAccess: true}: true
+        case BoundTupleElementAccessExpression{Receiver: var receiver}: CanReconstructAddressAcrossSuspension(receiver)
+        case BoundDereferenceExpression{Operand: BoundAddressOfExpression inner}: CanReconstructAddressAcrossSuspension(
+            inner.Operand
         )
+        case BoundDereferenceExpression{
+            Operand: BoundConditionalAddressExpression cond
+        }: CanReconstructAddressAcrossSuspension(cond.WhenTrueOperand) &&
+            CanReconstructAddressAcrossSuspension(cond.WhenFalseOperand)
+        default: false
     }
 
     private func BindUserIndexerDefaultArgument(parameter ParameterSymbol, parameterType TypeSymbol) BoundExpression {
@@ -565,6 +594,7 @@ internal partial class ExpressionBinder {
             receiver = BoundVariableExpression(nil, receiverLocal)
         }
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](indexer!!.Parameters.Length)
+        var hasNonReconstructableAddress = false
         for var i = 0; i < indexer!!.Parameters.Length; i++ {
             let parameter = indexer!!.Parameters[i]
             let parameterType = SubstituteIndexerType(parameter.Type, substitution)
@@ -573,6 +603,14 @@ internal partial class ExpressionBinder {
             } else {
                 BindUserIndexerArgument(indexSyntaxes[i], preBound, nil, parameter, parameterType, i)
             }
+            if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(converted) {
+                Diagnostics.ReportManagedReference(
+                    location,
+                    "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                )
+                return BoundErrorExpression(nil)
+            }
+            hasNonReconstructableAddress |= RequiresSuspensionFreeAddressCapture(converted)
             arguments.Add(CaptureUserIndexerArgument(converted, statements))
         }
         let capturedArguments = arguments.MoveToImmutable()
@@ -631,6 +669,13 @@ internal partial class ExpressionBinder {
         let value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType)
         if value is BoundErrorExpression {
             return value
+        }
+        if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(value) {
+            Diagnostics.ReportManagedReference(
+                location,
+                "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+            )
+            return BoundErrorExpression(nil)
         }
         if referenceTemp != nil {
             // The hoisted managed pointer cannot survive a suspension of the
@@ -791,7 +836,16 @@ internal partial class ExpressionBinder {
         }
         let converted = BindClrIndexerArguments(target.Type, indexer, resolvedArguments, location, indexSyntaxes)
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](converted.Length)
+        var hasNonReconstructableAddress = false
         for argument in converted {
+            if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(argument) {
+                Diagnostics.ReportManagedReference(
+                    location,
+                    "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                )
+                return BoundErrorExpression(nil)
+            }
+            hasNonReconstructableAddress |= RequiresSuspensionFreeAddressCapture(argument)
             arguments.Add(CaptureUserIndexerArgument(argument, statements))
         }
         let capturedArguments = arguments.MoveToImmutable()
@@ -846,6 +900,13 @@ internal partial class ExpressionBinder {
         let value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType)
         if value is BoundErrorExpression {
             return value
+        }
+        if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(value) {
+            Diagnostics.ReportManagedReference(
+                location,
+                "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+            )
+            return BoundErrorExpression(nil)
         }
         let valueLocal = DeclareRangeTemp("value", elementType, value, statements)
         let valueRead = BoundVariableExpression(nil, valueLocal)

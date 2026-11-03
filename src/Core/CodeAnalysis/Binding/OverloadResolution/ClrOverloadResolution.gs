@@ -6851,6 +6851,45 @@ internal shared class ClrOverloadResolution {
                 )
             }
         }
+        // Issue #4421: when candidates remain tied and an argument omits `in`
+        // (its source type is not ByRef), prefer a by-value parameter over a
+        // by-reference parameter, matching C# §12.6.4.3.
+        if pool.Count > 1 && argTypes.Count > 0 {
+            let preferredByValue = List[
+                (Method T, Conversions[]ImplicitConversionKind, ParamTypes[]Type, Mapping[]?int32, IsExpanded bool)
+            ](pool.Count)
+            for candidate in pool {
+                var dominated = false
+                for other in pool {
+                    if object.ReferenceEquals(candidate.Method, other.Method) {
+                        continue
+                    }
+                    if IsBetterOmittedByRefPassingMode(
+                        other.Method,
+                        other.Mapping,
+                        candidate.Method,
+                        candidate.Mapping,
+                        argTypes
+                    ) {
+                        dominated = true
+                        break
+                    }
+                }
+                if !dominated {
+                    preferredByValue.Add(candidate)
+                }
+            }
+            if preferredByValue.Count >= 1 && preferredByValue.Count < pool.Count {
+                pool = preferredByValue
+            }
+            if pool.Count == 1 {
+                return Result[T].Single(
+                    pool[0].Method,
+                    BuildMappingArray(pool[0].Mapping, argumentNames),
+                    pool[0].IsExpanded
+                )
+            }
+        }
         // Phase 2g — the full NuGet transitive closure can surface the exact
         // same method more than once: e.g. `MemoryExtensions.AsSpan` reachable
         // via both `System.Memory` and a type-forwarding facade, or
@@ -7180,6 +7219,50 @@ internal shared class ClrOverloadResolution {
             }
         }
         return hasStrictlyBetter
+    }
+
+    private func IsBetterOmittedByRefPassingMode(
+        candidateMethod MethodBase,
+        candidateMapping[]?int32,
+        otherMethod MethodBase,
+        otherMapping[]?int32,
+        sources IReadOnlyList[Type?]
+    ) bool {
+        let candidateParameters = candidateMethod.GetParameters()
+        let otherParameters = otherMethod.GetParameters()
+        var hasBetter = false
+        for var i = 0; i < sources.Count; i++ {
+            let source = sources[i]
+            if source?.IsByRef == true || object.ReferenceEquals(source, SymbolicByRefArgumentType) {
+                continue
+            }
+            let candidateSlot = if candidateMapping != nil && i < candidateMapping.Length {
+                candidateMapping[i]
+            } else {
+                i
+            }
+            let otherSlot = if otherMapping != nil && i < otherMapping.Length {
+                otherMapping[i]
+            } else {
+                i
+            }
+            if candidateSlot < 0 ||
+                otherSlot < 0 ||
+                candidateSlot >= candidateParameters.Length ||
+                otherSlot >= otherParameters.Length {
+                continue
+            }
+            let candidateKind = RefCapabilities.GetParameterRefKind(candidateParameters[candidateSlot])
+            let otherKind = RefCapabilities.GetParameterRefKind(otherParameters[otherSlot])
+            if (candidateKind == RefKind.None && otherKind == RefKind.In) ||
+                (candidateKind == RefKind.In && otherKind == RefKind.None) {
+                if candidateKind != RefKind.None {
+                    return false
+                }
+                hasBetter = true
+            }
+        }
+        return hasBetter
     }
 
     private func CompareConversions(

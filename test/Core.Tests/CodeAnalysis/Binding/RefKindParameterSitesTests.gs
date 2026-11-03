@@ -430,6 +430,138 @@ class Impl : IIdx {
 0
 `)
         Assert.Contains(ifaceMismatch.Diagnostics, (d Diagnostic) -> d.Id == "GS0240")
+
+        let arityMismatch = Evaluate(`
+open class Base {
+    open prop this[i int32] int32 -> i
+}
+
+class Derived : Base {
+    override prop this[in i int32, j int32] int32 -> i + j
+}
+0
+`)
+        Assert.Contains(arityMismatch.Diagnostics, (d Diagnostic) -> d.Id == "GS0185")
+
+        let namedItemMismatch = Evaluate(`
+open class Base {
+    open prop Item int32 -> 1
+}
+
+class Derived : Base {
+    override prop this[in i int32] int32 -> i
+}
+0
+`)
+        Assert.Contains(namedItemMismatch.Diagnostics, (d Diagnostic) -> d.Id == "GS0185")
+    }
+
+    @Fact
+    func UserIndexer_InParameterAssignment_PreservesAliasAndValidatesAddressBeforeRhs() {
+        let result = Evaluate(`
+import System
+
+class Idx {
+    var Last int32
+    prop this[in i int32] int32 {
+        get { return i }
+        set { Last = i * 10 + value }
+    }
+    prop this[in i int32, j int32] int32 {
+        get { return i + j }
+        set { Last = i * 100 + j * 10 + value }
+    }
+}
+
+func Alias(ref x int32) ref int32 {
+    return ref x
+}
+
+func Change(ref x int32) int32 {
+    x = 4
+    return 7
+}
+
+let idx = Idx()
+var x = 1
+idx[Alias(&x)] = Change(&x)
+let aliasObserved = idx.Last
+
+var sideEffects = 0
+func SideEffect() int32 {
+    sideEffects = sideEffects + 1
+    return 9
+}
+
+let items = []int32{10, 20}
+var badIndex = 5
+try {
+    idx[in items[badIndex]] = SideEffect()
+} catch (ex IndexOutOfRangeException) {
+}
+try {
+    idx[in items[badIndex], SideEffect()] = 1
+} catch (ex IndexOutOfRangeException) {
+}
+aliasObserved * 10 + sideEffects
+`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(470, result.Value)
+
+        let asyncBorrowed = Evaluate(`
+import System.Threading.Tasks
+
+class Idx {
+    prop this[in i int32] int32 {
+        get { return i }
+        set { }
+    }
+}
+
+func Alias(ref x int32) ref int32 {
+    return ref x
+}
+
+async func Bad() Task[int32] {
+    let idx = Idx()
+    var x = 1
+    idx[Alias(&x)] = await Task.FromResult(2)
+    return x
+}
+0
+`)
+        Assert.Contains(asyncBorrowed.Diagnostics, (d Diagnostic) -> d.Id == "GS0604")
+    }
+
+    @Fact
+    func UserIndexer_ByValueAndInOverloads_PrefersByValueForOmittedInAndSelectsInForExplicitIn() {
+        let result = Evaluate(`
+class Dual {
+    var Last int32
+    prop this[i int32] int32 {
+        get { return i + 10 }
+        set { Last = i + 10 + value }
+    }
+    prop this[in i int32] int32 {
+        get { return i + 100 }
+        set { Last = i + 100 + value }
+    }
+}
+
+let d = Dual()
+var k = 5
+let a = d[1]
+let b = d[k]
+let c = d[in k]
+d[k] = 2
+let w1 = d.Last
+d[in k] = 3
+let w2 = d.Last
+a * 100000 + b * 1000 + c + w1 * 10 + w2
+`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        // a = 11, b = 15, c = 105, w1 = 17, w2 = 108 -> 1100000 + 15000 + 105 + 170 + 108 = 1115383
+        Assert.Equal(1115383, result.Value)
     }
 
     shared {

@@ -1942,8 +1942,10 @@ internal partial class DeclarationBinder {
                 var overriddenProperty PropertySymbol? = nil
                 var pendingCovariantCheck = false
                 if isOverride {
+                    let baseTypeSubst = BuildBaseTypeArgumentSubstitution(structSymbol)
                     if structSymbol.BaseClass != nil &&
                         TryGetOverriddenPropertyCandidate(
+                        structSymbol,
                         structSymbol.BaseClass!!,
                         propName,
                         isIndexer,
@@ -1952,7 +1954,14 @@ internal partial class DeclarationBinder {
                     ) {
                         if !baseProp!!.IsVirtual && !baseProp!!.IsOverride {
                             Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName)
-                        } else if isIndexer && !HaveSameIndexerSignature(baseProp!!.Parameters, indexerParameters) {
+                        } else if isIndexer != baseProp!!.IsIndexer ||
+                            (
+                            isIndexer &&
+                                !HaveSameIndexerParameterTypes(baseProp!!.Parameters, indexerParameters, baseTypeSubst)
+                        ) {
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName)
+                        } else if isIndexer &&
+                            !HaveSameIndexerSignature(baseProp!!.Parameters, indexerParameters, baseTypeSubst) {
                             for var i = 0; i < indexerParameters.Length; i++ {
                                 if baseProp!!.Parameters[i].RefKind != indexerParameters[i].RefKind {
                                     Diagnostics.ReportOverrideRefKindMismatch(

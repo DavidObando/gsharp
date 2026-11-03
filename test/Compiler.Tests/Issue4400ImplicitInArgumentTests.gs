@@ -507,6 +507,87 @@ Console.WriteLine("${a} ${b}")`
         }
     }
 
+    /// Issue #4421 review: imported pointer-valued indexers (`this[int*]` and
+    /// `this[in int*, int]`) keep their pointer layer, and imported generic
+    /// indexers overloaded by `this[T]` vs `this[in T]` resolve explicit `in`
+    /// to `this[in T]` and omitted `in` to `this[T]` for a same-compilation `T`.
+    @Fact
+    func ImportedPointerAndGenericInOverloadedIndexers_VerifyAndRun() {
+        const csLibSource = `namespace InIdxReviewLib;
+
+public unsafe class PtrIdx
+{
+    public int Last;
+
+    public int this[int* p]
+    {
+        set => Last = p == null ? -1 : *p;
+    }
+
+    public int this[in int* p, int bias] => (p == null ? 0 : *p) + bias;
+}
+
+public class OverloadedGenIdx<T>
+{
+    public string Last = "";
+
+    public string this[T k]
+    {
+        get => "val:" + k;
+        set => Last = "val:" + k + "=" + value;
+    }
+
+    public string this[in T k]
+    {
+        get => "in:" + k;
+        set => Last = "in:" + k + "=" + value;
+    }
+}`
+        const gsAppSource = `package P
+import System
+import InIdxReviewLib
+
+struct Key {
+    var Id int32
+    override func ToString() string -> "K(${Id})"
+}
+
+unsafe func UsePointers() string {
+    let pIdx = PtrIdx()
+    pIdx[nil] = 9
+    let nullWrite = pIdx.Last
+    var cell = 40
+    var ptr *int32 = &cell
+    pIdx[ptr] = 1
+    let valWrite = pIdx.Last
+    let readInPtr = pIdx[in ptr, 2]
+    let readOmittedInPtr = pIdx[ptr, 3]
+    return "${nullWrite} ${valWrite} ${readInPtr} ${readOmittedInPtr}"
+}
+
+let g = OverloadedGenIdx[Key]()
+var key = Key{Id: 7}
+let rVal = g[key]
+let rIn = g[in key]
+g[key] = "A"
+let wVal = g.Last
+g[in key] = "B"
+let wIn = g.Last
+Console.WriteLine("${UsePointers()} | ${rVal} ${rIn} ${wVal} ${wIn}")`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4421_rev_").FullName
+        try {
+            let csLibPath = CompileCSharpUnsafe(tempDir, "InIdxReviewLib", csLibSource)
+            let appPath = Path.Combine(tempDir, "App.dll")
+            let log = Compile(tempDir, gsAppSource, appPath, "/reference:" + csLibPath)
+            Assert.True(File.Exists(appPath), "App must compile. Log:\n$log")
+            let (exit, output) = RunDotnet(appPath)
+            Assert.True(exit == 0, "App must run. Exit $exit:\n$output")
+            Assert.Equal("-1 40 42 43 | val:K(7) in:K(7) val:K(7)=A in:K(7)=B", output.Trim())
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const RunTimeout int32 = 60_000
 
@@ -1253,13 +1334,21 @@ let r = C().F((x int32) -> x + 1, 2)`, "GS0235"}
         private func CompileCSharp(tempDir string, assemblyName string, source string) string -> CompileCSharpWithRef(
             tempDir,
             assemblyName,
-            source
+            source,
+            allowUnsafe: false
         )
+
+        private func CompileCSharpUnsafe(
+            tempDir string,
+            assemblyName string,
+            source string
+        ) string -> CompileCSharpWithRef(tempDir, assemblyName, source, allowUnsafe: true)
 
         private func CompileCSharpWithRef(
             tempDir string,
             assemblyName string,
             source string,
+            allowUnsafe bool = false,
             extraRefs ...string
         ) string {
             let references = TrustedPlatformAssemblies()
@@ -1270,7 +1359,7 @@ let r = C().F((x int32) -> x + 1, 2)`, "GS0235"}
                 assemblyName,
                 []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: allowUnsafe)
             )
             let path = Path.Combine(tempDir, assemblyName + ".dll")
             let result = compilation.Emit(path)
