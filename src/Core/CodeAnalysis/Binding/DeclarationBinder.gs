@@ -82,7 +82,21 @@ internal partial class DeclarationBinder {
     // scope and the enclosing type's static-member scope before binding.
     private let pendingConstInitializerBindings List[() -> void] = List[() -> void]()
 
-    private let pendingFieldInitializerBindings List[() -> void] = List[() -> void]()
+    private let pendingFieldInitializerStructs List[StructSymbol] = List[StructSymbol]()
+
+    private let pendingInstanceFieldInitializerMap Dictionary[FieldSymbol, () -> void] = Dictionary[
+        FieldSymbol,
+        () -> void
+    ](ReferenceEqualityComparer.Instance)
+
+    private let pendingZeroValueInstanceFieldMap Dictionary[FieldSymbol, () -> void] = Dictionary[
+        FieldSymbol,
+        () -> void
+    ](ReferenceEqualityComparer.Instance)
+
+    private let pendingStaticFieldInitializerBindings List[() -> void] = List[() -> void]()
+
+    private let deferredInitializerDiagnostics List[Diagnostic] = List[Diagnostic]()
 
     // Issue #4183: default-parameter-value expressions (`func M(x T = expr)`,
     // including on primary/explicit constructors and static methods) are
@@ -164,6 +178,7 @@ internal partial class DeclarationBinder {
         bindInterpolatedStringAsFormattable DeclarationBinder_BindInterpolatedStringAsFormattableDelegate? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
+        this.binderCtx.EnsureStructFieldInitializerBound = EnsureStructFieldInitializerBound
         this.conversions = conversions ?? throw ArgumentNullException("conversions")
         ArgumentNullException.ThrowIfNull(bindExpression, paramName: "bindExpression")
         this.bindExpression = (syntax ExpressionSyntax) -> {

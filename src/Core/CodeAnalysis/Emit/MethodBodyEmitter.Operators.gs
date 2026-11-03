@@ -349,7 +349,7 @@ internal partial class MethodBodyEmitter {
                 let end = this.il.DefineLabel()
                 this.il.Branch(ILOpCode.Brfalse, fallback)
                 // Non-null branch: reproduce the operator's result type.
-                if b.Type is NullableTypeSymbol {
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(b.Type, leftNullable) {
                     // Result is `Nullable<T>` — push the spilled wrapper as
                     // a value. Reloading the slot preserves the present
                     // wrapper (`HasValue == true`) so the consumer sees
@@ -373,8 +373,50 @@ internal partial class MethodBodyEmitter {
                     // convert the unwrapped underlying value to the result type so
                     // the non-null branch leaves a value of `b.Type` on the stack,
                     // matching the (already-converted) right branch.
-                    if b.Type != leftNullable.UnderlyingType {
-                        this.TryEmitNumericConversion(leftNullable.UnderlyingType, b.Type)
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        b.Type,
+                        leftNullable.UnderlyingType
+                    ) {
+                        if b.Type is NullableTypeSymbol resultNullable && ReflectionMetadataEmitter.IsValueTypeNullable(
+                            resultNullable
+                        ) &&
+                            resultNullable
+                            .UnderlyingType
+                            ?.ClrType is {IsValueType: true} resultInnerClr {
+                            this.TryEmitNumericConversion(leftNullable.UnderlyingType, resultNullable.UnderlyingType)
+                            if !NullableLifting.TryConstructNullable(
+                                this.outer.emitCtx.References,
+                                resultInnerClr,
+                                out var resultNullableClr
+                            ) {
+                                throw InvalidOperationException(
+                                    "Cannot construct Nullable<${resultInnerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set."
+                                )
+                            }
+                            let resultInnerArg = resultNullableClr.GetGenericArguments()[0]
+                            let resultCtor = resultNullableClr.GetConstructor([]Type{resultInnerArg}) ??
+                                throw InvalidOperationException(
+                                "Nullable<${resultInnerArg.FullName}> has no single-arg constructor."
+                            )
+                            this.il.OpCode(ILOpCode.Newobj)
+                            this.il.Token(this.outer.memberRefs.GetCtorReference(resultCtor))
+                        } else if b
+                            .Type
+                            .ClrType
+                            ?.IsSameAs(typeof(object)) == true ||
+                            IsInterfaceTargetType(b.Type) ||
+                            (
+                            b
+                                .Type
+                                .ClrType is Type valueBoxTarget &&
+                                (valueBoxTarget.IsSameAs(typeof(ValueType)) || valueBoxTarget.IsSameAs(typeof(Enum)))
+                        ) {
+                            this.il.OpCode(ILOpCode.Box)
+                            this.il.Token(this.outer.memberRefs.GetElementTypeToken(leftNullable.UnderlyingType))
+                            this.EmitInterfaceMergeCastIfNeeded(b.Left, b.Type)
+                        } else {
+                            this.TryEmitNumericConversion(leftNullable.UnderlyingType, b.Type)
+                        }
                     }
                 }
                 this.il.Branch(ILOpCode.Br, end)
@@ -382,6 +424,7 @@ internal partial class MethodBodyEmitter {
                 // match the operator's result (either `T` or `Nullable<T>`).
                 this.il.MarkLabel(fallback)
                 this.EmitExpression(b.Right)
+                this.EmitInterfaceMergeCastIfNeeded(b.Right, b.Type)
                 this.il.MarkLabel(end)
                 return
             }
@@ -500,7 +543,7 @@ internal partial class MethodBodyEmitter {
                 this.il.OpCode(ILOpCode.Box)
                 this.il.Token(userVtBoxToken)
                 this.il.Branch(ILOpCode.Brfalse, fallback)
-                if b.Type is NullableTypeSymbol {
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(b.Type, userVtNullable) {
                     // Result is `Nullable<UserT>` — reload the present wrapper.
                     this.il.LoadLocal(userVtSlot)
                 } else {
@@ -508,10 +551,32 @@ internal partial class MethodBodyEmitter {
                     this.il.LoadLocalAddress(userVtSlot)
                     this.il.OpCode(ILOpCode.Call)
                     this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(userVtNullable))
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        b.Type,
+                        userVtNullable.UnderlyingType
+                    ) &&
+                        (
+                        b
+                            .Type
+                            .ClrType
+                            ?.IsSameAs(typeof(object)) == true ||
+                            IsInterfaceTargetType(b.Type) ||
+                            (
+                            b
+                                .Type
+                                .ClrType is Type symBoxTarget &&
+                                (symBoxTarget.IsSameAs(typeof(ValueType)) || symBoxTarget.IsSameAs(typeof(Enum)))
+                        )
+                    ) {
+                        this.il.OpCode(ILOpCode.Box)
+                        this.il.Token(this.outer.memberRefs.GetElementTypeToken(userVtNullable.UnderlyingType))
+                        this.EmitInterfaceMergeCastIfNeeded(b.Left, b.Type)
+                    }
                 }
                 this.il.Branch(ILOpCode.Br, end)
                 this.il.MarkLabel(fallback)
                 this.EmitExpression(b.Right)
+                this.EmitInterfaceMergeCastIfNeeded(b.Right, b.Type)
                 this.il.MarkLabel(end)
                 return
             }
