@@ -215,8 +215,10 @@ public func RunAll() string {
             )
             let loadContext = AssemblyLoadContext("Issue5590", isCollectible: true)
             try {
-                let _ = loadContext.LoadFromAssemblyPath(libraryPath)
-                let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+                using let libraryStream = MemoryStream(File.ReadAllBytes(libraryPath))
+                using let consumerStream = MemoryStream(File.ReadAllBytes(consumerPath))
+                let _ = loadContext.LoadFromStream(libraryStream)
+                let consumer = loadContext.LoadFromStream(consumerStream)
                 let ownerType = consumer.GetType("InputConsumer.Owner", throwOnError: true)!!
                 let bigType = consumer.GetType("InputConsumer.Big", throwOnError: true)!!
                 let receiverType = consumer.GetType("InputConsumer.Receiver", throwOnError: true)!!
@@ -327,8 +329,10 @@ public class Owner : Base[Big] {
             )
             let loadContext = AssemblyLoadContext("Issue5590Repro", isCollectible: true)
             try {
-                let _ = loadContext.LoadFromAssemblyPath(libraryPath)
-                let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+                using let libraryStream = MemoryStream(File.ReadAllBytes(libraryPath))
+                using let consumerStream = MemoryStream(File.ReadAllBytes(consumerPath))
+                let _ = loadContext.LoadFromStream(libraryStream)
+                let consumer = loadContext.LoadFromStream(consumerStream)
                 let ownerType = consumer.GetType("InputConsumer.Owner", throwOnError: true)!!
                 let ownerInstance = Activator.CreateInstance(ownerType)!!
                 let readMethod = ownerType.GetMethod("Read")!!

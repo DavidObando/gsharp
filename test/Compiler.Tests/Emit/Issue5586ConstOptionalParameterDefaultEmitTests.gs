@@ -180,7 +180,9 @@ public func RunConsumer() string {
             )
             let loadContext = AssemblyLoadContext("Issue5586", isCollectible: true)
             try {
-                let library = loadContext.LoadFromAssemblyPath(libraryPath)
+                using let libraryStream = MemoryStream(File.ReadAllBytes(libraryPath))
+                using let consumerStream = MemoryStream(File.ReadAllBytes(consumerPath))
+                let library = loadContext.LoadFromStream(libraryStream)
                 let libProgram = library.GetTypes().Single((type Type) -> type.Name == "<Program>")
                 let qualifiedParam = libProgram.GetMethod("Qualified")!!.GetParameters().Single()
                 Assert.True(qualifiedParam.IsOptional)
@@ -192,7 +194,7 @@ public func RunConsumer() string {
                 Assert.True(importedParam.HasDefaultValue)
                 Assert.Equal(14.0, importedParam.RawDefaultValue)
 
-                let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+                let consumer = loadContext.LoadFromStream(consumerStream)
                 let consumerProgram = consumer.GetTypes().Single((type Type) -> type.Name == "<Program>")
                 let runConsumer = consumerProgram.GetMethod(
                     "RunConsumer",
