@@ -1074,10 +1074,11 @@ internal partial class StatementBinder {
         captureReceiver Func[BoundExpression, BoundExpression],
         captureArgument Func[BoundExpression, BoundExpression]
     ) BoundExpression {
+        var rebuilt BoundExpression
         switch expression {
             case call is BoundCallExpression {
-                return BoundCallExpression(
-                    nil,
+                rebuilt = BoundCallExpression(
+                    call.Syntax,
                     call.Function,
                     CaptureArguments(call.Arguments, captureArgument),
                     call.ReturnType,
@@ -1089,8 +1090,8 @@ internal partial class StatementBinder {
                 }
             }
             case call is BoundIndirectCallExpression {
-                return BoundIndirectCallExpression(
-                    nil,
+                rebuilt = BoundIndirectCallExpression(
+                    call.Syntax,
                     captureReceiver(call.Target),
                     call.FunctionType,
                     CaptureArguments(call.Arguments, captureArgument),
@@ -1098,8 +1099,8 @@ internal partial class StatementBinder {
                 )
             }
             case call is BoundUserInstanceCallExpression {
-                return BoundUserInstanceCallExpression(
-                    nil,
+                rebuilt = BoundUserInstanceCallExpression(
+                    call.Syntax,
                     captureReceiver(call.Receiver),
                     call.Method,
                     CaptureArguments(call.Arguments, captureArgument),
@@ -1133,11 +1134,11 @@ internal partial class StatementBinder {
                     object.ReferenceEquals(captured.Variable, read.Variable) {
                     copy.RecordLogicalCompletion(read)
                 }
-                return copy
+                rebuilt = copy
             }
             case call is BoundImportedInstanceCallExpression {
-                return BoundImportedInstanceCallExpression(
-                    nil,
+                rebuilt = BoundImportedInstanceCallExpression(
+                    call.Syntax,
                     captureReceiver(call.Receiver),
                     call.Method,
                     call.Type,
@@ -1150,8 +1151,8 @@ internal partial class StatementBinder {
                 )
             }
             case call is BoundBaseClassCallExpression {
-                return BoundBaseClassCallExpression(
-                    nil,
+                rebuilt = BoundBaseClassCallExpression(
+                    call.Syntax,
                     captureReceiver(call.Receiver),
                     call.BaseClass,
                     call.Method,
@@ -1165,6 +1166,8 @@ internal partial class StatementBinder {
                 throw InvalidOperationException("Unexpected captured call expression: ${expression.Kind}")
             }
         }
+        expression.CopyStaticQualifierTo(rebuilt)
+        return rebuilt
     }
 
     private func CaptureArguments(
@@ -1236,8 +1239,32 @@ internal partial class StatementBinder {
             return CaptureGoOperand(receiver, prefix)
         }
         let rebuilt = CaptureGoReceiverCore(receiver, prefix)
-        if NeedsLocationProbe(rebuilt) && !ReadsUncapturableVariable(rebuilt) {
+        if ReadsUncapturableVariable(rebuilt) {
+            return rebuilt
+        }
+        if NeedsLocationProbe(rebuilt) {
             prefix.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, rebuilt)))
+        }
+        if rebuilt is not BoundVariableExpression {
+            return GSharp
+                .Core
+                .CodeAnalysis
+                .Lowering
+                .SideEffectSpiller
+                .CaptureRuntimeGenericStorageReceiver(
+                rebuilt,
+                receiver.Syntax,
+                prefix,
+                func (role string, isReadOnly bool, storageType TypeSymbol) LocalVariableSymbol {
+                    let local = LocalVariableSymbol(
+                        "$$go$$$role$$${binderCtx.GoArgumentCounter++}",
+                        isReadOnly,
+                        storageType
+                    )
+                    $scope.TryDeclareVariable(local)
+                    return local
+                }
+            )
         }
         return rebuilt
     }
@@ -1267,6 +1294,26 @@ internal partial class StatementBinder {
         switch receiver {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return CaptureGoReceiverCore(address.Operand, prefix)
+            }
+            case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
+                let address = cast[BoundConditionalAddressExpression](dereference.Operand)
+                let condition = CaptureGoOperand(address.Condition, prefix)
+                let trueStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                let whenTrue = CaptureGoReceiverCore(address.WhenTrueOperand, trueStatements)
+                let falseStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                let whenFalse = CaptureGoReceiverCore(address.WhenFalseOperand, falseStatements)
+                AppendConditionalReceiverBranch(condition, jumpIfTrue: false, trueStatements, prefix)
+                AppendConditionalReceiverBranch(condition, jumpIfTrue: true, falseStatements, prefix)
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    BoundConditionalAddressExpression(
+                        address.Syntax,
+                        condition,
+                        whenTrue,
+                        whenFalse,
+                        address.PointeeType
+                    )
+                )
             }
             case tuple is BoundTupleElementAccessExpression {
                 return BoundTupleElementAccessExpression(
@@ -1322,12 +1369,54 @@ internal partial class StatementBinder {
         }
     }
 
+    private func AppendConditionalReceiverBranch(
+        condition BoundExpression,
+        jumpIfTrue bool,
+        branchStatements ImmutableArray[BoundStatement].Builder,
+        prefix ImmutableArray[BoundStatement].Builder
+    ) {
+        if branchStatements.Count == 0 {
+            return
+        }
+        let body = ImmutableArray.CreateBuilder[BoundStatement](branchStatements.Count)
+        for statement in branchStatements {
+            if statement is BoundVariableDeclaration{
+                Variable: LocalVariableSymbol{RefKind: RefKind.None},
+                Initializer: {} initializer
+            } declaration {
+                prefix.Add(
+                    BoundVariableDeclaration(
+                        declaration.Syntax,
+                        declaration.Variable,
+                        BoundDefaultExpression(nil, declaration.Variable.Type)
+                    )
+                )
+                body.Add(
+                    BoundExpressionStatement(
+                        declaration.Syntax,
+                        BoundAssignmentExpression(declaration.Syntax, declaration.Variable, initializer)
+                    )
+                )
+            } else {
+                body.Add(statement)
+            }
+        }
+        let skip = BoundLabel("$$go$$skip$$${binderCtx.GoArgumentCounter++}")
+        prefix.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: jumpIfTrue))
+        prefix.AddRange(body)
+        prefix.Add(BoundLabelStatement(nil, skip))
+    }
+
     private func NeedsLocationProbe(receiver BoundExpression?) bool -> switch receiver {
         case BoundIndexExpression{IsArrayBackedElementAccess: true}: true
         case BoundFieldAccessExpression{Receiver: {} owner}: !MayBeValueType(owner.Type) || NeedsLocationProbe(owner)
         case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: {} owner}: !MayBeValueType(owner.Type) ||
             NeedsLocationProbe(owner)
         case BoundTupleElementAccessExpression{Receiver: var owner}: NeedsLocationProbe(owner)
+        case BoundDereferenceExpression{Operand: BoundConditionalAddressExpression cond}: NeedsLocationProbe(
+            cond.WhenTrueOperand
+        ) ||
+            NeedsLocationProbe(cond.WhenFalseOperand)
         default: false
     }
 

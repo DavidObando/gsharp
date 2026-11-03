@@ -7,7 +7,11 @@ package GSharp.Compiler.Tests.Emit
 import System
 import System.Diagnostics
 import System.IO
+import System.Linq
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import Xunit
 import GSharp.Compiler.Tests
@@ -189,19 +193,40 @@ suspending 7
         let source = `package Issue5591Receivers
 import System.Runtime.CompilerServices
 ` + Prelude + `
-struct Counter {
+struct Counter : IDisposable {
     var n int32
     func Bump() { n++ }
     func Add(delta int32) { n += delta }
+    func Dispose() { n++ }
+}
+class DisposableBox : IDisposable {
+    var n int32
+    func Dispose() { n++ }
 }
 class Holder {
     var counter Counter
     var pair (Counter, int32) = (Counter{}, 0)
 }
+class GenericHolder[T] {
+    var item T
+    init(item T) { this.item = item }
+}
+
+func RunConstrained[T IDisposable](items []T, holder GenericHolder[T], replacement T, release ManualResetEventSlim) {
+    scope {
+        go items[0].Dispose()
+        go holder.item.Dispose()
+        items[0] = replacement
+        holder.item = replacement
+        release.Set()
+    }
+}
 
 class Spawner {
     var counter Counter
     var holder Holder = Holder()
+    var altHolder Holder = Holder()
+    var choose bool = true
     var box StrongBox[Counter] = StrongBox[Counter](Counter{})
     var items []Counter = []Counter{Counter{}, Counter{}}
     var pairs [](Counter, int32) = [](Counter, int32){(Counter{}, 0), (Counter{}, 0)}
@@ -213,11 +238,28 @@ class Spawner {
         return 1
     }
 
+    func PickFirst() Holder {
+        probed += "first;"
+        return holder
+    }
+
+    func PickSecond() Holder {
+        probed += "second;"
+        return altHolder
+    }
+
     func Run(release ManualResetEventSlim) {
         let originalHolder = holder
+        let originalAltHolder = altHolder
         let originalBox = box
         let originalItems = items
         let originalPairs = pairs
+        let genericStructs = []Counter{Counter{}}
+        let genericStructHolder = GenericHolder[Counter](Counter{})
+        let originalClass = DisposableBox()
+        let replacementClass = DisposableBox()
+        let genericClasses = []DisposableBox{originalClass}
+        let genericClassHolder = GenericHolder[DisposableBox](originalClass)
         var nilHolder Holder? = nil
         var nilBox StrongBox[Counter]? = nil
         try {
@@ -238,19 +280,31 @@ class Spawner {
         scope {
             go counter.Bump()
             go holder.counter.Bump()
+            go (*&(choose ? PickFirst().counter : PickSecond().counter)).Bump()
             go holder.pair.Item1.Bump()
             go box.Value.Bump()
             go items[index].Bump()
             go pairs[index].Item1.Bump()
+            go genericStructs[0].Dispose()
+            go genericStructHolder.item.Dispose()
+            go genericClasses[0].Dispose()
+            go genericClassHolder.item.Dispose()
+            choose = false
             holder = Holder()
+            altHolder = Holder()
             box = StrongBox[Counter](Counter{})
             items = []Counter{Counter{}, Counter{}}
             pairs = [](Counter, int32){(Counter{}, 0), (Counter{}, 0)}
+            genericClasses[0] = replacementClass
+            genericClassHolder.item = replacementClass
             index = 0
             release.Set()
         }
         Log.Add("box original=" + originalBox.Value.n.ToString() + " replacement=" + box.Value.n.ToString())
+        Log.Add("conditional first=" + originalHolder.counter.n.ToString() + " second=" + originalAltHolder.counter.n.ToString())
         Log.Add("field " + counter.n.ToString())
+        Log.Add("generic class original=" + originalClass.n.ToString() + " replacement=" + replacementClass.n.ToString())
+        Log.Add("generic struct array=" + genericStructs[0].n.ToString() + " field=" + genericStructHolder.item.n.ToString())
         Log.Add("holder original=" + originalHolder.counter.n.ToString() + " replacement=" + holder.counter.n.ToString())
         Log.Add("items original=" + originalItems[0].n.ToString() + originalItems[1].n.ToString() + " replacement=" + items[0].n.ToString() + items[1].n.ToString())
         Log.Add("pairs original=" + originalPairs[0].Item1.n.ToString() + originalPairs[1].Item1.n.ToString() + " replacement=" + pairs[0].Item1.n.ToString() + pairs[1].Item1.n.ToString())
@@ -261,15 +315,90 @@ class Spawner {
 
 RestrictPool()
 Blocked((release ManualResetEventSlim) -> Spawner().Run(release))
+let constrainedStructs = []Counter{Counter{}}
+let constrainedStructHolder = GenericHolder[Counter](Counter{})
+Blocked((release ManualResetEventSlim) -> RunConstrained(constrainedStructs, constrainedStructHolder, Counter{n: 10}, release))
+Console.WriteLine("constrained struct array=" + constrainedStructs[0].n.ToString() + " field=" + constrainedStructHolder.item.n.ToString())
+let constrainedOriginal = DisposableBox()
+let constrainedReplacement = DisposableBox()
+let constrainedClasses = []DisposableBox{constrainedOriginal}
+let constrainedClassHolder = GenericHolder[DisposableBox](constrainedOriginal)
+Blocked((release ManualResetEventSlim) -> RunConstrained(constrainedClasses, constrainedClassHolder, constrainedReplacement, release))
+Console.WriteLine("constrained class original=" + constrainedOriginal.n.ToString() + " replacement=" + constrainedReplacement.n.ToString())
 `
         AssertRuns(source, "ValueTypeReceiver", `box original=1 replacement=0
+conditional first=2 second=0
 field 1
-holder original=1 replacement=0
+generic class original=2 replacement=0
+generic struct array=1 field=1
+holder original=2 replacement=0
 items original=01 replacement=00
 pairs original=01 replacement=00
-probed index-threw;holder-threw;box-threw;
+probed index-threw;holder-threw;box-threw;first;
 tuple original=1 replacement=0
+constrained struct array=11 field=11
+constrained class original=2 replacement=0
 `)
+    }
+
+    /// Rebuilt `go` calls keep their syntax anchor, member group, and static
+    /// qualifier so `SemanticModel` queries resolve the call and its target.
+    @Fact
+    func SemanticModel_ResolvesGoCalls() {
+        let source = `package Issue5591SemanticModel
+import System
+class Worker {
+    func Run(x int32) int32 -> x + 1
+    shared {
+        func Start(x int32) int32 -> x + 2
+    }
+}
+func Top(x int32) int32 -> x + 3
+let w = Worker()
+var n = 1
+scope {
+    go Top(n)
+    go w.Run(n)
+    go Worker.Start(n)
+    go Console.WriteLine(n)
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "test.gs"))
+        let compilation = Compilation(tree){RecordMemberGroups = true}
+        let model = compilation.GetSemanticModel(tree)
+        let calls = tree
+            .Root
+            .DescendantNodes()
+            .OfType[CallExpressionSyntax]()
+            .Where(
+            (c CallExpressionSyntax) -> c
+                .Identifier
+                .Text == "Top" ||
+                c
+                .Identifier
+                .Text == "Run" ||
+                c
+                .Identifier
+                .Text == "Start" ||
+                c
+                .Identifier
+                .Text == "WriteLine"
+        )
+            .ToArray()
+        Assert.Equal(4, calls.Length)
+        for call in calls {
+            Assert.NotNull(model.GetBoundNode(call))
+            Assert.Equal(call.Identifier.Text, model.GetSymbolInfo(call).Symbol?.Name)
+            Assert.NotEmpty(model.GetMemberGroup(call))
+        }
+        let qualifiers = tree
+            .Root
+            .DescendantNodes()
+            .OfType[NameExpressionSyntax]()
+            .Where((n NameExpressionSyntax) -> n.IdentifierToken.Text == "Worker")
+            .ToArray()
+        Assert.Single(qualifiers)
+        Assert.Equal("Worker", model.GetSymbolInfo(qualifiers[0]).Symbol?.Name)
     }
 
     /// A ref-returning receiver cannot safely escape into the goroutine
