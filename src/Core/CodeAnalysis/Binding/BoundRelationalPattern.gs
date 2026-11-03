@@ -22,7 +22,8 @@ class BoundRelationalPattern : BoundPattern {
         if type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
             InputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, type)
             // A non-returning value (`never`) has nothing to store.
-            if value.Type != TypeSymbol.Never && (value.Type != nullable.UnderlyingType || value !is BoundLiteralExpression) {
+            if value.Type != TypeSymbol.Never &&
+                (value.Type != nullable.UnderlyingType || value !is BoundLiteralExpression) {
                 ValueVariable = LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, value.Type)
             }
         }
