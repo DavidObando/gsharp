@@ -1522,7 +1522,16 @@ partial class CSharpToGSharpTranslator {
                         case property is IPropertySymbol: property.Type
                         default: default(ITypeSymbol?)
                     }
-                    return this.SubstituteProjectedContainingTypeParameter(enclosingType, projectedImplicitMemberType)
+                    let substitutedImplicitMemberType ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
+                        enclosingType,
+                        projectedImplicitMemberType
+                    )
+                    if !SymbolEqualityComparer.IncludeNullability.Equals(
+                        this.context.GetTypeInfo(expression).Type,
+                        substitutedImplicitMemberType
+                    ) {
+                        return substitutedImplicitMemberType
+                    }
                 }
             }
             if this.context.GetTypeInfo(expression).Type is IArrayTypeSymbol array && this.GetMappedArrayElementType(
@@ -1625,10 +1634,16 @@ partial class CSharpToGSharpTranslator {
                     invocation.Expression is MemberAccessExpressionSyntax calledMember &&
                     this.GetProjectedReceiverType(calledMember.Expression) is INamedTypeSymbol projectedOwner &&
                     this.GetProjectedMember(projectedOwner, invokedMethod) is IMethodSymbol projectedCalledMethod {
-                    return this.SubstituteProjectedContainingTypeParameter(
+                    let substitutedCalledReturn ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
                         projectedOwner,
                         projectedCalledMethod.ReturnType
                     )
+                    if !SymbolEqualityComparer.IncludeNullability.Equals(
+                        this.context.GetTypeInfo(expression).Type,
+                        substitutedCalledReturn
+                    ) {
+                        return substitutedCalledReturn
+                    }
                 }
                 invokedMethod = invokedMethod?.ReducedFrom ?? invokedMethod?.OriginalDefinition
                 if invokedMethod?.ReturnType is IArrayTypeSymbol{
@@ -1706,7 +1721,18 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
             }
-            return this.SubstituteProjectedContainingTypeParameter(receiverType, projectedMemberType)
+            let substitutedMemberType ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
+                receiverType,
+                projectedMemberType
+            )
+            return if !SymbolEqualityComparer.IncludeNullability.Equals(
+                this.context.GetTypeInfo(expression).Type,
+                substitutedMemberType
+            ) {
+                substitutedMemberType
+            } else {
+                default(ITypeSymbol?)
+            }
         }
 
         private func SubstituteProjectedContainingTypeParameter(

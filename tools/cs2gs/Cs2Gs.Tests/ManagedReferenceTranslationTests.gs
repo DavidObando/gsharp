@@ -7428,11 +7428,17 @@ namespace ManagedArrayInheritedGenericBaseFixedDestination;
 public interface IStore<T> {
     void Replace(ref T value);
 }
+public interface IFixedProperty {
+    ManagedRef<int> PropValue { get; set; }
+}
 public class Box<T> {
     public Box() { }
     public Box(T[] items) { }
+    public void Add(T value) { }
 }
 public class Base<T> {
+    public Box<T> Value = new();
+    public T PropValue { get; set; }
     public Func<Box<T>> Factory = () => new Box<T>();
     public Base() { }
     public Base(ref T value) { }
@@ -7464,13 +7470,16 @@ public class OverrideChildDerived : OverrideParentDerived {
     public override void Add(ManagedRef<int> value) { }
 }
 public class InterfaceDerived : Base<ManagedRef<int>>, IStore<ManagedRef<int>> { }
+public class InterfacePropertyDerived : Base<ManagedRef<int>>, IFixedProperty { }
 public class MethodGroupDerived : Base<ManagedRef<int>> { }
 public class IndexerDerived : Base<ManagedRef<int>> { }
 public class MultiLevelBoxDerived : Mid<ManagedRef<int>> { }
 public class LambdaMemberDerived : Base<ManagedRef<int>> { }
+public class MemberReadDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
+    private static void AcceptBox(Box<ManagedRef<int>> value) { }
 
     public static void Run(
         bool flag,
@@ -7515,10 +7524,13 @@ public class Probe {
         var fixedMember = new FixedMemberDerived();
         fixedMember.Add(source[0]);
         fixedMember.Fixed = new Box<ManagedRef<int>>(source);
+        fixedMember.Fixed.Add(source[0]);
 
         new OverrideParentDerived().Add(source[0]);
 
         new InterfaceDerived().Add(source[0]);
+
+        new InterfacePropertyDerived().Add(source[0]);
 
         var methodGroupDerived = new MethodGroupDerived();
         Func<ManagedRef<int>> reader = methodGroupDerived.Get;
@@ -7534,6 +7546,10 @@ public class Probe {
 
         var lambdaMember = new LambdaMemberDerived { Factory = () => FixedBox };
         lambdaMember.Add(source[0]);
+
+        var memberRead = new MemberReadDerived();
+        AcceptBox(memberRead.Value);
+        memberRead.Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7548,7 +7564,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            15,
+            18,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7581,10 +7597,16 @@ public class Probe {
             text,
             StringComparison.Ordinal
         )
+        Assert.Contains(
+            "open class InterfacePropertyDerived : Base[managed[int32]], IFixedProperty",
+            text,
+            StringComparison.Ordinal
+        )
         Assert.Contains("open class MethodGroupDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class IndexerDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class MultiLevelBoxDerived : Mid[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class LambdaMemberDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class MemberReadDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
