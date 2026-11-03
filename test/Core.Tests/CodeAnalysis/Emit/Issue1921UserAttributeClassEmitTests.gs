@@ -207,9 +207,36 @@ class ExpandedTieAttribute : Attribute {
     }
 }
 
+class Holder[T] {
+    enum E {
+        First,
+        Second
+    }
+}
+
+class GenericEnumMarkerAttribute[T](Value Holder[T].E) : Attribute {
+    var Which string = "Primary"
+    init(fallback Object) {
+        Value = Holder[T].E.First
+        Which = "Object"
+    }
+}
+
+class GenericExplicitEnumMarkerAttribute[T] : Attribute {
+    var Which string = ""
+    init(fallback Object) {
+        Which = "Object"
+    }
+    init(kind Holder[T].E) {
+        Which = "Explicit:" + kind.ToString()
+    }
+}
+
 @Marker(typeof(Owner))
 @Tag("hello")
 @ExpandedTie(1)
+@GenericEnumMarker[int32](Holder[int32].E.Second)
+@GenericExplicitEnumMarker[int32](Holder[int32].E.Second)
 class Owner {
 }
 
@@ -233,6 +260,16 @@ func run() {
             var exp ExpandedTieAttribute = (attrs[i] as ExpandedTieAttribute)!!
             Console.WriteLine(exp.Which)
         }
+        if attrs[i].GetType().Name.StartsWith("GenericEnumMarkerAttribute") {
+            var gen GenericEnumMarkerAttribute[int32] = (attrs[i] as GenericEnumMarkerAttribute[int32])!!
+            Console.WriteLine("GenericEnum:" + gen.Which + ":" + gen.Value.ToString())
+        }
+        if attrs[i].GetType().Name.StartsWith("GenericExplicitEnumMarkerAttribute") {
+            var genExp GenericExplicitEnumMarkerAttribute[int32] = (
+                attrs[i] as GenericExplicitEnumMarkerAttribute[int32]
+            )!!
+            Console.WriteLine("GenericExplicitEnum:" + genExp.Which)
+        }
     }
     var explicitType Type = typeof(ExplicitObjectOwner)
     var explicitAttrs = explicitType.GetCustomAttributes(true)
@@ -250,6 +287,8 @@ run()
         Assert.Contains("Type:Owner", output)
         Assert.Contains("String:hello", output)
         Assert.Contains("FixedAndParams:1", output)
+        Assert.Contains("GenericEnum:Primary:Second", output)
+        Assert.Contains("GenericExplicitEnum:Explicit:Second", output)
         Assert.Contains("Explicit:Object", output)
     }
 

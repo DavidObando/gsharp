@@ -764,7 +764,7 @@ internal class CustomAttributeEncoder {
         }
         if this.resolveExplicitCtorToken != nil {
             for ctor in attributeType.EffectiveExplicitConstructors {
-                constructorCandidates.Add((ctor, ctor.Parameters))
+                constructorCandidates.Add((ctor, GetSubstitutedConstructorParameters(attributeType, ctor)))
             }
         }
         let candidates = List[UserAttributeConstructorCandidate]()
@@ -1498,6 +1498,27 @@ internal class CustomAttributeEncoder {
         internal func ShouldEmitPerPositionNullable(
             flags ImmutableArray[uint8]
         ) bool -> MethodNullabilityPlan.NeedsAttribute(flags, NullableFlagsBuilder.NotAnnotated)
+
+        private func GetSubstitutedConstructorParameters(
+            attributeType StructSymbol,
+            ctor ConstructorSymbol
+        ) ImmutableArray[ParameterSymbol] {
+            let source = ctor.Parameters
+            if source.IsDefaultOrEmpty {
+                return source
+            }
+            let substitutedTypes = attributeType.GetConstructorParameterTypesForConstruction(ctor)
+            let builder = ImmutableArray.CreateBuilder[ParameterSymbol](source.Length)
+            for var i = 0; i < source.Length; i++ {
+                let parameter = source[i]
+                let substituted = ParameterSymbol(parameter, substitutedTypes[i], parameter.DeclaringSyntax)
+                if parameter.HasExplicitDefaultValue {
+                    substituted.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
+                }
+                builder.Add(substituted)
+            }
+            return builder.MoveToImmutable()
+        }
 
         private func TryMapUserAttributeConstructorArgumentSlots(
             parameters ImmutableArray[ParameterSymbol],

@@ -683,6 +683,26 @@ class LocalExpandedTieAttribute : Attribute {
     }
 }
 
+class Holder[T] {
+    enum E {
+        First,
+        Second
+    }
+}
+
+class GenericPrimaryEnumMarkerAttribute[T](Value Holder[T].E) : Attribute {
+    init(value object) {
+    }
+}
+
+class GenericExplicitEnumMarkerAttribute[T] : Attribute {
+    init(value object) {
+    }
+
+    init(kind Holder[T].E) {
+    }
+}
+
 @LocalMarker(typeof(Owner))
 class Owner {
 }
@@ -733,6 +753,14 @@ class EnumOwner {
 
 @EnumMarker(42)
 class IntOwner {
+}
+
+@GenericPrimaryEnumMarker[int32](Holder[int32].E.Second)
+class GenericPrimaryEnumOwner {
+}
+
+@GenericExplicitEnumMarker[int32](Holder[int32].E.Second)
+class GenericExplicitEnumOwner {
 }
 
 Console.WriteLine("ok")
@@ -821,6 +849,14 @@ Console.WriteLine("ok")
             Assert.Equal(2, SelectedConstructorParameterCount(localAppPath, libPath, "ExpandedTieOwner"))
             Assert.Equal("P.Status", SelectedConstructorParameterType(localAppPath, libPath, "EnumOwner"))
             Assert.Equal("System.Int32", SelectedConstructorParameterType(localAppPath, libPath, "IntOwner"))
+            Assert.Equal(
+                "P.Holder`1+E[System.Int32]",
+                SelectedConstructorParameterType(localAppPath, libPath, "GenericPrimaryEnumOwner")
+            )
+            Assert.Equal(
+                "P.Holder`1+E[System.Int32]",
+                SelectedConstructorParameterType(localAppPath, libPath, "GenericExplicitEnumOwner")
+            )
 
             for (name, annotation) in[](string, string){
                 ("ImportedStringOrObjectArray", "@StringOrObjectArray(nil)"),
@@ -1180,6 +1216,23 @@ class NoteAttribute(Text string) : Attribute {
                     .Namespace
                     ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
             )
+            if attribute.AttributeType.IsGenericType {
+                let loadContext = System.Runtime.Loader.AssemblyLoadContext(nil, isCollectible: true)
+                try {
+                    using let stream = MemoryStream(File.ReadAllBytes(assemblyPath))
+                    let runtimeAssembly = loadContext.LoadFromStream(stream)
+                    let runtimeTarget = runtimeAssembly.GetTypes().Single(
+                        (candidate Type) -> candidate.Name == typeName
+                    )
+                    let runtimeAttribute = runtimeTarget.GetCustomAttributesData().Single(
+                        (candidate CustomAttributeData) -> candidate.AttributeType.Namespace == "P"
+                    )
+                    let runtimeParameter = Assert.Single(runtimeAttribute.Constructor.GetParameters())
+                    return runtimeParameter.ParameterType.ToString()
+                } finally {
+                    loadContext.Unload()
+                }
+            }
             let parameter = Assert.Single(attribute.Constructor.GetParameters())
             return parameter.ParameterType.FullName ?? parameter.ParameterType.Name
         }
