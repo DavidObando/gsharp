@@ -176,7 +176,11 @@ partial class CSharpToGSharpTranslator {
                 }
                 case declaration is DeclarationPatternSyntax {
                     return if declaration.Designation == targetDesignation {
-                        receiverType
+                        this
+                            .context
+                            .GetTypeInfo(declaration.Type)
+                            .Type
+                            ?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
                     } else {
                         default(ITypeSymbol?)
                     }
@@ -453,6 +457,13 @@ partial class CSharpToGSharpTranslator {
                         this.GetMappedArrayElementType(patternInput)
                     )
                 }
+            }
+            if designation.Parent is DeclarationExpressionSyntax{
+                Type: {IsVar: true},
+                Parent: ArgumentSyntax outArgument
+            } &&
+                this.GetArgumentParameter(outArgument) is {} projectedOutParameter {
+                return projectedOutParameter.Type
             }
             if !IsImplicitlyTypedLocal(local) {
                 return nil

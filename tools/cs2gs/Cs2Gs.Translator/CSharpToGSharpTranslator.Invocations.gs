@@ -4774,6 +4774,9 @@ partial class CSharpToGSharpTranslator {
             ) {
                 var argument = argument
                 argument = Unparenthesize(argument)
+                if argument is DeclarationExpressionSyntax{Type: {IsVar: true}} {
+                    return
+                }
                 if argument is TupleExpressionSyntax tuple &&
                     parameterType is INamedTypeSymbol{IsTupleType: true} parameterTuple &&
                     tuple
@@ -5432,6 +5435,77 @@ partial class CSharpToGSharpTranslator {
             var expression = expression
             expression = Unparenthesize(expression)
             if expression is DeclarationExpressionSyntax declaration && declaration.Type.IsVar {
+                if declaration.Designation is not SingleVariableDesignationSyntax single ||
+                    this
+                    .context
+                    .GetDeclaredSymbol(single) is not ILocalSymbol outLocal {
+                    return true
+                }
+                if SymbolEqualityComparer.IncludeNullability.Equals(outLocal.Type, projectedParameterType) &&
+                    outLocal
+                    .Type
+                    .NullableAnnotation == projectedParameterType.NullableAnnotation {
+                    return true
+                }
+                let scope_ = this
+                    .state
+                    .CurrentBodyScope ??
+                    single
+                    .Ancestors()
+                    .OfType[MemberDeclarationSyntax]()
+                    .FirstOrDefault() ??
+                    single
+                    .SyntaxTree
+                    .GetRoot()
+                let hadPrevious = this
+                    .state
+                    .ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType
+                    .TryGetValue(outLocal, out var previousType)
+                this
+                    .state
+                    .ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType[outLocal] = projectedParameterType
+                var allMatch = true
+                for use in scope_.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                    if !this.BindsTo(use, outLocal) {
+                        continue
+                    }
+                    if use.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .AssignmentExpressionSyntax writeAssignment &&
+                        writeAssignment.Left == use {
+                        if !writeAssignment.IsKind(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
+                        ) ||
+                            !this.ValueFitsProjectedBaseTarget(writeAssignment.Right, projectedParameterType) {
+                            allMatch = false
+                            break
+                        }
+                        continue
+                    }
+                    if !this.ProjectedValueFitsConsumerDestination(use, outLocal.Type, projectedParameterType) {
+                        allMatch = false
+                        break
+                    }
+                }
+                if !allMatch {
+                    if hadPrevious {
+                        this
+                            .state
+                            .ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[outLocal] = previousType
+                    } else {
+                        this
+                            .state
+                            .ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType
+                            .Remove(outLocal)
+                    }
+                    return false
+                }
                 return true
             }
             if this
@@ -5446,7 +5520,8 @@ partial class CSharpToGSharpTranslator {
                 expression = initializer
             }
             let storageType ITypeSymbol? = this.GetManagedReferenceArrayProjectedArgumentType(expression)
-            return SymbolEqualityComparer.IncludeNullability.Equals(storageType, projectedParameterType)
+            return SymbolEqualityComparer.IncludeNullability.Equals(storageType, projectedParameterType) &&
+                storageType?.NullableAnnotation == projectedParameterType.NullableAnnotation
         }
 
         private func ObjectCreationCanProjectContainingType(creation BaseObjectCreationExpressionSyntax) bool {
@@ -7012,6 +7087,9 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     var argument = argument
                     argument = Unparenthesize(argument)
+                    if argument is DeclarationExpressionSyntax{Type: {IsVar: true}} {
+                        return
+                    }
                     if argument is TupleExpressionSyntax tuple &&
                         parameterType is INamedTypeSymbol{IsTupleType: true} parameterTuple &&
                         tuple
@@ -10500,18 +10578,19 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case declaration is DeclarationPatternSyntax {
-                    if this
-                        .context
-                        .GetTypeInfo(declaration.Type)
-                        .Type is {} declaredType &&
-                        !this.NestedProjectionFitsDestination(projectedInputType, declaredType) {
+                    let declaredType ITypeSymbol? = this.context.GetTypeInfo(declaration.Type).Type
+                    if declaredType != nil && !this.NestedProjectionFitsDestination(projectedInputType, declaredType) {
                         return false
                     }
                     if declaration.Designation is SingleVariableDesignationSyntax single &&
                         this
                         .context
                         .GetDeclaredSymbol(single) is ILocalSymbol local {
-                        return ValidatePatternLocal(local, local.Type, projectedInputType)
+                        return ValidatePatternLocal(
+                            local,
+                            local.Type,
+                            declaredType?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                        )
                     }
                     return true
                 }
@@ -10896,23 +10975,32 @@ partial class CSharpToGSharpTranslator {
             argumentType ITypeSymbol?,
             target ITypeParameterSymbol,
             compilation Compilation,
-            projectedArguments List[ITypeSymbol]
+            projectedArguments List[ITypeSymbol],
+            visitedMethodParameters HashSet[ITypeParameterSymbol]? = nil
         ) {
+            if parameterType == nil || argumentType == nil {
+                return
+            }
             if parameterType is ITypeParameterSymbol parameter {
                 if SymbolEqualityComparer.Default.Equals(parameter.OriginalDefinition, target.OriginalDefinition) &&
                     CSharpToGSharpTranslator
                     .TypeContainsRecognizedManagedReferenceConsumer(argumentType, compilation) {
-                    projectedArguments.Add(argumentType!!)
+                    projectedArguments.Add(argumentType)
                 } else if parameter.TypeParameterKind == TypeParameterKind.Method &&
                     target.TypeParameterKind == TypeParameterKind
                     .Type {
+                    let seen = visitedMethodParameters ?? HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
+                    if !seen.Add(parameter.OriginalDefinition) {
+                        return
+                    }
                     for constraint in parameter.ConstraintTypes {
                         this.CollectProjectedTypeArguments(
                             constraint,
                             argumentType,
                             target,
                             compilation,
-                            projectedArguments
+                            projectedArguments,
+                            seen
                         )
                     }
                 }
@@ -10924,7 +11012,8 @@ partial class CSharpToGSharpTranslator {
                     argumentArray.ElementType,
                     target,
                     compilation,
-                    projectedArguments
+                    projectedArguments,
+                    visitedMethodParameters
                 )
                 return
             }
@@ -10935,7 +11024,8 @@ partial class CSharpToGSharpTranslator {
                     argumentPointer.PointedAtType,
                     target,
                     compilation,
-                    projectedArguments
+                    projectedArguments,
+                    visitedMethodParameters
                 )
                 return
             }
@@ -10958,7 +11048,8 @@ partial class CSharpToGSharpTranslator {
                     matchingArgument.TypeArguments[i],
                     target,
                     compilation,
-                    projectedArguments
+                    projectedArguments,
+                    visitedMethodParameters
                 )
             }
             if parameterNamed.ContainingType != nil && matchingArgument.ContainingType != nil {
@@ -10967,7 +11058,8 @@ partial class CSharpToGSharpTranslator {
                     matchingArgument.ContainingType,
                     target,
                     compilation,
-                    projectedArguments
+                    projectedArguments,
+                    visitedMethodParameters
                 )
             }
         }

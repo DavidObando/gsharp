@@ -1443,6 +1443,13 @@ partial class CSharpToGSharpTranslator {
                 if this.state.ProjectedQueryBindingType.TryGetValue(identifierSymbol, out var projectedQueryType) {
                     return projectedQueryType
                 }
+                if identifierSymbol is IRangeVariableSymbol rangeVariable && this.TryGetProjectedRangeVariableType(
+                    rangeVariable
+                ) is {} inferredRangeType &&
+                    CSharpToGSharpTranslator
+                    .TypeContainsRecognizedManagedReferenceConsumer(inferredRangeType, this.context.Compilation) {
+                    return inferredRangeType
+                }
                 if identifierSymbol is IParameterSymbol parameter &&
                     this
                     .state
@@ -1532,6 +1539,12 @@ partial class CSharpToGSharpTranslator {
                                 .TypeContainsRecognizedManagedReferenceConsumer(
                                 projectedDesignationType,
                                 this.context.Compilation
+                            ) &&
+                                !SymbolEqualityComparer
+                                .IncludeNullability
+                                .Equals(
+                                this.context.GetTypeInfo(identifier).Type ?? local.Type,
+                                projectedDesignationType
                             ) {
                                 return projectedDesignationType
                             }
