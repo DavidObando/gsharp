@@ -1020,8 +1020,8 @@ class Conversion {
                     // actual `null` reference and a `HasValue == true` source boxes
                     // its underlying value. `BindConversion` materialises this as a
                     // `BoundConversionExpression` so emit inserts the box.
-                    if fromNullable.UnderlyingType?.ClrType is {IsValueType: true} {
-                        let boxedConversion = Classify(fromUnderlying, toUnderlying)
+                    if NullableLifting.IsAnyValueTypeNullable(fromNullable) && IsReferenceLikeTarget(toUnderlying) {
+                        let boxedConversion = ClassifyNonStructural(fromUnderlying, toUnderlying)
                         if boxedConversion.Exists && boxedConversion.IsImplicit {
                             return Conversion.Implicit
                         }
@@ -2615,7 +2615,18 @@ class Conversion {
         internal func HasCheckedUnboxingConversion(
             from TypeSymbol?,
             to TypeSymbol?
-        ) bool -> HasExplicitUnboxingConversion(from, to)
+        ) bool -> HasExplicitUnboxingConversion(from, to) ||
+            HasExplicitNullableValueUnwrap(from, to)
+
+        internal func HasExplicitNullableValueUnwrap(
+            from TypeSymbol?,
+            to TypeSymbol?
+        ) bool -> from is NullableTypeSymbol sourceNullable &&
+            NullableLifting.IsAnyValueTypeNullable(sourceNullable) &&
+            to != nil &&
+            !(to is NullableTypeSymbol) &&
+            !IsReferenceLikeTarget(to) &&
+            ClassifyNonStructural(sourceNullable.UnderlyingType, to).Exists
 
         /// Returns whether `to(fromValue)` is a checked CLR reference cast.
         /// The conversion preserves a null reference, returns the target reference

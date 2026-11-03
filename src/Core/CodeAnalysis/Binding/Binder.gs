@@ -7212,8 +7212,8 @@ partial class Binder {
             // static-member calls, matching the visibility a constructor body has.
             // (Parameter default values already drained above, before this
             // point — see the #4183/#4192 comment above DetectClassInheritanceCycles.)
-            binder.declarations.BindPendingBaseInitializers()
             binder.declarations.BindPendingFieldInitializers()
+            binder.declarations.BindPendingBaseInitializers()
             binder.declarations.ExpandStructInterfaceClosures()
             // Issue #4481: every class's base class, every source interface's base
             // clause and every class's implemented-interface closure are populated

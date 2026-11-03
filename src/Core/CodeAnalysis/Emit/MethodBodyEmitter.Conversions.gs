@@ -186,6 +186,10 @@ internal partial class MethodBodyEmitter {
             delegateSourceType is ImportedTypeSymbol{ClrType: Type importedDelegateSource} &&
             ClrTypeUtilities
             .IsDelegateType(importedDelegateSource) {
+            if Conversion.ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
+                this.EmitExpression(conv.Expression)
+                return
+            }
             let invoke = importedDelegateSource.GetMethod("Invoke") ??
                 throw InvalidOperationException(
                 "Delegate type '${importedDelegateSource.FullName}' has no Invoke method."
