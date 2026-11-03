@@ -38,15 +38,7 @@ internal shared class SynthesizedClosureReifier {
         for t in types {
             TypeSymbol.CollectReferencedTypeParameters(t, referenced)
         }
-        // A cloned constraint must not reference an undeclared original parameter.
-        // The collector deduplicates entries, including self-referential constraints.
-        for var i = 0; i < referenced.Count; i++ {
-            let parameter = referenced[i]
-            TypeSymbol.CollectReferencedTypeParameters(parameter.TypeParameterBound, referenced)
-            TypeSymbol.CollectReferencedTypeParameters(parameter.ClassConstraint, referenced)
-            TypeSymbol.CollectReferencedTypeParameters(parameter.InterfaceConstraint, referenced)
-            TypeSymbol.CollectReferencedTypeParameters(parameter.ClrInterfaceConstraint, referenced)
-        }
+        ExpandWithConstraintDependencies(referenced)
         if referenced.Count == 0 {
             return ImmutableArray[TypeParameterSymbol].Empty
         }
@@ -73,6 +65,18 @@ internal shared class SynthesizedClosureReifier {
             }
         )
         return referenced.ToImmutableArray()
+    }
+
+    func ExpandWithConstraintDependencies(referenced List[TypeParameterSymbol]) {
+        // A cloned constraint must not reference an undeclared original parameter.
+        // The collector deduplicates entries, including self-referential constraints.
+        for var i = 0; i < referenced.Count; i++ {
+            let parameter = referenced[i]
+            TypeSymbol.CollectReferencedTypeParameters(parameter.TypeParameterBound, referenced)
+            TypeSymbol.CollectReferencedTypeParameters(parameter.ClassConstraint, referenced)
+            TypeSymbol.CollectReferencedTypeParameters(parameter.InterfaceConstraint, referenced)
+            TypeSymbol.CollectReferencedTypeParameters(parameter.ClrInterfaceConstraint, referenced)
+        }
     }
 
     /// Issue #1499: clones [`origTPs`](paramref) 1:1 as class-level type
