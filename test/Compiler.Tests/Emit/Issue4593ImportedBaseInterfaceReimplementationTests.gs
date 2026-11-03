@@ -106,6 +106,48 @@ class Issue4593ImportedBaseInterfaceReimplementationTests {
         }
     }
 
+    @Fact
+    func ReListedSymbolicGenericInterface_ImplementedByImportedBase_CompilesAndDispatchesToBase() {
+        let (exitCode, output, assemblyPath) = CompileLibrary(SymbolicAcceptedSource, "Issue4613")
+        try {
+            Assert.True(exitCode == 0, (`gsc failed (exit ` + "$exitCode" + `):
+` + "$output"))
+            Assert.DoesNotContain("GS0187", output, StringComparison.Ordinal)
+            IlVerifier.Verify(assemblyPath)
+            let assembly = EmittedFixture.Load(assemblyPath)
+            let probes = assembly
+                .GetTypes()
+                .SelectMany(
+                func (type Type) IEnumerable[MethodInfo] {
+                    return type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                }
+            )
+                .ToArray()
+            Assert.Equal(271, probes.Single((method MethodInfo) -> method.Name == "Probe4613").Invoke(nil, nil))
+            Assert.Equal(
+                true,
+                probes.Single((method MethodInfo) -> method.Name == "FieldReadOnly4613").Invoke(nil, nil)
+            )
+        } finally {
+            DeleteDirectory(assemblyPath)
+        }
+    }
+
+    @Fact
+    func ReListedSymbolicGenericInterface_MismatchedTypeArgument_StillReportsGs0187() {
+        let (exitCode, output, assemblyPath) = CompileLibrary(SymbolicRejectedSource, "Issue4613Control")
+        try {
+            Assert.NotEqual(0, exitCode)
+            Assert.Contains(
+                "error GS0187: Class 'MismatchedShapes4613' does not implement interface method 'System.Collections.Generic.IList[OtherShape4613].IndexOf(T)'.",
+                output,
+                StringComparison.Ordinal
+            )
+        } finally {
+            DeleteDirectory(assemblyPath)
+        }
+    }
+
     shared {
         private const AcceptedSource string = `package Issue4593
 import System
@@ -155,6 +197,65 @@ import System
 import System.IO
 
 public class Comparable4593 : MemoryStream, IComparable {
+}`
+
+        private const SymbolicAcceptedSource string = `package Issue4613
+import System
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+public class Shape4613 {
+    public var Tag int32
+}
+
+public open class MidShapes4613[T] : Collection[T] {
+}
+
+public class Shapes4613 : Collection[Shape4613], IList[Shape4613], IList {
+}
+
+public class DerivedShapes4613 : MidShapes4613[Shape4613], IList[Shape4613] {
+}
+
+public class GenericShapes4613[T] : Collection[T], IList[T] {
+}
+
+public class FieldShapes4613 : Collection[Shape4613], IList[Shape4613] {
+    public var IsReadOnly bool = true
+}
+
+public func Probe4613() int32 {
+    let first = Shape4613{Tag: 3}
+    let second = Shape4613{Tag: 7}
+    let shapes = Shapes4613()
+    shapes.Add(first)
+    shapes.Add(second)
+    var list IList[Shape4613] = shapes
+    var collection ICollection[Shape4613] = DerivedShapes4613()
+    collection.Add(first)
+    collection.Add(second)
+    var genericList IList[Shape4613] = GenericShapes4613[Shape4613]()
+    genericList.Add(second)
+    return collection.Count * 100 + list[1].Tag * 10 + list.IndexOf(second)
+}
+
+public func FieldReadOnly4613() bool {
+    var collection ICollection[Shape4613] = FieldShapes4613()
+    return collection.IsReadOnly
+}`
+
+        private const SymbolicRejectedSource string = `package Issue4613Control
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+public class Shape4613 {
+}
+
+public class OtherShape4613 {
+}
+
+public class MismatchedShapes4613 : Collection[Shape4613], IList[OtherShape4613] {
 }`
 
         private func CompileLibrary(source string, assemblyName string)(
