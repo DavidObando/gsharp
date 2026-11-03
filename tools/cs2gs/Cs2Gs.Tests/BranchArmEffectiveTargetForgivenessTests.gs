@@ -148,6 +148,23 @@ namespace App
         public static void ObjectParamsSeed() => ObjectParams("head", null);
 
         public static void ObjectParamsConditional(Model.Arg a, Model.Arg b, bool flag) => ObjectParams(flag ? a.Objects : b.Objects, "tail");
+
+        public static void ExtensionParams(this Model.Arg receiver, params string[] values) { }
+
+        public static void ExtensionParamsSeed(Model.Arg receiver) => receiver.ExtensionParams("head", null);
+
+        public static void ExtensionParamsConditional(Model.Arg argument, int i) => argument.ExtensionParams(i >= 0 ? argument.Value : argument.Name, argument.Name);
+
+        public static void ExtensionParamsSwitch(Model.Arg argument, int i) => argument.ExtensionParams("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public sealed class TaintedBag
+        {
+            public int this[params string[] keys] => 0;
+        }
+
+        public static int BagSeed(TaintedBag bag) => bag["head", null];
+
+        public static int BagConditional(TaintedBag bag, Model.Arg argument, int i) => bag[i >= 0 ? argument.Value : argument.Name, i switch { 0 => argument.Name, _ => argument.Value }];
     }
 }`
         let printed = TranslateCrossProject(app)
@@ -172,16 +189,35 @@ namespace App
 
         public static T ParamsId<T>(params T[] values) => values[0];
 
+        public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
+
         public static string Inferred(Model.Arg argument, int i) => Id(i > 0 ? argument.Value : argument.Name);
 
         public static string InferredParams(Model.Arg argument, int i) => ParamsId(i > 0 ? argument.Value : argument.Name);
 
         public static string InferredParamsSwitch(Model.Arg argument, int i) => ParamsId("head", i switch { 0 => argument.Value, _ => argument.Name });
 
+        public static string InferredSpanParams(Model.Arg argument, int i) => SpanParamsId(i > 0 ? argument.Value : argument.Name, "tail");
+
+        public static string InferredSpanParamsSwitch(Model.Arg argument, int i) => SpanParamsId("head", i switch { 0 => argument.Value, _ => argument.Name });
+
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
 
         public static string? ExplicitNullableParamsSwitch(Model.Arg argument, int i) => ParamsId<string?>("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public static void JoinExtension(this Model.Arg receiver, params string?[] values) { }
+
+        public static void ExtensionJoined(Model.Arg argument, int i) =>
+            argument.JoinExtension(i == 0 ? argument.Name : argument.Value, argument.Name);
+
+        public sealed class Bag
+        {
+            public string? this[params string?[] keys] => keys[0];
+        }
+
+        public static string? IndexerJoined(Bag bag, Model.Arg argument, int i) =>
+            bag[i == 0 ? argument.Name : argument.Value, i switch { 0 => argument.Name, _ => argument.Value }];
 #nullable restore
 
         public static int Suppressed(Model.Arg argument, bool flag)
@@ -282,6 +318,13 @@ namespace App
         public static int ParamsIndex(params string[] names) => names[0] == "x" ? 0 : -1;
 
         public static int ObjectParamsCount(params object?[] values) => values.Length;
+
+        public sealed class NonNullBag
+        {
+            public int this[params string[] keys] => keys.Length;
+
+            public int this[int tag, params object?[] values] => values.Length;
+        }
 #nullable restore
 
         public static int Conditional(Model.Arg argument, int i) => Index(i > 0 ? argument.Name : "x");
@@ -294,13 +337,23 @@ namespace App
 
         public static int ObjectParamsDirect(Model.Arg a, Model.Arg b, bool flag) => ObjectParamsCount(flag ? a.Objects : b.Objects);
 
+        public static int BagNonNullExpanded(NonNullBag bag, Model.Arg argument, int i) =>
+            bag[i > 2 ? argument.Name : "z", "tail"];
+
+        public static int BagNormalForm(NonNullBag bag, Model.Arg a, Model.Arg b, bool flag) =>
+            bag[0, flag ? a.Objects : b.Objects];
+
         public static T Id<T>(T value) => value;
 
         public static T ParamsId<T>(params T[] values) => values[0];
 
+        public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
         public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
+
+        public static string ExplicitSpanParams(Model.Arg argument, int i) => SpanParamsId<string>(i > 3 ? argument.Value : argument.Name, "tail");
 
         public sealed class Dest
         {
@@ -321,8 +374,12 @@ namespace App
         Assert.Contains("ParamsIndex(if i > 0 { argument.Name!! } else { \"x\" })", printed)
         Assert.Contains("case 1: argument.Name!!", printed)
         Assert.Contains("ObjectParamsCount(if flag { a.Objects!! } else { b.Objects!! })", printed)
+        Assert.Contains("bag[if i > 2 { argument.Name!! } else { \"z\" }, \"tail\"]", printed)
+        Assert.Contains("bag[0, if flag { a.Objects!! } else { b.Objects!! }]", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
+        Assert.Contains("SpanParamsId[string](", printed)
+        Assert.Contains("if i > 3 {", printed)
         Assert.Contains("else { argument.Name!! })", printed)
         // A user-defined conversion is an invocation boundary: the arm feeds
         // the operator's non-null parameter, not the widened local `d`.

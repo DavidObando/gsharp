@@ -1246,11 +1246,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let declared = parameter.OriginalDefinition.Type
-            let inferred ITypeSymbol? = if declared is IArrayTypeSymbol array {
-                array.ElementType
-            } else {
-                declared
-            }
+            let inferred ITypeSymbol? = GetParamsElementType(parameter.OriginalDefinition) ?? declared
             return inferred is ITypeParameterSymbol typeParameter &&
                 !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter)
         }

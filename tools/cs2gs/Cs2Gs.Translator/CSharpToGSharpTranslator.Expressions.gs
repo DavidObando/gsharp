@@ -6883,8 +6883,21 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IndexArgumentTargetsNonNullableReference(argument ArgumentSyntax) bool {
-            if !(this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter}) {
+            let parameter IParameterSymbol? = this.GetArgumentParameter(argument)
+            if parameter == nil {
                 return false
+            }
+            if this.TryGetExpandedParamsElementTarget(
+                argument,
+                parameter,
+                out var paramsElementType,
+                out var paramsParameter
+            ) {
+                return this.TargetWillRemainNonNullableReference(
+                    paramsElementType,
+                    paramsParameter,
+                    argument.Expression
+                )
             }
             return this.ParameterWillRemainNonNullableReference(parameter, argument.Expression)
         }
@@ -9216,9 +9229,7 @@ partial class CSharpToGSharpTranslator {
                         methodParameter.TypeParameterKind == TypeParameterKind.Method
                 }
                 let generic = IsMethodTypeParameter(declared) ||
-                    (
-                    parameter.IsParams && (declared is IArrayTypeSymbol && IsMethodTypeParameter(declared.ElementType))
-                )
+                    IsMethodTypeParameter(GetParamsElementType(parameter.OriginalDefinition))
                 return generic && !CallHasExplicitTypeArguments(callSite)
             }
 

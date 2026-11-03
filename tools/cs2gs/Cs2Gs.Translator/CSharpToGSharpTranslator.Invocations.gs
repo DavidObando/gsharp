@@ -1629,12 +1629,19 @@ partial class CSharpToGSharpTranslator {
             let operationParameter IParameterSymbol? = (
                 this.context.SemanticModel.GetOperation(argument) as IArgumentOperation
             )?.Parameter
-            if argument.Parent is not BaseArgumentListSyntax list ||
-                list.Parent == nil ||
-                this
-                .context
-                .GetSymbolInfo(list.Parent)
-                .Symbol is not IMethodSymbol method {
+            if argument.Parent is not BaseArgumentListSyntax list || list.Parent == nil {
+                return operationParameter
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(list.Parent).Symbol
+            if symbol is IPropertySymbol property {
+                return GetArgumentParameter(
+                    argument,
+                    property.Parameters,
+                    isReducedExtension: false,
+                    operationParameter
+                )
+            }
+            if symbol is not IMethodSymbol method {
                 return operationParameter
             }
             let parameter IParameterSymbol? = this.GetArgumentParameter(argument, method, operationParameter)
@@ -1669,9 +1676,21 @@ partial class CSharpToGSharpTranslator {
             argument ArgumentSyntax,
             method IMethodSymbol?,
             operationParameter IParameterSymbol?
+        ) IParameterSymbol? -> GetArgumentParameter(
+            argument,
+            method!!.Parameters,
+            method!!.MethodKind == MethodKind.ReducedExtension,
+            operationParameter
+        )
+
+        private func GetArgumentParameter(
+            argument ArgumentSyntax,
+            parameters ImmutableArray[IParameterSymbol],
+            isReducedExtension bool,
+            operationParameter IParameterSymbol?
         ) IParameterSymbol? {
-            if operationParameter != nil && method!!.MethodKind == MethodKind.ReducedExtension {
-                let reducedParameter IParameterSymbol? = method!!.Parameters.FirstOrDefault(
+            if operationParameter != nil && isReducedExtension {
+                let reducedParameter IParameterSymbol? = parameters.FirstOrDefault(
                     (parameter IParameterSymbol) -> parameter.Name == operationParameter.Name &&
                         parameter.RefKind == operationParameter.RefKind
                 )
@@ -1681,16 +1700,12 @@ partial class CSharpToGSharpTranslator {
             }
             if operationParameter != nil &&
                 operationParameter.Ordinal >= 0 &&
-                operationParameter.Ordinal < method!!
-                .Parameters
-                .Length &&
-                method!!
-                .Parameters[operationParameter.Ordinal]
-                .RefKind == operationParameter.RefKind {
-                return method!!.Parameters[operationParameter.Ordinal]
+                operationParameter.Ordinal < parameters.Length &&
+                parameters[operationParameter.Ordinal].RefKind == operationParameter.RefKind {
+                return parameters[operationParameter.Ordinal]
             }
             if argument.NameColon is {} nameColon {
-                return method!!.Parameters.FirstOrDefault(
+                return parameters.FirstOrDefault(
                     (parameter IParameterSymbol) -> parameter.Name == nameColon.Name.Identifier.ValueText
                 )
             }
@@ -1698,12 +1713,10 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             let index = list.Arguments.IndexOf(argument)
-            if index >= 0 && index < method!!.Parameters.Length {
-                return method!!.Parameters[index]
+            if index >= 0 && index < parameters.Length {
+                return parameters[index]
             }
-            return if index >= method!!.Parameters.Length && method!!.Parameters.LastOrDefault() is {
-                IsParams: true
-            } paramsParameter {
+            return if index >= parameters.Length && parameters.LastOrDefault() is {IsParams: true} paramsParameter {
                 paramsParameter
             } else {
                 default(IParameterSymbol?)
@@ -1983,7 +1996,7 @@ partial class CSharpToGSharpTranslator {
                 default: default(ImmutableArray[IArgumentOperation])
             }
             if !callArguments.IsDefaultOrEmpty && callArguments.FirstOrDefault(
-                (candidate IArgumentOperation) -> candidate.Parameter?.Ordinal == parameter!!.Ordinal
+                (candidate IArgumentOperation) -> candidate.Parameter?.Name == parameter!!.Name
             ) is {} paramsArgument {
                 if paramsArgument.ArgumentKind is not(ArgumentKind.ParamArray or ArgumentKind.ParamCollection) {
                     return false
