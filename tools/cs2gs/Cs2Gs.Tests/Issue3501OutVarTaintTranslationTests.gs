@@ -674,6 +674,29 @@ namespace Demo
             return "no-match";
         }
 
+        public static string NegatedAndDoubleNegatedPatternInHoistedLoop()
+        {
+            step = 0;
+            object nonString = 42;
+            string notMatched = "missed";
+            while (Next(out string x) && nonString is not string unused)
+            {
+                x = null;
+                notMatched = "body:" + (x ?? "nil");
+            }
+
+            step = 0;
+            object strObj = "assigned";
+            string doubleNeg = "missed";
+            while (Next(out string x) && !(strObj is not string assigned))
+            {
+                x = null;
+                doubleNeg = RequireNonNull(assigned) + ":" + (x ?? "nil");
+            }
+
+            return notMatched + "/" + doubleNeg;
+        }
+
         public static string ComputedPropertyPatternEvaluatedOnce()
         {
             step = 0;
@@ -840,6 +863,7 @@ namespace Demo
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = new Token { Code = 7 } }) + ":" +
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = "nope" }) + "|" +
             ReassignedSecondaryWholeValueBinder("orig") + "|" +
+            NegatedAndDoubleNegatedPatternInHoistedLoop() + "|" +
             ComputedPropertyPatternEvaluatedOnce() + ":" +
             ComputedPropertyVarPatternEvaluatedOnce() + ":" +
             NullComputedPropertyVarPatternMatches(new Box()) + "|" +
@@ -850,7 +874,7 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|N1:1:N1:1:replaced:loop|2:2/1|1"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|body:nil/ASSIGNED:nil|N1:1:N1:1:replaced:loop|2:2/1|1"
         )
     }
 

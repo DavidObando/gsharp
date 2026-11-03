@@ -205,7 +205,7 @@ partial class CSharpToGSharpTranslator {
         // shapes that still lacks a native value-position form.
         private func ClauseRequiresConditionHoist(clause ExpressionSyntax) bool {
             return (
-                clause is IsPatternExpressionSyntax isPattern &&
+                UnwrapLogicalNot(clause, out _) is IsPatternExpressionSyntax isPattern &&
                     (
                     (
                         PatternIntroducesBinding(isPattern.Pattern) && !this.ConditionUsesNativePatternVariables(
@@ -254,7 +254,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func HoistLoopConditionClauseCore(clause ExpressionSyntax, into List[GStatement]) {
-            if clause is not IsPatternExpressionSyntax isPattern {
+            if UnwrapLogicalNot(clause, out var negated) is not IsPatternExpressionSyntax isPattern {
                 let replacements = List[ExpressionSyntax]()
                 let embedded = this.HoistAssignmentsInOrder(clause, includeSelf: true, into, replacements)
                 if embedded.Count == 0 {
@@ -276,17 +276,21 @@ partial class CSharpToGSharpTranslator {
             // references to that binder print as the hoist local); otherwise a fresh
             // synthetic name is used.
             let wholeValueBinders = HashSet[ILocalSymbol](
-                this.EnumerateWholeValuePatternBinders(isPattern.Pattern),
+                this.EnumerateWholeValuePatternBinders(isPattern.Pattern, negated),
                 SymbolEqualityComparer.Default
             )
-            let mainBinder ILocalSymbol? = this.FindMainPatternBinder(isPattern.Pattern)
+            let whenTrueBinders = HashSet[ILocalSymbol](
+                this.EnumerateWhenTruePatternBinders(isPattern.Pattern, negated),
+                SymbolEqualityComparer.Default
+            )
+            let mainBinder ILocalSymbol? = this.FindMainPatternBinder(isPattern.Pattern, negated)
             let binding = if mainBinder != nil && this.IsLocalReassigned(mainBinder) {
                 BindingKind.Var
             } else {
                 BindingKind.Let
             }
             let separateMainBinder = mainBinder != nil &&
-                isPattern.Pattern is not VarPatternSyntax &&
+                (!(!negated && isPattern.Pattern is VarPatternSyntax)) &&
                 (
                 wholeValueBinders.Count > 1 || binding == BindingKind.Var || this.ShouldPromoteToNullableReference(
                     mainBinder
@@ -329,7 +333,8 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     mainBinder
                 },
-                into
+                into,
+                negated
             )
             if separateMainBinder && mainBinder != nil {
                 this.state.PatternBindings.Remove(mainBinder)
@@ -360,6 +365,10 @@ partial class CSharpToGSharpTranslator {
                 into.Add(LocalDeclarationStatement(binding, binderName, binderType, binderInit))
             }
             for nestedBinder in this.EnumeratePatternBinders(isPattern.Pattern) {
+                if !whenTrueBinders.Contains(nestedBinder) {
+                    this.state.PatternBindings.Remove(nestedBinder)
+                    continue
+                }
                 if SymbolEqualityComparer.Default.Equals(nestedBinder, mainBinder) ||
                     !this
                     .state
@@ -434,7 +443,8 @@ partial class CSharpToGSharpTranslator {
             scrutineeIsNullable bool,
             pattern PatternSyntax,
             mainBinder ILocalSymbol?,
-            into List[GStatement]
+            into List[GStatement],
+            negated bool = false
         ) {
             switch pattern {
                 case parenthesized is ParenthesizedPatternSyntax {
@@ -444,35 +454,48 @@ partial class CSharpToGSharpTranslator {
                         scrutineeIsNullable,
                         parenthesized.Pattern,
                         mainBinder,
-                        into
-                    )
-                    return
-                }
-                case andPattern is BinaryPatternSyntax when andPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword) {
-                    this.EmitMustHoldGuards(
-                        idExpr,
-                        scrutineeType,
-                        scrutineeIsNullable,
-                        andPattern.Left,
-                        mainBinder,
-                        into
-                    )
-                    this.EmitMustHoldGuards(
-                        idExpr,
-                        scrutineeType,
-                        scrutineeIsNullable,
-                        andPattern.Right,
-                        mainBinder,
-                        into
+                        into,
+                        negated
                     )
                     return
                 }
                 case notPattern is UnaryPatternSyntax when notPattern.IsKind(SyntaxKind.NotPattern) {
-                    // `not P` must hold → break when `P` matches.
-                    into.Add(BreakIf(this.TranslatePatternTest(idExpr, notPattern.Pattern, scrutineeType)))
+                    this.EmitMustHoldGuards(
+                        idExpr,
+                        scrutineeType,
+                        scrutineeIsNullable,
+                        notPattern.Pattern,
+                        mainBinder,
+                        into,
+                        !negated
+                    )
                     return
                 }
-                case declaration is DeclarationPatternSyntax when this.IsBindOnlyMainBinder(
+                case binaryPattern is BinaryPatternSyntax when(
+                    (!negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword)) ||
+                        (negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword))
+                ) {
+                    this.EmitMustHoldGuards(
+                        idExpr,
+                        scrutineeType,
+                        scrutineeIsNullable,
+                        binaryPattern.Left,
+                        mainBinder,
+                        into,
+                        negated
+                    )
+                    this.EmitMustHoldGuards(
+                        idExpr,
+                        scrutineeType,
+                        scrutineeIsNullable,
+                        binaryPattern.Right,
+                        mainBinder,
+                        into,
+                        negated
+                    )
+                    return
+                }
+                case declaration is DeclarationPatternSyntax when !negated && this.IsBindOnlyMainBinder(
                     declaration,
                     scrutineeType,
                     scrutineeIsNullable,
@@ -484,14 +507,29 @@ partial class CSharpToGSharpTranslator {
                     return
                 }
                 case declaration is DeclarationPatternSyntax {
-                    // A secondary type-binder: emit the type test as a break guard;
-                    // references to the binder print as the hoist local (registered by
-                    // HoistLoopConditionClause).
-                    into.Add(BreakIf(Negate(this.BuildTypeTestExpression(idExpr, declaration.Type, declaration))))
+                    let typeTest = this.BuildTypeTestExpression(idExpr, declaration.Type, declaration)
+                    into.Add(
+                        BreakIf(
+                            if negated {
+                                typeTest
+                            } else {
+                                Negate(typeTest)
+                            }
+                        )
+                    )
                     return
                 }
                 default {
-                    into.Add(BreakIf(Negate(this.TranslatePatternTest(idExpr, pattern, scrutineeType))))
+                    let patternTest = this.TranslatePatternTest(idExpr, pattern, scrutineeType)
+                    into.Add(
+                        BreakIf(
+                            if negated {
+                                patternTest
+                            } else {
+                                Negate(patternTest)
+                            }
+                        )
+                    )
                     return
                 }
             }
@@ -521,37 +559,126 @@ partial class CSharpToGSharpTranslator {
             return IsAssignableNonNull(scrutineeType, target)
         }
 
-        private func FindMainPatternBinder(pattern PatternSyntax) ILocalSymbol? -> this
-            .EnumerateWholeValuePatternBinders(pattern).FirstOrDefault()
+        private func FindMainPatternBinder(pattern PatternSyntax, negated bool = false) ILocalSymbol? -> this
+            .EnumerateWholeValuePatternBinders(pattern, negated).FirstOrDefault()
 
-        private func EnumerateWholeValuePatternBinders(pattern PatternSyntax) sequence[ILocalSymbol] {
+        private func EnumerateWholeValuePatternBinders(pattern PatternSyntax, negated bool = false) sequence[
+            ILocalSymbol
+        ] {
             switch pattern {
                 case parenthesized is ParenthesizedPatternSyntax {
-                    for binder in this.EnumerateWholeValuePatternBinders(parenthesized.Pattern) {
+                    for binder in this.EnumerateWholeValuePatternBinders(parenthesized.Pattern, negated) {
                         yield binder
                     }
                 }
-                case andPattern is BinaryPatternSyntax when andPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword) {
-                    for binder in this.EnumerateWholeValuePatternBinders(andPattern.Left) {
-                        yield binder
-                    }
-                    for binder in this.EnumerateWholeValuePatternBinders(andPattern.Right) {
+                case notPattern is UnaryPatternSyntax when notPattern.IsKind(SyntaxKind.NotPattern) {
+                    for binder in this.EnumerateWholeValuePatternBinders(notPattern.Pattern, !negated) {
                         yield binder
                     }
                 }
-                case DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax single} {
+                case binaryPattern is BinaryPatternSyntax when(
+                    (!negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword)) ||
+                        (negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword))
+                ) {
+                    for binder in this.EnumerateWholeValuePatternBinders(binaryPattern.Left, negated) {
+                        yield binder
+                    }
+                    for binder in this.EnumerateWholeValuePatternBinders(binaryPattern.Right, negated) {
+                        yield binder
+                    }
+                }
+                case DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
                     if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
                         yield symbol
                     }
                 }
-                case VarPatternSyntax{Designation: SingleVariableDesignationSyntax single} {
+                case VarPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
                     if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
                         yield symbol
                     }
                 }
-                case RecursivePatternSyntax{Designation: SingleVariableDesignationSyntax single} {
+                case RecursivePatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
                     if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
                         yield symbol
+                    }
+                }
+                default { }
+            }
+        }
+
+        private func EnumerateWhenTruePatternBinders(pattern PatternSyntax?, negated bool = false) sequence[
+            ILocalSymbol
+        ] {
+            switch pattern {
+                case parenthesized is ParenthesizedPatternSyntax {
+                    for binder in this.EnumerateWhenTruePatternBinders(parenthesized.Pattern, negated) {
+                        yield binder
+                    }
+                }
+                case notPattern is UnaryPatternSyntax when notPattern.IsKind(SyntaxKind.NotPattern) {
+                    for binder in this.EnumerateWhenTruePatternBinders(notPattern.Pattern, !negated) {
+                        yield binder
+                    }
+                }
+                case binaryPattern is BinaryPatternSyntax when(
+                    (!negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword)) ||
+                        (negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword))
+                ) {
+                    for binder in this.EnumerateWhenTruePatternBinders(binaryPattern.Left, negated) {
+                        yield binder
+                    }
+                    for binder in this.EnumerateWhenTruePatternBinders(binaryPattern.Right, negated) {
+                        yield binder
+                    }
+                }
+                case DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
+                    if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
+                        yield symbol
+                    }
+                }
+                case VarPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
+                    if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
+                        yield symbol
+                    }
+                }
+                case recursive is RecursivePatternSyntax when !negated {
+                    if recursive.Designation is SingleVariableDesignationSyntax single &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(single) is ILocalSymbol symbol {
+                        yield symbol
+                    }
+                    if recursive.PropertyPatternClause != nil {
+                        for subpattern in recursive.PropertyPatternClause!!.Subpatterns {
+                            for binder in this.EnumerateWhenTruePatternBinders(subpattern.Pattern, false) {
+                                yield binder
+                            }
+                        }
+                    }
+                    if recursive.PositionalPatternClause != nil {
+                        for subpattern in recursive.PositionalPatternClause!!.Subpatterns {
+                            for binder in this.EnumerateWhenTruePatternBinders(subpattern.Pattern, false) {
+                                yield binder
+                            }
+                        }
+                    }
+                }
+                case list is ListPatternSyntax when !negated {
+                    if list.Designation is SingleVariableDesignationSyntax single && this.context.GetDeclaredSymbol(
+                        single
+                    ) is ILocalSymbol symbol {
+                        yield symbol
+                    }
+                    for element in list.Patterns {
+                        if element is SlicePatternSyntax slice {
+                            for binder in this.EnumerateWhenTruePatternBinders(slice.Pattern, false) {
+                                yield binder
+                            }
+                        } else {
+                            for binder in this.EnumerateWhenTruePatternBinders(element, false) {
+                                yield binder
+                            }
+                        }
                     }
                 }
                 default { }
@@ -2006,6 +2133,23 @@ partial class CSharpToGSharpTranslator {
                     FlattenAndClauses(binary.Right, clauses)
                 } else {
                     clauses.Add(expr!!)
+                }
+            }
+
+            private func UnwrapLogicalNot(expression ExpressionSyntax, out negated bool) ExpressionSyntax {
+                negated = false
+                var current = expression
+                while true {
+                    if current is ParenthesizedExpressionSyntax paren {
+                        current = paren.Expression
+                    } else if current is PrefixUnaryExpressionSyntax prefix && prefix.IsKind(
+                        SyntaxKind.LogicalNotExpression
+                    ) {
+                        negated = !negated
+                        current = prefix.Operand
+                    } else {
+                        return current
+                    }
                 }
             }
 
