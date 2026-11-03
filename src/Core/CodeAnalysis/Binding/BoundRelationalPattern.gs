@@ -43,12 +43,12 @@ class BoundRelationalPattern : BoundPattern {
     }
 
     /// Gets the temporary that holds a value-type `T?` input.
-    prop InputVariable LocalVariableSymbol? {
+    internal prop InputVariable LocalVariableSymbol? {
         get;
     }
 
     /// Gets the temporary that holds a `T?` value for a value-type `T?` input.
-    prop ValueVariable LocalVariableSymbol? {
+    internal prop ValueVariable LocalVariableSymbol? {
         get;
     }
 }
