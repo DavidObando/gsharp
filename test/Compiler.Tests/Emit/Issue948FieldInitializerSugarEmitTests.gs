@@ -241,6 +241,18 @@ struct ZeroChildB {
     var Missing bool = IsMissingItems(ZeroOwnerA{}.Value)
 }
 
+struct ExplicitCollectionOwner {
+    var Value ExplicitCollectionChild
+}
+
+func IsMissingBoolItems(child ExplicitCollectionChild) bool {
+    return Object.ReferenceEquals(child.Items, nil)
+}
+
+struct ExplicitCollectionChild {
+    var Items []bool = []bool{IsMissingBoolItems(ExplicitCollectionOwner{}.Value)}
+}
+
 class CheckedCaller {
     var Value UncheckedPayload = checked(UncheckedPayload{})
 }
@@ -287,6 +299,7 @@ func Main() {
             peerB.Scale.ToString() + "," + peerB.Peers[0].Tag.ToString()
     )
     Console.WriteLine("zero-missing=" + ZeroChildB{}.Missing.ToString())
+    Console.WriteLine("explicit-collection-missing=" + ExplicitCollectionChild{}.Items[0].ToString())
     Console.WriteLine("unchecked-payload=" + CheckedCaller().Value.Count.ToString())
 }`
         let output = CompileAndRun(source)
@@ -305,6 +318,7 @@ func Main() {
                 "mutual=11,11,13",
                 "peers=17,19,19,17",
                 "zero-missing=False",
+                "explicit-collection-missing=False",
                 "unchecked-payload=-2147483648",
                 ""
             }

@@ -4083,6 +4083,7 @@ internal partial class DeclarationBinder {
     /// unqualified free-function or sibling static-member call.
     internal func BindPendingFieldInitializers() {
         EnsurePendingConstInitializersBound()
+        EnsurePendingZeroValueInitializersBound()
         for symbol in pendingFieldInitializerStructs {
             EnsureStructFieldInitializerBound(symbol, field: nil)
         }
@@ -4109,27 +4110,30 @@ internal partial class DeclarationBinder {
         FoldCrossTypeConstInitializers()
     }
 
+    private func EnsurePendingZeroValueInitializersBound() {
+        if pendingZeroValueInstanceFieldMap.Count == 0 {
+            return
+        }
+        for symbol in pendingFieldInitializerStructs {
+            EnsureStructClosureFieldInitializersBound(symbol)
+        }
+        pendingZeroValueInstanceFieldMap.Clear()
+    }
+
     // Issue #5596: bind a struct's field initializer on demand so composite literals keep non-overridden defaults.
     internal func EnsureStructFieldInitializerBound(structSymbol StructSymbol?, field FieldSymbol?) {
         if structSymbol == nil {
             return
         }
         EnsurePendingConstInitializersBound()
+        EnsurePendingZeroValueInitializersBound()
         let definition = structSymbol.Definition ?? structSymbol
         if field != nil {
             let definitionField = structSymbol.GetDefinitionField(field) ?? field
-            if pendingZeroValueInstanceFieldMap.Remove(definitionField, out var bindZero) {
-                bindZero()
-            }
             if pendingInstanceFieldInitializerMap.Remove(definitionField, out var bindField) {
                 bindField()
             }
             return
-        }
-        for candidate in definition.Fields {
-            if pendingZeroValueInstanceFieldMap.Remove(candidate, out var bindZero) {
-                bindZero()
-            }
         }
         for candidate in definition.Fields {
             if pendingInstanceFieldInitializerMap.Remove(candidate, out var bindCandidate) {
@@ -4153,9 +4157,6 @@ internal partial class DeclarationBinder {
         for candidate in definition.Fields {
             if pendingZeroValueInstanceFieldMap.Remove(candidate, out var bindZero) {
                 bindZero()
-            } else if MagicCollectionZeroValue.MightNeedZeroValue(candidate.Type) &&
-                pendingInstanceFieldInitializerMap.Remove(candidate, out var bindMagic) {
-                bindMagic()
             }
         }
     }
