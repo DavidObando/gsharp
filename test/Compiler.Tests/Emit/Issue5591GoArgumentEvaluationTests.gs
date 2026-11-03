@@ -130,6 +130,7 @@ class Spawner : Base {
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
     func PairIn(in a int32, b int32) { Log.Add("named-in a=" + a.ToString() + " b=" + b.ToString()) }
+    func ConsumeSpan(value ReadOnlySpan[char], extra int32) { Log.Add("named-span len=" + value.Length.ToString() + " extra=" + extra.ToString()) }
     func Show[T](tag string, value T) { Log.Add(tag + " " + value.ToString()) }
     async func Later(v int32) {
         await Task.Yield()
@@ -148,6 +149,7 @@ class Spawner : Base {
             go Three(Next("a"), Next("b"), Next("c"))
             go Pair(b: Next("d"), a: Next("e"))
             go PairIn(b: Next("f"), a: Next("g"))
+            go ConsumeSpan(extra: Next("h"), value: label.AsSpan())
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -180,7 +182,8 @@ interface A 41
 method first 41
 named a=5 b=4
 named-in a=7 b=6
-order abcdefg|
+named-span len=3 extra=8
+order abcdefgh|
 positional 123
 suspending 7
 `)

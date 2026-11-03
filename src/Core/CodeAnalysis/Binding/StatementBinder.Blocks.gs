@@ -1295,8 +1295,7 @@ internal partial class StatementBinder {
                 return CaptureGoReceiverCore(address.Operand, prefix)
             }
             case block is BoundBlockExpression when !ReadsUncapturableVariable(block) {
-                HoistArgumentBlockStatements(block.Statements, prefix)
-                return CaptureGoReceiverCore(block.Expression, prefix)
+                return HoistArgumentBlock(block, prefix, (tail BoundExpression) -> CaptureGoReceiverCore(tail, prefix))
             }
             case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
                 let address = cast[BoundConditionalAddressExpression](dereference.Operand)
@@ -1447,23 +1446,30 @@ internal partial class StatementBinder {
     ) BoundExpression {
         if operand is BoundAddressOfExpression{
             Operand: BoundDereferenceExpression{Operand: BoundBlockExpression block}
-        } {
-            HoistArgumentBlockStatements(block.Statements, prefix)
-            return CaptureGoOperand(block.Expression, prefix)
+        } outerAddress {
+            let rewritten = HoistArgumentBlock(block, prefix, (tail BoundExpression) -> CaptureGoOperand(tail, prefix))
+            if rewritten is BoundBlockExpression {
+                return BoundAddressOfExpression(
+                    outerAddress.Syntax,
+                    BoundDereferenceExpression(outerAddress.Operand.Syntax, rewritten),
+                    outerAddress.IsUnmanaged,
+                    outerAddress.IsReadOnly
+                )
+            }
+            return rewritten
         }
         if operand is BoundAddressOfExpression{Operand: BoundBlockExpression block} addressBlock &&
             !ReadsUncapturableVariable(addressBlock) {
-            HoistArgumentBlockStatements(block.Statements, prefix)
+            let rewritten = HoistArgumentBlock(block, prefix, (tail BoundExpression) -> tail)
             return BoundAddressOfExpression(
                 addressBlock.Syntax,
-                block.Expression,
+                rewritten,
                 addressBlock.IsUnmanaged,
                 addressBlock.IsReadOnly
             )
         }
         if operand is BoundBlockExpression plainBlock && !ReadsUncapturableVariable(plainBlock) {
-            HoistArgumentBlockStatements(plainBlock.Statements, prefix)
-            return CaptureGoOperand(plainBlock.Expression, prefix)
+            return HoistArgumentBlock(plainBlock, prefix, (tail BoundExpression) -> CaptureGoOperand(tail, prefix))
         }
         // A constant and `this` cannot change before the child runs, and a
         // function literal only allocates a closure over shared variables, so
@@ -1490,16 +1496,31 @@ internal partial class StatementBinder {
         return SpillToReadOnlyLocal(operand, "$$go$$arg$$${binderCtx.GoArgumentCounter++}", prefix)
     }
 
-    private func HoistArgumentBlockStatements(
-        statements ImmutableArray[BoundStatement],
-        prefix ImmutableArray[BoundStatement].Builder
-    ) {
-        for statement in statements {
-            if statement is BoundVariableDeclaration declaration {
-                $scope.TryDeclareVariable(declaration.Variable)
+    private func HoistArgumentBlock(
+        block BoundBlockExpression,
+        prefix ImmutableArray[BoundStatement].Builder,
+        captureTail Func[BoundExpression, BoundExpression]
+    ) BoundExpression {
+        let retained = ImmutableArray.CreateBuilder[BoundStatement]()
+        for statement in block.Statements {
+            if statement is BoundVariableDeclaration declaration &&
+                (
+                ClosureCaptureLegalityChecker.RejectsCapture(declaration.Variable) ||
+                    (declaration.Initializer != nil && ReadsUncapturableVariable(declaration.Initializer))
+            ) {
+                retained.Add(statement)
+                continue
+            }
+            if statement is BoundVariableDeclaration hoistedDeclaration {
+                $scope.TryDeclareVariable(hoistedDeclaration.Variable)
             }
             prefix.Add(statement)
         }
+        let tail = captureTail(block.Expression)
+        if retained.Count == 0 {
+            return tail
+        }
+        return BoundBlockExpression(block.Syntax, retained.ToImmutable(), tail)
     }
 
     private func ReadsUncapturableVariable(operand BoundExpression) bool {
