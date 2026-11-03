@@ -1851,7 +1851,13 @@ internal partial class ExpressionBinder {
                     nativeConversions: conversions
                 ),
                 erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(boundArguments),
-                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments)
+                delegateArgumentCheck: MakeDelegateArgumentCheck(boundArguments),
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                    boundArguments,
+                    nativeConversions: conversions,
+                    openGenericDefinition: openGenericDefinition,
+                    symbolicTypeArguments: symbolicTypeArgs
+                )
             )
             switch resolution.Outcome {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved {
@@ -1901,8 +1907,18 @@ internal partial class ExpressionBinder {
                 (
                 !hasInvalidExplicitTypedInlineOut &&
                     !hasErrorArgument &&
+                    (
                     inlineOutArguments.Count > 0 &&
-                    TryReportClrConstructorArgumentTypeMismatch(syntax, ctors, argumentNames, boundArguments)
+                        TryReportClrConstructorArgumentTypeMismatch(syntax, ctors, argumentNames, boundArguments) ||
+                        TryReportClrConstructorByRefArgumentStorageMismatch(
+                        syntax,
+                        ctors,
+                        argumentNames,
+                        boundArguments,
+                        openGenericDefinition,
+                        symbolicTypeArgs
+                    )
+                )
             ) {
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
@@ -2057,11 +2073,7 @@ internal partial class ExpressionBinder {
                     symbolicTypeArgs,
                     bestCtor,
                     p,
-                    peelByRef: ctorParameters[p]
-                        .ParameterType
-                        .IsByRef &&
-                        ctorParameters[p].IsIn &&
-                        !ctorParameters[p].IsOut
+                    peelByRef: ctorParameters[p].ParameterType.IsByRef
                 )
                 if recovered == nil {
                     continue
@@ -2109,7 +2121,10 @@ internal partial class ExpressionBinder {
         } else if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
             resultType = ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs)
         } else {
-            resultType = TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            resultType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                clrType,
+                TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            )
         }
         let ctorCall BoundExpression = BoundClrConstructorCallExpression(
             syntax,
@@ -2174,6 +2189,73 @@ internal partial class ExpressionBinder {
                     parameter.Name ?? "value",
                     expectedType,
                     actualType
+                )
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TryReportClrConstructorByRefArgumentStorageMismatch(
+        syntax CallExpressionSyntax,
+        constructors IReadOnlyList[ConstructorInfo],
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        openGenericDefinition Type?,
+        symbolicTypeArguments ImmutableArray[TypeSymbol]
+    ) bool {
+        for var index = 0; index < boundArguments.Count; index++ {
+            if ByRefStorageMatching.TryGetStorageType(boundArguments[index]) is not{} storage {
+                continue
+            }
+            let name string? = if argumentNames.IsDefault {
+                default(string?)
+            } else {
+                argumentNames[index]
+            }
+            for constructor in constructors {
+                let parameters = constructor.GetParameters()
+                if parameters.Length != boundArguments.Count {
+                    continue
+                }
+                let parameterIndex = if name == nil {
+                    index
+                } else {
+                    FindClrParameterIndex(parameters, name)
+                }
+                if parameterIndex < 0 ||
+                    parameterIndex >= parameters.Length ||
+                    !parameters[parameterIndex]
+                    .ParameterType
+                    .IsByRef ||
+                    parameters[parameterIndex]
+                    .ParameterType
+                    .ContainsGenericParameters {
+                    continue
+                }
+                let expectedType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    parameters[parameterIndex].ParameterType,
+                    ResolveConstructorParameterPointeeType(
+                        constructor,
+                        parameterIndex,
+                        openGenericDefinition,
+                        symbolicTypeArguments
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex])
+                )
+                if ByRefStorageMatching.AreSameStorageType(storage, expectedType, out _, out _, out _) {
+                    continue
+                }
+                let location = if index < syntax.Arguments.Count {
+                    syntax.Arguments[index].Location
+                } else {
+                    syntax.Location
+                }
+                conversions.ReportByRefStorageMismatch(
+                    location,
+                    parameters[parameterIndex].Name ?? "value",
+                    expectedType,
+                    storage
                 )
                 return true
             }
@@ -3063,11 +3145,14 @@ internal partial class ExpressionBinder {
                 return nil
             }
             let openParameter = openParameters[parameterIndex]
-            return if openParameter.ParameterType.IsByRef {
-                MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
-                    openParameter,
-                    openGenericDefinition,
-                    symbolicTypeArguments
+            return if openParameter.ParameterType.IsByRef && openParameter.ParameterType.ContainsGenericParameters {
+                ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParameter.ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParameter,
+                        openGenericDefinition,
+                        symbolicTypeArguments
+                    )
                 )
             } else {
                 default(TypeSymbol?)

@@ -248,7 +248,7 @@ internal class MemberLookup {
         }
         let argTypes = [boundArguments.Length]Type?
         for var i = 0; i < boundArguments.Length; i++ {
-            argTypes[i] = boundArguments[i].Type?.ClrType
+            argTypes[i] = NullableLifting.GetEffectiveClrType(boundArguments[i].Type)
             if argTypes[i] == nil {
                 // Issue #2471: imported generic receivers constructed with a
                 // same-compilation source type use System.Object as the
@@ -8719,6 +8719,9 @@ internal class MemberLookup {
         ) {
             var actual = actual
             if openClr == nil || actual == nil {
+                return
+            }
+            if !openClr.IsByRef && actual is ByRefTypeSymbol {
                 return
             }
             if object.ReferenceEquals(actual, TypeSymbol.Error) {

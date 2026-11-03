@@ -83,6 +83,31 @@ internal class CustomAttributeEncoder {
         ParamsExpanded
     }
 
+    private enum AttributeArgumentConversionKind {
+        NotApplicable,
+        Exact,
+        UntypedNullToReferenceArray,
+        UntypedNullToObjectArray,
+        UntypedNullToOtherReference,
+        CovariantArray,
+        ObjectFallback
+    }
+
+    private data class UserAttributeConstructorCandidate(
+        Constructor ConstructorSymbol?,
+        Form AttributeConstructorArgumentForm,
+        ParamTypes[]Type,
+        EffectiveArguments[]object?,
+        Conversions[]AttributeArgumentConversionKind
+    )
+
+    private data class ImportedAttributeConstructorCandidate(
+        Constructor ConstructorInfo,
+        Form AttributeConstructorArgumentForm,
+        EffectiveArguments[]object?,
+        Conversions[]AttributeArgumentConversionKind
+    )
+
     /// Emits a fixed-shape custom attribute whose constructor takes a single
     /// (cref:string) argument, used by assembly-level helpers such as
     /// `EmitReferenceAssemblyAttribute` and the AssemblyInfo emitters.
@@ -729,90 +754,104 @@ internal class CustomAttributeEncoder {
         var sawProjectableCandidate = false
         var positionalConflict BoundAttributeArgument? = nil
         ValidateUniqueNamedConstructorArguments(attr)
-        for useDefaults in[]bool{false, true} {
-            if attributeType.HasPrimaryConstructor && this.resolvePrimaryCtorToken != nil {
+        let constructorCandidates = List[(Constructor ConstructorSymbol?, Parameters ImmutableArray[ParameterSymbol])]()
+        if attributeType.HasPrimaryConstructor &&
+            this.resolvePrimaryCtorToken != nil &&
+            !attributeType
+            .EffectiveExplicitConstructors
+            .Any((ctor ConstructorSymbol) -> ctor.IsSynthesizedFromPrimaryConstructor) {
+            constructorCandidates.Add((nil, attributeType.PrimaryConstructorParameters))
+        }
+        if this.resolveExplicitCtorToken != nil {
+            for ctor in attributeType.EffectiveExplicitConstructors {
+                constructorCandidates.Add((ctor, GetSubstitutedConstructorParameters(attributeType, ctor)))
+            }
+        }
+        let candidates = List[UserAttributeConstructorCandidate]()
+        for (ctor, parameters) in constructorCandidates {
+            for desiredForm in Enum.GetValues[AttributeConstructorArgumentForm]() {
                 if !TryMapUserAttributeConstructorArgumentSlots(
-                    attributeType.PrimaryConstructorParameters,
+                    parameters,
                     attr,
+                    desiredForm,
                     out var slots,
-                    out var usedDefault,
+                    out var expandedTail,
+                    out var argumentSlotIndices,
                     out var conflict
                 ) {
                     positionalConflict ??= conflict
-                } else if usedDefault == useDefaults {
-                    if !TryGetClrParameterTypes(
-                        attributeType.PrimaryConstructorParameters,
-                        out paramTypes,
-                        out var offending
-                    ) {
-                        unsupportedParameter = offending
-                    } else {
-                        // A by-reference parameter keeps no narrowing across a call (ADR-0208 R12).
-                        let resolvedTypes = paramTypes
-                        SawProjectable(&sawProjectableCandidate)
-                        if TryBuildUserAttributeConstructorArguments(slots, resolvedTypes, out effectiveArguments) {
-                            ctorToken = this.resolvePrimaryCtorToken!!(attributeType)
-                            return true
-                        }
-                        // Issue #4097: a primary constructor was previously
-                        // accepted on arity alone, allowing an argument type
-                        // mismatch to reach the blob writer as GS9998.
-                        paramTypes = nil
-                    }
+                    continue
                 }
-            }
-            if this.resolveExplicitCtorToken != nil {
-                var matchedCtor ConstructorSymbol? = nil
-                var matchedParamTypes[]?Type = nil
-                var matchedArguments[]?object? = nil
-                var ambiguousCtor ConstructorSymbol? = nil
-                for ctor in attributeType.EffectiveExplicitConstructors {
-                    if !TryMapUserAttributeConstructorArgumentSlots(
-                        ctor.Parameters,
-                        attr,
-                        out var slots,
-                        out var usedDefault,
-                        out var conflict
-                    ) {
-                        positionalConflict ??= conflict
-                        continue
-                    }
-                    if usedDefault != useDefaults {
-                        continue
-                    }
-                    if !TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending) {
-                        unsupportedParameter ??= offending
-                        continue
-                    }
-                    sawProjectableCandidate = true
-                    if !TryBuildUserAttributeConstructorArguments(
-                        slots,
+                if !TryGetClrParameterTypes(parameters, out var candidateParamTypes, out var offending) {
+                    unsupportedParameter ??= offending
+                    break
+                }
+                sawProjectableCandidate = true
+                if !TryBuildUserAttributeConstructorArguments(
+                    slots,
+                    expandedTail,
+                    argumentSlotIndices,
+                    parameters,
+                    candidateParamTypes,
+                    desiredForm,
+                    out var candidateArguments,
+                    out var candidateConversions
+                ) {
+                    continue
+                }
+                candidates.Add(
+                    UserAttributeConstructorCandidate(
+                        ctor,
+                        desiredForm,
                         candidateParamTypes,
-                        out var candidateArguments
-                    ) {
+                        candidateArguments,
+                        candidateConversions
+                    )
+                )
+                break
+            }
+        }
+        if candidates.Count > 0 {
+            var bestIndex = -1
+            for var i = 0; i < candidates.Count; i++ {
+                var beatsAll = true
+                for var j = 0; j < candidates.Count; j++ {
+                    if i == j {
                         continue
                     }
-                    if matchedCtor != nil {
-                        ambiguousCtor = ctor
+                    if !IsBetterAttributeConstructorCandidate(
+                        candidates[i].Conversions,
+                        candidates[i].Form,
+                        candidates[i].ParamTypes.Length,
+                        candidates[j].Conversions,
+                        candidates[j].Form,
+                        candidates[j].ParamTypes.Length
+                    ) {
+                        beatsAll = false
                         break
                     }
-                    matchedCtor = ctor
-                    matchedParamTypes = candidateParamTypes
-                    matchedArguments = candidateArguments
                 }
-                if ambiguousCtor != nil {
-                    EmitDiagnosticException.Throw(
-                        attr.Syntax,
-                        "Ambiguous constructor for attribute '${attributeType.Name}': more than one 'init(...)' overload accepts the given arguments. Add an explicit conversion or change the argument types to disambiguate."
-                    )
-                }
-                if matchedCtor != nil && matchedParamTypes != nil && matchedArguments != nil {
-                    ctorToken = this.resolveExplicitCtorToken!!(attributeType, matchedCtor)
-                    paramTypes = matchedParamTypes
-                    effectiveArguments = matchedArguments
-                    return true
+                if beatsAll {
+                    bestIndex = i
+                    break
                 }
             }
+            if bestIndex < 0 {
+                EmitDiagnosticException.Throw(
+                    attr.Syntax,
+                    "Ambiguous constructor for attribute '${attributeType.Name}': more than one 'init(...)' overload accepts the given arguments. Add an explicit conversion or change the argument types to disambiguate."
+                )
+            }
+            let winner = candidates[bestIndex]
+            ctorToken = if winner.Constructor == nil ||
+                (winner.Constructor.IsSynthesizedFromPrimaryConstructor && this.resolvePrimaryCtorToken != nil) {
+                this.resolvePrimaryCtorToken!!(attributeType)
+            } else {
+                this.resolveExplicitCtorToken!!(attributeType, winner.Constructor)
+            }
+            paramTypes = winner.ParamTypes
+            effectiveArguments = winner.EffectiveArguments
+            return true
         }
         if sawProjectableCandidate {
             // Review feedback on PR #4137: an unprojectable parameter was
@@ -908,20 +947,17 @@ internal class CustomAttributeEncoder {
     private func WriteCustomAttributeFixedArg(bb BlobBuilder, paramType Type, value object?) {
         var value = value
         if value is BoundAttributeArgument argument {
+            let unwrappedArgumentType = UnwrapAttributeReferenceNullability(argument.Type) ?? argument.Type
             if paramType.IsSameAs(typeof(object)) &&
-                (argument.Type is EnumSymbol || argument.Type.ClrType?.IsEnum == true) &&
-                TryGetAttributeParameterWriteType(argument.Type, out var enumType) {
+                (unwrappedArgumentType is EnumSymbol || unwrappedArgumentType.ClrType?.IsEnum == true) &&
+                TryGetAttributeParameterWriteType(unwrappedArgumentType, out var enumType) {
                 // A boxed enum's tag names the enum, not its integer payload.
                 bb.WriteByte(0x55)
-                bb.WriteSerializedString(this.GetSerializedTypeName(argument.Type))
+                bb.WriteSerializedString(this.GetSerializedTypeName(unwrappedArgumentType))
                 this.WriteCustomAttributeFixedArg(bb, enumType!!, argument.Value)
                 return
             }
-            let arrayElement TypeSymbol? = switch argument.Type {
-                case slice is SliceTypeSymbol: slice.ElementType
-                case array is ArrayTypeSymbol: array.ElementType
-                default: default(TypeSymbol?)
-            }
+            let arrayElement TypeSymbol? = GetOneDimensionalArrayElementType(argument.Type)
             if paramType.IsSameAs(typeof(object)) &&
                 (arrayElement is EnumSymbol || arrayElement?.ClrType?.IsEnum == true) &&
                 TryGetAttributeParameterWriteType(arrayElement, out var elementWriteType) {
@@ -943,6 +979,16 @@ internal class CustomAttributeEncoder {
                 // because it contains a same-compilation TypeSymbol).
                 WriteCustomAttributeFieldOrPropertyType(bb, arrayWriteType!!)
                 this.WriteCustomAttributeFixedArg(bb, arrayWriteType!!, argument.Value)
+                return
+            }
+            if paramType.IsSameAs(typeof(object)) &&
+                argument.Value == nil &&
+                unwrappedArgumentType.ClrType is {} scalarNullClr &&
+                NormalizeWellKnownType(scalarNullClr) is {} normalizedScalarNull &&
+                normalizedScalarNull
+                .IsSameAs(typeof(Type)) {
+                WriteCustomAttributeFieldOrPropertyType(bb, typeof(Type))
+                this.WriteCustomAttributeFixedArg(bb, typeof(Type), nil)
                 return
             }
             value = argument.Value
@@ -1453,24 +1499,58 @@ internal class CustomAttributeEncoder {
             flags ImmutableArray[uint8]
         ) bool -> MethodNullabilityPlan.NeedsAttribute(flags, NullableFlagsBuilder.NotAnnotated)
 
+        private func GetSubstitutedConstructorParameters(
+            attributeType StructSymbol,
+            ctor ConstructorSymbol
+        ) ImmutableArray[ParameterSymbol] {
+            let source = ctor.Parameters
+            if source.IsDefaultOrEmpty {
+                return source
+            }
+            let substitutedTypes = attributeType.GetConstructorParameterTypesForConstruction(ctor)
+            let builder = ImmutableArray.CreateBuilder[ParameterSymbol](source.Length)
+            for var i = 0; i < source.Length; i++ {
+                let parameter = source[i]
+                let substituted = ParameterSymbol(parameter, substitutedTypes[i], parameter.DeclaringSyntax)
+                if parameter.HasExplicitDefaultValue {
+                    substituted.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
+                }
+                builder.Add(substituted)
+            }
+            return builder.MoveToImmutable()
+        }
+
         private func TryMapUserAttributeConstructorArgumentSlots(
             parameters ImmutableArray[ParameterSymbol],
             attribute BoundAttribute,
+            desiredForm AttributeConstructorArgumentForm,
             @NotNullWhen(true) out slots[]?object?,
-            out usedDefault bool,
+            @NotNullWhen(true) out expandedTail List[BoundAttributeArgument]?,
+            @NotNullWhen(true) out argumentSlotIndices[]?int32,
             out positionalConflict BoundAttributeArgument?
         ) bool {
             slots = nil
-            usedDefault = false
+            expandedTail = nil
+            argumentSlotIndices = nil
             positionalConflict = nil
-            if attribute.PositionalArguments.Length > parameters.Length {
+            let arguments = attribute.PositionalArguments
+            let expanded = desiredForm == AttributeConstructorArgumentForm.ParamsExpanded
+            let hasParams = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic
+            let fixedCount = if expanded && hasParams {
+                parameters.Length - 1
+            } else {
+                parameters.Length
+            }
+            if (expanded && !hasParams) || (!expanded && arguments.Length > parameters.Length) {
                 return false
             }
             let mappedSlots = [parameters.Length]object?
             let filled = [parameters.Length]bool
+            let tail = List[BoundAttributeArgument]()
+            let slotIndices = [arguments.Length]int32
             var sawOutOfPositionName = false
-            for var sourceIndex = 0; sourceIndex < attribute.PositionalArguments.Length; sourceIndex++ {
-                let argument = attribute.PositionalArguments[sourceIndex]
+            for var sourceIndex = 0; sourceIndex < arguments.Length; sourceIndex++ {
+                let argument = arguments[sourceIndex]
                 var index = sourceIndex
                 if argument.Name is {} name {
                     index = -1
@@ -1481,10 +1561,21 @@ internal class CustomAttributeEncoder {
                         }
                     }
                     sawOutOfPositionName |= index != sourceIndex
-                } else if sawOutOfPositionName {
+                } else {
+                    if sawOutOfPositionName {
+                        return false
+                    }
+                    if expanded && sourceIndex >= fixedCount {
+                        slotIndices[sourceIndex] = -1 - tail.Count
+                        tail.Add(argument)
+                        continue
+                    }
+                }
+                if index < 0 || (expanded && index == parameters.Length - 1) {
                     return false
                 }
-                if index < 0 {
+                if index >= parameters.Length {
+                    positionalConflict = argument
                     return false
                 }
                 if (filled[index]) {
@@ -1493,36 +1584,116 @@ internal class CustomAttributeEncoder {
                 }
                 mappedSlots[index] = argument
                 filled[index] = true
+                slotIndices[sourceIndex] = index
             }
-            for var i = 0; i < parameters.Length; i++ {
+            var usedDefault = false
+            for var i = 0; i < fixedCount; i++ {
                 if !filled[i] {
                     if !parameters[i].HasExplicitDefaultValue {
                         return false
                     }
                     usedDefault = true
                     mappedSlots[i] = parameters[i].ExplicitDefaultValue
+                    filled[i] = true
                     continue
                 }
             }
+            if !expanded {
+                for var i = fixedCount; i < parameters.Length; i++ {
+                    if !filled[i] {
+                        return false
+                    }
+                }
+                if (desiredForm == AttributeConstructorArgumentForm.Normal && usedDefault) ||
+                    (desiredForm == AttributeConstructorArgumentForm.Defaulted && !usedDefault) {
+                    return false
+                }
+            }
             slots = mappedSlots
+            expandedTail = tail
+            argumentSlotIndices = slotIndices
             return true
         }
 
         private func TryBuildUserAttributeConstructorArguments(
             slots[]object?,
+            expandedTail List[BoundAttributeArgument],
+            argumentSlotIndices[]int32,
+            parameters ImmutableArray[ParameterSymbol],
             parameterTypes[]Type,
-            @NotNullWhen(true) out effectiveArguments[]?object?
+            desiredForm AttributeConstructorArgumentForm,
+            @NotNullWhen(true) out effectiveArguments[]?object?,
+            @NotNullWhen(true) out conversions[]?AttributeArgumentConversionKind
         ) bool {
             effectiveArguments = nil
-            for var i = 0; i < slots.Length; i++ {
+            conversions = nil
+            let expanded = desiredForm == AttributeConstructorArgumentForm.ParamsExpanded
+            let fixedCount = if expanded {
+                parameters.Length - 1
+            } else {
+                parameters.Length
+            }
+            let slotConversions = [parameters.Length]AttributeArgumentConversionKind
+            for var i = 0; i < fixedCount; i++ {
                 if slots[i] is not BoundAttributeArgument supplied {
                     continue
                 }
-                if !ArgAssignable(supplied.Value, parameterTypes[i], supplied.Type) {
+                let conversion = ClassifyAttributeArgumentConversion(
+                    supplied.Value,
+                    parameterTypes[i],
+                    supplied.Type,
+                    parameters[i].Type
+                )
+                if conversion == AttributeArgumentConversionKind.NotApplicable {
                     return false
                 }
+                slotConversions[i] = conversion
             }
-            effectiveArguments = slots
+            let argumentConversions = [argumentSlotIndices.Length]AttributeArgumentConversionKind
+            if !expanded {
+                for var sourceIndex = 0; sourceIndex < argumentSlotIndices.Length; sourceIndex++ {
+                    argumentConversions[sourceIndex] = slotConversions[argumentSlotIndices[sourceIndex]]
+                }
+                effectiveArguments = slots
+                conversions = argumentConversions
+                return true
+            }
+            let elementType Type? = parameterTypes[parameters.Length - 1].GetElementType()
+            if elementType == nil {
+                return false
+            }
+            let declaredElementType = GetOneDimensionalArrayElementType(parameters[parameters.Length - 1].Type)
+            let tail = [expandedTail.Count]object?
+            let tailConversions = [expandedTail.Count]AttributeArgumentConversionKind
+            for var i = 0; i < expandedTail.Count; i++ {
+                let argument = expandedTail[i]
+                let conversion = ClassifyAttributeArgumentConversion(
+                    argument.Value,
+                    elementType,
+                    argument.Type,
+                    declaredElementType
+                )
+                if conversion == AttributeArgumentConversionKind.NotApplicable {
+                    return false
+                }
+                tail[i] = argument
+                tailConversions[i] = conversion
+            }
+            for var sourceIndex = 0; sourceIndex < argumentSlotIndices.Length; sourceIndex++ {
+                let slotIndex = argumentSlotIndices[sourceIndex]
+                argumentConversions[sourceIndex] = if slotIndex >= 0 {
+                    slotConversions[slotIndex]
+                } else {
+                    tailConversions[-1 - slotIndex]
+                }
+            }
+            let result = [parameters.Length]object?
+            for var i = 0; i < fixedCount; i++ {
+                result[i] = slots[i]
+            }
+            result[parameters.Length - 1] = tail
+            effectiveArguments = result
+            conversions = argumentConversions
             return true
         }
 
@@ -1575,11 +1746,12 @@ internal class CustomAttributeEncoder {
         /// @param writeType The CLR type to encode the argument as.
         /// @returns Whether the parameter can be encoded at all.
         private func TryGetAttributeParameterWriteType(type TypeSymbol?, @NotNullWhen(true) out writeType Type?) bool {
-            if type?.ClrType is {} declared {
+            let unwrapped = UnwrapAttributeReferenceNullability(type)
+            if unwrapped?.ClrType is {} declared {
                 writeType = declared
                 return true
             }
-            if type is EnumSymbol sourceEnum && sourceEnum.UnderlyingType.ClrType is {} underlying {
+            if unwrapped is EnumSymbol sourceEnum && sourceEnum.UnderlyingType.ClrType is {} underlying {
                 writeType = underlying
                 return true
             }
@@ -1590,11 +1762,7 @@ internal class CustomAttributeEncoder {
             // (`DeclarationBinder.TryBindAttributeArrayArgument`) already builds
             // the constant CONTAINER as `int32[]` for exactly this shape, so the
             // signature must match: encode the parameter as `int32[]`.
-            let arrayElementType TypeSymbol? = switch type {
-                case slice is SliceTypeSymbol: slice.ElementType
-                case array is ArrayTypeSymbol: array.ElementType
-                default: default(TypeSymbol?)
-            }
+            let arrayElementType TypeSymbol? = GetOneDimensionalArrayElementType(unwrapped)
             if arrayElementType is EnumSymbol arrayEnum && arrayEnum.UnderlyingType.ClrType is {} arrayUnderlying {
                 writeType = arrayUnderlying.MakeArrayType()
                 return true
@@ -1638,11 +1806,18 @@ internal class CustomAttributeEncoder {
                 attribute,
                 out effectiveArguments,
                 out var duplicateNamedArgument,
-                out var positionalConflict
+                out var positionalConflict,
+                out var isAmbiguous
             )
             if constructor != nil {
                 memberArguments = attribute.NamedArguments
                 return constructor
+            }
+            if isAmbiguous {
+                EmitDiagnosticException.Throw(
+                    attribute.Syntax,
+                    "Ambiguous constructor for attribute '${attributeType.Name}': more than one 'init(...)' overload accepts the given arguments. Add an explicit conversion or change the argument types to disambiguate."
+                )
             }
             if duplicateNamedArgument != nil {
                 EmitDiagnosticException.ThrowDiagnostic(
@@ -1716,21 +1891,40 @@ internal class CustomAttributeEncoder {
             out effectiveArguments[]object?,
             out duplicateNamedArgument BoundAttributeArgument?,
             out positionalConflict BoundAttributeArgument?
+        ) ConstructorInfo? -> TryResolveImportedAttributeConstructor(
+            attributeType,
+            attribute,
+            out effectiveArguments,
+            out duplicateNamedArgument,
+            out positionalConflict,
+            out _
+        )
+
+        internal func TryResolveImportedAttributeConstructor(
+            attributeType Type,
+            attribute BoundAttribute,
+            out effectiveArguments[]object?,
+            out duplicateNamedArgument BoundAttributeArgument?,
+            out positionalConflict BoundAttributeArgument?,
+            out isAmbiguous bool
         ) ConstructorInfo? {
             effectiveArguments = Array.Empty[object?]()
             duplicateNamedArgument = nil
             positionalConflict = nil
+            isAmbiguous = false
             let constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-            // Keep the existing precedence: normal form, omitted optionals, then
-            // params expansion. Named constructor arguments only change which
-            // parameter slot receives each supplied value.
-            for desiredForm in Enum.GetValues[AttributeConstructorArgumentForm]() {
-                for constructor in constructors {
+            let candidates = List[ImportedAttributeConstructorCandidate]()
+            // Select each constructor's highest-precedence applicable form first.
+            // Rank candidates across constructors by argument conversion specificity, then by form.
+            for constructor in constructors {
+                let parameters = constructor.GetParameters()
+                for desiredForm in Enum.GetValues[AttributeConstructorArgumentForm]() {
                     if !TryMapAttributeConstructorArguments(
-                        constructor.GetParameters(),
+                        parameters,
                         attribute.PositionalArguments,
                         desiredForm,
                         out var candidateArguments,
+                        out var candidateConversions,
                         out var duplicate,
                         out var conflict
                     ) {
@@ -1738,11 +1932,50 @@ internal class CustomAttributeEncoder {
                         positionalConflict ??= conflict
                         continue
                     }
-                    effectiveArguments = candidateArguments
-                    return constructor
+                    candidates.Add(
+                        ImportedAttributeConstructorCandidate(
+                            constructor,
+                            desiredForm,
+                            candidateArguments,
+                            candidateConversions
+                        )
+                    )
+                    break
                 }
             }
-            return nil
+            if candidates.Count == 0 {
+                return nil
+            }
+            var bestIndex = -1
+            for var i = 0; i < candidates.Count; i++ {
+                var beatsAll = true
+                for var j = 0; j < candidates.Count; j++ {
+                    if i == j {
+                        continue
+                    }
+                    if !IsBetterAttributeConstructorCandidate(
+                        candidates[i].Conversions,
+                        candidates[i].Form,
+                        candidates[i].EffectiveArguments.Length,
+                        candidates[j].Conversions,
+                        candidates[j].Form,
+                        candidates[j].EffectiveArguments.Length
+                    ) {
+                        beatsAll = false
+                        break
+                    }
+                }
+                if beatsAll {
+                    bestIndex = i
+                    break
+                }
+            }
+            if bestIndex < 0 {
+                isAmbiguous = true
+                return nil
+            }
+            effectiveArguments = candidates[bestIndex].EffectiveArguments
+            return candidates[bestIndex].Constructor
         }
 
         private func ValidateUniqueNamedConstructorArguments(attribute BoundAttribute) {
@@ -1766,10 +1999,12 @@ internal class CustomAttributeEncoder {
             arguments ImmutableArray[BoundAttributeArgument],
             desiredForm AttributeConstructorArgumentForm,
             out effective[]object?,
+            out conversions[]AttributeArgumentConversionKind,
             out duplicateNamedArgument BoundAttributeArgument?,
             out positionalConflict BoundAttributeArgument?
         ) bool {
             effective = Array.Empty[object?]()
+            conversions = Array.Empty[AttributeArgumentConversionKind]()
             duplicateNamedArgument = nil
             positionalConflict = nil
             let expanded = desiredForm == AttributeConstructorArgumentForm.ParamsExpanded
@@ -1785,6 +2020,7 @@ internal class CustomAttributeEncoder {
             let slots = [parameters.Length]object?
             let filled = [parameters.Length]bool
             let expandedTail = List[BoundAttributeArgument]()
+            let slotIndices = [arguments.Length]int32
             let parameterNames = parameters.Select((parameter ParameterInfo) -> parameter.Name ?? string.Empty)
                 .ToArray()
             let parameterIndexes = Dictionary[string, int32](StringComparer.Ordinal)
@@ -1817,6 +2053,7 @@ internal class CustomAttributeEncoder {
                         return false
                     }
                     if expanded && sourceIndex >= fixedCount {
+                        slotIndices[sourceIndex] = -1 - expandedTail.Count
                         expandedTail.Add(argument)
                         continue
                     }
@@ -1838,8 +2075,10 @@ internal class CustomAttributeEncoder {
                 }
                 slots[parameterIndex] = argument
                 filled[parameterIndex] = true
+                slotIndices[sourceIndex] = parameterIndex
             }
             var usedDefault = false
+            let slotConversions = [parameters.Length]AttributeArgumentConversionKind
             for var i = 0; i < fixedCount; i++ {
                 if !filled[i] {
                     if !TryGetOptionalDefault(parameters[i], out var fallback) {
@@ -1853,10 +2092,17 @@ internal class CustomAttributeEncoder {
                 if slots[i] is not BoundAttributeArgument supplied {
                     return false
                 }
-                if !ArgAssignable(supplied.Value, parameters[i].ParameterType, supplied.Type) {
+                let conversion = ClassifyAttributeArgumentConversion(
+                    supplied.Value,
+                    parameters[i].ParameterType,
+                    supplied.Type
+                )
+                if conversion == AttributeArgumentConversionKind.NotApplicable {
                     return false
                 }
+                slotConversions[i] = conversion
             }
+            let argumentConversions = [arguments.Length]AttributeArgumentConversionKind
             if !expanded {
                 for var i = fixedCount; i < parameters.Length; i++ {
                     if !filled[i] {
@@ -1867,7 +2113,11 @@ internal class CustomAttributeEncoder {
                     (desiredForm == AttributeConstructorArgumentForm.Defaulted && !usedDefault) {
                     return false
                 }
+                for var sourceIndex = 0; sourceIndex < arguments.Length; sourceIndex++ {
+                    argumentConversions[sourceIndex] = slotConversions[slotIndices[sourceIndex]]
+                }
                 effective = slots
+                conversions = argumentConversions
                 return true
             }
             let elementType Type? = parameters[parameters.Length - 1].ParameterType.GetElementType()
@@ -1875,12 +2125,23 @@ internal class CustomAttributeEncoder {
                 return false
             }
             let tail = [expandedTail.Count]object?
+            let tailConversions = [expandedTail.Count]AttributeArgumentConversionKind
             for var i = 0; i < expandedTail.Count; i++ {
                 let argument = expandedTail[i]
-                if !ArgAssignable(argument.Value, elementType, argument.Type) {
+                let conversion = ClassifyAttributeArgumentConversion(argument.Value, elementType, argument.Type)
+                if conversion == AttributeArgumentConversionKind.NotApplicable {
                     return false
                 }
                 tail[i] = argument
+                tailConversions[i] = conversion
+            }
+            for var sourceIndex = 0; sourceIndex < arguments.Length; sourceIndex++ {
+                let slotIndex = slotIndices[sourceIndex]
+                argumentConversions[sourceIndex] = if slotIndex >= 0 {
+                    slotConversions[slotIndex]
+                } else {
+                    tailConversions[-1 - slotIndex]
+                }
             }
             let result = [parameters.Length]object?
             for var i = 0; i < fixedCount; i++ {
@@ -1888,6 +2149,7 @@ internal class CustomAttributeEncoder {
             }
             result[parameters.Length - 1] = tail
             effective = result
+            conversions = argumentConversions
             return true
         }
 
@@ -1916,14 +2178,6 @@ internal class CustomAttributeEncoder {
                 return !parameter.ParameterType.IsValueType
             }
             value = raw
-            return true
-        }
-
-        /// Marks that a layout-applicable constructor projected, and returns true.
-        /// @param seen The flag to set.
-        /// @returns Always `true`, so it can chain into a condition.
-        private func SawProjectable(ref seen bool) bool {
-            seen = true
             return true
         }
 
@@ -1966,26 +2220,136 @@ internal class CustomAttributeEncoder {
         /// consults it; a recursive element check passes `null` because an
         /// element carries no separate bound type.
         /// @returns Whether the value may be encoded into that parameter.
-        private func ArgAssignable(supplied object?, paramType Type, suppliedType TypeSymbol? = nil) bool {
+        private func ArgAssignable(
+            supplied object?,
+            paramType Type,
+            suppliedType TypeSymbol? = nil,
+            declaredParamType TypeSymbol? = nil
+        ) bool -> ClassifyAttributeArgumentConversion(supplied, paramType, suppliedType, declaredParamType) !=
+        AttributeArgumentConversionKind.NotApplicable
+
+        /// Classifies an attribute argument conversion so overload resolution prefers exact types over `[]object` and `object` (#4749).
+        private func ClassifyAttributeArgumentConversion(
+            supplied object?,
+            paramType Type,
+            suppliedType TypeSymbol? = nil,
+            declaredParamType TypeSymbol? = nil
+        ) AttributeArgumentConversionKind {
             var paramType = paramType
             // Third-party attributes are commonly resolved through a
             // MetadataLoadContext. Normalize framework types before using CLR
             // assignability so, for example, its System.String matches a runtime
             // string constant.
             paramType = NormalizeWellKnownType(paramType)!!
+            let unwrappedSupplied = UnwrapAttributeReferenceNullability(suppliedType)
+            let unwrappedDeclared = UnwrapAttributeReferenceNullability(declaredParamType)
+            let suppliedIsObject = unwrappedSupplied != nil &&
+                unwrappedSupplied != TypeSymbol.Null &&
+                unwrappedSupplied
+                .ClrType
+                ?.FullName == "System.Object"
             // Everything is assignable to System.Object. Compared by name so the
             // check holds for attribute types resolved through a MetadataLoadContext.
             if paramType.FullName == "System.Object" {
-                return true
+                return if suppliedIsObject {
+                    AttributeArgumentConversionKind.Exact
+                } else {
+                    AttributeArgumentConversionKind.ObjectFallback
+                }
+            }
+            if suppliedIsObject {
+                return AttributeArgumentConversionKind.NotApplicable
             }
             if supplied == nil {
-                return !(paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == nil)
+                if paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == nil {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+                if unwrappedSupplied != nil && unwrappedSupplied != TypeSymbol.Null {
+                    return ClassifyTypedNullAttributeArgumentConversion(paramType, unwrappedSupplied, unwrappedDeclared)
+                }
+                return ClassifyUntypedNullAttributeArgumentConversion(paramType, unwrappedDeclared)
+            }
+            if unwrappedDeclared is EnumSymbol declaredEnum {
+                return if unwrappedSupplied is EnumSymbol suppliedEnum && suppliedEnum == declaredEnum {
+                    AttributeArgumentConversionKind.Exact
+                } else {
+                    AttributeArgumentConversionKind.NotApplicable
+                }
+            }
+            if GetOneDimensionalArrayElementType(unwrappedDeclared) is EnumSymbol declaredArrayEnum {
+                return if GetOneDimensionalArrayElementType(unwrappedSupplied) is EnumSymbol suppliedArrayEnum &&
+                    suppliedArrayEnum == declaredArrayEnum {
+                    AttributeArgumentConversionKind.Exact
+                } else {
+                    AttributeArgumentConversionKind.NotApplicable
+                }
+            }
+            if unwrappedSupplied is EnumSymbol || GetOneDimensionalArrayElementType(unwrappedSupplied) is EnumSymbol {
+                return AttributeArgumentConversionKind.NotApplicable
+            }
+            if unwrappedSupplied != nil {
+                let suppliedClr = unwrappedSupplied.ClrType
+                let suppliedIsEnum = suppliedClr != nil && suppliedClr.IsEnumSafe()
+                let paramIsEnum = paramType.IsEnumSafe()
+                if paramIsEnum != suppliedIsEnum {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+                if paramIsEnum && !string.Equals(suppliedClr?.FullName, paramType.FullName, StringComparison.Ordinal) {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+                let suppliedElementType = GetOneDimensionalArrayElementType(unwrappedSupplied)
+                let suppliedElementClr = suppliedElementType?.ClrType
+                let suppliedElementIsEnum = suppliedElementClr != nil && suppliedElementClr.IsEnumSafe()
+                let paramElementType = if paramType.IsArray && paramType.GetArrayRank() == 1 {
+                    paramType.GetElementType()
+                } else {
+                    default(Type?)
+                }
+                let paramElementIsEnum = paramElementType != nil && paramElementType.IsEnumSafe()
+                if paramElementIsEnum != suppliedElementIsEnum {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+                if paramElementIsEnum && !string.Equals(
+                    suppliedElementClr?.FullName,
+                    paramElementType?.FullName,
+                    StringComparison.Ordinal
+                ) {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+            }
+            if IsObjectArrayType(paramType) {
+                if unwrappedSupplied != nil {
+                    let elementClr = GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType
+                    if elementClr == nil {
+                        return AttributeArgumentConversionKind.NotApplicable
+                    }
+                    let normalizedElement = NormalizeWellKnownType(elementClr)!!
+                    if normalizedElement.FullName == "System.Object" {
+                        return if paramType.IsInstanceOfType(supplied) {
+                            AttributeArgumentConversionKind.Exact
+                        } else {
+                            AttributeArgumentConversionKind.NotApplicable
+                        }
+                    }
+                    if !normalizedElement.IsValueType {
+                        return AttributeArgumentConversionKind.CovariantArray
+                    }
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+                if paramType.IsInstanceOfType(supplied) {
+                    return if supplied.GetType().IsSameAs(typeof([]object)) {
+                        AttributeArgumentConversionKind.Exact
+                    } else {
+                        AttributeArgumentConversionKind.CovariantArray
+                    }
+                }
+                return AttributeArgumentConversionKind.NotApplicable
             }
             if paramType.IsInstanceOfType(supplied) {
-                return true
+                return AttributeArgumentConversionKind.Exact
             }
             if supplied is TypeSymbol && paramType.FullName == "System.Type" {
-                return true
+                return AttributeArgumentConversionKind.Exact
             }
             // Issue #4073: `[]Type{typeof(SourceType)}` is carried as an `object[]`,
             // because #3684 had to widen the constant CONTAINER to hold the
@@ -2022,19 +2386,184 @@ internal class CustomAttributeEncoder {
             if paramType.IsArray && paramType.GetArrayRank() == 1 &&
                 paramType.GetElementType() is {} parameterElementType &&
                 supplied is []object? widenedElements &&
-                suppliedType?.ClrType is {IsArray: true} declaredArrayType &&
-                declaredArrayType.GetArrayRank() == 1 && declaredArrayType.GetElementType() is {} declaredElementType &&
+                GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType is {} declaredElementType &&
                 NormalizeWellKnownType(declaredElementType) is {} normalizedElementType &&
                 string
                 .Equals(normalizedElementType.FullName, parameterElementType.FullName, StringComparison.Ordinal) {
                 for element in widenedElements {
                     if !ArgAssignable(element, parameterElementType) {
-                        return false
+                        return AttributeArgumentConversionKind.NotApplicable
                     }
                 }
+                return AttributeArgumentConversionKind.Exact
+            }
+            return if IsTriviallyConvertible(supplied.GetType(), paramType) {
+                AttributeArgumentConversionKind.Exact
+            } else {
+                AttributeArgumentConversionKind.NotApplicable
+            }
+        }
+
+        private func ClassifyTypedNullAttributeArgumentConversion(
+            paramType Type,
+            unwrappedSupplied TypeSymbol,
+            unwrappedDeclared TypeSymbol?
+        ) AttributeArgumentConversionKind {
+            if GetOneDimensionalArrayElementType(unwrappedDeclared) is EnumSymbol declaredArrayEnum {
+                return if GetOneDimensionalArrayElementType(unwrappedSupplied) is EnumSymbol suppliedArrayEnum &&
+                    suppliedArrayEnum == declaredArrayEnum {
+                    AttributeArgumentConversionKind.Exact
+                } else {
+                    AttributeArgumentConversionKind.NotApplicable
+                }
+            }
+            if GetOneDimensionalArrayElementType(unwrappedSupplied) is EnumSymbol {
+                return AttributeArgumentConversionKind.NotApplicable
+            }
+            if IsObjectArrayType(paramType) {
+                let elementClr = GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType
+                if elementClr == nil {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
+                let normalizedElement = NormalizeWellKnownType(elementClr)!!
+                if normalizedElement.FullName == "System.Object" {
+                    return AttributeArgumentConversionKind.Exact
+                }
+                return if !normalizedElement.IsValueType {
+                    AttributeArgumentConversionKind.CovariantArray
+                } else {
+                    AttributeArgumentConversionKind.NotApplicable
+                }
+            }
+            if paramType.IsArray && paramType.GetArrayRank() == 1 && paramType.GetElementType() is {} paramElement {
+                let suppliedElementClr = GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType
+                return if suppliedElementClr != nil &&
+                    NormalizeWellKnownType(suppliedElementClr) is {} normalizedSuppliedElement &&
+                    string
+                    .Equals(normalizedSuppliedElement.FullName, paramElement.FullName, StringComparison.Ordinal) {
+                    AttributeArgumentConversionKind.Exact
+                } else {
+                    AttributeArgumentConversionKind.NotApplicable
+                }
+            }
+            return if GetOneDimensionalArrayElementType(unwrappedSupplied) == nil &&
+                unwrappedSupplied.ClrType is {} suppliedClr &&
+                NormalizeWellKnownType(suppliedClr) is {} normalizedSupplied &&
+                string
+                .Equals(normalizedSupplied.FullName, paramType.FullName, StringComparison.Ordinal) {
+                AttributeArgumentConversionKind.Exact
+            } else {
+                AttributeArgumentConversionKind.NotApplicable
+            }
+        }
+
+        private func ClassifyUntypedNullAttributeArgumentConversion(
+            paramType Type,
+            unwrappedDeclared TypeSymbol?
+        ) AttributeArgumentConversionKind {
+            if IsObjectArrayType(paramType) {
+                return AttributeArgumentConversionKind.UntypedNullToObjectArray
+            }
+            if GetOneDimensionalArrayElementType(unwrappedDeclared) is EnumSymbol {
+                return AttributeArgumentConversionKind.UntypedNullToOtherReference
+            }
+            if paramType.IsArray && paramType.GetArrayRank() == 1 && paramType.GetElementType() is {} elementType {
+                let normalizedElement = NormalizeWellKnownType(elementType)!!
+                if !normalizedElement.IsValueType && !normalizedElement.IsEnumSafe() {
+                    return AttributeArgumentConversionKind.UntypedNullToReferenceArray
+                }
+            }
+            return AttributeArgumentConversionKind.UntypedNullToOtherReference
+        }
+
+        private func IsBetterAttributeConstructorCandidate(
+            conversionsA[]AttributeArgumentConversionKind,
+            formA AttributeConstructorArgumentForm,
+            parameterCountA int32,
+            conversionsB[]AttributeArgumentConversionKind,
+            formB AttributeConstructorArgumentForm,
+            parameterCountB int32
+        ) bool {
+            var hasStrictlyBetterConversion = false
+            for var i = 0; i < conversionsA.Length; i++ {
+                let cmp = CompareAttributeArgumentConversions(conversionsA[i], conversionsB[i])
+                if cmp > 0 {
+                    return false
+                }
+                if cmp < 0 {
+                    hasStrictlyBetterConversion = true
+                }
+            }
+            if hasStrictlyBetterConversion {
                 return true
             }
-            return IsTriviallyConvertible(supplied.GetType(), paramType)
+            if formA != formB {
+                return int32(formA) < int32(formB)
+            }
+            return formA == AttributeConstructorArgumentForm.ParamsExpanded && parameterCountA > parameterCountB
+        }
+
+        private func CompareAttributeArgumentConversions(
+            ka AttributeArgumentConversionKind,
+            kb AttributeArgumentConversionKind
+        ) int32 {
+            if ka == kb {
+                return 0
+            }
+            if ka == AttributeArgumentConversionKind.ObjectFallback {
+                return 1
+            }
+            if kb == AttributeArgumentConversionKind.ObjectFallback {
+                return -1
+            }
+            if ka == AttributeArgumentConversionKind.UntypedNullToReferenceArray &&
+                kb == AttributeArgumentConversionKind.UntypedNullToObjectArray {
+                return -1
+            }
+            if kb == AttributeArgumentConversionKind.UntypedNullToReferenceArray &&
+                ka == AttributeArgumentConversionKind.UntypedNullToObjectArray {
+                return 1
+            }
+            if (
+                ka is AttributeArgumentConversionKind.UntypedNullToReferenceArray or
+                    AttributeArgumentConversionKind.UntypedNullToObjectArray or
+                    AttributeArgumentConversionKind.UntypedNullToOtherReference
+            ) ||
+                (
+                kb is AttributeArgumentConversionKind.UntypedNullToReferenceArray or
+                    AttributeArgumentConversionKind.UntypedNullToObjectArray or
+                    AttributeArgumentConversionKind.UntypedNullToOtherReference
+            ) {
+                return 0
+            }
+            return (int32(ka)).CompareTo(int32(kb))
+        }
+
+        private func IsObjectArrayType(type Type) bool -> type.IsArray && type.GetArrayRank() == 1 &&
+            type
+            .GetElementType()?.FullName == "System.Object"
+
+        private func UnwrapAttributeReferenceNullability(type TypeSymbol?) TypeSymbol? {
+            var current = type
+            while true {
+                if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                    continue
+                }
+                if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    current = nullable.UnderlyingType
+                    continue
+                }
+                return current
+            }
+        }
+
+        private func GetOneDimensionalArrayElementType(
+            type TypeSymbol?
+        ) TypeSymbol? -> switch UnwrapAttributeReferenceNullability(type) {
+            case slice is SliceTypeSymbol: slice.ElementType
+            case array is ArrayTypeSymbol: array.ElementType
+            default: default(TypeSymbol?)
         }
 
         /// Returns the executing runtime's (cref:Type) for well-known
