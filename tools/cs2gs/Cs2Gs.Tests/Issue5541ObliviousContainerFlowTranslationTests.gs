@@ -831,6 +831,135 @@ public static class Use
             }, []string{"Array", "2", "Listed", "2", "Inline", "2", "Throws", "-1"})
     }
 
+    /// Review of 286a895b5 (#5571): a lambda parameter of a constructor call takes
+    /// the effective positions of the construction, including those of the storage
+    /// that receives it, so a reassigned construction with a lambda states the
+    /// promoted parameter type.
+    @Fact
+    func A_Constructor_Lambda_Parameter_Takes_The_Sink_Positions() {
+        this.Check("Review25", `using ObLib;
+
+public class Box<T>
+{
+    public T Value;
+    public System.Func<T, int> Score;
+    public Box(T value) { Value = value; }
+    public Box(System.Func<T, int> score) { Score = score; }
+    public int Eval(T item) => Score(item);
+}
+
+public static class Use
+{
+    public static int Jagged(string p)
+    {
+        string[][] j;
+        j = Node.Jagged(p);
+        Box<string[]> b;
+        b = new Box<string[]>(j[0]);
+        var sample = b.Value;
+        b = new Box<string[]>(a => a == null ? 0 : 10);
+        int n = b.Eval(sample);
+        b = new Box<string[]>(a => a[0].Length);
+        return n + b.Eval(sample);
+    }
+    public static int Scalar(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Box<string> b;
+        b = new Box<string>(lines[0]);
+        var sample = b.Value;
+        b = new Box<string>(s => s == null ? 10 : 0);
+        int n = b.Eval(lines[1]);
+        b = new Box<string>(s => s.Length);
+        return n + b.Eval(sample);
+    }
+}`, []string{
+                "b = Box[[]?string?]((a []?string?) -> if a == nil { 0 } else { 10 })",
+                "b = Box[[]?string?]((a []?string?) -> a!![0]!!.Length)",
+                "b = Box[string?]((s string?) -> if s == nil { 10 } else { 0 })",
+                "b = Box[string?]((s string?) -> s!!.Length)"
+            }, []string{"Jagged", "12", "Scalar", "12"})
+    }
+
+    /// Review of 286a895b5 (#5571): the implicit `value` parameter of a property or
+    /// indexer setter shares the property's positions, for element reads and for
+    /// forwarding assignments.
+    @Fact
+    func A_Property_Or_Indexer_Setter_Value_Shares_The_Property_Positions() {
+        this.Check("Review26", `using ObLib;
+
+public class Holder
+{
+    public int N;
+    private string[] backing = new[] { "x" };
+    public string[] P { get => Node.Lines("ab"); set { N = value[0].Length; backing = value; } }
+    public string[] Forward { get => backing; set { backing = value; N += value[0].Length; } }
+    public string[] this[int i] { get => Node.Holes("ab"); set { N = value[0].Length + (value[1] == null ? 10 : 0); } }
+    public string[] Check { get => Node.Holes("ab"); set { N = value[1].Length; } }
+}
+
+public static class Use
+{
+    public static int Prop(string p) { var h = new Holder(); h.P = Node.Lines(p); h.Forward = Node.Lines(p); return h.N + h.Forward[0].Length; }
+    public static int Indexer(string p) { var h = new Holder(); h[0] = Node.Holes(p); return h.N; }
+    public static int Throws(string p) { var h = new Holder(); try { h.Check = Node.Holes(p); return h.N; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "N = value[0]!!.Length",
+                "N += value[0]!!.Length",
+                "N = value[0]!!.Length + (if value[1] == nil { 10 } else { 0 })",
+                "N = value[1]!!.Length"
+            }, []string{"Prop", "6", "Indexer", "12", "Throws", "-1"})
+    }
+
+    /// Review of 286a895b5 (#5571): nested deconstruction designations and tuple
+    /// targets carry their dotted element prefix, and tuples with eight or more
+    /// elements map positions through the CLR `Rest` chain for declarations,
+    /// deconstructions and element reads.
+    @Fact
+    func Nested_Deconstructions_And_Long_Tuples_Carry_Positions() {
+        this.Check("Review27", `using ObLib;
+
+public static class Use
+{
+    public static int Nested(string p) { string[] lines; lines = Node.Holes(p); var ((a, b), n) = ((lines[0], lines[1]), 3); ((var c, var d), var m) = ((lines[0], lines[1]), 4); return a.Length + c.Length + (b == null ? 10 : 0) + (d == null ? 100 : 0) + n + m; }
+    public static int NestedDisabled(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+#nullable disable
+        var ((a, b), n) = ((lines[0], lines[1]), 5);
+        return a.Length + (b == null ? 10 : 0) + n;
+#nullable restore
+    }
+    public static int LongDeclared(string p) { string[] lines; lines = Node.Holes(p); (string a, int b, int c, int d, int e, int f, int g, string h) t = (lines[0], 1, 2, 3, 4, 5, 6, lines[1]); return t.a.Length + (t.h == null ? 10 : 0) + t.g; }
+    public static int LongInferred(string p) { string[] lines; lines = Node.Holes(p); var t = (1, 2, 3, 4, 5, 6, lines[1], lines[0]); var n = (a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: lines[1], h: lines[0]); return t.Item8.Length + n.h.Length + (t.Item7 == null ? 10 : 0); }
+    public static int LongDeconstructed(string p) { string[] lines; lines = Node.Holes(p); var (x1, x2, x3, x4, x5, x6, x7, x8) = (1, 2, 3, 4, 5, 6, lines[1], lines[0]); return x8.Length + (x7 == null ? 10 : 0) + x1; }
+    public static int LongThrows(string p) { string[] lines; lines = Node.Holes(p); var t = (1, 2, 3, 4, 5, 6, 7, lines[1]); try { return t.Item8.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return a!!.Length + c!!.Length",
+                "return a!!.Length + (if b == nil { 10 } else { 0 }) + n",
+                "let t (a string?, b int32, c int32, d int32, e int32, f int32, g int32, h string?) = (lines[0], 1, 2, 3, 4, 5, 6, lines[1])",
+                "return t.a!!.Length + (if t.h == nil { 10 } else { 0 }) + t.g",
+                "return t.Item8!!.Length + n.Item8!!.Length + (if t.Item7 == nil { 10 } else { 0 })",
+                "return x8!!.Length + (if x7 == nil { 10 } else { 0 }) + x1",
+                "return t.Item8!!.Length"
+            }, []string{
+                "Nested",
+                "121",
+                "NestedDisabled",
+                "17",
+                "LongDeclared",
+                "18",
+                "LongInferred",
+                "14",
+                "LongDeconstructed",
+                "13",
+                "LongThrows",
+                "-1"
+            })
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {

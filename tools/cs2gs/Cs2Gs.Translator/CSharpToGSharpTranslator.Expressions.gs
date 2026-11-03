@@ -3744,6 +3744,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ForEachBindingInfersNonNullElement(local ILocalSymbol) bool {
+            if this.ForEachBindingHasObliviousContainerElements(local) {
+                return true
+            }
             let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope
             // Iterator lowering preserves the source collection's nullable
             // element annotation, so yield seams handle their own proof here.
@@ -3761,17 +3764,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
-                let elementType ITypeSymbol? = if forEachInfo
-                    .ElementConversion
-                    .IsIdentity &&
-                    this
-                    .context
-                    .GetTypeInfo(forEach.Expression)
-                    .Type is IArrayTypeSymbol arrayType {
-                    arrayType.ElementType
-                } else {
-                    forEachInfo.ElementType
-                }
+                let elementType ITypeSymbol? = forEachInfo.ElementType
                 return if elementType != nil && elementType.IsValueType == true {
                     elementType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
                 } else {

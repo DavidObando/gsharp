@@ -3959,13 +3959,6 @@ partial class CSharpToGSharpTranslator {
                         declaredBindingType,
                         forEachInfo.ElementConversion
                     ) ??
-                        (
-                        if forEachInfo.ElementConversion.IsIdentity {
-                            projectedElement
-                        } else {
-                            default(ITypeSymbol?)
-                        }
-                    ) ??
                         declaredBindingType
                     let projectedBindingType = forEachElement != nil &&
                         projectedElement != nil &&
@@ -3975,7 +3968,8 @@ partial class CSharpToGSharpTranslator {
                             declaredBindingType
                         )
                     )
-                    let nullableElement = (
+                    let nullableElement = !this.ForEachBindingHasObliviousContainerElements(loopSymbol) &&
+                        (
                         projectedBindingType &&
                             (
                             this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression) ||
