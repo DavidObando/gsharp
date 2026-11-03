@@ -116,6 +116,7 @@ abstract class BoundTreeWalker {
         switch node.Kind {
             case BoundNodeKind.ErrorExpression,
             BoundNodeKind.Utf8StringExpression,
+            BoundNodeKind.PatternOperandExpression,
             BoundNodeKind.LiteralExpression,
             BoundNodeKind.VariableExpression,
             BoundNodeKind.DefaultExpression,
@@ -785,6 +786,7 @@ abstract class BoundTreeWalker {
 
     protected open func VisitRelationalPattern(node BoundRelationalPattern) {
         VisitExpression(node.Value)
+        VisitExpression(node.Test)
     }
 
     protected open func VisitTypePattern(node BoundTypePattern) {

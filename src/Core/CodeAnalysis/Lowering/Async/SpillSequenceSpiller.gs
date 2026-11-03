@@ -1079,6 +1079,7 @@ shared class SpillSequenceSpiller {
                 }
                 case BoundLiteralExpression,
                 BoundUtf8StringExpression,
+                BoundPatternOperandExpression,
                 BoundVariableExpression,
                 BoundDefaultExpression,
                 BoundTypeParameterConstructionExpression,

@@ -313,7 +313,7 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten expression.
     protected open func RewriteExpression(node BoundExpression) BoundExpression {
         switch node.Kind {
-            case BoundNodeKind.Utf8StringExpression {
+            case BoundNodeKind.Utf8StringExpression, BoundNodeKind.PatternOperandExpression {
                 return node
             }
             case BoundNodeKind.ErrorExpression {
@@ -882,6 +882,24 @@ abstract class BoundTreeRewriter {
             case BoundNodeKind.RelationalPattern {
                 let relational = cast[BoundRelationalPattern](node)
                 let relValue = RewriteExpression(relational.Value)
+                if relational.Test is {} test {
+                    let relTest = RewriteExpression(test)
+                    return if relValue == relational.Value && relTest == test {
+                        node
+                    } else {
+                        cast[BoundPattern](
+                            BoundRelationalPattern(
+                                node.Syntax,
+                                node.Type,
+                                relational.Op,
+                                relValue,
+                                relational.InputVariable!!,
+                                relational.ValueVariable!!,
+                                relTest
+                            )
+                        )
+                    }
+                }
                 return if relValue == relational.Value {
                     node
                 } else {

@@ -38,6 +38,9 @@ internal partial class MethodBodyEmitter {
             this.currentNode = expression
         }
         switch expression {
+            case operand is BoundPatternOperandExpression {
+                this.il.LoadLocal(this.locals[operand.Variable])
+            }
             case utf8 is BoundUtf8StringExpression {
                 this.il.OpCode(ILOpCode.Ldtoken)
                 this.il.Token(this.outer.utf8Data.GetField(utf8))
