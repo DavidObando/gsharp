@@ -54,7 +54,7 @@ internal shared class SideEffectAnalyzer {
             BoundNodeKind.ErrorExpression {
                 return false
             }
-            case BoundNodeKind.VariableExpression {
+            case BoundNodeKind.VariableExpression, BoundNodeKind.PatternOperandExpression {
                 return false
             }
             case BoundNodeKind.ConversionExpression {

@@ -117,6 +117,17 @@ Console.WriteLine(a + "|" + b + "|" + c)`)
         Assert.Equal("pos|other|not${Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine))
     }
 
+    @Fact
+    func RelationalPattern_StringEquality_ComparesValues() {
+        // Issue #5688: `== "abc"` compares string values, as `s == "abc"` does.
+        let output = RunSubmission(`let built = String([]char{'a', 'b', 'c'})
+let a = switch built { case == "abc": "eq" default: "ne" }
+let b = if built is != "abc" { "ne" } else { "eq" }
+Console.WriteLine(a + "|" + b)`)
+        Assert.DoesNotContain("error GS", output)
+        Assert.Equal("eq|eq${Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine))
+    }
+
     shared {
         private func RunSubmission(text string) string {
             using let outWriter = StringWriter()
