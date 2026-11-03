@@ -2675,7 +2675,9 @@ func Run(ref text string?, flag bool, dt DateTime, dto DateTimeOffset, payload P
     return n
 }
 func Main() { }`, "GS0158@11:16")
-            Add("arms-of-one-type-and-inferred-compound-parameters-are-rejected-by-the-one-rule (A3, stricter than main)", `package T
+            Add(
+                "arms-of-one-type-and-inferred-compound-parameters-are-rejected-by-the-one-rule (A3, stricter than main)",
+                `package T
 import System
 import System.Collections.Generic
 func Use[T](xs List[T], item T) { }
@@ -2690,7 +2692,9 @@ func Run(ref text string?, flag bool, dto DateTimeOffset, ys List[int32], n0 int
     }
     return n
 }
-func Main() { }`, "GS0158@8:16")
+func Main() { }`,
+                "GS0158@8:16"
+            )
             Add("base-call-is-not-a-call-of-a-function-of-its-name (A3)", `package T
 import System
 open class Parent {
