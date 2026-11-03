@@ -2865,11 +2865,7 @@ class Conversion {
                 return false
             }
             for var i = 0; i < fromArgs.Length; i++ {
-                if (fromArgs[i] == toArgs[i]) {
-                    continue
-                }
-                let slotConversion = Classify(fromArgs[i], toArgs[i])
-                if !slotConversion.Exists || !slotConversion.IsIdentity {
+                if !IsCrossContextIdenticalElement(fromArgs[i], toArgs[i]) {
                     return false
                 }
             }
