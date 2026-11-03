@@ -1227,8 +1227,9 @@ backward `goto`, so no span.
 Slice L1 (issue [#5317](https://github.com/DavidObando/gsharp/issues/5317), which also
 closes [#5315](https://github.com/DavidObando/gsharp/issues/5315)) replaced the snapshot and
 the second bind of `BindLoopBody` with the lower bound of section 6, applied to the frames
-before the header and the body are bound once. Each loop that is entered with a fact in force
-runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideRegionKill`).
+before the header and the body are bound once. Each loop that is entered with a fact or an external
+callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0
+(`DecideRegionKill`).
 
 **Divergences from the text above.**
 
@@ -1267,7 +1268,10 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   join of break states wait for the slice that records them.
 - *External callable aliases.* A function value that the region assigns, or that shares storage with one
   that it assigns, leaves the set at the loop entry; a region with a pointer write or an unknown syntax
-  kind empties the set.
+  kind empties the set. The set is part of the entry state (section 13), so a loop entered with an alias and
+  no fact also applies the lower bound ([#5461](https://github.com/DavidObando/gsharp/issues/5461)).
+  Otherwise `var g = cb` reassigned to a closure later in the body kept `g` external, and a fact proven
+  in the body survived the call `g()` (corpus rows `d01` to `d06`).
 - *R16 in loops (documented cost of row R7 (e)).* ADR-0208 R16 keeps a fact across a read of a stable imported
   getter (`string.Length`) and a field read is no call, in straight-line code. The walker sees only syntax, so it
   cannot tell them from a user getter, and Q7 (decided) allows no exemption: the corpus row
