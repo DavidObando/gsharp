@@ -1772,7 +1772,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     return n
 }
 func Main() { }`, "")
-            Add("call-inside-a-chain-is-a-member-call (A3)", `package T
+            Add("call-inside-a-chain-with-a-same-name-extension-counts (A3, stricter than main)", `package T
 import System
 import System.Collections.Generic
 class Holder {
@@ -1802,7 +1802,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@24:16")
             Add("property-subpattern-type-tests-a-member-not-the-subject (A3)", `package T
 import System
 import System.Collections.Generic
