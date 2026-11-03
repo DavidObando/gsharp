@@ -64,6 +64,7 @@ internal class PatternBinder {
     private let bindExpression(ExpressionSyntax) -> BoundExpression
     private let bindTypeClause(TypeClauseSyntax) -> TypeSymbol?
     private let isNilLiteral(BoundExpression) -> bool
+    private let bindEqualityOperation(RelationalPatternSyntax, BoundExpression, BoundExpression) -> BoundExpression
     private var currentPatternInput TypeSymbol?
 
     /// Initializes a new instance of the (cref:PatternBinder)
@@ -83,18 +84,22 @@ internal class PatternBinder {
     /// more (cref:BoundConversionExpression) wrappers). Used by
     /// (cref:BindConstantPattern) when the discriminant is a
     /// nullable type to pick the right comparison operand type.
+    /// @param bindEqualityOperation Callback that binds the `==` or `!=` operation of a relational
+    /// pattern on two bound operands, as the binary expression binds it.
     init(
         binderCtx BinderContext,
         conversions ConversionClassifier,
         bindExpression(ExpressionSyntax) -> BoundExpression,
         bindTypeClause(TypeClauseSyntax) -> TypeSymbol?,
-        isNilLiteral(BoundExpression) -> bool
+        isNilLiteral(BoundExpression) -> bool,
+        bindEqualityOperation(RelationalPatternSyntax, BoundExpression, BoundExpression) -> BoundExpression
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.conversions = conversions ?? throw ArgumentNullException("conversions")
         this.bindExpression = bindExpression ?? throw ArgumentNullException("bindExpression")
         this.bindTypeClause = bindTypeClause ?? throw ArgumentNullException("bindTypeClause")
         this.isNilLiteral = isNilLiteral ?? throw ArgumentNullException("isNilLiteral")
+        this.bindEqualityOperation = bindEqualityOperation ?? throw ArgumentNullException("bindEqualityOperation")
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -879,6 +884,10 @@ internal class PatternBinder {
     }
 
     private func BindRelationalPattern(syntax RelationalPatternSyntax, discriminantType TypeSymbol) BoundPattern {
+        let operatorKind = syntax.OperatorToken.Kind
+        if operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken {
+            return BindRelationalEqualityPattern(syntax, discriminantType)
+        }
         var value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
         var operandType = discriminantType
         // Issue #5681: a value-type `T?` input with a non-nullable value compares the underlying `T` values.
@@ -916,6 +925,55 @@ internal class PatternBinder {
             op ?? throw InvalidOperationException("A relational pattern operator must be available."),
             value
         )
+    }
+
+    // Issue #5688: `== value` and `!= value` bind the operation `input op value` as the binary expression does.
+    // String, data struct, user operator, CLR operator, nullable, enum, and floating-point operands then make the
+    // same operator decision in the pattern and in the expression. The value keeps its own type, as the right
+    // operand of the expression does; only a target-dependent value (bare `default`, an untyped lambda) and a
+    // method group take the input type.
+    private func BindRelationalEqualityPattern(
+        syntax RelationalPatternSyntax,
+        discriminantType TypeSymbol
+    ) BoundPattern {
+        var value = if ExpressionBinder.IsTargetDependentExpressionSyntax(syntax.Expression) {
+            conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
+        } else {
+            bindExpression(syntax.Expression)
+        }
+        if value is BoundMethodGroupExpression || value is BoundClrMethodGroupExpression {
+            value = conversions.BindConversion(syntax.Expression.Location, value, discriminantType)
+        }
+        let kind = syntax.OperatorToken.Kind
+        let op = BoundBinaryOperator.Bind(kind, discriminantType, discriminantType) ?? BoundBinaryOperator.Bind(
+            kind,
+            TypeSymbol.Bool,
+            TypeSymbol.Bool
+        ) ??
+            throw InvalidOperationException("Boolean equality operators must be available.")
+        // A non-returning value has nothing to compare; the emitter evaluates the input and then the value.
+        if discriminantType == TypeSymbol.Error || value.Type == TypeSymbol.Error || value.Type == TypeSymbol.Never {
+            return BoundRelationalPattern(syntax, discriminantType, op, value)
+        }
+        let inputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, discriminantType)
+        // The value is the right operand itself, so the operator binding sees constants, tuple elements, and `nil` as
+        // the expression does, and the test evaluates the converted input before the value.
+        let mark = Diagnostics.Count
+        let test = bindEqualityOperation(syntax, BoundPatternOperandExpression(inputVariable), value)
+        if test is BoundErrorExpression || test.Type != TypeSymbol.Bool {
+            // An operator that is undefined for the tested type keeps the pattern diagnostic. A value of another
+            // type keeps the binary-operator diagnostic, which names both types.
+            if value.Type == discriminantType || test.Type != TypeSymbol.Error || Diagnostics.Count == mark {
+                Diagnostics.TruncateTo(mark)
+                Diagnostics.ReportRelationalPatternOperatorUndefined(
+                    syntax.OperatorToken.Location,
+                    kind,
+                    discriminantType
+                )
+            }
+            return BoundRelationalPattern(syntax, discriminantType, op, value)
+        }
+        return BoundRelationalPattern(syntax, discriminantType, op, value, inputVariable, test)
     }
 
     private func BindListPattern(
