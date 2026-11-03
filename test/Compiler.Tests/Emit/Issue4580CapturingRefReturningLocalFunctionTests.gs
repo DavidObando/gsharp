@@ -178,6 +178,204 @@ Console.WriteLine(h.RunCapturing([]int32{1}))`
         Assert.Equal("31" + Environment.NewLine + "32" + Environment.NewLine, CompileVerifyAndRun(Source))
     }
 
+    @Fact
+    func GenericClassAndStructEncloser_CaptureFreeLocalFunctionGroupAndRefReturn_VerifyAndRun() {
+        // Issue #4655: capture-free direct-call local functions (a non-generic
+        // mutual-recursion group or a single ref-returning `let` local) inside
+        // a member of a generic class or struct must emit top-level MethodDefs
+        // (promoted over any referenced enclosing type parameters) rather than
+        // `<lambda_host_*>` display classes that direct calls never consult.
+        const Source = `package Issue4655
+
+class Box[T] {
+    func RunGroup(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 1 : 0
+    }
+    func RunRef(data []int32) int32 {
+        let At = func (xs []int32, index int32) ref int32 { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = 35
+        return data[0]
+    }
+    func RunGenericRefAndDelegate(data []T, replacement T) T {
+        let At = func (xs []T, index int32) ref T { return ref xs[index] }
+        let First = func (x T, depth int32) T { return depth == 0 ? x : Second(x, depth - 1) }
+        let Second = func (x T, depth int32) T { return First(x, depth) }
+        let Pass = func (x T) T { return First(x, 1) }
+        let fn (T) -> T = Pass
+        var ref a = At(data, 0)
+        a = fn(replacement)
+        return data[0]
+    }
+    func RunCapturingRefWithNestedLambda(data []int32) int32 {
+        let At = func (index int32) ref int32 {
+            let nested = func () int32 { return index }
+            return ref data[nested()]
+        }
+        var ref a = At(0)
+        a = 77
+        return data[0]
+    }
+    func RunFunctionPointerToPromotedLocal() string {
+        let First = func (n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func (n int32) string { return n < 0 ? First(n) : typeof(T).Name }
+        let Caller = func () string {
+            unsafe {
+                let fp = &First
+                return cast[nint](fp) != 0 ? First(1) : ""
+            }
+        }
+        let CallerSibling = func () string { return Caller() }
+        return CallerSibling()
+    }
+    func RunCapturingCallerOfPromotedDelegate[U](n int32) string {
+        let First = func (k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func (k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Caller = func () string {
+            let fn (int32) -> string = First
+            return fn(n)
+        }
+        return Caller()
+    }
+    func RunCapturingFirstCallingPromotedSecond[U](prefix string) string {
+        let First = func () string { return prefix + Second() }
+        let Second = func () string { return typeof(U).Name }
+        return First()
+    }
+}
+
+class PlainBox {
+    func RunFunctionPointer[U]() string {
+        let First = func (n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func (n int32) string { return n < 0 ? First(n) : typeof(U).Name }
+        unsafe {
+            let fp = &First
+            return cast[nint](fp) != 0 ? First(1) : ""
+        }
+    }
+    func RunParentChildDelegate[U]() string {
+        let First = func (k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func (k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Parent[P] = func (p P, n int32) string {
+            let Child[V] = func (v V) string {
+                let fn (int32) -> string = First
+                return fn(n)
+            }
+            return Child(p)
+        }
+        return Parent(0, 1)
+    }
+    func RunCapturingIterator[U](prefix string) string {
+        let First = func (k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func (k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Iter = func () sequence[string] {
+            yield prefix + First(1)
+        }
+        for s in Iter() {
+            return s
+        }
+        return ""
+    }
+    func RunCapturedFunctionPointerReturningTypeParam[U](seed U) U {
+        let First = func (x U) U { return Second(x) }
+        let Second = func (x U) U { return x }
+        unsafe {
+            let fp = &First
+            let readFp = func () bool {
+                return cast[nint](fp) != 0
+            }
+            return readFp() ? First(seed) : seed
+        }
+    }
+    func RunConstrainedMethodParams[A, B System.IComparable[A]](xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+    func RunDependentMethodParams[A, B A](xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+
+class ConstrainedBox[A, B System.IComparable[A]] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+
+class DependentBox[A, B A] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+
+struct SBox[T] {
+    func RunGroup(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 1 : 0
+    }
+    func RunRef(data []int32) int32 {
+        let At = func (xs []int32, index int32) ref int32 { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = 35
+        return data[0]
+    }
+}
+
+let b = Box[string]()
+let pb = PlainBox()
+let db = DependentBox[object, string]()
+var sb = SBox[string]{}
+Console.WriteLine(b.RunGroup(4))
+Console.WriteLine(b.RunRef([]int32{1}))
+Console.WriteLine(b.RunGenericRefAndDelegate([]string{"old"}, "new"))
+Console.WriteLine(b.RunCapturingRefWithNestedLambda([]int32{1}))
+Console.WriteLine(b.RunFunctionPointerToPromotedLocal())
+Console.WriteLine(b.RunCapturingCallerOfPromotedDelegate[int32](1))
+Console.WriteLine(b.RunCapturingFirstCallingPromotedSecond[int32]("p:"))
+Console.WriteLine(pb.RunFunctionPointer[int32]())
+Console.WriteLine(pb.RunParentChildDelegate[string]())
+Console.WriteLine(pb.RunCapturingIterator[string]("iter:"))
+Console.WriteLine(pb.RunCapturedFunctionPointerReturningTypeParam("fp-ok"))
+Console.WriteLine(pb.RunDependentMethodParams[object, string]([]string{"old"}, "dep-m"))
+Console.WriteLine(db.RunRef([]string{"old"}, "dep-c"))
+Console.WriteLine(sb.RunGroup(4))
+Console.WriteLine(sb.RunRef([]int32{1}))`
+        let expected = string.Join(
+            Environment.NewLine,
+            "1",
+            "35",
+            "new",
+            "77",
+            "String",
+            "Int32",
+            "p:Int32",
+            "Int32",
+            "String",
+            "iter:String",
+            "fp-ok",
+            "dep-m",
+            "dep-c",
+            "1",
+            "35"
+        ) +
+            Environment.NewLine
+        Assert.Equal(expected, CompileVerifyAndRun(Source))
+    }
+
     shared {
         private func CompileVerifyAndRun(source string) string {
             let directory = Path.Combine(
