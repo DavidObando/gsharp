@@ -1436,19 +1436,27 @@ internal partial class StatementBinder {
     }
 
     // Whether an argument reaches a parameter of a candidate without a conversion that runs code, whichever candidate
-    // the binder selects. An argument passed by reference, a function literal and a range convert nothing, and a
-    // value does not bind a `ref` or `out` parameter. `nil` needs no operator for a reference, nullable or type
-    // parameter type. A value needs none when no user-defined or imported conversion operator reaches the parameter's
-    // type from its type (the binder's `HasUserDefinedImplicitConversion`). A parameter that names a type parameter
-    // counts: the walker does not infer type arguments.
+    // the binder selects. An argument passed by reference and a range convert nothing, a function literal converts
+    // nothing into a delegate or function type, and a value does not bind a `ref` or `out` parameter. `nil` needs no
+    // operator for a reference, nullable or type parameter type. A value needs none when no user-defined or imported
+    // conversion operator reaches the parameter's type from its type (the binder's `HasUserDefinedImplicitConversion`).
+    // A parameter that names a type parameter counts: the walker does not infer type arguments.
     private func ArgumentPassesWithoutCode(parameter TypeSymbol, types List[TypeSymbol]?, kind int32) bool {
         if kind == ArgumentByReference ||
             kind == ArgumentReadOnlyReference ||
             kind == ArgumentInlineDeclaration ||
-            kind == ArgumentFunction ||
             kind == ArgumentSkipped ||
             parameter is ByRefTypeSymbol {
             return true
+        }
+        // A function literal takes a delegate or function type without code; any other parameter type can take it
+        // through a conversion operator from its function type (#5663).
+        if kind == ArgumentFunction {
+            let target = StripReferenceNullability(parameter) ?? parameter
+            return target is FunctionTypeSymbol or
+                DelegateTypeSymbol ||
+                target.ClrType is {} clr &&
+                ClrTypeUtilities.IsDelegateType(clr)
         }
         if kind == ArgumentNil {
             return AcceptsNilWithoutOperator(parameter)

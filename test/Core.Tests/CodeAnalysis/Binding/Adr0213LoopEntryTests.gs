@@ -3437,6 +3437,25 @@ func Run(ref text string?, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@12:16")
+            Add("function-literal-converted-by-an-operator-counts (A3, #5663)", `package T
+import System
+struct Payload { var Raw int32 }
+var g string? = "ab"
+func operator implicit(f () -> int32) Payload {
+    g = nil
+    return Payload{Raw: f()}
+}
+func Use(p Payload) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(func() int32 { return 1 })
+    }
+    return n
+}
+func Main() { }`, "GS0158@13:16")
             return rows
         }
     }
