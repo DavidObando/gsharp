@@ -220,6 +220,10 @@ internal class UserTokenResolver {
         if !ownTypeParameters.IsDefaultOrEmpty {
             referenced.RemoveAll((tp TypeParameterSymbol) -> ownTypeParameters.Contains(tp))
         }
+        SynthesizedClosureReifier.ExpandWithConstraintDependencies(referenced)
+        if !ownTypeParameters.IsDefaultOrEmpty {
+            referenced.RemoveAll((tp TypeParameterSymbol) -> ownTypeParameters.Contains(tp))
+        }
         if referenced.Count == 0 {
             return
         }

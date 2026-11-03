@@ -442,9 +442,46 @@ class PlainBox {
         }
         return ""
     }
+    func RunCapturedFp[U](seed U) U {
+        let First = func(x U) U { return Second(x) }
+        let Second = func(x U) U { return x }
+        unsafe {
+            let fp = &First
+            let readFp = func() bool { return cast[nint](fp) != 0 }
+            return readFp() ? fp(seed) : seed
+        }
+    }
+    func RunConstrained[A, B System.IComparable[A]](xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+    func RunDependent[A, B A](xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
 }
-"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}:${Box[string]().RunCapturingCallerOfPromotedDelegate[int32](1)}:${PlainBox().RunFunctionPointer[int32]()}:${PlainBox().RunParentChildDelegate[string]()}:${PlainBox().RunCapturingIterator[string]("iter:")}"`)
+class ConstrainedBox[A, B System.IComparable[A]] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+class DependentBox[A, B A] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}:${Box[string]().RunCapturingCallerOfPromotedDelegate[int32](1)}:${PlainBox().RunFunctionPointer[int32]()}:${PlainBox().RunParentChildDelegate[string]()}:${PlainBox().RunCapturingIterator[string]("iter:")}:${PlainBox().RunCapturedFp("fp")}:${PlainBox().RunDependent[object, string]([]string{"old"}, "dep-m")}:${DependentBox[object, string]().RunRef([]string{"old"}, "dep-c")}"`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
-        Assert.Equal("42:String:Int32:Int32:String:iter:String", result.Value)
+        Assert.Equal("42:String:Int32:Int32:String:iter:String:fp:dep-m:dep-c", result.Value)
     }
 }

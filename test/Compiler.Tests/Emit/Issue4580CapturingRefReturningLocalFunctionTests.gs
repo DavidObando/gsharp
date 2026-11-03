@@ -278,6 +278,47 @@ class PlainBox {
         }
         return ""
     }
+    func RunCapturedFunctionPointerReturningTypeParam[U](seed U) U {
+        let First = func (x U) U { return Second(x) }
+        let Second = func (x U) U { return x }
+        unsafe {
+            let fp = &First
+            let readFp = func () bool {
+                return cast[nint](fp) != 0
+            }
+            return readFp() ? First(seed) : seed
+        }
+    }
+    func RunConstrainedMethodParams[A, B System.IComparable[A]](xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+    func RunDependentMethodParams[A, B A](xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+
+class ConstrainedBox[A, B System.IComparable[A]] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+
+class DependentBox[A, B A] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func (items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
 }
 
 struct SBox[T] {
@@ -296,6 +337,7 @@ struct SBox[T] {
 
 let b = Box[string]()
 let pb = PlainBox()
+let db = DependentBox[object, string]()
 var sb = SBox[string]{}
 Console.WriteLine(b.RunGroup(4))
 Console.WriteLine(b.RunRef([]int32{1}))
@@ -307,6 +349,9 @@ Console.WriteLine(b.RunCapturingFirstCallingPromotedSecond[int32]("p:"))
 Console.WriteLine(pb.RunFunctionPointer[int32]())
 Console.WriteLine(pb.RunParentChildDelegate[string]())
 Console.WriteLine(pb.RunCapturingIterator[string]("iter:"))
+Console.WriteLine(pb.RunCapturedFunctionPointerReturningTypeParam("fp-ok"))
+Console.WriteLine(pb.RunDependentMethodParams[object, string]([]string{"old"}, "dep-m"))
+Console.WriteLine(db.RunRef([]string{"old"}, "dep-c"))
 Console.WriteLine(sb.RunGroup(4))
 Console.WriteLine(sb.RunRef([]int32{1}))`
         let expected = string.Join(
@@ -321,6 +366,9 @@ Console.WriteLine(sb.RunRef([]int32{1}))`
             "Int32",
             "String",
             "iter:String",
+            "fp-ok",
+            "dep-m",
+            "dep-c",
             "1",
             "35"
         ) +
