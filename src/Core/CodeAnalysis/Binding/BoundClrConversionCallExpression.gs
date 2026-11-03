@@ -86,16 +86,21 @@ class BoundClrConversionCallExpression : BoundExpression {
             Conversion
             .ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit
 
-        internal func CanApplyImplicitClrConversion(
-            source TypeSymbol,
-            target TypeSymbol,
-            method MethodInfo
-        ) bool -> Conversion
-            .ClassifyNonStructural(
-            GetEffectiveResultType(source, target, method, ComputeIsLifted(source, target, method, nil, nil)),
-            target
-        )
-            .IsImplicit
+        internal func CanApplyImplicitClrConversion(source TypeSymbol, target TypeSymbol, method MethodInfo) bool {
+            let isLifted = ComputeIsLifted(source, target, method, nil, nil)
+            if source is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
+                !isLifted &&
+                (
+                method.GetParameters() is not{Length: 1} parameters || !ClrTypeUtilities.AreSame(
+                    parameters[0].ParameterType,
+                    NullableLifting.GetEffectiveClrType(source)
+                )
+            ) {
+                return false
+            }
+            return Conversion.ClassifyNonStructural(GetEffectiveResultType(source, target, method, isLifted), target)
+                .IsImplicit
+        }
 
         private func GetEffectiveResultType(
             source TypeSymbol,
