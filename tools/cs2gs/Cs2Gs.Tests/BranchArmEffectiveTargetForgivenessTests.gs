@@ -132,6 +132,16 @@ namespace App
         public static bool Tested(Model.Arg argument, int i) => (i switch { 0 => argument.Value, _ => argument.Name }) is null;
 
         public static bool ComparedWrapped(Model.Arg argument, int i) => (i >= 0 ? argument.Value : argument.Name) == (null!);
+
+        public static void Params(params string[] values) { }
+
+        public static void ParamsSeed() => Params("head", null);
+
+        public static void ParamsConditional(Model.Arg argument, int i) => Params(i >= 0 ? argument.Value : argument.Name);
+
+        public static void ParamsSwitch(Model.Arg argument, int i) => Params("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public static void ParamsNested(Model.Arg argument, int i) => Params(i >= 0 ? (i > 1 ? argument.Value : argument.Name) : "x");
     }
 }`
         let printed = TranslateCrossProject(app)
@@ -154,7 +164,19 @@ namespace App
     {
         public static T Id<T>(T value) => value;
 
+        public static T ParamsId<T>(params T[] values) => values[0];
+
         public static string Inferred(Model.Arg argument, int i) => Id(i > 0 ? argument.Value : argument.Name);
+
+        public static string InferredParams(Model.Arg argument, int i) => ParamsId(i > 0 ? argument.Value : argument.Name);
+
+        public static string InferredParamsSwitch(Model.Arg argument, int i) => ParamsId("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+#nullable enable
+        public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
+
+        public static string? ExplicitNullableParamsSwitch(Model.Arg argument, int i) => ParamsId<string?>("head", i switch { 0 => argument.Value, _ => argument.Name });
+#nullable restore
 
         public static int Suppressed(Model.Arg argument, bool flag)
         {
@@ -212,16 +234,23 @@ namespace App
             }
         }
 
+#nullable enable
+        public static string JoinParams(params string?[] values) => (values[0] ?? "0") + ":" + (values[1] ?? "1");
+
+        public static string ParamsJoined(Arg a, int i) =>
+            JoinParams(i == 0 ? a.Name : a.Value, i switch { 0 => a.Name, _ => a.Value });
+#nullable restore
+
         public static string Run()
         {
             var a = new Arg("v");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0);
         }
     }
 }`
         let (library, consumer) = TranslateBothProjects(app)
         Assert.DoesNotContain("a.Name!!", consumer)
-        Assert.Equal("[]<>nonenull{}N", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
+        Assert.Equal("[]<>nonenull{}N0:1", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
     }
 
     /// Precision: an arm whose whole-expression target is a non-null
@@ -236,13 +265,25 @@ namespace App
     {
         public static int Index(string name) => name == "x" ? 0 : -1;
 
+#nullable enable
+        public static int ParamsIndex(params string[] names) => names[0] == "x" ? 0 : -1;
+#nullable restore
+
         public static int Conditional(Model.Arg argument, int i) => Index(i > 0 ? argument.Name : "x");
 
         public static int Switch(Model.Arg argument, int i) => Index(i switch { 0 => argument.Name, _ => "y" });
 
+        public static int ParamsConditional(Model.Arg argument, int i) => ParamsIndex(i > 0 ? argument.Name : "x");
+
+        public static int ParamsSwitch(Model.Arg argument, int i) => ParamsIndex("head", i switch { 1 => argument.Name, _ => "y" });
+
         public static T Id<T>(T value) => value;
 
+        public static T ParamsId<T>(params T[] values) => values[0];
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
+
+        public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
 
         public sealed class Dest
         {
@@ -258,9 +299,12 @@ namespace App
     }
 }`
         let printed = TranslateCrossProject(app)
-        Assert.Contains("if i > 0 { argument.Name!! } else { \"x\" }", printed)
+        Assert.Contains("Index(if i > 0 { argument.Name!! } else { \"x\" })", printed)
         Assert.Contains("case 0: argument.Name!!", printed)
+        Assert.Contains("ParamsIndex(if i > 0 { argument.Name!! } else { \"x\" })", printed)
+        Assert.Contains("case 1: argument.Name!!", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
+        Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("else { argument.Name!! })", printed)
         // A user-defined conversion is an invocation boundary: the arm feeds
         // the operator's non-null parameter, not the widened local `d`.

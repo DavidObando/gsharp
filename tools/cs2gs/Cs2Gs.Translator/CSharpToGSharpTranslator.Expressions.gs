@@ -6475,27 +6475,36 @@ partial class CSharpToGSharpTranslator {
             // so leaving the arm bare would make the local `T?` and move the
             // failure to its next use. It is a target only when cs2gs itself
             // widens it (it then emits the `T?` clause).
-            if target == nil && isBranchArm && !this.FlowsThroughUserDefinedConversion(current) &&
-                this.ResolveValueSink(
-                cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](current)
-            ) is {} sink &&
-                !(
-                sink is ILocalSymbol inferredLocal &&
-                    IsImplicitlyTypedLocal(inferredLocal) &&
-                    !this.ShouldPromoteToNullableReference(inferredLocal) && !this.IsUsedAsNullable(
-                    inferredLocal,
-                    this.GetNullabilityScope(inferredLocal)
-                )
-            ) {
-                let sinkType ITypeSymbol? = switch sink {
-                    case local is ILocalSymbol: local.Type
-                    case field is IFieldSymbol: field.Type
-                    case property is IPropertySymbol: property.Type
-                    case parameter is IParameterSymbol: parameter.Type
-                    default: default(ITypeSymbol?)
+            if target == nil && isBranchArm && !this.FlowsThroughUserDefinedConversion(current) {
+                if current!!.Parent is ArgumentSyntax argument && this.TryGetExpandedParamsElementTarget(
+                    argument,
+                    this.GetArgumentParameter(argument),
+                    out var paramsElementType,
+                    out var paramsParameter
+                ) {
+                    return (paramsElementType, paramsParameter)
                 }
-                if sinkType != nil {
-                    return (sinkType, sink)
+                if this.ResolveValueSink(
+                    cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](current)
+                ) is {} sink &&
+                    !(
+                    sink is ILocalSymbol inferredLocal &&
+                        IsImplicitlyTypedLocal(inferredLocal) &&
+                        !this.ShouldPromoteToNullableReference(inferredLocal) && !this.IsUsedAsNullable(
+                        inferredLocal,
+                        this.GetNullabilityScope(inferredLocal)
+                    )
+                ) {
+                    let sinkType ITypeSymbol? = switch sink {
+                        case local is ILocalSymbol: local.Type
+                        case field is IFieldSymbol: field.Type
+                        case property is IPropertySymbol: property.Type
+                        case parameter is IParameterSymbol: parameter.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    if sinkType != nil {
+                        return (sinkType, sink)
+                    }
                 }
             }
             // Issue #4356: an async LAMBDA's target is its delegate's Invoke, which
