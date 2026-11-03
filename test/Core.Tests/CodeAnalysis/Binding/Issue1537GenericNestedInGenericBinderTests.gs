@@ -177,6 +177,124 @@ func Use(m Issue1537SOuter[int32].Issue1537SMiddle[string]) { }`)
         Assert.Equal("string", ownArg.Name)
     }
 
+    @Fact
+    func Issue4750_ClosedEnclosingGenericNestedClass_RejectsMismatchedOrOpenEnclosingTypeArguments() {
+        let mismatchedDiagnostics = GetDiagnostics(`package Issue4750BinderMismatch
+class Issue4750MOuter[T] {
+    class Issue4750MInner { }
+}
+class Issue4750MProbe {
+    shared {
+        private func Consume(value Issue4750MOuter[int32].Issue4750MInner) int32 -> 42
+        func RunMismatch() int32 -> Issue4750MProbe.Consume(Issue4750MOuter[string].Issue4750MInner())
+        func RunOpen() int32 -> Issue4750MProbe.Consume(Issue4750MInner())
+    }
+}`)
+        let errors = mismatchedDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(2, errors.Length)
+        Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0154", d.Id))
+
+        let derivedMismatchDiagnostics = GetDiagnostics(`package Issue4750BinderDerivedMismatch
+class Issue4750DOuter[T] {
+    open class Issue4750DInner { }
+}
+class Issue4750DSub : Issue4750DOuter[int32].Issue4750DInner { }
+func AcceptGood(v Issue4750DSub) Issue4750DOuter[int32].Issue4750DInner -> v
+func AcceptBad(v Issue4750DSub) Issue4750DOuter[string].Issue4750DInner -> v`)
+        let derivedError = Assert.Single(derivedMismatchDiagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0155", derivedError.Id)
+
+        let siblingUpcastGoodDiagnostics = GetDiagnostics(`package Issue4750BinderSiblingUpcastGood
+class Issue4750SliceGoodOuter[T] {
+    open class Base { }
+    class Derived : Base { }
+    shared {
+        func UpcastGood(value Issue4750SliceGoodOuter[[]T].Derived) Issue4750SliceGoodOuter[[]T].Base -> value
+    }
+}`)
+        Assert.Empty(siblingUpcastGoodDiagnostics)
+
+        let siblingUpcastBadDiagnostics = GetDiagnostics(`package Issue4750BinderSiblingUpcastBad
+class Issue4750SliceBadOuter[T] {
+    open class Base { }
+    class Derived : Base { }
+    shared {
+        func UpcastBad(value Issue4750SliceBadOuter[[]T].Derived) Issue4750SliceBadOuter[[][]T].Base -> value
+    }
+}`)
+        let siblingError = Assert.Single(siblingUpcastBadDiagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0155", siblingError.Id)
+
+        let openOwnerInferenceDiagnostics = GetDiagnostics(`package Issue4750BinderOpenOwnerInference
+class Issue4750OpenOuter[T] {
+    class Inner {
+        shared {
+            func InnerPick[U](x Issue4750OpenOuter[T].Inner, seed U) T -> default(T)
+        }
+    }
+    shared {
+        func Pick[U](x Issue4750OpenOuter[T].Inner, seed U) T -> default(T)
+        func BadOuterQualified() int32 -> Issue4750OpenOuter.Pick(Issue4750OpenOuter[int32].Inner(), 0)
+        func BadInnerQualified() int32 -> Inner.InnerPick(Issue4750OpenOuter[int32].Inner(), 0)
+        func BadBare() int32 -> Pick(Issue4750OpenOuter[int32].Inner(), 0)
+    }
+}`)
+        let openOwnerErrors = openOwnerInferenceDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(3, openOwnerErrors.Count((d Diagnostic) -> d.Id == "GS0154"))
+        Assert.Equal(3, openOwnerErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
+
+        let nullableSlotDiagnostics = GetDiagnostics(`package Issue4750BinderNullableSlotMismatch
+class Issue4750NullBox[T](Value T) { }
+class Issue4750NullOuter[T] {
+    class Inner(Value T) { }
+    class PlainInner { }
+}
+func BadBox(x Issue4750NullBox[string?]) Issue4750NullBox[string] -> x
+func BadNested(x Issue4750NullOuter[string?].Inner) Issue4750NullOuter[string].Inner -> x
+func BadPlainNested(x Issue4750NullOuter[string?].PlainInner) Issue4750NullOuter[string].PlainInner -> x`)
+        let nullableSlotErrors = nullableSlotDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(3, nullableSlotErrors.Length)
+        Assert.Equal(2, nullableSlotErrors.Count((d Diagnostic) -> d.Id == "GS0490"))
+        Assert.Equal(1, nullableSlotErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
+    }
+
+    @Fact
+    func Issue4750_ClosedEnclosingGenericNestedClass_StaticMethodAndGenericInference_PreservesEnclosingArguments() {
+        let diagnostics = GetDiagnostics(`package Issue4750BinderStaticAndInference
+class Issue4750SOuter[T] {
+    class Issue4750SInner {
+        shared {
+            func Create() Issue4750SInner -> Issue4750SInner()
+            func Echo(value T) T -> value
+        }
+    }
+}
+class Issue4750SProbe {
+    shared {
+        private func Consume(value Issue4750SOuter[int32].Issue4750SInner) int32 -> 40
+        private func InferEnclosing[U](value Issue4750SOuter[U].Issue4750SInner, seed U) U -> seed
+        func Run() int32 {
+            let created = Issue4750SOuter[int32].Issue4750SInner.Create()
+            let echoed = Issue4750SOuter[int32].Issue4750SInner.Echo(2)
+            let inferred = Issue4750SProbe.InferEnclosing(Issue4750SOuter[int32].Issue4750SInner(), echoed)
+            return Issue4750SProbe.Consume(created) + inferred
+        }
+    }
+}`)
+        Assert.Empty(diagnostics)
+
+        let topLevelInheritedNestedDiagnostics = GetDiagnostics(`package Issue4750BinderTopLevelInheritedNested
+open class Issue4750TopBase[U] {
+    class N(Tag U) { }
+}
+class Issue4750TopOuter[T] {
+    class Derived[V] : Issue4750TopBase[V] { }
+}
+func ConvertToBase(value Issue4750TopOuter[int32].Derived[string].N) Issue4750TopBase[string].N -> value
+func ConvertFromBase(value Issue4750TopBase[string].N) Issue4750TopOuter[int32].Derived[string].N -> value`)
+        Assert.Empty(topLevelInheritedNestedDiagnostics)
+    }
+
     shared {
         private func GetDiagnostics(source string) IReadOnlyList[Diagnostic] {
             let result = EmittedOracle.Evaluate(source)

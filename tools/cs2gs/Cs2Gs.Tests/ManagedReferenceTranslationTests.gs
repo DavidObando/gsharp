@@ -4064,7 +4064,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
-        Assert.Contains("let inner = Inner(source)", text, StringComparison.Ordinal)
+        Assert.Contains("let inner = Outer[managed[int32]?].Inner(source)", text, StringComparison.Ordinal)
         Assert.Contains("inner.Get()!!.Borrow()", text, StringComparison.Ordinal)
     }
 

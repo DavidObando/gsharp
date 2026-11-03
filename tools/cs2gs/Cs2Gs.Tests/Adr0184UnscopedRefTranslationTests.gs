@@ -15,6 +15,7 @@ import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
 import System.IO
+import System.Linq
 import System.Threading.Tasks
 import Xunit
 
@@ -298,6 +299,61 @@ namespace Demo
         Assert.Contains("property 'Size'", diagnostic.Message, StringComparison.Ordinal)
     }
 
+    @Fact
+    func ExplicitEventAccessorAttributes_AreDroppedWithWarningInsteadOfHoisted() {
+        let (printed, diagnostics) = TranslateUnitWithDiagnostics(`
+using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        [Obsolete("legacy")]
+        public event EventHandler? Changed
+        {
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            add { }
+            [param: AllowNull]
+            remove { }
+        }
+    }
+}`)
+        Assert.Contains("@Obsolete(\"legacy\")", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("@MethodImpl", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("@AllowNull", printed, StringComparison.Ordinal)
+        let dropped = diagnostics.Where(
+            (d TranslationDiagnostic) -> d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
+        )
+            .ToArray()
+        Assert.Equal(2, dropped.Length)
+
+        let addDiagnostic = dropped[0]
+        Assert.Equal(TranslationSeverity.Warning, addDiagnostic.Severity)
+        Assert.Equal("AddAccessorDeclaration", addDiagnostic.ConstructKind)
+        Assert.Contains("MethodImplAttribute", addDiagnostic.Message, StringComparison.Ordinal)
+        Assert.Contains("on the 'add' accessor of event 'Changed'", addDiagnostic.Message, StringComparison.Ordinal)
+        Assert.Equal(
+            "MethodImpl(MethodImplOptions.NoInlining)",
+            addDiagnostic.Location!!.SourceTree!!.GetText().ToString(addDiagnostic.Location!!.SourceSpan)
+        )
+
+        let removeDiagnostic = dropped[1]
+        Assert.Equal(TranslationSeverity.Warning, removeDiagnostic.Severity)
+        Assert.Equal("RemoveAccessorDeclaration", removeDiagnostic.ConstructKind)
+        Assert.Contains("AllowNullAttribute", removeDiagnostic.Message, StringComparison.Ordinal)
+        Assert.Contains(
+            "on the 'remove' accessor of event 'Changed'",
+            removeDiagnostic.Message,
+            StringComparison.Ordinal
+        )
+        Assert.Equal(
+            "AllowNull",
+            removeDiagnostic.Location!!.SourceTree!!.GetText().ToString(removeDiagnostic.Location!!.SourceSpan)
+        )
+    }
+
     /// Found in adversarial review of PR #4291: the hoist must read the
     /// `get` accessor only. The member-level G# annotation is emitted on
     /// the PropertyDef, which C# (and gsc's own
@@ -406,6 +462,62 @@ public sealed class Warned
             Assert.Contains("Warned.cs(8,10): GetAccessorDeclaration", translateLog)
             Assert.DoesNotContain(": warning:", translateLog, StringComparison.Ordinal)
             Assert.Equal(1, translateLog.Split("Warned.cs", StringSplitOptions.None).Length - 1)
+        } finally {
+            DeleteDirectory(projectDir)
+            DeleteDirectory(outRoot)
+        }
+    }
+
+    @Fact
+    async func ExplicitEventAccessorAttributeWarning_ReachesTranslateLogWithoutFailingTheApp() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let projectDir = NewScratchDir("event-accessor-attribute-warning")
+        let outRoot = NewOutputRoot("event-accessor-attribute-warning")
+        try {
+            File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>")
+            let projectPath = Path.Combine(projectDir, "Warned.csproj")
+            File.WriteAllText(projectPath, `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+`)
+            File.WriteAllText(Path.Combine(projectDir, "Warned.cs"), `
+using System;
+using System.Runtime.CompilerServices;
+
+public sealed class Warned
+{
+    public event EventHandler? Changed
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        add { }
+        [MethodImpl(MethodImplOptions.NoOptimization)]
+        remove { }
+    }
+}`)
+            let options = PipelineOptions{GscPath: compiler, OutputRoot: outRoot}
+            let pipeline = MigrationPipeline(options, []IMigrationStage{TranslateStage()})
+            let app = CorpusApp("test/EventAccessorAttributeWarning", projectPath, TargetKind.Library)
+            let result = await pipeline.RunAsync([]CorpusApp{app})
+            let appResult = Assert.Single(result.Apps)
+            Assert.True(appResult.Succeeded, "An explicit-event accessor-attribute warning must not fail the app.")
+            let translateLog = File.ReadAllText(
+                Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories))
+            )
+            Assert.Contains(CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId, translateLog)
+            Assert.Contains("(non-fatal)", translateLog)
+            Assert.Contains("MethodImplAttribute", translateLog)
+            Assert.Contains("Warned.cs(9,10): AddAccessorDeclaration", translateLog)
+            Assert.Contains("on the 'add' accessor of event 'Changed'", translateLog)
+            Assert.Contains("Warned.cs(11,10): RemoveAccessorDeclaration", translateLog)
+            Assert.Contains("on the 'remove' accessor of event 'Changed'", translateLog)
+            Assert.DoesNotContain(": warning:", translateLog, StringComparison.Ordinal)
+            Assert.Equal(2, translateLog.Split("Warned.cs", StringSplitOptions.None).Length - 1)
         } finally {
             DeleteDirectory(projectDir)
             DeleteDirectory(outRoot)
