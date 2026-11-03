@@ -622,7 +622,12 @@ partial class CSharpToGSharpTranslator {
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
                     assignment.Right == node {
-                    return this.context.GetSymbolInfo(assignment.Left).Symbol
+                    let symbol ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
+                    return if symbol is IDiscardSymbol {
+                        default(ISymbol?)
+                    } else {
+                        symbol
+                    }
                 }
                 case argument is ArgumentSyntax {
                     return this.GetArgumentParameter(argument)
