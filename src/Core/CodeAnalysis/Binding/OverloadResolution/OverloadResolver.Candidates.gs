@@ -1479,6 +1479,7 @@ internal partial class OverloadResolver {
         if !candidate.IsGeneric {
             return true
         }
+        SeedFixedOwnerTypeParameters(candidate.StaticOwnerType ?? candidate.ReceiverType, substitution)
         let parameterOffset = if candidate.ExplicitReceiverParameter == nil {
             0
         } else {

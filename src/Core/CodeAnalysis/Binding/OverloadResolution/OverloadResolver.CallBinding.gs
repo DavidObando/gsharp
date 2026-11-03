@@ -1950,6 +1950,7 @@ internal partial class OverloadResolver {
         var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
         if function!!.IsGeneric {
             substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            SeedFixedOwnerTypeParameters(function!!.StaticOwnerType ?? function!!.ReceiverType, substitution)
             if syntax.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != function!!.TypeParameters.Length {

@@ -120,6 +120,7 @@ internal partial class OverloadResolver {
             let tps = classType.TypeParameters
             let defParams = classType.PrimaryConstructorParameters
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            SeedEnclosingTypeArguments(classType, substitution)
             if syntax.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != tps.Length {
@@ -1491,6 +1492,25 @@ internal partial class OverloadResolver {
     /// constraints, then yields the constructed closed (cref:StructSymbol).
     /// Returns `false` after reporting a diagnostic when the type
     /// arguments cannot be resolved.
+    private func SeedEnclosingTypeArguments(
+        classType StructSymbol,
+        substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) {
+        let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(classType)
+        for var i = 0; i < enclosingParams.Length; i++ {
+            substitution[enclosingParams[i]] = if !classType
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty &&
+                i < classType
+                .EnclosingTypeArguments
+                .Length {
+                classType.EnclosingTypeArguments[i]
+            } else {
+                enclosingParams[i]
+            }
+        }
+    }
+
     private func TryCloseGenericExplicitConstructorType(
         syntax CallExpressionSyntax,
         classType StructSymbol,
@@ -1514,6 +1534,7 @@ internal partial class OverloadResolver {
         }
         let tps = classType.TypeParameters
         var substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+        SeedEnclosingTypeArguments(classType, substitution)
         if syntax.TypeArgumentList is {} typeArgumentList {
             let explicitArgs = typeArgumentList.Arguments
             if explicitArgs.Count != tps.Length {
@@ -1561,6 +1582,7 @@ internal partial class OverloadResolver {
                     continue
                 }
                 let candidateSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                SeedEnclosingTypeArguments(classType, candidateSubstitution)
                 InferExplicitConstructorTypeArguments(
                     syntax,
                     constructor,
@@ -2301,6 +2323,49 @@ internal partial class OverloadResolver {
     }
 
     shared {
+        internal func SeedFixedOwnerTypeParameters(
+            owner TypeSymbol?,
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+        ) {
+            if owner is StructSymbol structOwner {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(structOwner)
+                let enclosingArgs = structOwner.EnclosingTypeArguments
+                for var i = 0; i < enclosingParams.Length; i++ {
+                    if !substitution.ContainsKey(enclosingParams[i]) {
+                        substitution[enclosingParams[i]] = if !enclosingArgs.IsDefaultOrEmpty &&
+                            i < enclosingArgs.Length {
+                            enclosingArgs[i]
+                        } else {
+                            enclosingParams[i]
+                        }
+                    }
+                }
+                let ownParams = (structOwner.Definition ?? structOwner).DeclaredTypeParameters
+                let ownArgs = structOwner.TypeArguments
+                for var i = 0; i < ownParams.Length; i++ {
+                    if !substitution.ContainsKey(ownParams[i]) {
+                        substitution[ownParams[i]] = if !ownArgs.IsDefaultOrEmpty && i < ownArgs.Length {
+                            ownArgs[i]
+                        } else {
+                            ownParams[i]
+                        }
+                    }
+                }
+            } else if owner is InterfaceSymbol ifaceOwner {
+                let ownParams = (ifaceOwner.Definition ?? ifaceOwner).TypeParameters
+                let ownArgs = ifaceOwner.TypeArguments
+                for var i = 0; i < ownParams.Length; i++ {
+                    if !substitution.ContainsKey(ownParams[i]) {
+                        substitution[ownParams[i]] = if !ownArgs.IsDefaultOrEmpty && i < ownArgs.Length {
+                            ownArgs[i]
+                        } else {
+                            ownParams[i]
+                        }
+                    }
+                }
+            }
+        }
+
         /// Issue #2263: rewrites an imported `data class` primary-constructor
         /// call into the field-initialising (cref:BoundStructLiteralExpression)
         /// shared with the `with`/copy lowering. The constructor's arguments
