@@ -1515,7 +1515,7 @@ internal class DataStructSynthesizer {
             )
             il.LoadArgument(0)
             il.OpCode(
-                if property.IsVirtual || property.IsOverride || property.IsAbstract {
+                if structSym.IsClass && (property.IsVirtual || property.IsOverride || property.IsAbstract) {
                     ILOpCode.Callvirt
                 } else {
                     ILOpCode.Call
@@ -2014,9 +2014,13 @@ internal class DataStructSynthesizer {
             let builder = ImmutableArray.CreateBuilder[FieldSymbol](
                 structSym.Fields.Length + structSym.Properties.Length
             )
+            let declaredFields = (structSym.Definition ?? structSym).Fields
             builder.AddRange(structSym.Fields)
             for property in structSym.Properties {
-                if property.BackingField != nil && !builder.Contains(property.BackingField!!) {
+                if property.BackingField != nil && property.OwnsBackingField(structSym) && !builder.Contains(
+                    property.BackingField!!
+                ) &&
+                    !declaredFields.Contains(property.BackingField!!) {
                     builder.Add(property.BackingField!!)
                 }
             }

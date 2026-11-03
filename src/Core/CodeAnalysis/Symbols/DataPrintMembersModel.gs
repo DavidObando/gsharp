@@ -228,6 +228,7 @@ internal shared class DataPrintMembersModel {
                 )
             )
         }
+        let declaredFields = (owner.Definition ?? owner).Fields
         for property in owner.Properties {
             // Roslyn skips an override: the base declaration already prints it
             // (through the virtual getter), so printing both would repeat it.
@@ -236,7 +237,26 @@ internal shared class DataPrintMembersModel {
                 property.IsIndexer ||
                 !property.HasGetter ||
                 property.Accessibility != Accessibility.Public ||
-                property.Type is PointerTypeSymbol {
+                property.Type is PointerTypeSymbol ||
+                (
+                property.Declaration == nil &&
+                    property.BackingField is {} backingField &&
+                    (
+                    !property.OwnsBackingField(owner) || owner.Fields.Any(
+                        (field FieldSymbol) -> field.Accessibility == Accessibility.Public && object.ReferenceEquals(
+                            field,
+                            backingField
+                        )
+                    ) ||
+                        declaredFields
+                        .Any(
+                        (field FieldSymbol) -> field.Accessibility == Accessibility.Public && object.ReferenceEquals(
+                            field,
+                            backingField
+                        )
+                    )
+                )
+            ) {
                 continue
             }
             members.Add(
