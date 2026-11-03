@@ -205,7 +205,26 @@ namespace App
 
         public static T FixedByListOrNullParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T PromotedReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params System.ReadOnlySpan<T> values) => values[0];
+
         public static string NullListAllowsInference(Model.Arg argument, int i) => FixedByListOrNullParams(null, i > 0 ? argument.Value : argument.Name, "tail");
+
+#nullable enable annotations
+        public static string PromotedListArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return FixedByListOrNullParams(list, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedReceiverAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return list.PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
 
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
@@ -236,6 +255,7 @@ namespace App
     }
 }`
         let printed = TranslateCrossProject(app)
+        Assert.Contains("List[string?](lines)", printed)
         Assert.DoesNotContain("argument.Name!!", printed)
         Assert.DoesNotContain("argument.Value!!", printed)
         // Issue #4452: the translated C# `!` into the widened `chosen` is erased
@@ -371,6 +391,14 @@ namespace App
 
         public static T FixedByListArrayParams<T>(System.Collections.Generic.List<T>[] lists, params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T FixedByInParams<T>(in T fixedValue, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByIListParams<T>(System.Collections.Generic.IList<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static void Consume(string s) { }
+
+        public static void Consume(int n) { }
+
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
 
         public static int NormalFormGenericParams(Model.Arg a, Model.Arg b, bool flag) =>
@@ -390,6 +418,24 @@ namespace App
 
         public static string FixedByListArrayParamsCall(System.Collections.Generic.List<string>[] lists, Model.Arg argument, int i) =>
             FixedByListArrayParams(lists, i > 8 ? "e" : argument.Name, "tail");
+
+        public static string FixedByExplicitInParamsCall(string text, Model.Arg argument, int i) =>
+            FixedByInParams(in text, i > 9 ? "f" : argument.Name, "tail");
+
+        public static string FixedByImplicitInParamsCall(string text, Model.Arg argument, int i) =>
+            FixedByInParams(text, i > 10 ? "g" : argument.Name, "tail");
+
+        public static string FixedByDefaultListParamsCall(Model.Arg argument, int i) =>
+            FixedByListParams(default, i > 11 ? "h" : argument.Name, "tail");
+
+        public static string FixedByAnonymousMethodParamsCall(Model.Arg argument, int i) =>
+            FixedByActionParams(delegate (string s) { }, i > 12 ? "j" : argument.Name, "tail");
+
+        public static string FixedByMethodGroupParamsCall(Model.Arg argument, int i) =>
+            FixedByActionParams(Consume, i > 13 ? "k" : argument.Name, "tail");
+
+        public static string FixedByConstrainedTypeParameterCall<U>(U list, Model.Arg argument, int i) where U : System.Collections.Generic.IList<string> =>
+            FixedByIListParams(list, i > 14 ? "m" : argument.Name, "tail");
 
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
@@ -424,6 +470,12 @@ namespace App
         Assert.Contains("list.FixedByReceiverParams(if i > 6 { \"c\" } else { argument.Name!! }, \"tail\")", printed)
         Assert.Contains("FixedByActionParams(consume, if i > 7 { \"d\" } else { argument.Name!! }, \"tail\")", printed)
         Assert.Contains("FixedByListArrayParams(lists, if i > 8 { \"e\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByInParams(in text, if i > 9 { \"f\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByInParams(in text, if i > 10 { \"g\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("if i > 11 { \"h\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 12 { \"j\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 13 { \"k\" } else { argument.Name!! }", printed)
+        Assert.Contains("FixedByIListParams(list, if i > 14 { \"m\" } else { argument.Name!! }, \"tail\")", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -510,11 +562,21 @@ namespace Model
     }
 }`
 
+        private const ObLibSource string = `
+namespace ObLib
+{
+    public static class Node
+    {
+        public static string[] Holes() => new string[] { null };
+    }
+}`
+
         private func TranslateCrossProject(app string) string -> TranslateBothProjects(app).Consumer
 
         private func TranslateBothProjects(app string)(Library string, Consumer string) {
+            let (_, obImage) = Compile(ObLibSource, "ObLib", Array.Empty[MetadataReference]())
             let (library, image) = Compile(Model, "Model", Array.Empty[MetadataReference]())
-            let (consumer, _) = Compile(app, "App", []MetadataReference{image})
+            let (consumer, _) = Compile(app, "App", []MetadataReference{image, obImage})
             let repository = []CSharpCompilation{library, consumer}
             return (Translate(library, repository), Translate(consumer, repository))
         }
