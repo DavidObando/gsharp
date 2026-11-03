@@ -385,11 +385,7 @@ partial class CSharpToGSharpTranslator {
                         // element slot rather than dropped.
                         let directArgument = (
                             EnclosingInvocationArgument(value) is {} argument &&
-                                this
-                                .context
-                                .SemanticModel
-                                .GetOperation(argument) is IArgumentOperation operation &&
-                                operation.ArgumentKind == ArgumentKind.Explicit
+                                !this.TryGetExpandedParamsElementTarget(argument, parameter, out _, out _)
                         ) ||
                             (
                             knownSlotType != nil && SymbolEqualityComparer.Default.Equals(knownSlotType, parameter.Type)
