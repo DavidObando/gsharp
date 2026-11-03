@@ -1,0 +1,1202 @@
+// <copyright file="Issue5541ObliviousContainerFlowTranslationTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package Cs2Gs.Tests
+
+import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Pipeline
+import Cs2Gs.Translator
+import Cs2Gs.Translator.Loading
+import GCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Tests
+import GSourceText = GSharp.Core.CodeAnalysis.Text.SourceText
+import GSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
+import System
+import System.Collections.Immutable
+import System.IO
+import System.Linq
+import System.Reflection
+import Xunit
+
+/// Issue #5541: one nested-position flow analysis decides which storage that
+/// receives an imported oblivious container keeps nullable element positions, and
+/// which reads of it need `!!`. Each test translates enabled C# that reads a
+/// Roslyn-compiled oblivious library, compiles the output with no diagnostics,
+/// verifies it with strict ILVerify before it runs, and compares each method's
+/// result with the original C# compiled by Roslyn. A nil element stays nil where
+/// C# keeps it, and throws (cref:NullReferenceException) where C# throws.
+class Issue5541ObliviousContainerFlowTranslationTests : IDisposable {
+    private let directory string = Path.Combine(
+        Path.GetTempPath(),
+        "cs2gs-5541-container-flow-" + Guid.NewGuid().ToString("N")
+    )
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    func Dispose() {
+        try {
+            Directory.Delete(this.directory, recursive: true)
+        } catch (IOException) {
+            // Best effort: a loaded assembly can keep the file open on some hosts.
+
+        } catch (UnauthorizedAccessException) {
+            // Best effort, as above.
+
+        }
+    }
+
+    /// Item 1: an extension or LINQ result and a lambda parameter take the nullable
+    /// element of the storage. The lambda parameter states `string?`, and each
+    /// dereference gets `!!`.
+    @Fact
+    func Linq_Results_And_Lambda_Parameters_Read_Nullable_Elements() {
+        this.Check("Item1", `using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int First(string p) { string[] lines; lines = Node.Lines(p); return lines.First().Length + lines.Select(l => l.Length).Sum(); }
+    public static int Where(string p) { string[] lines; lines = Node.Holes(p); return lines.Where(l => l != null).Count(); }
+    public static int SelectThrows(string p) { string[] lines; lines = Node.Holes(p); try { return lines.Select(l => l.Length).Sum(); } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return lines.First()!!.Length + lines.Select((l string?) -> l!!.Length).Sum()",
+                "return lines.Where((l string?) -> l != nil).Count()"
+            }, []string{"First", "6", "Where", "1", "SelectThrows", "-1"})
+    }
+
+    /// Item 2: a construction that converts the storage to another container type
+    /// states the nullable type argument, so the copy keeps the nil element.
+    @Fact
+    func A_Construction_From_Storage_States_Nullable_Type_Arguments() {
+        this.Check("Item2", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Copy(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        var copy = new List<string>(lines);
+        int nils = 0;
+        foreach (var s in copy) { if (s == null) { nils++; } }
+        return nils + copy.Count + copy[0].Length;
+    }
+}`, []string{"let copy = List[string?](lines)", "return nils + copy.Count + copy[0]!!.Length"}, []string{"Copy", "5"})
+    }
+
+    /// Item 3: an override, an interface implementation, the member it implements, an
+    /// indexer and an `async` method state one signature with the nullable element.
+    @Fact
+    func Overrides_Implementations_Indexers_And_Async_Methods_Share_Nullable_Elements() {
+        this.Check("Item3", `using System.Threading.Tasks;
+using ObLib;
+
+public interface IGet { string[] Get(string p); }
+public class Getter : IGet { public string[] Get(string p) { return Node.Holes(p); } }
+public abstract class Base { public abstract string[] Make(string p); }
+public class Derived : Base { public override string[] Make(string p) { return Node.Lines(p); } }
+public class Holder { public string[] this[string p] { get { return Node.Holes(p); } } }
+
+public static class Use
+{
+    public static int Interface(string p) { IGet g = new Getter(); return g.Get(p)[0].Length + (g.Get(p)[1] == null ? 10 : 0); }
+    public static int InterfaceThrows(string p) { IGet g = new Getter(); try { return g.Get(p)[1].Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int Override(string p) { Base b = new Derived(); return b.Make(p)[1].Length; }
+    public static int Indexer(string p) { var h = new Holder(); return h[p][1] == null ? 1 : 0; }
+    static async Task<string[]> LoadAsync(string p) { await Task.Yield(); return Node.Holes(p); }
+    public static int Async(string p) { return LoadAsync(p).Result[1] == null ? 1 : 0; }
+}`, []string{
+                "func Get(p string) []string?;",
+                "func Get(p string) []string? {",
+                "open func Make(p string) []string?;",
+                "open override func Make(p string) []string? {",
+                "prop this[p string] []string? {",
+                "private async func LoadAsync(p string) []string? {",
+                "return g.Get(p)[0]!!.Length"
+            }, []string{"Interface", "12", "InterfaceThrows", "-1", "Override", "2", "Indexer", "1", "Async", "1"})
+    }
+
+    /// Item 4: enabled storage that is stored as a whole into oblivious container
+    /// storage states the same nullable element, so no conversion widens the
+    /// element of a mutable container.
+    @Fact
+    func Storage_Stored_Into_Container_Storage_States_The_Same_Element() {
+        this.Check("Item4", `using ObLib;
+
+public static class Use
+{
+    public static int Back(string p)
+    {
+        string[] lines;
+        lines = Node.Lines(p);
+        string[] other = new string[1];
+        other[0] = "x";
+        lines = other;
+        return lines[0].Length + other[0].Length;
+    }
+}`, []string{"let other []string? = [1]string?", "return lines[0]!!.Length + other[0]!!.Length"}, []string{"Back", "2"})
+    }
+
+    /// Item 5: a chained element read follows the storage's full position path, for
+    /// nested generic containers and for jagged arrays.
+    @Fact
+    func Chained_Element_Reads_Follow_The_Full_Position_Path() {
+        this.Check("Item5", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Chained(string p) { List<List<string>> nested; nested = Node.Nested(p); return nested[0][0].Length + (nested[0][1] == null ? 10 : 0); }
+    public static int Jagged(string p) { string[][] j; j = Node.Jagged(p); return j[0][0].Length + (j[0][1] == null ? 10 : 0); }
+    public static int JaggedThrows(string p) { string[][] j; j = Node.Jagged(p); try { return j[0][1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "var nested List[List[string?]?]",
+                "return nested[0]!![0]!!.Length + (if nested[0]!![1] == nil { 10 } else { 0 })",
+                "var j [][]?string?",
+                "return j[0]!![1]!!.Length"
+            }, []string{"Chained", "12", "Jagged", "12", "JaggedThrows", "-1"})
+    }
+
+    /// Item 6: a local that infers the platform container from its initializer is a
+    /// source for other storage.
+    @Fact
+    func Inferred_Platform_Locals_Are_Sources() {
+        this.Check("Item6", `using ObLib;
+
+public static class Use
+{
+    public static int Inferred(string p) { var a = Node.Lines(p); string[] b; b = a; return b[0].Length; }
+    public static int Typed(string p) { string[] a = Node.Holes(p); string[] b; b = a; return b[1] == null ? 1 : 0; }
+}`, []string{"var b []string?", "return b[0]!!.Length"}, []string{"Inferred", "2", "Typed", "1"})
+    }
+
+    /// Item 7: the arms of a conditional, switch or coalescing value merge into the
+    /// storage. Arms that give different positions make a local state the merged type.
+    @Fact
+    func Conditional_Switch_And_Coalescing_Arms_Merge() {
+        this.Check("Item7", `using ObLib;
+
+public static class Use
+{
+    public static int Conditional(string p) { string[] lines; lines = p.Length > 1 ? Node.Lines(p) : Node.Holes(p); return lines[1].Length; }
+    public static int Coalesce(string p) { string[] lines; lines = Node.Holes(p) ?? Node.Lines(p); return lines[1] == null ? 1 : 0; }
+    public static int Switch(string p) { string[] lines; lines = p.Length switch { 1 => Node.Lines(p), _ => Node.Holes(p) }; return lines[0].Length; }
+    public static int MixedArms(string p) { string[] other = new string[] { "x" }; string[] lines = other ?? Node.Lines(p); return lines[0].Length; }
+}`, []string{
+                "lines = if p.Length > 1 { Node.Lines(p)!! } else { Node.Holes(p)!! }",
+                "lines = Node.Holes(p) ?? Node.Lines(p)\n",
+                "let lines []string? = other ?? Node.Lines(p)"
+            }, []string{"Conditional", "2", "Coalesce", "1", "Switch", "2", "MixedArms", "1"})
+    }
+
+    /// Item 8: a `Dictionary` entry, key collection and value collection read the
+    /// nullable positions of the dictionary.
+    @Fact
+    func Dictionary_Entries_Keys_And_Values_Read_Nullable_Positions() {
+        this.Check("Item8", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Entries(string p)
+    {
+        Dictionary<string, string> d;
+        d = Node.Map(p);
+        int n = 0;
+        foreach (var kv in d) { n += kv.Value.Length + kv.Key.Length; }
+        foreach (var k in d.Keys) { n += k.Length; }
+        foreach (var v in d.Values) { n += v.Length; }
+        return n;
+    }
+}`, []string{
+                "n += kv.Value!!.Length + kv.Key!!.Length",
+                "n += k!!.Length",
+                "n += v!!.Length"
+            }, []string{"Entries", "6"})
+    }
+
+    /// Item 9: a `foreach` variable that a nil test narrows needs no `!!`, so the
+    /// output has no GS0536 warning.
+    @Fact
+    func A_Guarded_ForEach_Variable_Gets_No_Assertion() {
+        this.Check("Item9", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Guard(string p) { IEnumerable<string> xs; xs = Node.Seq(p); int n = 0; foreach (var s in xs) { if (s != null) { n += s.Length; } } return n; }
+}`, []string{"if s != nil {\n                n += s.Length\n"}, []string{"Guard", "2"})
+    }
+
+    /// Item 10: a generic call result takes the nullable element of its argument,
+    /// whether the method is source or imported from oblivious metadata.
+    @Fact
+    func Generic_Call_Results_Read_Nullable_Elements() {
+        this.Check("Item10", `using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) { return x; }
+    public static int Source(string p) { string[] lines; lines = Node.Holes(p); return Id(lines)[0].Length + (Id(lines)[1] == null ? 10 : 0); }
+    public static int Imported(string p) { string[] lines; lines = Node.Holes(p); return Node.OId(lines)[0].Length; }
+    public static int Stored(string p) { string[] lines; lines = Node.Holes(p); var copy = Id(lines); return copy[0].Length; }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); try { return Id(lines)[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return Id(lines)[0]!!.Length + (if Id(lines)[1] == nil { 10 } else { 0 })",
+                "return Node.OId(lines)[0]!!.Length",
+                "return copy[0]!!.Length"
+            }, []string{"Source", "12", "Imported", "2", "Stored", "2", "Throws", "-1"})
+    }
+
+    /// Item 11: an explicit type argument and a declared return of a generic call
+    /// result state the nullable element.
+    @Fact
+    func Explicit_Type_Arguments_And_Returns_State_Nullable_Elements() {
+        this.Check("Item11", `using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) { return x; }
+    public static int Explicit(string p) { string[] lines; lines = Node.Holes(p); return Id<string[]>(lines)[0].Length; }
+    static string[] Pass(string p) { string[] lines; lines = Node.Holes(p); return Id(lines); }
+    public static int Returned(string p) { return Pass(p)[1] == null ? 1 : 0; }
+}`, []string{
+                "return Id[[]string?](lines)[0]!!.Length",
+                "private func Pass(p string) []string? {"
+            }, []string{"Explicit", "2", "Returned", "1"})
+    }
+
+    /// Review of #5571: a construction that states a nullable type argument makes its
+    /// element reads nullable even when no storage holds the container.
+    @Fact
+    func A_Construction_Without_Storage_Reads_Nullable_Elements() {
+        this.Check("Review1", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Read(string p) { return new List<string>(Node.Holes(p))[0].Length + (new List<string>(Node.Holes(p))[1] == null ? 10 : 0); }
+    public static int Throws(string p) { try { return new List<string>(Node.Holes(p))[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{"List[string?](Node.Holes(p)!!)[0]!!.Length"}, []string{"Read", "12", "Throws", "-1"})
+    }
+
+    /// Review of #5571: a base method that implements an interface member only through
+    /// a derived class shares the interface member's signature.
+    @Fact
+    func An_Inherited_Interface_Implementation_Shares_The_Signature() {
+        this.Check("Review2", `using ObLib;
+
+public interface IGet { string[] Get(string p); }
+public class Base { public string[] Get(string p) { return Node.Holes(p); } }
+public class Derived : Base, IGet { }
+
+public static class Use
+{
+    public static int Interface(string p) { IGet g = new Derived(); return g.Get(p)[1] == null ? 1 : 0; }
+    public static int Direct(string p) { Base b = new Base(); return b.Get(p)[0].Length; }
+}`, []string{
+                "func Get(p string) []string?;",
+                "func Get(p string) []string? {"
+            }, []string{"Interface", "1", "Direct", "2"})
+    }
+
+    /// Review of #5571: a target-typed construction states the same nullable type
+    /// argument as an explicit one.
+    @Fact
+    func A_Target_Typed_Construction_States_Nullable_Type_Arguments() {
+        this.Check("Review3", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Copy(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        List<string> copy = new(lines);
+        return copy[0].Length + (copy[1] == null ? 10 : 0);
+    }
+}`, []string{"let copy = List[string?](lines)", "return copy[0]!!.Length"}, []string{"Copy", "12"})
+    }
+
+    /// Review of #5571: a type parameter whose constraint rejects a `T?` argument keeps
+    /// its type argument and the argument's `!!`, for a call and a construction.
+    @Fact
+    func A_Constrained_Type_Parameter_Keeps_A_Non_Null_Argument() {
+        this.Check("Review4", `using ObLib;
+
+public class Box<T> where T : class
+{
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+
+public static class Use
+{
+    static T Keep<T>(T x) where T : class { return x; }
+    public static int Explicit(string p) { string[] lines; lines = Node.Lines(p); return Keep<string>(lines[0]).Length; }
+    public static int Constructed(string p) { string[] lines; lines = Node.Lines(p); return new Box<string>(lines[0]).Value.Length; }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); try { return Keep<string>(lines[1]).Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "Keep[string](lines[0]!!)",
+                "Box[string](lines[0]!!)"
+            }, []string{"Explicit", "2", "Constructed", "2", "Throws", "-1"})
+    }
+
+    /// Review of #5571: an expanded `params` argument passes a nil element through, so
+    /// the parameter's element is nullable.
+    @Fact
+    func An_Expanded_Params_Argument_Passes_A_Nil_Element() {
+        this.Check("Review5", `using ObLib;
+
+public static class Use
+{
+    static int Count(params string[] values) { return values[0] == null ? 1 : 0; }
+    public static int Expanded(string p) { string[] lines; lines = Node.Holes(p); return Count(lines[1]); }
+}`, []string{"private func Count(values ...string?) int32 {", "return Count(lines[1])\n"}, []string{"Expanded", "1"})
+    }
+
+    /// Review of #5571: an argument for a parameter typed by a type argument that the
+    /// call binds to a nullable position passes a nil element through, for a stated
+    /// type argument, a construction and an inferred one. The call result then keeps
+    /// its `!!` at a dereference.
+    @Fact
+    func A_Generic_Argument_Bound_To_A_Nullable_Type_Argument_Passes_Nil() {
+        this.Check("Review6", `using ObLib;
+
+public class Box<T>
+{
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+
+public static class Use
+{
+    static T Id<T>(T x) { return x; }
+    public static int Explicit(string p) { string[] lines; lines = Node.Holes(p); return Id<string>(lines[1]) == null ? 1 : 0; }
+    public static int Constructed(string p) { string[] lines; lines = Node.Holes(p); return new Box<string>(lines[1]).Value == null ? 1 : 0; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Lines(p); return Id(lines[0]).Length; }
+    public static int InferredNil(string p) { string[] lines; lines = Node.Holes(p); return Id(lines[1]) == null ? 1 : 0; }
+    public static int InferredThrows(string p) { string[] lines; lines = Node.Holes(p); try { return Id(lines[1]).Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return if Id[string?](lines[1]) == nil { 1 } else { 0 }",
+                "return if Box[string?](lines[1]).Value == nil { 1 } else { 0 }",
+                "return Id(lines[0])!!.Length",
+                "return if Id(lines[1]) == nil { 1 } else { 0 }"
+            }, []string{
+                "Explicit",
+                "1",
+                "Constructed",
+                "1",
+                "Inferred",
+                "2",
+                "InferredNil",
+                "1",
+                "InferredThrows",
+                "-1"
+            })
+    }
+
+    /// Review of #5571: a block-bodied lambda returns a nullable element as it is when
+    /// the call binds the delegate result to a nullable position.
+    @Fact
+    func A_Block_Lambda_Returns_A_Nullable_Element_Unchanged() {
+        this.Check("Review7", `using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int Block(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => { return l; }).Count(x => x == null); }
+    public static int BlockFirst(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => { return l; }).First().Length; }
+}`, []string{"return l\n", ").First()!!.Length"}, []string{"Block", "1", "BlockFirst", "2"})
+    }
+
+    /// Review of #5571: a local that a G# nil test narrows passes a non-null value to a
+    /// generic call and to a local that takes its type from it, so neither result gets
+    /// a redundant `!!` (GS0536).
+    @Fact
+    func A_Narrowed_Local_Gives_A_Non_Null_Generic_Result() {
+        this.Check("Review8", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) { return x; }
+    public static int Guard(string p)
+    {
+        IEnumerable<string> xs;
+        xs = Node.Seq(p);
+        int n = 0;
+        foreach (var s in xs)
+        {
+            if (s != null)
+            {
+                var t = Id(s);
+                n += t.Length + Id(s).Length;
+            }
+        }
+        return n;
+    }
+}`, []string{"n += t.Length + Id(s).Length"}, []string{"Guard", "4"})
+    }
+
+    /// Review of #5571: enabled storage that an `async` method returns as its task's
+    /// result states the result's nullable element, so no conversion widens it.
+    @Fact
+    func Storage_Returned_By_An_Async_Method_States_The_Result_Element() {
+        this.Check("Review9", `using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static async Task<string[]> Load(string p, bool flag)
+    {
+        await Task.Yield();
+        string[] other = new string[1];
+        other[0] = "x";
+        if (flag) { return Node.Holes(p); }
+        return other;
+    }
+
+    public static int Async(string p) { return Load(p, false).Result[0].Length + (Load(p, true).Result[1] == null ? 10 : 0); }
+}`, []string{
+                "private async func Load(p string, flag bool) []string? {",
+                "let other []string? = [1]string?"
+            }, []string{"Async", "11"})
+    }
+
+    /// Review of #5571: an awaited generic result reads the nullable position that the
+    /// awaitable's argument gives it, so a dereference gets `!!` and a nil test does not.
+    @Fact
+    func An_Awaited_Generic_Result_Reads_A_Nullable_Element() {
+        this.Check("Review10", `using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static Task<T> AsTask<T>(T x) { return Task.FromResult(x); }
+    static async Task<int> ReadAsync(string p) { string[] lines; lines = Node.Lines(p); return (await AsTask(lines[0])).Length; }
+    static async Task<int> NilAsync(string p) { string[] lines; lines = Node.Holes(p); return (await AsTask(lines[1])) == null ? 1 : 0; }
+    static async Task<int> ThrowsAsync(string p) { string[] lines; lines = Node.Holes(p); try { return (await AsTask(lines[1])).Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int Await(string p) { return ReadAsync(p).Result; }
+    public static int AwaitNil(string p) { return NilAsync(p).Result; }
+    public static int AwaitThrows(string p) { return ThrowsAsync(p).Result; }
+}`, []string{
+                "return (await AsTask(lines[0]))!!.Length",
+                "return if (await AsTask(lines[1])) == nil { 1 } else { 0 }"
+            }, []string{"Await", "2", "AwaitNil", "1", "AwaitThrows", "-1"})
+    }
+
+    /// Review of #5571: a configured awaitable (`ConfigureAwait(false)`) and a value task
+    /// carry the result's nullable element through `GetAwaiter().GetResult()`.
+    @Fact
+    func A_Configured_Await_Keeps_The_Result_Element() {
+        this.Check("Review11", `using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static async Task<string[]> LoadAsync(string p) { await Task.Yield(); return Node.Holes(p); }
+    static async ValueTask<string[]> LoadValueAsync(string p) { await Task.Yield(); return Node.Holes(p); }
+    static async Task<int> CopyAsync(string p) { var copy = await LoadAsync(p).ConfigureAwait(false); return copy[0].Length + (copy[1] == null ? 10 : 0); }
+    static async Task<int> ValueAsync(string p) { var copy = await LoadValueAsync(p).ConfigureAwait(false); return copy[0].Length; }
+    public static int Configured(string p) { return CopyAsync(p).Result; }
+    public static int Value(string p) { return ValueAsync(p).Result; }
+}`, []string{
+                "return copy[0]!!.Length + (if copy[1] == nil { 10 } else { 0 })"
+            }, []string{"Configured", "12", "Value", "2"})
+    }
+
+    /// Review of #5571: an expanded `params T[]` argument for a type argument that the
+    /// call binds to `T?` passes a nil element through.
+    @Fact
+    func An_Expanded_Generic_Params_Argument_Passes_A_Nil_Element() {
+        this.Check("Review12", `using ObLib;
+
+public static class Use
+{
+    static T[] Pack<T>(params T[] xs) { return xs; }
+    public static int Stated(string p) { string[] lines; lines = Node.Holes(p); return Pack<string>(lines[1])[0] == null ? 1 : 0; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Holes(p); return Pack(lines[1])[0] == null ? 1 : 0; }
+}`, []string{
+                "return if Pack[string?](lines[1])[0] == nil { 1 } else { 0 }",
+                "return if Pack(lines[1])[0] == nil { 1 } else { 0 }"
+            }, []string{"Stated", "1", "Inferred", "1"})
+    }
+
+    /// Review of #5571: a construction that an `async` method returns states the task
+    /// result's positions, so its collection initializer takes a nil element as it is.
+    @Fact
+    func An_Async_Return_Construction_Takes_A_Nil_Element() {
+        this.Check("Review13", `using System.Collections.Generic;
+using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    static async Task<List<string>> LoadAsync(string p, int k)
+    {
+        await Task.Yield();
+        string[] lines; lines = Node.Holes(p);
+        if (k == 0) { return new List<string>(Node.Holes(p)); }
+        if (k == 1) { return new List<string>(); }
+        return new List<string> { lines[1] };
+    }
+    static async Task<string[]> LoadArrayAsync(string p, int k)
+    {
+        await Task.Yield();
+        string[] lines; lines = Node.Holes(p);
+        if (k == 0) { return Node.Holes(p); }
+        return new string[] { lines[1] };
+    }
+    public static int AsyncList(string p) { return LoadAsync(p, 2).Result[0] == null ? 1 : 0; }
+    public static int AsyncEmpty(string p) { return LoadAsync(p, 1).Result.Count; }
+    public static int AsyncArray(string p) { return LoadArrayAsync(p, 1).Result[0] == null ? 1 : 0; }
+    public static int AsyncThrows(string p) { try { return LoadAsync(p, 2).Result[0].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return List[string?](Node.Holes(p)!!)",
+                "return List[string?]()",
+                "return List[string?]{ lines[1] }",
+                "return []string?{lines[1]}"
+            }, []string{"AsyncList", "1", "AsyncEmpty", "0", "AsyncArray", "1", "AsyncThrows", "-1"})
+    }
+
+    /// Review of #5571: a construction assigned to a local that an earlier construction
+    /// promoted states that local's positions, so a nil argument is passed through.
+    @Fact
+    func A_Reassigned_Construction_Takes_The_Local_Positions() {
+        this.Check("Review14", `using ObLib;
+
+public class Box<T> { public T Value; public Box(T value) { Value = value; } }
+
+public static class Use
+{
+    public static int Reassigned(string p)
+    {
+        string[] lines; lines = Node.Holes(p);
+        Box<string> b;
+        b = new Box<string>(lines[0]);
+        string? s = null;
+        b = new Box<string>(s);
+        return b.Value == null ? 1 : 0;
+    }
+}`, []string{"b = Box[string?](lines[0])", "b = Box[string?](s)"}, []string{"Reassigned", "1"})
+    }
+
+    /// Review of #5571: an array literal of a nullable element is a `[]T?`, so a lambda
+    /// that wraps an element passes nil through.
+    @Fact
+    func An_Array_Literal_Holds_A_Nil_Element() {
+        this.Check("Review15", `using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int Arrays(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => new[] { l }).ToArray().Length + (lines.Select(l => new string[] { l }).ToArray()[1][0] == null ? 10 : 0); }
+    public static int ArrayThrows(string p) { string[] lines; lines = Node.Holes(p); try { return lines.Select(l => new[] { l }).ToArray()[1][0].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{"lines.Select((l string?) -> []string?{l})"}, []string{"Arrays", "12", "ArrayThrows", "-1"})
+    }
+
+    /// Review of #5571: an `async` lambda's results give the task result of the delegate
+    /// its positions, so returning a nil element does not assert it.
+    @Fact
+    func An_Async_Lambda_Returns_A_Nil_Element() {
+        this.Check("Review16", `using System.Linq;
+using System.Threading.Tasks;
+using ObLib;
+
+public static class Use
+{
+    public static int AsyncLambda(string p) { string[] lines; lines = Node.Holes(p); var all = Task.WhenAll(lines.Select(async l => { await Task.Yield(); return l; })).GetAwaiter().GetResult(); return all.Length + (all[1] == null ? 10 : 0); }
+    public static int AsyncLambdaThrows(string p) { string[] lines; lines = Node.Holes(p); try { return Task.WhenAll(lines.Select(async l => { await Task.Yield(); return l; })).GetAwaiter().GetResult()[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{"async (l string?) -> {", "return l\n"}, []string{"AsyncLambda", "12", "AsyncLambdaThrows", "-1"})
+    }
+
+    /// Review of #5571: a value that the analysis makes nullable keeps its `!!` only
+    /// where its slot is proven non-null. An iterator's declared element is such a
+    /// slot; a lambda result that a call binds is not, so it passes nil through.
+    @Fact
+    func Only_A_Proven_Slot_Asserts_A_Nullable_Value() {
+        this.Check("Review17", `using System.Collections.Generic;
+using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    static IEnumerable<string> Iterate(string p) { string[] lines; lines = Node.Holes(p); yield return lines[0]; }
+    public static int Iterator(string p) { return Iterate(p).First().Length; }
+    public static int Bound(string p) { string[] lines; lines = Node.Holes(p); return lines.Select(l => new List<string> { l }).ToList()[1][0] == null ? 1 : 0; }
+}`, []string{
+                "yield lines[0]!!",
+                "lines.Select((l string?) -> List[string?]{ l })"
+            }, []string{"Iterator", "2", "Bound", "1"})
+    }
+
+    /// Review of #5571: an indexer's key and value slots are bound by the receiver's
+    /// storage, as a method's parameters are. An unchanged `Dictionary<string, int>`
+    /// keeps the key's `!!`; a promoted `List[string?]` takes a nil value.
+    @Fact
+    func An_Indexer_Slot_Is_Bound_By_Its_Receiver() {
+        this.Check("Review18", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Get(string p) { string[] lines; lines = Node.Lines(p); Dictionary<string, int> table = new Dictionary<string, int> { ["ab"] = 3 }; return table[lines[0]]; }
+    public static int Set(string p) { string[] lines; lines = Node.Lines(p); Dictionary<string, int> table = new Dictionary<string, int>(); table[lines[0]] = 4; return table["ab"]; }
+    public static int Promoted(string p) { string[] lines; lines = Node.Holes(p); List<string> list = new List<string>(lines); list[0] = lines[1]; return list[0] == null ? 1 : 0; }
+}`, []string{
+                "return table[lines[0]!!]",
+                "table[lines[0]!!] = 4",
+                "list[0] = lines[1]\n"
+            }, []string{"Get", "3", "Set", "4", "Promoted", "1"})
+    }
+
+    /// Review of #5571: a value returned from a property or indexer getter is stored
+    /// in the property, so a construction there states the property's positions and
+    /// takes a nil argument as it is.
+    @Fact
+    func A_Getter_Return_Is_Stored_In_Its_Property() {
+        this.Check("Review19", `using ObLib;
+
+public class Box<T> { public T Value; public Box(T value) { Value = value; } }
+public class Holder
+{
+    public bool Flag;
+    public string P = "";
+    public Box<string> Prop { get { string[] lines; lines = Node.Holes(P); if (Flag) { return new Box<string>(lines[0]); } string? s = null; return new Box<string>(s); } }
+    public Box<string> this[int i] { get { string[] lines; lines = Node.Holes(P); if (i == 0) { return new Box<string>(lines[1]); } string? s = null; return new Box<string>(s); } }
+}
+public static class Use
+{
+    public static int Getter(string p) { var h = new Holder { P = p }; return h.Prop.Value == null ? 1 : 0; }
+    public static int GetterFlag(string p) { var h = new Holder { P = p, Flag = true }; return h.Prop.Value.Length; }
+    public static int Indexer(string p) { var h = new Holder { P = p }; return (h[1].Value == null ? 1 : 0) + (h[0].Value == null ? 10 : 0); }
+    public static int Throws(string p) { var h = new Holder { P = p }; try { return h[0].Value.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "prop Prop Box[string?] {",
+                "return Box[string?](s)\n"
+            }, []string{"Getter", "1", "GetterFlag", "2", "Indexer", "11", "Throws", "-1"})
+    }
+
+    /// Review of #5571: an array literal or collection expression states the whole
+    /// position subtree of its element, so `new[] { lines }` is `[][]string?{lines}`.
+    @Fact
+    func An_Array_Literal_States_Nested_Positions() {
+        this.Check("Review20", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Implicit(string p) { string[] lines; lines = Node.Holes(p); var wrapped = new[] { lines }; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Explicit(string p) { string[] lines; lines = Node.Holes(p); var wrapped = new string[][] { lines }; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Collection(string p) { string[] lines; lines = Node.Holes(p); string[][] wrapped = [lines]; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Listed(string p) { string[] lines; lines = Node.Holes(p); List<string[]> wrapped = [lines]; return wrapped[0][0].Length + (wrapped[0][1] == null ? 10 : 0); }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); var wrapped = new[] { lines }; try { return wrapped[0][1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "let wrapped = [][]string?{lines}",
+                "let wrapped [][]string? = [][]string?{lines}",
+                "let wrapped List[[]string?] = List[[]string?]{ lines }",
+                "return wrapped[0][0]!!.Length"
+            }, []string{"Implicit", "12", "Explicit", "12", "Collection", "12", "Listed", "12", "Throws", "-1"})
+    }
+
+    /// Review of #5571: an object initializer's `[key] = value` and a conditional
+    /// `table?[key]` bind the indexer through the construction and the conditional
+    /// receiver, so an unchanged dictionary keeps the key's `!!` and a promoted
+    /// construction takes a nil value.
+    @Fact
+    func An_Initializer_Or_Conditional_Indexer_Is_Bound_By_Its_Receiver() {
+        this.Check("Review21", `using System.Collections.Generic;
+using ObLib;
+
+public class Bag<T> { private T item; public T this[int i] { get { return item; } set { item = value; } } }
+public static class Use
+{
+    public static int Init(string p) { string[] lines; lines = Node.Lines(p); var table = new Dictionary<string, int> { [lines[0]] = 1 }; return table["ab"]; }
+    public static int Cond(string p) { string[] lines; lines = Node.Lines(p); Dictionary<string, int>? table = new Dictionary<string, int> { ["ab"] = 5 }; return table?[lines[0]] ?? -1; }
+    public static int PromotedInit(string p) { string[] lines; lines = Node.Holes(p); var bag = new Bag<string> { [0] = lines[1] }; return bag[0] == null ? 1 : 0; }
+}`, []string{
+                "Dictionary[string, int32]{ [lines[0]!!] = 1 }",
+                "return table?[lines[0]!!] ?? -1",
+                "Bag[string?]{ [0] = lines[1] }"
+            }, []string{"Init", "1", "Cond", "5", "PromotedInit", "1"})
+    }
+
+    /// Final review of #5571: a tuple element goes into the slot of its target. A
+    /// deconstruction into typed declarations is proven non-null and keeps `!!`. A
+    /// tuple local is storage that states its elements' positions, so it takes a nil
+    /// element as it is and its dereference asserts it; an implicitly typed
+    /// deconstruction takes a nil element as it is and keeps the element's positions
+    /// for dereferences and generic calls, in enabled and disabled regions alike.
+    @Fact
+    func A_Tuple_Element_Is_Asserted_Only_For_A_Declared_Target() {
+        this.Check("Review22", `using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) => x;
+    public static int Declared(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) = (lines[0], lines[1]); return a.Length + b.Length; }
+    public static int Local(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) t = (lines[0], lines[1]); return t.b.Length; }
+    public static int Inferred(string p) { string[] lines; lines = Node.Holes(p); var (a, b) = (lines[0], lines[1]); return a.Length + Id(a).Length + (Id(b) == null ? 10 : 0); }
+    public static int InferredThrows(string p) { string[] lines; lines = Node.Holes(p); var (a, b) = (lines[0], lines[1]); try { return b.Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int Natural(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); return t.Item1.Length + (t.Item2 == null ? 10 : 0); }
+    public static int Disabled(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+#nullable disable
+        var (a, b) = (lines[0], lines[1]);
+        return a.Length + (b == null ? 10 : 0);
+#nullable restore
+    }
+}`, []string{
+                "let (a, b) = (lines[0]!!, lines[1]!!)",
+                "let t (a string?, b string?) = (lines[0], lines[1])",
+                "return t.b!!.Length",
+                "let (a, b) = (lines[0], lines[1])",
+                "return a!!.Length + Id(a)!!.Length + (if Id(b) == nil { 10 } else { 0 })",
+                "return b!!.Length",
+                "let t = (lines[0], lines[1])",
+                "return t.Item1!!.Length + (if t.Item2 == nil { 10 } else { 0 })",
+                "return a!!.Length + (if b == nil { 10 } else { 0 })"
+            }, []string{
+                "Declared",
+                "4",
+                "Local",
+                "2",
+                "Inferred",
+                "14",
+                "InferredThrows",
+                "-1",
+                "Natural",
+                "12",
+                "Disabled",
+                "12"
+            })
+    }
+
+    /// Final review of #5571: a conditional access, a slice and a tuple literal carry
+    /// the positions of what they hold, so each dereference asserts exactly the
+    /// nullable element: `?.` keeps the bound member's nested positions, `[..]` keeps
+    /// the array's element and is itself non-null, and a tuple keeps each element's
+    /// positions in a local.
+    @Fact
+    func Conditional_Access_Slice_And_Tuple_Carry_Nested_Positions() {
+        this.Check("Review23", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    static T Id<T>(T x) => x;
+    public static int Conditional(string p) { return (new List<string>(Node.Lines(p))?.GetRange(0, 1))![0].Length; }
+    public static int ConditionalNil(string p) { return (new List<string>(Node.Holes(p))?.GetRange(1, 1))![0] == null ? 1 : 0; }
+    public static int Slice(string p) { string[] lines; lines = Node.Holes(p); var s = Id(lines)[..]; return Id(lines)[..].Length + s[0].Length + (s[1] == null ? 10 : 0); }
+    public static int Tuple(string p) { string[] lines; lines = Node.Lines(p); var t = (lines[0], lines[1]); var n = (a: lines[0], b: lines[1]); return t.Item1.Length + n.b.Length; }
+    public static int TupleThrows(string p) { string[] lines; lines = Node.Holes(p); var t = (lines[0], lines[1]); try { return t.Item2.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "?.GetRange(0, 1))!![0]!!.Length",
+                "return Id(lines)[..].Length + s[0]!!.Length",
+                "return t.Item1!!.Length + n.Item2!!.Length",
+                "return t.Item2!!.Length"
+            }, []string{"Conditional", "2", "ConditionalNil", "1", "Slice", "14", "Tuple", "4", "TupleThrows", "-1"})
+    }
+
+    /// Final review of #5571: a `foreach` variable stored as a whole in promoted
+    /// container storage gives its collection those element positions, so the
+    /// collection and its nested literals state `[]string?` and the loop variable's
+    /// element dereference needs `!!` without GS0536.
+    @Fact
+    func A_ForEach_Binding_Assigned_To_Storage_Promotes_Its_Collection() {
+        this.Check("Review24", `using System.Collections.Generic;
+using ObLib;
+
+public static class Use
+{
+    public static int Array(string p) { string[] lines; lines = Node.Holes(p); var rows = new[] { new[] { "x" } }; int n = 0; foreach (var row in rows) { lines = row; n += row[0].Length; } return n + lines[0].Length; }
+    public static int Listed(string p) { string[] lines; lines = Node.Holes(p); var rows = new List<string[]> { new[] { "x" } }; int n = 0; foreach (var row in rows) { lines = row; n += row[0].Length; } return n + lines[0].Length; }
+    public static int Inline(string p) { string[] lines; lines = Node.Holes(p); int n = 0; foreach (var row in new[] { new[] { "x" } }) { lines = row; n += row[0].Length; } return n + lines[0].Length; }
+    public static int Throws(string p) { string[] lines; lines = Node.Holes(p); var rows = new[] { new[] { "x" } }; foreach (var row in rows) { if (p.Length == 0) { lines = row; } } try { return lines[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "let rows [][]string? = [][]string?{[]string?{\"x\"}}",
+                "let rows List[[]string?] = List[[]string?]{ []string?{\"x\"} }",
+                "for row in [][]string?{[]string?{\"x\"}}",
+                "n += row[0]!!.Length"
+            }, []string{"Array", "2", "Listed", "2", "Inline", "2", "Throws", "-1"})
+    }
+
+    /// Review of 286a895b5 (#5571): a lambda parameter of a constructor call takes
+    /// the effective positions of the construction, including those of the storage
+    /// that receives it, so a reassigned construction with a lambda states the
+    /// promoted parameter type.
+    @Fact
+    func A_Constructor_Lambda_Parameter_Takes_The_Sink_Positions() {
+        this.Check("Review25", `using ObLib;
+
+public class Box<T>
+{
+    public T Value;
+    public System.Func<T, int> Score;
+    public Box(T value) { Value = value; }
+    public Box(System.Func<T, int> score) { Score = score; }
+    public int Eval(T item) => Score(item);
+}
+
+public static class Use
+{
+    public static int Jagged(string p)
+    {
+        string[][] j;
+        j = Node.Jagged(p);
+        Box<string[]> b;
+        b = new Box<string[]>(j[0]);
+        var sample = b.Value;
+        b = new Box<string[]>(a => a == null ? 0 : 10);
+        int n = b.Eval(sample);
+        b = new Box<string[]>(a => a[0].Length);
+        return n + b.Eval(sample);
+    }
+    public static int Scalar(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        Box<string> b;
+        b = new Box<string>(lines[0]);
+        var sample = b.Value;
+        b = new Box<string>(s => s == null ? 10 : 0);
+        int n = b.Eval(lines[1]);
+        b = new Box<string>(s => s.Length);
+        return n + b.Eval(sample);
+    }
+}`, []string{
+                "b = Box[[]?string?]((a []?string?) -> if a == nil { 0 } else { 10 })",
+                "b = Box[[]?string?]((a []?string?) -> a!![0]!!.Length)",
+                "b = Box[string?]((s string?) -> if s == nil { 10 } else { 0 })",
+                "b = Box[string?]((s string?) -> s!!.Length)"
+            }, []string{"Jagged", "12", "Scalar", "12"})
+    }
+
+    /// Review of 286a895b5 and e2069117b (#5571): the implicit `value` parameter of a
+    /// property or indexer setter shares the property's positions, while an indexer's
+    /// key parameters map to their own parameter declarations rather than the
+    /// property's value storage.
+    @Fact
+    func A_Property_Or_Indexer_Setter_Value_Shares_The_Property_Positions() {
+        this.Check("Review26", `using ObLib;
+
+public class Holder
+{
+    public int N;
+    private string[] backing = new[] { "x" };
+    public string[] P { get => Node.Lines("ab"); set { N = value[0].Length; backing = value; } }
+    public string[] Forward { get => backing; set { backing = value; N += value[0].Length; } }
+    public string[] this[int i] { get => Node.Holes("ab"); set { N = value[0].Length + (value[1] == null ? 10 : 0); } }
+    public string[] this[string[] key] { get => Node.Holes(key[0]); set { N = key[0].Length + value[0].Length; } }
+    public string[] this[string[] key, int tag] { get => Node.Lines("ab"); set { N = key[0].Length + value[0].Length + tag; } }
+    public string[] Check { get => Node.Holes("ab"); set { N = value[1].Length; } }
+}
+
+public static class Use
+{
+    public static int Prop(string p) { var h = new Holder(); h.P = Node.Lines(p); h.Forward = Node.Lines(p); return h.N + h.Forward[0].Length; }
+    public static int Indexer(string p) { var h = new Holder(); h[0] = Node.Holes(p); return h.N; }
+    public static int Keyed(string p) { var h = new Holder(); var k = new[] { "abc" }; h[k] = Node.Holes(p); return h.N + h[k][0].Length; }
+    public static int PromotedKey(string p) { var h = new Holder(); h[Node.Holes(p), 5] = Node.Lines(p); return h.N; }
+    public static int Throws(string p) { var h = new Holder(); try { h.Check = Node.Holes(p); return h.N; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "N = value[0]!!.Length",
+                "N += value[0]!!.Length",
+                "N = value[0]!!.Length + (if value[1] == nil { 10 } else { 0 })",
+                "N = key[0].Length + value[0]!!.Length",
+                "N = key[0]!!.Length + value[0]!!.Length + tag",
+                "N = value[1]!!.Length"
+            }, []string{"Prop", "6", "Indexer", "12", "Keyed", "8", "PromotedKey", "9", "Throws", "-1"})
+    }
+
+    /// Review of 286a895b5 and e2069117b (#5571): nested deconstruction designations
+    /// and tuple targets carry their dotted element prefix, nested typed declarations
+    /// assert their leaf elements, and tuples with eight or more elements map
+    /// positions through the CLR `Rest` chain.
+    @Fact
+    func Nested_Deconstructions_And_Long_Tuples_Carry_Positions() {
+        this.Check("Review27", `using ObLib;
+
+public static class Use
+{
+    public static int Nested(string p) { string[] lines; lines = Node.Holes(p); var ((a, b), n) = ((lines[0], lines[1]), 3); ((var c, var d), var m) = ((lines[0], lines[1]), 4); return a.Length + c.Length + (b == null ? 10 : 0) + (d == null ? 100 : 0) + n + m; }
+    public static int NestedTyped(string p) { string[] lines; lines = Node.Lines(p); ((string a, string b), int n) = ((lines[0], lines[1]), 3); string c; string d; int m; ((c, d), m) = ((lines[0], lines[1]), 4); return a.Length + b.Length + c.Length + d.Length + n + m; }
+    public static int NestedTypedThrows(string p) { string[] lines; lines = Node.Holes(p); try { ((string a, string b), int n) = ((lines[0], lines[1]), 3); return a.Length + b.Length + n; } catch (System.NullReferenceException) { return -1; } }
+    public static int NestedDisabled(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+#nullable disable
+        var ((a, b), n) = ((lines[0], lines[1]), 5);
+        return a.Length + (b == null ? 10 : 0) + n;
+#nullable restore
+    }
+    public static int LongDeclared(string p) { string[] lines; lines = Node.Holes(p); (string a, int b, int c, int d, int e, int f, int g, string h) t = (lines[0], 1, 2, 3, 4, 5, 6, lines[1]); return t.a.Length + (t.h == null ? 10 : 0) + t.g; }
+    public static int LongInferred(string p) { string[] lines; lines = Node.Holes(p); var t = (1, 2, 3, 4, 5, 6, lines[1], lines[0]); var n = (a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: lines[1], h: lines[0]); return t.Item8.Length + n.h.Length + (t.Item7 == null ? 10 : 0); }
+    public static int LongDeconstructed(string p) { string[] lines; lines = Node.Holes(p); var (x1, x2, x3, x4, x5, x6, x7, x8) = (1, 2, 3, 4, 5, 6, lines[1], lines[0]); return x8.Length + (x7 == null ? 10 : 0) + x1; }
+    public static int LongThrows(string p) { string[] lines; lines = Node.Holes(p); var t = (1, 2, 3, 4, 5, 6, 7, lines[1]); try { return t.Item8.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "return a!!.Length + c!!.Length",
+                "((lines[0]!!, lines[1]!!), 3)",
+                "return a.Length + b.Length + c.Length + d.Length + n + m",
+                "return a!!.Length + (if b == nil { 10 } else { 0 }) + n",
+                "let t (a string?, b int32, c int32, d int32, e int32, f int32, g int32, h string?) = (lines[0], 1, 2, 3, 4, 5, 6, lines[1])",
+                "return t.a!!.Length + (if t.h == nil { 10 } else { 0 }) + t.g",
+                "return t.Item8!!.Length + n.Item8!!.Length + (if t.Item7 == nil { 10 } else { 0 })",
+                "return x8!!.Length + (if x7 == nil { 10 } else { 0 }) + x1",
+                "return t.Item8!!.Length"
+            }, []string{
+                "Nested",
+                "121",
+                "NestedTyped",
+                "15",
+                "NestedTypedThrows",
+                "-1",
+                "NestedDisabled",
+                "17",
+                "LongDeclared",
+                "18",
+                "LongInferred",
+                "14",
+                "LongDeconstructed",
+                "13",
+                "LongThrows",
+                "-1"
+            })
+    }
+
+    /// Review of e2069117b (#5571): a `foreach` binding with a non-identity conversion
+    /// records its nested declared positions, a rectangular array initializer flattens
+    /// its leaf elements for both flow and emission, and a promoted collection
+    /// expression coerces its elements against its promoted element contract.
+    @Fact
+    func Typed_ForEach_Range_Rectangular_Arrays_And_Collection_Coercion_Carry_Positions() {
+        this.Check("Review28", `using System.Collections.Generic;
+using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int ForEachRange(string p) { string[] lines; lines = Node.Holes(p); int n = 0; foreach (IEnumerable<string> row in new[] { lines }) { n += row.First().Length + (row.Last() == null ? 10 : 0); } return n; }
+    public static int GridInferred(string p) { string[] lines; lines = Node.Holes(p); var grid = new string[,] { { lines[0], lines[1] } }; var imp = new[,] { { lines[0], lines[1] } }; return grid[0, 0].Length + imp[0, 0].Length + (grid[0, 1] == null ? 10 : 0); }
+    public static int GridDeclared(string p) { string[] lines; lines = Node.Holes(p); string[,] grid; grid = new string[,] { { lines[0], lines[1] } }; return grid[0, 0].Length + (grid[0, 1] == null ? 10 : 0); }
+    public static int GridThrows(string p) { string[] lines; lines = Node.Holes(p); var grid = new string[,] { { lines[0], lines[1] } }; try { return grid[0, 1].Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int CollectionCoercion(string p) { string[] lines; lines = Node.Holes(p); string? s = null; List<string> copy = [lines[0], s]; return copy[0].Length + (copy[1] == null ? 10 : 0); }
+}`, []string{
+                "for row IEnumerable[string?] in [][]string?{lines}",
+                "row.First()!!.Length",
+                "let grid = [1, 2]string?{lines[0], lines[1]}",
+                "return grid[0, 0]!!.Length + imp[0, 0]!!.Length + (if grid[0, 1] == nil { 10 } else { 0 })",
+                "var grid [,]string?",
+                "grid = [1, 2]string?{lines[0], lines[1]}",
+                "let copy List[string?] = List[string?]{ lines[0], s }"
+            }, []string{
+                "ForEachRange",
+                "12",
+                "GridInferred",
+                "14",
+                "GridDeclared",
+                "12",
+                "GridThrows",
+                "-1",
+                "CollectionCoercion",
+                "12"
+            })
+    }
+
+    /// Review of 98fce67c7 (#5571): nested nullable positions on a local or `foreach`
+    /// variable do not make a nullable top-level container non-null, so `lines!.Length`
+    /// on `string[]? lines` and dereferences of nullable `foreach` bindings with
+    /// promoted elements keep their top-level `!!`.
+    @Fact
+    func Nullable_Containers_And_ForEach_Bindings_With_Promoted_Elements_Keep_Top_Level_Assertions() {
+        this.Check("Review29", `using System.Collections.Generic;
+using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int Local(string p) { bool flag = p.Length > 0; string[]? lines = flag ? Node.Holes(p) : null; return lines!.Length; }
+    public static int LocalElement(string p) { bool flag = p.Length > 0; string[]? lines = flag ? Node.Holes(p) : null; return lines![0].Length; }
+    public static int LocalThrows(string p) { bool flag = p.Length == 0; string[]? lines = flag ? Node.Holes(p) : null; try { return lines!.Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int ForEachAnnotated(string p) { string[] lines; lines = Node.Holes(p); var rows = new string[]?[] { lines }; int n = 0; foreach (string[]? row in rows) { n += row![0].Length; } foreach (var row in rows) { n += row!.Length; } foreach (IEnumerable<string>? seq in rows) { n += seq!.First().Length; } return n; }
+    public static int ForEachAnnotatedThrows(string p) { string[] lines; lines = Node.Holes(p); var rows = new string[]?[] { null, lines }; try { foreach (var row in rows) { return row!.Length; } return 0; } catch (System.NullReferenceException) { return -1; } }
+    public static int ForEachWidenedArray(string p) { string[] lines; lines = Node.Holes(p); var rows = new string[2][]; rows[0] = lines; rows[1] = null!; foreach (var row in rows) { if (p.Length == 0) { lines = row; } return row[0].Length; } return 0; }
+    public static int ForEachJagged(string p) { string[][] j; j = Node.Jagged(p); int n = 0; foreach (var row in j) { n += row[0].Length; } return n; }
+}`, []string{
+                "return lines!!.Length",
+                "return lines!![0]!!.Length",
+                "n += row!![0]!!.Length",
+                "n += row!!.Length",
+                "n += seq!!.First()!!.Length",
+                "return row!![0]!!.Length"
+            }, []string{
+                "Local",
+                "2",
+                "LocalElement",
+                "2",
+                "LocalThrows",
+                "-1",
+                "ForEachAnnotated",
+                "6",
+                "ForEachAnnotatedThrows",
+                "-1",
+                "ForEachWidenedArray",
+                "2",
+                "ForEachJagged",
+                "2"
+            })
+    }
+
+    /// Review of 125d853ab (#5571): an element that flows through a user-defined
+    /// conversion operator obeys the operator's input parameter contract and keeps
+    /// its operand positions separate from the converted result, and parenthesized
+    /// tuple literals in typed deconstructions still assert their leaf elements.
+    @Fact
+    func User_Defined_Conversions_And_Parenthesized_Tuple_Deconstructions_Keep_Leaf_Assertions() {
+        this.Check("Review30", `using System.Collections.Generic;
+using ObLib;
+
+public class Box
+{
+    public int N;
+    public Box(string s) { N = s.Length; }
+    public static implicit operator Box(string s) => new Box(s);
+}
+
+public static class Use
+{
+    public static int ConvertedInit(string p) { string[] lines; lines = Node.Holes(p); var list = new List<Box> { lines[0] }; list.Add(lines[0]); return list[0].N + list[1].N; }
+    public static int ConvertedNullableSink(string p) { string[] lines; lines = Node.Holes(p); var list = new List<Box?> { lines[0], null }; list.Add(lines[0]); Box? b = lines[0]; return list[0]!.N + list[2]!.N + b!.N + (list[1] == null ? 10 : 0); }
+    public static int ConvertedThrows(string p) { string[] lines; lines = Node.Holes(p); try { var list = new List<Box> { lines[1] }; return list[0].N; } catch (System.NullReferenceException) { return -1; } }
+    public static int ParenthesizedTuple(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) = ((lines[0], lines[1])); ((string c, string d), int n) = (((lines[0], lines[1])), 3); return a.Length + b.Length + c.Length + d.Length + n; }
+    public static int ParenthesizedTupleThrows(string p) { string[] lines; lines = Node.Holes(p); try { (string a, string b) = ((lines[0], lines[1])); return a.Length + b.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "let list = List[Box]{ lines[0]!! }",
+                "let list = List[Box?]{ lines[0]!!, nil }",
+                "list.Add(lines[0]!!)",
+                "let b Box? = lines[0]!!",
+                "let (a, b) = ((lines[0]!!, lines[1]!!))",
+                "return a.Length + b.Length + c.Length + d.Length + n"
+            }, []string{
+                "ConvertedInit",
+                "4",
+                "ConvertedNullableSink",
+                "16",
+                "ConvertedThrows",
+                "-1",
+                "ParenthesizedTuple",
+                "11",
+                "ParenthesizedTupleThrows",
+                "-1"
+            })
+    }
+
+    // Translates the C#, checks the printed form, compiles and verifies the G#, and
+    // compares each named method with the C# oracle and the expected result.
+    private func Check(name string, source string, printedFragments[]string, expectations[]string) {
+        Directory.CreateDirectory(this.directory)
+        let libraryPath = Path.Combine(this.directory, "Lib5541" + name + ".dll")
+        let library = CSharpCompilation.Create(
+            "Lib5541" + name,
+            []SyntaxTree{CSharpSyntaxTree.ParseText(LibrarySource, CSharpParseOptions(LanguageVersion.Latest))},
+            CSharpProjectLoader.RuntimeReferences(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Disable
+            )
+        )
+        let libraryEmit = library.Emit(libraryPath)
+        Assert.True(libraryEmit.Success, string.Join(Environment.NewLine, libraryEmit.Diagnostics))
+        let reference = MetadataReference.CreateFromFile(libraryPath)
+        let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Snippet.cs")
+        let consumer = CSharpCompilation.Create(
+            "Use5541" + name + "CSharp",
+            []SyntaxTree{tree},
+            CSharpProjectLoader.RuntimeReferences().Append(reference).ToImmutableArray(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let oraclePath = Path.Combine(this.directory, "Use5541" + name + "CSharp.dll")
+        let oracleEmit = consumer.Emit(oraclePath)
+        Assert.True(oracleEmit.Success, string.Join(Environment.NewLine, oracleEmit.Diagnostics))
+        let model = consumer.GetSemanticModel(tree)
+        let document = LoadedDocument("Snippet.cs", tree, model)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                document,
+                TranslationContext(consumer, model, document.FilePath)
+            )
+        )
+            .Replace("\r\n", "\n")
+        for fragment in printedFragments {
+            Assert.Contains(fragment, printed, StringComparison.Ordinal)
+        }
+        let translated = this.CompileVerifyAndLoad(printed, libraryPath, "Use5541" + name)
+        let oracle = EmittedFixture.Load(oraclePath)
+        for var i = 0; i < expectations.Length; i += 2 {
+            let expected = Invoke(oracle, expectations[i])
+            Assert.Equal(expectations[i + 1], expected)
+            Assert.Equal(expected, Invoke(translated, expectations[i]))
+        }
+    }
+
+    // Compiles the translation as a library with no diagnostics, verifies it with the
+    // repository ilverify before it runs, and loads it. A skipped verification fails.
+    private func CompileVerifyAndLoad(printed string, libraryPath string, assemblyName string) Assembly {
+        let path = Path.Combine(this.directory, assemblyName + ".dll")
+        using let resolver = ReferenceResolver.WithReferences([]string{libraryPath})
+        let compilation = GCompilation(resolver, []GSyntaxTree{GSyntaxTree.Parse(GSourceText.From(printed))})
+        compilation.IsLibrary = true
+        {
+            using let peStream = File.Create(path)
+            let emit = compilation.Emit(peStream, pdbStream: nil, refStream: nil, assemblyName: assemblyName)
+            Assert.True(emit.Success && emit.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", emit.Diagnostics))
+        }
+        let verification = IlVerifyRunner().Verify(path, []string{libraryPath})
+        Assert.True(verification.Status == IlVerifyStatus.Passed, verification.Output)
+        Assert.Empty(verification.Errors)
+        return EmittedFixture.Load(path)
+    }
+
+    shared {
+        private const LibrarySource string = `namespace ObLib;
+
+public static class Node
+{
+    public static string[] Lines(string p) { return new[] { p, p }; }
+    public static string[] Holes(string p) { return new[] { p, null }; }
+    public static string[][] Jagged(string p) { return new[] { new[] { p, null } }; }
+    public static System.Collections.Generic.List<System.Collections.Generic.List<string>> Nested(string p) { return new() { new() { p, null } }; }
+    public static System.Collections.Generic.Dictionary<string, string> Map(string p) { return new() { { "k", p } }; }
+    public static System.Collections.Generic.IEnumerable<string> Seq(string p) { return new[] { p, null }; }
+    public static T OId<T>(T x) { return x; }
+}`
+
+        // The result of a public static `Use` method called with "ab": its value, or
+        // the type of the exception it throws.
+        private func Invoke(consumer Assembly, method string) string {
+            let use = consumer.GetTypes().Single((type Type) -> type.Name == "Use")
+            try {
+                let value = use.GetMethod(method)!!.Invoke(nil, []object? {"ab"})
+                return if value == nil {
+                    "null"
+                } else {
+                    value.ToString() ?? "null"
+                }
+            } catch (exception TargetInvocationException) {
+                return "throw:" + (exception.InnerException?.GetType().Name ?? "?")
+            }
+        }
+    }
+}
