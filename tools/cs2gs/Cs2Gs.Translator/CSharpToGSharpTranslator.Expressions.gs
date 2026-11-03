@@ -2239,7 +2239,11 @@ partial class CSharpToGSharpTranslator {
                     conditional.WhenNotNull == current {
                     return conditional.Expression
                 }
-                if (current!!.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current) ||
+                if (
+                    current!!.Parent is ConditionalAccessExpressionSyntax nestedConditional &&
+                        nestedConditional.Expression == current
+                ) ||
+                    (current!!.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current) ||
                     (
                     current!!.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Expression == current
                 ) ||
@@ -2247,6 +2251,12 @@ partial class CSharpToGSharpTranslator {
                     current!!.Parent is ElementAccessExpressionSyntax elementAccess &&
                         elementAccess.Expression == current
                 ) ||
+                    (current!!.Parent is PostfixUnaryExpressionSyntax postfix && postfix.Operand == current) ||
+                    current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax ||
                     current!!.Parent is MemberBindingExpressionSyntax ||
                     current!!.Parent is ElementBindingExpressionSyntax {
                     current = current!!.Parent

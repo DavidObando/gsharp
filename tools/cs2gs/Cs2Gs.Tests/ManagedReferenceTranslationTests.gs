@@ -7307,17 +7307,32 @@ public class Probe {
 
     @Fact
     func NonGenericDerivedReceiverProjectsInheritedGenericBaseMembers() {
-        const source = `using Gsharp.Values;
+        const source = `using System;
+using Gsharp.Values;
 namespace ManagedArrayInheritedGenericBase;
 public interface IMarker { }
 public class Box<T> {
-    public Box(T[] items) { }
+    private readonly T item;
+    public Box() { }
+    public Box(T[] items) { this.item = items[0]; }
+    public T Get() => this.item;
+}
+public class Wrapper<TFirst, TSecond> {
+    public void UseFirst(TFirst value) { }
+    public void UseSecond(TSecond value) { }
 }
 public class Base<T> {
     private T stored;
     public T Value;
-    public void Add(T value) { this.stored = value; }
+    public Box<T>? ValueBox;
+    public Wrapper<T, ManagedRef<int>> Data = new();
+    public void Add(T value) {
+        this.stored = value;
+        this.ValueBox = new Box<T>(new[] { value });
+    }
     public T Get() => this.stored;
+    public string Describe() => "ok";
+    public void AcceptObject(object value) { }
     public U Echo<U>(U value) => value;
     public T Id<U>(T value, U tag) => value;
     public T this[T key] {
@@ -7341,10 +7356,13 @@ public class GenericDerived<T> : Base<T> { }
 public class OpenDerived<U> : Base<ManagedRef<U>> { }
 public class TupleDerived<U> : Base<(ManagedRef<U> Reference, U Value)> { }
 public class Probe {
+    private static ref int GetRef(int[] storage, object? ignored) => ref storage[0];
+
     public static int Run() {
         var emptySource = new ManagedRef<int>[1];
         var derived = new Derived();
         derived.BaseAdd(emptySource);
+        derived.Data.UseFirst(emptySource[0]);
         derived[emptySource[0]] = emptySource[0];
         _ = derived[emptySource[0]];
         new SubDerived().Add(emptySource[0]);
@@ -7365,10 +7383,18 @@ public class Probe {
         var populatedSource = new ManagedRef<int>[1];
         populatedSource[0] = ManagedRef<int>.FromArray(values, 0);
         var populated = new SubDerived();
+        Func<object> describeReader = populated.Describe;
+        Action<string> objectWriter = populated.AcceptObject;
+        _ = describeReader();
+        objectWriter("test");
         populated.Add(populatedSource[0]);
+        ref int alias = ref GetRef(values, populated.Get());
+        _ = alias;
+        SubDerived? nullablePopulated = populated;
+        var nestedConditional = nullablePopulated?.ValueBox?.Get().Borrow() ?? 0;
         var secondSource = new ManagedRef<int>[1];
         secondSource[0] = ManagedRef<int>.FromArray(values, 1);
-        return populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
+        return (populated.BaseRead() - nestedConditional) + populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
     }
 }`
         let references = List[MetadataReference](
@@ -7396,6 +7422,7 @@ public class Probe {
         )
         Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
         Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("derived.Data.UseFirst(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains("derived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
         Assert.Contains("_ = derived[emptySource[0]]", text, StringComparison.Ordinal)
         Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
@@ -7409,6 +7436,7 @@ public class Probe {
         Assert.Contains("OpenDerived[int64]().Add(emptyLongSource[0])", text, StringComparison.Ordinal)
         Assert.Contains("TupleDerived[int32]().Add(emptyTuples[0])", text, StringComparison.Ordinal)
         Assert.DoesNotContain("emptySource[0]!!", text, StringComparison.Ordinal)
+        Assert.Contains("nullablePopulated?.ValueBox?.Get()!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("populated.Echo(secondSource[0])!!.Borrow()", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
@@ -7436,9 +7464,25 @@ public class Box<T> {
     public Box(T[] items) { }
     public void Add(T value) { }
 }
+public class Holder<T> {
+    public Box<T> Value = new();
+}
+public class Wrapper<TFirst, TSecond> {
+    public void UseFirst(TFirst value) { }
+    public void UseSecond(TSecond value) { }
+}
+public class CollectionBase<T> : IEnumerable<Box<T>> {
+    public void Add(Box<T> item) { }
+    public void AddScalar(T value) { }
+    public IEnumerator<Box<T>> GetEnumerator() => null!;
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => null!;
+}
 public class Base<T> {
     public T ScalarValue;
     public Box<T> Value = new();
+    public Box<T>? NullableBox;
+    public Holder<T> NestedHolder = new();
+    public Wrapper<T, ManagedRef<int>> Data = new();
     public T PropValue { get; set; }
     public virtual event Action<T> Changed;
     public event Action<Box<T>> BoxChanged;
@@ -7494,6 +7538,10 @@ public class RefReturnDerived : Base<ManagedRef<int>> { }
 public class EventSubDerived : Base<ManagedRef<int>> { }
 public class ImplicitIndexerInitDerived : Base<ManagedRef<int>> { }
 public class LambdaParamDerived : Base<ManagedRef<int>> { }
+public class PartialWrapperDerived : Base<ManagedRef<int>> { }
+public class ChainedReadDerived : Base<ManagedRef<int>> { }
+public class CollectionExprDerived : CollectionBase<ManagedRef<int>> { }
+public class CoalesceAssignDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
@@ -7598,6 +7646,21 @@ public class Probe {
         var lambdaParamDerived = new LambdaParamDerived();
         lambdaParamDerived.Callback = box => { };
         lambdaParamDerived.Add(source[0]);
+
+        var partialWrapper = new PartialWrapperDerived();
+        partialWrapper.Add(source[0]);
+        partialWrapper.Data.UseSecond(source[0]);
+
+        var chainedRead = new ChainedReadDerived();
+        AcceptBox(chainedRead.NestedHolder.Value);
+        chainedRead.Add(source[0]);
+
+        CollectionExprDerived collectionExpr = [FixedBox];
+        collectionExpr.AddScalar(source[0]);
+
+        var coalesceAssign = new CoalesceAssignDerived();
+        coalesceAssign.Add(source[0]);
+        coalesceAssign.NullableBox ??= FixedBox;
     }
 }`
         let references = List[MetadataReference](
@@ -7612,7 +7675,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            26,
+            30,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7662,6 +7725,14 @@ public class Probe {
         Assert.Contains("open class EventSubDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class ImplicitIndexerInitDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class LambdaParamDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class PartialWrapperDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ChainedReadDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class CollectionExprDerived : CollectionBase[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class CoalesceAssignDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
