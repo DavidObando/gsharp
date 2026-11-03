@@ -141,24 +141,6 @@ internal partial class StatementBinder {
         }
     }
 
-    private var packageDeclaresConversions bool? = nil
-
-    // Whether a type of the package declares a user-defined conversion operator.
-    private func PackageDeclaresConversions() bool {
-        if packageDeclaresConversions == nil {
-            var found = false
-            for declared in $scope.GetDeclaredStructs() {
-                for method in declared.StaticMethods {
-                    if method.Name == "op_Implicit" || method.Name == "op_Explicit" {
-                        found = true
-                    }
-                }
-            }
-            packageDeclaresConversions = found
-        }
-        return packageDeclaresConversions == true
-    }
-
     private func SameRoot(first VariableSymbol, second VariableSymbol) bool {
         if object.ReferenceEquals(first, second) {
             return true
@@ -1313,15 +1295,12 @@ internal partial class StatementBinder {
         return false
     }
 
-    // Whether a call or an index access of the region passes a value that a user-defined or imported conversion
-    // operator can convert to its parameter type (the predicate of the conversion classifier). The candidates are
-    // the functions or methods of the callee's name, or the indexers of the target, with as many parameters as
-    // arguments, after the receiver's type arguments are substituted. A candidate that takes every argument without
-    // a conversion operator (the same or a built-in type, a reference conversion, a type parameter that the call
-    // infers, or `nil` for a reference or nullable type) is taken to be the one that binds. A call that the walker
-    // cannot check counts (coordinator decision 2026-11-01): a callee without such a candidate (an extension method,
-    // an expanded or optional argument), a named argument, a typed `out var`, an argument without a path, an operator argument when an
-    // operator of the region can return another type, or a range that does not slice a built-in sequence.
+    // Whether a call or an index access of the region can pass a value through a user-defined or imported conversion
+    // operator (ADR-0213 §20b, one conservative rule). Every candidate of the callee's name, or every indexer of the
+    // target, with the receiver's type arguments substituted, is checked, whichever the binder selects. A call that
+    // the walker cannot check counts (coordinator decision 2026-11-01): a callee whose candidates it cannot list, a
+    // named argument, an argument without a path, an operator argument when an operator of the region can return
+    // another type, or a range that does not slice a built-in sequence.
     private func ArgumentsRunUserConversion(effects RegionEffects) bool {
         let operatorResultsKnown = !OperatorsRunUserCode(effects, false)
         for call in effects.Calls {
@@ -1378,7 +1357,7 @@ internal partial class StatementBinder {
         let kinds = List[int32]()
         for var index = 0; index < call.Arguments.Count; index++ {
             let form = call.ArgumentForms[index]
-            if form == RegionArgumentForm.Named || form == RegionArgumentForm.TypedInlineDeclaration {
+            if form == RegionArgumentForm.Named {
                 return true
             }
             if form == RegionArgumentForm.ByReference || form == RegionArgumentForm.ReadOnlyReference {
@@ -1397,12 +1376,11 @@ internal partial class StatementBinder {
                     }
                 )
             } else if form == RegionArgumentForm.FunctionLiteral {
-                // A function literal converts to a delegate without an operator, but it does not show which
-                // candidate's delegate type it fits, so it proves no candidate by identity.
+                // A function literal converts to a delegate without an operator.
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentFunction)
             } else if form == RegionArgumentForm.InlineDeclaration {
-                // `out var v` takes only a by-reference parameter, of any type.
+                // `out var v` (typed or not) is passed by reference.
                 argumentTypes.Add(nil)
                 kinds.Add(ArgumentInlineDeclaration)
             } else if form == RegionArgumentForm.Range {
@@ -1437,413 +1415,61 @@ internal partial class StatementBinder {
                 kinds.Add(ArgumentTyped)
             }
         }
-        // The receiver can have each of its alternative types (its declared type, a narrowing, a type test of the
-        // region), and the call binds among the candidates of the one it has. Each alternative with a method of the
-        // name must take the call without a conversion operator; one whose methods have no candidate of this arity
-        // binds through an expanded or optional argument, which is not checked, so it counts. An alternative without
-        // a method of the name is not the type the call binds on unless an extension method can bind it, which is
-        // not checked either. A call that no alternative takes counts.
-        let unproven = HashSet[List[TypeSymbol]]()
-        let otherArity = HashSet[List[TypeSymbol]]()
-        guard let groups = ParameterListGroups(call, name, effects, unproven, otherArity) else {
+        // ADR-0213 §20b, one conservative rule (coordinator decision 2026-11-02): the walker does not model overload
+        // resolution. The call keeps the fact only when no candidate of the name, on any type the receiver can have,
+        // can receive an argument through a conversion that runs code. A callee whose candidates the walker cannot
+        // list, a candidate that can take another number of arguments, and a call that no candidate takes count.
+        guard let candidates = CandidateParameterLists(call, name, effects, argumentTypes.Count) else {
             return true
         }
-        var anyAlternative = false
-        for group in groups {
-            if group.Count == 0 {
-                continue
-            }
-            let candidates = List[List[TypeSymbol]]()
-            // An imported candidate of another arity that can take the call through omitted optional parameters or
-            // in expanded form is not classified; it can be the better one.
-            var unclassified = false
-            for parameters in group {
-                if parameters.Count == argumentTypes.Count {
-                    candidates.Add(parameters)
-                } else if otherArity.Contains(parameters) {
-                    unclassified = true
-                }
-            }
-            anyAlternative = true
-            if CandidatesRunUserConversion(
-                candidates,
-                argumentTypes,
-                kinds,
-                call.HasTypeArguments,
-                unproven,
-                unclassified
-            ) {
-                return true
-            }
-        }
-        return !anyAlternative
-    }
-
-    // A candidate that takes every argument by identity is better than one that needs a conversion operator, when
-    // lookup finds it (`unproven` holds the candidates that the binder may not select: a private or explicit-interface
-    // method, or an imported base method that a source method of the name hides). Without one, an unclassified
-    // candidate of another arity counts. Otherwise a candidate that needs one
-    // can be the better one (a conversion to `Payload` beats one to `object`), and a call that no candidate takes is
-    // not checked.
-    private func CandidatesRunUserConversion(
-        candidates List[List[TypeSymbol]],
-        argumentTypes List[List[TypeSymbol]?],
-        kinds List[int32],
-        explicitTypeArguments bool,
-        unproven HashSet[List[TypeSymbol]],
-        unclassified bool
-    ) bool {
-        // A call with named type arguments selects by generic arity, which the lists do not show.
-        if !explicitTypeArguments {
-            for parameters in candidates {
-                if !unproven.Contains(parameters) && CandidateIsExact(parameters, argumentTypes, kinds) {
-                    return false
-                }
-            }
-        }
-        if unclassified {
+        if candidates.Count == 0 {
             return true
         }
-        var free = false
         for parameters in candidates {
-            let candidate = ClassifyCandidate(parameters, argumentTypes, kinds, explicitTypeArguments)
-            if candidate == CandidateUser {
-                return true
-            }
-            free = free || candidate == CandidateFree
-        }
-        return !free
-    }
-
-    // Whether a candidate takes every argument of a known type by identity (the quick test before the classification).
-    private func CandidateIsExact(
-        parameters List[TypeSymbol],
-        argumentTypes List[List[TypeSymbol]?],
-        kinds List[int32]
-    ) bool {
-        for var index = 0; index < parameters.Count; index++ {
-            // An `in` argument also matches a parameter that is not `in`, so it proves no candidate by identity.
-            if !PassingModeMatches(parameters[index], kinds[index]) || kinds[index] == ArgumentReadOnlyReference {
-                return false
-            }
-            if kinds[index] == ArgumentSkipped || kinds[index] == ArgumentInlineDeclaration {
-                continue
-            }
-            if (kinds[index] != ArgumentTyped && kinds[index] != ArgumentByReference) ||
-                argumentTypes[index] is not{} types {
-                return false
-            }
-            let stripped = ReferencedType(parameters[index])
-            for argumentType in types {
-                if !object.Equals(argumentType, stripped) && !SameClrType(argumentType, stripped) {
-                    return false
-                }
-            }
-        }
-        return true
-    }
-
-    // How a candidate takes the arguments: not at all, through a conversion operator, without one, or by identity.
-    private const CandidateNotApplicable int32 = 0
-    private const CandidateUser int32 = 1
-    private const CandidateFree int32 = 2
-    private const CandidateExact int32 = 3
-
-    private func ClassifyCandidate(
-        parameters List[TypeSymbol],
-        argumentTypes List[List[TypeSymbol]?],
-        kinds List[int32],
-        explicitTypeArguments bool
-    ) int32 {
-        if !explicitTypeArguments && SharesInferredTypeParameter(parameters, argumentTypes, kinds) {
-            return CandidateUser
-        }
-        var result = CandidateExact
-        for var index = 0; index < parameters.Count; index++ {
-            let kind = kinds[index]
-            let parameter = parameters[index]
-            if !PassingModeMatches(parameter, kind) {
-                return CandidateNotApplicable
-            }
-            if kind == ArgumentSkipped || kind == ArgumentInlineDeclaration {
-                continue
-            }
-            let stripped = StripReferenceNullability(parameter) ?? parameter
-            var argument = CandidateExact
-            if kind == ArgumentFunction {
-                argument = CandidateFree
-            } else if kind == ArgumentByReference {
-                // The parameter takes the argument by identity, or not at all; an argument that the walker cannot
-                // type proves nothing.
-                argument = if argumentTypes[index] is not{} referenced {
-                    CandidateFree
-                } else if CandidateIsExactReference(referenced, ReferencedType(parameter)) {
-                    CandidateExact
-                } else {
-                    CandidateNotApplicable
-                }
-            } else if kind == ArgumentReadOnlyReference {
-                // The parameter takes the `in` argument without a conversion, or not at all.
-                argument = if argumentTypes[index] is not{} referenced {
-                    CandidateFree
-                } else if CandidateIsExactReference(referenced, ReferencedType(parameter)) {
-                    CandidateFree
-                } else {
-                    CandidateNotApplicable
-                }
-            } else if kind == ArgumentNil {
-                argument = if AcceptsNilWithoutOperator(parameter) {
-                    CandidateFree
-                } else {
-                    CandidateUser
-                }
-            } else if argumentTypes[index] is {} types {
-                argument = ClassifyArgument(types, parameter, stripped, explicitTypeArguments)
-            } else if MetadataTypeKeys.IsBuiltIn(StripNullableValue(stripped)) || object.Equals(
-                stripped,
-                TypeSymbol.Object
-            ) ||
-                TypeParameterTakesArgument(stripped, explicitTypeArguments) {
-                // A value of some built-in type.
-                argument = CandidateFree
-            } else if BuiltInReachesThroughOperator(StripNullableValue(stripped)) {
-                // A value of some built-in type reaches another type only through a conversion operator.
-                argument = CandidateUser
-            } else {
-                argument = CandidateNotApplicable
-            }
-            result = Math.Min(result, argument)
-        }
-        return result
-    }
-
-    // Whether the method type parameters that more than one parameter names may be inferred so that an argument
-    // reaches its parameter through a conversion operator (`Use[T](a T, b T)` with a `DateTimeOffset` and a
-    // `DateTime`). Each position binds the type parameters it names: a bare one the argument's type, a compound one
-    // (`List[T]`) the type arguments of an argument of the same generic type. A type parameter bound to two types, or
-    // named where the walker cannot bind it, counts. A built-in literal or operator value fits a type parameter that
-    // binds to a built-in type, or to nothing else.
-    private func SharesInferredTypeParameter(
-        parameters List[TypeSymbol],
-        argumentTypes List[List[TypeSymbol]?],
-        kinds List[int32]
-    ) bool {
-        let bound = Dictionary[object, object]()
-        let builtIn = List[object]()
-        var positions = 0
-        var unbindable = false
-        for var index = 0; index < parameters.Count; index++ {
-            let stripped = StripReferenceNullability(parameters[index]) ?? parameters[index]
-            let bare = TypeParameterTakesArgument(stripped, false)
-            if !bare && !IsCompoundOfMethodTypeParameters(stripped) {
-                continue
-            }
-            positions++
-            let single = if kinds[index] == ArgumentTyped && argumentTypes[index] is {} types && types.Count == 1 {
-                types[0]
-            } else {
-                default(TypeSymbol?)
-            }
-            if !bare {
-                if single is not{} argument || !BindCompound(bound, stripped, argument) {
-                    unbindable = true
-                }
-            } else if TypeParameterKey(stripped) is not{} key {
-                unbindable = true
-            } else if single is {} argument {
-                if !BindTypeParameter(bound, key, argument) {
+            for var index = 0; index < parameters.Count; index++ {
+                if !ArgumentPassesWithoutCode(parameters[index], argumentTypes[index], kinds[index]) {
                     return true
                 }
-            } else if kinds[index] == ArgumentBuiltIn {
-                builtIn.Add(key)
-            } else {
-                unbindable = true
-            }
-        }
-        if positions < 2 {
-            return false
-        }
-        if unbindable {
-            return true
-        }
-        for key in builtIn {
-            if bound.TryGetValue(key, out var value) && !BindingIsBuiltIn(value) {
-                return true
             }
         }
         return false
     }
 
-    // Binds the method type parameters of a compound parameter to the type arguments of an argument of the same
-    // generic type. Returns `false` when the walker cannot, or when a type parameter is bound to two types.
-    private func BindCompound(bound Dictionary[object, object], parameter TypeSymbol, argument TypeSymbol) bool {
-        guard let definition = GenericDefinition(parameter) else {
-            return false
-        }
-        guard let argumentDefinition = GenericDefinition(argument) else {
-            return false
-        }
-        if !ClrTypeUtilities.AreSame(argumentDefinition, definition) {
-            return false
-        }
-        let parameterArguments = TypeArgumentsOf(parameter)
-        let values = List[object]()
-        for type in TypeArgumentsOf(argument) {
-            values.Add(type)
-        }
-        if values.Count == 0 && argument.ClrType is {} clr {
-            try {
-                for type in clr.GetGenericArguments() {
-                    values.Add(type)
-                }
-            } catch (ex NotSupportedException) {
-                return false
-            }
-        }
-        if parameterArguments.IsDefaultOrEmpty || parameterArguments.Length != values.Count {
-            return false
-        }
-        for var index = 0; index < parameterArguments.Length; index++ {
-            let typeArgument = parameterArguments[index]
-            if TypeParameterTakesArgument(typeArgument, false) && TypeParameterKey(typeArgument) is {} key {
-                if !BindTypeParameter(bound, key, values[index]) {
-                    return false
-                }
-            } else if IsCompoundOfMethodTypeParameters(typeArgument) {
-                return false
-            }
-        }
-        return true
-    }
-
-    // A binding is a type symbol, or the CLR type of an imported type argument.
-    private func BindTypeParameter(bound Dictionary[object, object], key object, value object) bool {
-        if bound.TryGetValue(key, out var existing) {
-            return SameBinding(existing, value)
-        }
-        bound[key] = value
-        return true
-    }
-
-    private func SameBinding(first object, second object) bool {
-        if object.Equals(first, second) {
+    // Whether an argument reaches a parameter of a candidate without a conversion that runs code, whichever candidate
+    // the binder selects. An argument passed by reference, a function literal and a range convert nothing, and a
+    // value does not bind a `ref` or `out` parameter. `nil` needs no operator for a reference, nullable or type
+    // parameter type. A value needs none when no user-defined or imported conversion operator reaches the parameter's
+    // type from its type (the binder's `HasUserDefinedImplicitConversion`). A parameter that names a type parameter
+    // counts: the walker does not infer type arguments.
+    private func ArgumentPassesWithoutCode(parameter TypeSymbol, types List[TypeSymbol]?, kind int32) bool {
+        if kind == ArgumentByReference ||
+            kind == ArgumentReadOnlyReference ||
+            kind == ArgumentInlineDeclaration ||
+            kind == ArgumentFunction ||
+            kind == ArgumentSkipped ||
+            parameter is ByRefTypeSymbol {
             return true
         }
-        if first is TypeSymbol firstType && second is TypeSymbol secondType && SameClrType(firstType, secondType) {
-            return true
+        if kind == ArgumentNil {
+            return AcceptsNilWithoutOperator(parameter)
         }
-        guard let firstClr = BindingClrType(first) else {
+        let stripped = StripReferenceNullability(parameter) ?? parameter
+        if TypeSymbol.ContainsTypeParameter(stripped) || stripped.ClrType?.ContainsGenericParameters == true {
             return false
         }
-        guard let secondClr = BindingClrType(second) else {
+        if kind == ArgumentBuiltIn {
+            return !BuiltInReachesThroughOperator(stripped) &&
+                !BuiltInReachesThroughOperator(StripNullableValue(stripped))
+        }
+        guard let known = types else {
             return false
         }
-        return ClrTypeUtilities.AreSame(firstClr, secondClr)
-    }
-
-    private func BindingClrType(value object) Type? {
-        if value is Type clr {
-            return clr
-        }
-        if value is TypeSymbol type {
-            return StripAllNullability(type)?.ClrType
-        }
-        return nil
-    }
-
-    private func BindingIsBuiltIn(value object) bool {
-        if value is TypeSymbol type {
-            return MetadataTypeKeys.IsBuiltIn(StripNullableValue(type))
-        }
-        if value is Type clr {
-            return clr.IsPrimitive || clr.FullName == "System.String" || clr.FullName == "System.Decimal"
-        }
-        return false
-    }
-
-    // The identity of a method type parameter: its symbol, or the CLR generic parameter of an imported method.
-    private func TypeParameterKey(type TypeSymbol) object? {
-        if type is TypeParameterSymbol typeParameter {
-            return typeParameter
-        }
-        return type.ClrType
-    }
-
-    private func TypeArgumentsOf(type TypeSymbol) ImmutableArray[TypeSymbol] {
-        return switch type {
-            case imported is ImportedTypeSymbol: imported.TypeArguments
-            case constructed is ConstructedMetadataTypeSymbol: constructed.TypeArguments
-            case declared is StructSymbol: declared.TypeArguments
-            case contract is InterfaceSymbol: contract.TypeArguments
-            default: ImmutableArray[TypeSymbol].Empty
-        }
-    }
-
-    // A `ref` or `out` argument (an inline declaration included) takes only a `ref` or `out` parameter, and any other
-    // argument only a parameter that is not one. An `in` parameter is listed by value, so an `in` argument and a value
-    // both take it.
-    private func PassingModeMatches(parameter TypeSymbol, kind int32) bool -> (parameter is ByRefTypeSymbol) ==
-    (kind == ArgumentByReference || kind == ArgumentInlineDeclaration)
-
-    private func CandidateIsExactReference(types List[TypeSymbol], parameter TypeSymbol) bool {
-        for argumentType in types {
-            if !object.Equals(argumentType, parameter) && !SameClrType(argumentType, parameter) {
+        for type in known {
+            if ConversionOperatorReaches(type, stripped) {
                 return false
             }
         }
         return true
-    }
-
-    // The type that a parameter takes, without nullability and a by-reference layer.
-    private func ReferencedType(parameter TypeSymbol) TypeSymbol {
-        let referenced = if parameter is ByRefTypeSymbol byReference {
-            byReference.PointeeType
-        } else {
-            parameter
-        }
-        return StripReferenceNullability(referenced) ?? referenced
-    }
-
-    // The worst way that one argument, of any of its possible types, reaches the parameter. A conversion operator
-    // counts before a type that the parameter does not take.
-    private func ClassifyArgument(
-        types List[TypeSymbol],
-        parameter TypeSymbol,
-        stripped TypeSymbol,
-        explicitTypeArguments bool
-    ) int32 {
-        var result = CandidateExact
-        var notApplicable = false
-        for argumentType in types {
-            if object.Equals(argumentType, stripped) || SameClrType(argumentType, stripped) {
-                continue
-            }
-            if ArgumentFits(argumentType, parameter, explicitTypeArguments) {
-                result = Math.Min(result, CandidateFree)
-            } else if !explicitTypeArguments && IsCompoundOfMethodTypeParameters(stripped) {
-                let compound = CompoundParameterClass(argumentType, stripped)
-                if compound == CandidateUser {
-                    return CandidateUser
-                }
-                if compound == CandidateNotApplicable {
-                    notApplicable = true
-                } else {
-                    result = Math.Min(result, compound)
-                }
-            } else if ConversionOperatorReaches(argumentType, stripped) {
-                return CandidateUser
-            } else if explicitTypeArguments && TypeParameterTakesArgument(stripped, false) {
-                // A type argument that the call names can take the argument through a conversion operator.
-                return CandidateUser
-            } else {
-                notApplicable = true
-            }
-        }
-        return if notApplicable {
-            CandidateNotApplicable
-        } else {
-            result
-        }
     }
 
     // Whether a conversion operator converts some built-in type other than `string` to the type. An operator
@@ -1870,14 +1496,6 @@ internal partial class StatementBinder {
         return false
     }
 
-    // The effective CLR types: a nullable value type is `Nullable<T>`, while its (cref:TypeSymbol.ClrType) is `T`.
-    private func SameClrType(argument TypeSymbol, parameter TypeSymbol) bool -> NullableLifting.GetEffectiveClrType(
-        argument
-    ) is {} argumentClr &&
-        NullableLifting.GetEffectiveClrType(parameter) is {} parameterClr &&
-        !parameterClr.ContainsGenericParameters &&
-        ClrTypeUtilities.AreSame(argumentClr, parameterClr)
-
     // A conversion operator converts the value to the target, directly or between their value types (a lifted
     // conversion). Every check without the `?` of a nullable value type is kept, so no operator is missed.
     private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol) bool {
@@ -1891,137 +1509,6 @@ internal partial class StatementBinder {
         (type as NullableTypeSymbol)!!.UnderlyingType
     } else {
         type
-    }
-
-    private func ArgumentFits(argument TypeSymbol, parameter TypeSymbol, explicitTypeArguments bool) bool {
-        let stripped = StripReferenceNullability(parameter) ?? parameter
-        // A nullable value parameter takes a value of its value type, or of another nullable value type, as that
-        // value type takes the value (a wrapping or a lifted conversion is predefined).
-        if IsNullableValueType(stripped) && !object.Equals(argument, stripped) && !SameClrType(argument, stripped) {
-            return ArgumentFits(
-                StripNullableValue(argument),
-                (stripped as NullableTypeSymbol)!!.UnderlyingType,
-                explicitTypeArguments
-            )
-        }
-        if object.Equals(argument, stripped) || object.Equals(stripped, TypeSymbol.Object) {
-            return true
-        }
-        if SameClrType(argument, stripped) {
-            return true
-        }
-        if TypeParameterTakesArgument(stripped, explicitTypeArguments) {
-            return true
-        }
-        return (MetadataTypeKeys.IsBuiltIn(argument) && MetadataTypeKeys.IsBuiltIn(stripped)) ||
-            Conversion.IsRepresentationPreservingImplicit(argument, stripped)
-    }
-
-    // A parameter of a type parameter takes an argument without a conversion when the call infers the type argument
-    // from it. A type argument that the call names can need a conversion, and a type parameter of the receiver's type
-    // that is still open was not substituted (the walker does not know its argument).
-    private func TypeParameterTakesArgument(parameter TypeSymbol, explicitTypeArguments bool) bool {
-        if explicitTypeArguments {
-            return false
-        }
-        if parameter is TypeParameterSymbol typeParameter {
-            return typeParameter.IsMethodTypeParameter
-        }
-        // Only a bare type parameter is fixed by its argument; a compound one (`List[T]`) can still need a conversion.
-        if parameter.ClrType is {} clr && clr.ContainsGenericParameters {
-            return clr.IsGenericParameter && clr.IsGenericMethodParameter
-        }
-        return false
-    }
-
-    // A parameter type that is constructed from method type parameters without being one (`List[T]`, `[]T`).
-    private func IsCompoundOfMethodTypeParameters(parameter TypeSymbol) bool {
-        if parameter is TypeParameterSymbol {
-            return false
-        }
-        if parameter.ClrType is {} clr && clr.ContainsGenericParameters {
-            return !clr.IsGenericParameter && HasOnlyMethodTypeParameters(clr)
-        }
-        return TypeSymbol.ContainsTypeParameter(parameter)
-    }
-
-    // The generic type definition of a constructed type, or `nil`.
-    private func GenericDefinition(type TypeSymbol) Type? {
-        if type is ImportedTypeSymbol imported && imported.OpenDefinition is {} definition {
-            return definition
-        }
-        if type.ClrType is {} clr && clr.IsGenericType {
-            try {
-                return clr.GetGenericTypeDefinition()
-            } catch (ex NotSupportedException) {
-                return nil
-            }
-        }
-        return nil
-    }
-
-    // Whether an argument reaches a compound parameter of method type parameters (`List[T]`) without a conversion:
-    // its type, a base or an interface has the parameter's generic definition. Otherwise it reaches it through an
-    // implicit operator of its imported type to that definition, or not at all.
-    private func CompoundParameterClass(argument TypeSymbol, parameter TypeSymbol) int32 {
-        guard let definition = GenericDefinition(parameter) else {
-            return CandidateUser
-        }
-        if GenericDefinition(argument) is {} argumentDefinition && ClrTypeUtilities.AreSame(
-            argumentDefinition,
-            definition
-        ) {
-            return CandidateFree
-        }
-        if argument.ClrType is not{} argumentClr || ReflectionType(argumentClr) is not{} reflected {
-            return CandidateUser
-        }
-        try {
-            let related = List[Type]()
-            related.Add(reflected)
-            related.AddRange(reflected.GetInterfaces())
-            var current = reflected.BaseType
-            while current != nil {
-                related.Add(current)
-                current = current.BaseType
-            }
-            for candidate in related {
-                if candidate.IsGenericType && ClrTypeUtilities.AreSame(
-                    candidate.GetGenericTypeDefinition(),
-                    definition
-                ) {
-                    return CandidateFree
-                }
-            }
-            for method in reflected.GetMethods(BindingFlags.Public | BindingFlags.Static) {
-                if method.Name == "op_Implicit" && method.ReturnType.IsGenericType && ClrTypeUtilities.AreSame(
-                    method.ReturnType.GetGenericTypeDefinition(),
-                    definition
-                ) {
-                    return CandidateUser
-                }
-            }
-            return CandidateNotApplicable
-        } catch (ex NotSupportedException) {
-            return CandidateUser
-        }
-    }
-
-    private func HasOnlyMethodTypeParameters(type Type) bool {
-        if type.IsGenericParameter {
-            return type.IsGenericMethodParameter
-        }
-        if type.HasElementType {
-            return type.GetElementType() is {} element && HasOnlyMethodTypeParameters(element)
-        }
-        if type.IsGenericType {
-            for argument in type.GetGenericArguments() {
-                if !HasOnlyMethodTypeParameters(argument) {
-                    return false
-                }
-            }
-        }
-        return true
     }
 
     // `nil` reaches a reference type, a nullable type or a type parameter without an operator. A non-nullable value
@@ -2065,60 +1552,40 @@ internal partial class StatementBinder {
         return true
     }
 
-    // The parameter lists of the candidates, one group for each alternative type of the receiver, or `nil` when an
-    // alternative without a method of the name can bind the call through an extension method.
-    private func ParameterListGroups(
-        call RegionCall,
-        name string,
-        effects RegionEffects,
-        unproven HashSet[List[TypeSymbol]],
-        otherArity HashSet[List[TypeSymbol]]
-    ) List[List[List[TypeSymbol]]]? {
-        let groups = List[List[List[TypeSymbol]]]()
-        var receivers List[ReceiverType]? = nil
+    // The parameter lists of the candidates of a call's name that can take its number of arguments, on every type the
+    // receiver can have; `nil` when the walker cannot list them all: a receiver that it does not resolve, an imported
+    // base interface with a method of the name, a type without a method of the name that an extension method can
+    // bind, or a candidate that can take another number of arguments (an optional or variadic parameter).
+    private func CandidateParameterLists(call RegionCall, name string, effects RegionEffects, arity int32) List[
+        List[TypeSymbol]
+    ]? {
+        let lists = List[List[TypeSymbol]]()
+        let otherArity = HashSet[List[TypeSymbol]]()
         if call.Kind == RegionCallKind.NamedInvocation {
-            let lists = List[List[TypeSymbol]]()
             for function in $scope.TryLookupFunctions(name) {
-                if call.HasTypeArguments || TypeParametersInferable(function) {
-                    lists.Add(ParameterTypes(function))
+                AddFunctionParameterList(function, nil, lists, otherArity)
+            }
+        } else {
+            var receivers List[ReceiverType]? = nil
+            if call.ReceiverName is {} receiverName {
+                let types = List[ReceiverType]()
+                if AddRootTypes(receiverName, false, effects, types) {
+                    receivers = types
                 }
+            } else if call.Receiver is {} path {
+                receivers = ResolveReceiverPath(path, effects)
             }
-            groups.Add(lists)
-            return groups
-        }
-        if call.Kind != RegionCallKind.MemberInvocation {
-            return groups
-        }
-        if call.ReceiverName is {} receiverName {
-            let types = List[ReceiverType]()
-            if AddRootTypes(receiverName, false, effects, types) {
-                receivers = types
+            guard let resolved = receivers else {
+                return nil
             }
-        } else if call.Receiver is {} path {
-            receivers = ResolveReceiverPath(path, effects)
-        }
-        if receivers == nil {
-            return groups
-        }
-        // A receiver that names a type selects its static methods; a value selects instance methods.
-        let staticAccess = ReceiverNamesType(call)
-        for receiver in receivers {
-            let lists = List[List[TypeSymbol]]()
-            if name == RegionEffectScanner.IndexMemberName {
-                AddIndexParameterLists(receiver, call, effects, lists)
-            } else {
-                // A method of the name that the lists do not show (of a base interface of an imported interface, or
-                // an extension method) is not checked, so the call counts.
-                if !AddMethodParameterLists(
-                    receiver,
-                    name,
-                    call.HasTypeArguments,
-                    staticAccess,
-                    lists,
-                    unproven,
-                    otherArity
-                ) ||
-                    lists.Count == 0 &&
+            // A receiver that names a type selects its static methods; a value selects instance methods.
+            let staticAccess = ReceiverNamesType(call)
+            for receiver in resolved {
+                let found = List[List[TypeSymbol]]()
+                if name == RegionEffectScanner.IndexMemberName {
+                    AddIndexParameterLists(receiver, call, effects, found)
+                } else if !AddMethodParameterLists(receiver, name, staticAccess, found, otherArity) ||
+                    found.Count == 0 &&
                     !staticAccess &&
                     (
                     HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
@@ -2126,10 +1593,38 @@ internal partial class StatementBinder {
                 ) {
                     return nil
                 }
+                lists.AddRange(found)
             }
-            groups.Add(lists)
         }
-        return groups
+        let candidates = List[List[TypeSymbol]]()
+        for parameters in lists {
+            if parameters.Count == arity {
+                candidates.Add(parameters)
+            } else if otherArity.Contains(parameters) {
+                return nil
+            }
+        }
+        return candidates
+    }
+
+    // Adds a source function's parameter list; one with a default value or a variadic parameter can also take another
+    // number of arguments.
+    private func AddFunctionParameterList(
+        function FunctionSymbol,
+        level StructSymbol?,
+        lists List[List[TypeSymbol]],
+        otherArity HashSet[List[TypeSymbol]]
+    ) {
+        let types = List[TypeSymbol]()
+        for parameter in function.Parameters {
+            types.Add(PassedType(parameter, level?.SubstituteMemberType(parameter.Type) ?? parameter.Type))
+        }
+        lists.Add(types)
+        if function.Parameters.Any(
+            (parameter ParameterSymbol) -> parameter.IsVariadic || parameter.HasExplicitDefaultValue
+        ) {
+            otherArity.Add(types)
+        }
     }
 
     private func ReceiverNamesType(call RegionCall) bool {
@@ -2147,14 +1642,6 @@ internal partial class StatementBinder {
         return ResolveTypeName(root) != nil
     }
 
-    private func ParameterTypes(function FunctionSymbol) List[TypeSymbol] {
-        let types = List[TypeSymbol]()
-        for parameter in function.Parameters {
-            types.Add(PassedType(parameter, parameter.Type))
-        }
-        return types
-    }
-
     // A `ref` or `out` parameter is listed as a by-reference type, so that the passing mode of an argument is
     // checked (`Use(out var v, dt)` does not take `Use(v int32, d DateTime)`).
     private func PassedType(parameter ParameterSymbol, type TypeSymbol) TypeSymbol ->
@@ -2164,105 +1651,31 @@ internal partial class StatementBinder {
         type
     }
 
-    // The parameter types of the methods of a name on a receiver, with the receiver's type arguments substituted
-    // (`Add(T)` on `List[Token]` takes a `Token`).
-    // Whether a call without type arguments can infer every type parameter of a function from its parameters; a
-    // candidate that it cannot is not applicable (as `OverloadResolver` excludes it).
-    private func TypeParametersInferable(function FunctionSymbol) bool {
-        for typeParameter in function.TypeParameters {
-            var mentioned = false
-            for parameter in function.Parameters {
-                if TypeSymbol.AnyTypeParameter(
-                    parameter.Type,
-                    (candidate TypeParameterSymbol) -> object.ReferenceEquals(candidate, typeParameter)
-                ) {
-                    mentioned = true
-                }
-            }
-            if !mentioned {
-                return false
-            }
-        }
-        return true
-    }
-
-    private func ClrTypeParametersInferable(method MethodInfo) bool {
-        if !method.IsGenericMethod {
-            return true
-        }
-        for typeArgument in method.GetGenericArguments() {
-            var mentioned = false
-            for parameter in method.GetParameters() {
-                if MentionsClrType(parameter.ParameterType, typeArgument) {
-                    mentioned = true
-                }
-            }
-            if !mentioned {
-                return false
-            }
-        }
-        return true
-    }
-
-    private func MentionsClrType(type Type, target Type) bool {
-        if ClrTypeUtilities.AreSame(type, target) {
-            return true
-        }
-        if type.HasElementType {
-            return type.GetElementType() is {} element && MentionsClrType(element, target)
-        }
-        if type.IsGenericType {
-            for argument in type.GetGenericArguments() {
-                if MentionsClrType(argument, target) {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
     // Adds the parameter lists of the methods of the name on the receiver's type. Returns `false` when the lists
     // are not complete: an imported interface does not list the methods of its base interfaces.
     private func AddMethodParameterLists(
         receiver ReceiverType,
         name string,
-        explicitTypeArguments bool,
         staticAccess bool,
         lists List[List[TypeSymbol]],
-        unproven HashSet[List[TypeSymbol]],
         otherArity HashSet[List[TypeSymbol]]
     ) bool {
         var clrType = receiver.Clr
         var symbolic TypeSymbol? = nil
-        var sourceHides = false
         switch receiver.Symbol {
             case declared is StructSymbol {
                 for level in declared.GetHierarchy() {
                     for candidate in level.GetMembers() {
                         if candidate is FunctionSymbol function &&
                             function.Name == name &&
-                            function.IsStatic == staticAccess &&
-                            (explicitTypeArguments || TypeParametersInferable(function)) {
-                            let types = List[TypeSymbol]()
-                            for parameter in function.Parameters {
-                                types.Add(
-                                    PassedType(parameter, level.SubstituteMemberType(parameter.Type) ?? parameter.Type)
-                                )
-                            }
-                            lists.Add(types)
-                            if function.Accessibility == Accessibility.Private ||
-                                function.ExplicitInterfaceMember != nil ||
-                                function.ExplicitInterfaceClauseTarget != nil {
-                                unproven.Add(types)
-                            }
+                            function.IsStatic == staticAccess {
+                            AddFunctionParameterList(function, level, lists, otherArity)
                         }
                     }
                 }
                 let importedBase = declared.GetHierarchy().Last().ImportedBaseType
                 clrType = importedBase?.ClrType
                 symbolic = importedBase
-                // The binder looks up a source method of the name before the imported base's methods.
-                sourceHides = lists.Count > 0
             }
             case contract is InterfaceSymbol {
                 for level in contract.SelfAndAllBaseInterfaces() {
@@ -2274,14 +1687,16 @@ internal partial class StatementBinder {
                         level.GetMethods(name)
                     }
                     for function in functions {
-                        if !explicitTypeArguments && !TypeParametersInferable(function) {
-                            continue
-                        }
                         let types = List[TypeSymbol]()
                         for parameter in function.Parameters {
                             types.Add(PassedType(parameter, level.SubstituteMemberType(parameter.Type)))
                         }
                         lists.Add(types)
+                        if function.Parameters.Any(
+                            (parameter ParameterSymbol) -> parameter.IsVariadic || parameter.HasExplicitDefaultValue
+                        ) {
+                            otherArity.Add(types)
+                        }
                     }
                     // The methods of an imported base interface are not listed, as for an imported interface.
                     for clrBase in level.BaseClrInterfaces {
@@ -2315,15 +1730,10 @@ internal partial class StatementBinder {
                 name,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
             ) {
-                if member is MethodInfo method &&
-                    method.IsStatic == staticAccess &&
-                    (explicitTypeArguments || ClrTypeParametersInferable(method)) {
+                if member is MethodInfo method && method.IsStatic == staticAccess {
                     let methodParameters = method.GetParameters()
                     let types = ClrParameterTypes(symbolic, method, methodParameters)
                     lists.Add(types)
-                    if sourceHides {
-                        unproven.Add(types)
-                    }
                     // The CLR resolver also takes a candidate with omitted optional parameters, or in expanded form.
                     if methodParameters.Any((parameter ParameterInfo) -> parameter.IsOptional) ||
                         methodParameters.Length > 0 &&

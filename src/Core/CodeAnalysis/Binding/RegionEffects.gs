@@ -358,8 +358,6 @@ internal enum RegionArgumentForm {
     StringByForm,
     /// An `out var` or `out let` declaration, which takes the parameter's type.
     InlineDeclaration,
-    /// An `out var v T` declaration, which stores into its own type; the walker does not resolve the type.
-    TypedInlineDeclaration,
     /// A range index (`t[a..b]`), which the binder slices; the read classification decides whether that runs code.
     Range,
     /// An `in` argument, which takes an `in` parameter (listed by value) of its exact type.

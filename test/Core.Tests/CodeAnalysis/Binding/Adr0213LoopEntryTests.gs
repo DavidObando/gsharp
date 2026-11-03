@@ -1209,7 +1209,7 @@ func Run(ref text string?, pair (Cb Action, N int32)) int32 {
     return n
 }
 func Main() { }`, "GS0158@6:16")
-            Add("static-method-member-call-keeps-a-by-reference-fact (A3)", `package T
+            Add("static-method-member-call-is-rejected-by-the-one-rule (A3, stricter than main)", `package T
 import System
 func Run(ref text string?, values []int32) int32 {
     if text == nil { return 0 }
@@ -1219,7 +1219,7 @@ func Run(ref text string?, values []int32) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@6:16")
             Add("interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 interface IWork {
@@ -2165,7 +2165,7 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@7:16")
-            Add("argument-without-conversion-keeps-a-by-reference-fact (A3)", `package T
+            Add("argument-without-conversion-is-rejected-by-the-one-rule (A3, stricter than main)", `package T
 import System
 func Run(ref text string?) int32 {
     if text == nil { return 0 }
@@ -2177,7 +2177,7 @@ func Run(ref text string?) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@6:16")
             Add("return-conversion-in-a-resumed-loop-removes-a-by-reference-fact (A3)", `package T
 import System
 func Run(ref text string?) ReadOnlySpan[char] {
@@ -2361,7 +2361,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     return n
 }
 func Main() { }`, "GS0158@15:16")
-            Add("inferred-and-substituted-type-arguments-keep-a-by-reference-fact (A3)", `package T
+            Add("inferred-and-substituted-type-arguments-are-rejected-by-the-one-rule (A3, stricter than main)", `package T
 import System
 import System.Collections.Generic
 struct Token { var Raw int32 }
@@ -2376,7 +2376,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@9:16")
             Add("from-end-index-constructs-a-system-index (A3)", `package T
 import System
 import System.Text
@@ -2550,7 +2550,7 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@10:16")
-            Add("nested-arrays-and-exact-overloads-keep-a-by-reference-fact (A3)", `package T
+            Add("nested-arrays-and-exact-overloads-are-rejected-by-the-one-rule (A3, stricter than main)", `package T
 import System
 func Consume(n int32) { }
 func Consume(s ReadOnlySpan[char]) { }
@@ -2566,7 +2566,7 @@ func Run(ref text string?) int32 {
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@8:16")
             Add("pattern-member-getter-removes-a-by-reference-fact (R14)", `package T
 import System
 class Holder {
@@ -2675,7 +2675,7 @@ func Run(ref text string?, flag bool, dt DateTime, dto DateTimeOffset, payload P
     return n
 }
 func Main() { }`, "GS0158@11:16")
-            Add("arms-of-one-type-and-inferred-compound-parameters-keep-a-by-reference-fact (A3)", `package T
+            Add("arms-of-one-type-and-inferred-compound-parameters-are-rejected-by-the-one-rule (A3, stricter than main)", `package T
 import System
 import System.Collections.Generic
 func Use[T](xs List[T], item T) { }
@@ -2690,7 +2690,7 @@ func Run(ref text string?, flag bool, dto DateTimeOffset, ys List[int32], n0 int
     }
     return n
 }
-func Main() { }`, "")
+func Main() { }`, "GS0158@8:16")
             Add("base-call-is-not-a-call-of-a-function-of-its-name (A3)", `package T
 import System
 open class Parent {

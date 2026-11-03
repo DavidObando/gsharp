@@ -2449,11 +2449,7 @@ internal sealed class RegionEffectScanner {
             // A `ref` or `out` argument binds a parameter of its exact type; an `out var` takes the parameter's.
             if argument is RefArgumentExpressionSyntax byReference {
                 if byReference.IsInlineDeclaration {
-                    form = if byReference.DeclaredType != nil {
-                        RegionArgumentForm.TypedInlineDeclaration
-                    } else {
-                        RegionArgumentForm.InlineDeclaration
-                    }
+                    form = RegionArgumentForm.InlineDeclaration
                 } else if byReference.Expression != nil {
                     path = BuildPath(byReference.Expression)
                     if byReference.RefKindModifier.Text == "in" {
