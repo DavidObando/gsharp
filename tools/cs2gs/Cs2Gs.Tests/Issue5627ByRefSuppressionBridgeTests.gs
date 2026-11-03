@@ -21,9 +21,9 @@ import Xunit
 /// rows do not bind. Without its walk into the operands of a conditional, a switch expression or `??`, the
 /// composed receivers and the `??` return do not bind. Without the target check, the nullable control rows
 /// assert and throw `NullReferenceException`. `SlotTypeIsDeclared` limits the new `!!` to a slot whose type the
-/// program text writes: when it counts an inferred generic parameter, a `var` local, the result of an inferred
-/// lambda or a value with no slot symbol, the matching control rows assert and throw; when it drops a field, a
-/// property or a method result, the matching rows do not bind.
+/// program text writes: when it counts a slot typed by a type parameter, a `var` local, the result of an
+/// inferred lambda or a value with no slot symbol, the matching control rows assert and throw; when it drops a
+/// field, a property or a method result, the matching rows do not bind.
 open class Issue5627ByRefSuppressionBridgeTests {
     /// The issue's repro: an argument, a return and a conditional receiver of a dropped by-ref suppression.
     @Fact
@@ -253,6 +253,40 @@ namespace Demo
         Assert.Contains("b = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return (Volatile.Read(&full)!!, 0)\n", printed)
         RunsAs(printed, "box 1 True True 1 1 1")
+    }
+
+    /// Control: a field, a property or a parameter whose declared type mentions a type parameter is typed by
+    /// the type arguments that G# infers, here from the `T?`-only value itself (`var b = Wrap(…)`,
+    /// `Take<T>((T, int))`). A null cache passes through as in C#.
+    @Fact
+    func ASlotTypedByATypeParameter_TakesTheNullUnasserted() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public class Box<T>
+    {
+        public Box(T value) { Value = value; Prop = value; }
+        public T Value;
+        public T Prop { get; set; }
+    }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static int Take<T>((T, int) pair) => 1;
+        static int Field() { var b = Wrap(Volatile.Read(ref cache!)); b.Value = Volatile.Read(ref cache!); return 1; }
+        static int Property() { var b = Wrap(Volatile.Read(ref cache!)); b.Prop = Volatile.Read(ref cache!); return 1; }
+        static int TupleArgument() => Take((Volatile.Read(ref cache!), 0));
+        public static string Run() => Field() + " " + Property() + " " + TupleArgument();
+    }
+}`)
+        Assert.Contains("b.Value = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("b.Prop = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("Take((Volatile.Read(&cache), 0))", printed)
+        RunsAs(printed, "1 1 1")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference

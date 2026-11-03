@@ -2963,20 +2963,20 @@ partial class CSharpToGSharpTranslator {
         }
 
         /// Issue #5627: whether the program text writes the G# type of the slot [`targetSymbol`](paramref): a field,
-        /// a property or indexer, an explicitly typed local, a parameter that G# does not infer from the value
-        /// ([`inferredSink`](paramref)), or the result of a method, a local function or a lambda whose delegate
-        /// type is fixed. Only such a slot can be non-null where the value is `T?` only in G#. G# types every
-        /// other slot from the value: a `var` local, an inferred generic parameter and the result of an inferred
-        /// lambda. A value with no slot symbol (an arm of a receiver or of a `var` initializer, a tuple element of
-        /// `var` storage, a reassigned `var` local) is left to the bridge of its whole value or to gsc.
+        /// a property or indexer, or a parameter whose declared type mentions no type parameter, an explicitly
+        /// typed local, or the result of a method, a local function or a lambda whose delegate type is fixed. Only
+        /// such a slot can be non-null where the value is `T?` only in G#. G# can type every other slot from the
+        /// value: a `var` local, a slot typed by a type parameter (inferred for the call, or for the receiver's
+        /// own inferred type, as in `var b = Wrap(value); b.Value = …`) and the result of an inferred lambda. A
+        /// value with no slot symbol (an arm of a receiver or of a `var` initializer, a tuple element of `var`
+        /// storage, a reassigned `var` local) is left to the bridge of its whole value or to gsc.
         private func SlotTypeIsDeclared(
             targetSymbol ISymbol?,
-            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            inferredSink bool
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool -> switch targetSymbol {
-            case IFieldSymbol: true
-            case IPropertySymbol: true
-            case parameter is IParameterSymbol: !inferredSink
+            case field is IFieldSymbol: !ContainsTypeParameter(field.OriginalDefinition.Type)
+            case property is IPropertySymbol: !ContainsTypeParameter(property.OriginalDefinition.Type)
+            case parameter is IParameterSymbol: !ContainsTypeParameter(parameter.OriginalDefinition.Type)
             case local is ILocalSymbol: !IsImplicitlyTypedLocal(local)
             case method is IMethodSymbol: !(
                 this.ResultLambda(method, value) is {} lambda && this.LambdaTypeIsInferred(lambda)
@@ -3316,7 +3316,7 @@ partial class CSharpToGSharpTranslator {
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a slot whose
             // non-null type the program text declares.
-            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, value, inferredSink) &&
+            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, value) &&
                 this.YieldsValueNilableBeyondItsCSharpType(value)
             let inferredExpandedParamsElement = inferredSink &&
                 targetSymbol is IParameterSymbol expandedParam &&
