@@ -34,6 +34,9 @@ internal class LiftedLocalFunctionNameAllocator {
     private let localNamesByType Dictionary[ISymbol, HashSet[string]] = Dictionary[ISymbol, HashSet[string]](
         SymbolEqualityComparer.Default
     )
+    private let claimedLocalNamesByType Dictionary[ISymbol, HashSet[string]] = Dictionary[ISymbol, HashSet[string]](
+        SymbolEqualityComparer.Default
+    )
 
     func ClaimDesignator(emittedOwner INamedTypeSymbol?, stem string, reserved(string) -> bool) string {
         lock this.gate {
@@ -43,8 +46,17 @@ internal class LiftedLocalFunctionNameAllocator {
             } else {
                 default(HashSet[string]?)
             }
+            let claimedLocals HashSet[string]? = if owner != nil && this.claimedLocalNamesByType.TryGetValue(
+                owner,
+                out var claimed
+            ) {
+                claimed
+            } else {
+                default(HashSet[string]?)
+            }
             var designator = stem
-            for var suffix = 2; reserved(designator) || helpers?.Contains(designator) == true; suffix++ {
+            for var suffix = 2; reserved(designator) || helpers?.Contains(designator) == true ||
+                claimedLocals?.Contains(designator) == true; suffix++ {
                 designator = "${stem}_$suffix"
             }
             if owner != nil {
@@ -71,7 +83,15 @@ internal class LiftedLocalFunctionNameAllocator {
                 localNames = HashSet[string](StringComparer.Ordinal)
                 this.localNamesByType.Add(owner, localNames)
             }
-            return localNames.Add(name!!)
+            if !localNames.Add(name!!) {
+                return false
+            }
+            if !this.claimedLocalNamesByType.TryGetValue(owner, out var claimedLocals) {
+                claimedLocals = HashSet[string](StringComparer.Ordinal)
+                this.claimedLocalNamesByType.Add(owner, claimedLocals)
+            }
+            claimedLocals.Add(name!!)
+            return true
         }
     }
 
@@ -89,6 +109,11 @@ internal class LiftedLocalFunctionNameAllocator {
                 this.localNamesByType.Add(owner, localNames)
             }
             localNames.Add(name)
+            if !this.claimedLocalNamesByType.TryGetValue(owner, out var claimedLocals) {
+                claimedLocals = HashSet[string](StringComparer.Ordinal)
+                this.claimedLocalNamesByType.Add(owner, claimedLocals)
+            }
+            claimedLocals.Add(name)
             return true
         }
     }

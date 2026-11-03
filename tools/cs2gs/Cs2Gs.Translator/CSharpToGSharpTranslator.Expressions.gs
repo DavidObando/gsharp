@@ -3314,15 +3314,16 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let capture = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol
-            if capture == nil ||
-                (
-                this
-                    .state
-                    .PatternBindings
-                    .TryGetValue(capture, out var replacement) &&
-                    !(replacement is IdentifierExpression)
-            ) {
+            if capture == nil {
                 return nil
+            }
+            if this.state.PatternBindings.TryGetValue(capture, out var replacement) {
+                if this.state.StoredPatternCaptures.Contains(replacement) {
+                    return false
+                }
+                if !(replacement is IdentifierExpression) {
+                    return nil
+                }
             }
             return if this.TryGetVarCaptureStaticNonNull(capture, out var inputIsNonNull) {
                 inputIsNonNull
@@ -4500,7 +4501,20 @@ partial class CSharpToGSharpTranslator {
             if symbol is not ILocalSymbol{Type: {IsReferenceType: true}} local {
                 return false
             }
-            if this.state.HoistedNullableGuardLocals.Contains(local) {
+            if this
+                .state
+                .HoistedNullableGuardLocals
+                .Contains(local) ||
+                (
+                this
+                    .state
+                    .PatternBindings
+                    .TryGetValue(local, out var boundReplacement) &&
+                    this
+                    .state
+                    .StoredPatternCaptures
+                    .Contains(boundReplacement)
+            ) {
                 return true
             }
             let isPatternLocal = local.DeclaringSyntaxReferences.Any(
@@ -5197,9 +5211,10 @@ partial class CSharpToGSharpTranslator {
         /// (`IsMemberStorageWriteExpression`, `SourcePropertyAccessRunsUserCode` and `ClrAccessRunsUserCode` in
         /// src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.gs). gsc removes the fact of a by-reference
         /// variable at a write through a member, an element, an indirection or another by-reference variable, at an
-        /// accessor that can run user code, and at a `base.` access. A plain call keeps the fact (amendment A3). The
-        /// answer is for the G# that the translator emits for the C# node, so `Nullable<T>.Value` and `HasValue`
-        /// (emitted as `!!` and `!= nil`) are not accessors.
+        /// accessor that can run user code, and at a `base.` access. A plain call keeps the fact (amendment A3). A loop
+        /// whose iteration runs user code removes it too (R11, #5650). The answer is for the G# that the translator
+        /// emits for the C# node, so `Nullable<T>.Value` and `HasValue` (emitted as `!!` and `!= nil`) are not
+        /// accessors.
         private func NodeMayWriteReferenceStorage(node Microsoft.CodeAnalysis.SyntaxNode) bool {
             switch node {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
@@ -5341,6 +5356,18 @@ partial class CSharpToGSharpTranslator {
                     .BaseExpressionSyntax {
                     return true
                 }
+                case forEach is CommonForEachStatementSyntax {
+                    return this.ForEachIterationRunsUserCode(forEach) || this.ContainsNestedForEach(forEach)
+                }
+                case _ is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WhileStatementSyntax or
+                    _ is DoStatementSyntax or
+                    _ is ForStatementSyntax {
+                    return !this.LoopHeaderIsLiteralFalse(node) && this.ContainsNestedForEach(node)
+                }
                 case identifier is IdentifierNameSyntax when identifier.Parent is MemberAccessExpressionSyntax{
                     Name: var name
                 } &&
@@ -5418,6 +5445,172 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
             }
+        }
+
+        /// ADR-0208 R11 and ADR-0213 table T5 (#5650): whether gsc counts the iteration of the emitted `for ... in` as
+        /// user code. gsc iterates a single-dimensional array and a `string` by index (`ForRangeKind.Indexed`) and
+        /// every other collection through `GetEnumerator`, `MoveNext` and `Current`, which can run user code. An
+        /// `await for` always runs it. The loop variable's prelude runs before every body run: a user-defined
+        /// conversion of a typed loop variable and a `Deconstruct` call or a positional getter of a deconstructing loop
+        /// are calls.
+        private func ForEachIterationRunsUserCode(forEach CommonForEachStatementSyntax) bool {
+            if !forEach.AwaitKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) {
+                return true
+            }
+            let collection = this.context.GetTypeInfo(forEach.Expression).Type
+            if !(
+                collection is IArrayTypeSymbol{IsSZArray: true} || collection?.SpecialType == SpecialType.System_String
+            ) {
+                return true
+            }
+            if forEach is ForEachStatementSyntax typed {
+                // gsc binds a predefined conversion of the element as a conversion, but a tuple conversion is rebuilt
+                // element by element and an unwrapped nullable value is read, which `LoopPreludeRunsUserCode` counts.
+                let conversion = this.context.SemanticModel.GetForEachStatementInfo(typed).ElementConversion
+                return conversion.IsUserDefined ||
+                    conversion.IsTupleConversion ||
+                    (
+                    conversion.IsNullable &&
+                        this
+                        .context
+                        .GetTypeInfo(typed.Type)
+                        .Type
+                        ?.OriginalDefinition
+                        .SpecialType != SpecialType.System_Nullable_T
+                )
+            }
+            if forEach is ForEachVariableStatementSyntax deconstructing {
+                return this.DeconstructingForEachRunsUserCode(deconstructing)
+            }
+            return false
+        }
+
+        /// cs2gs emits only the names of a deconstructing loop (`for (a, b) in items`; the target types are dropped,
+        /// #5700), so its prelude is what gsc does for the element type. gsc reads the elements of a tuple without
+        /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
+        /// properties) except a discard, and calls an imported `Deconstruct`.
+        private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
+            let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
+            if element is INamedTypeSymbol{IsTupleType: true} {
+                return false
+            }
+            if element is INamedTypeSymbol{IsRecord: true} record && this.IsSourceSymbol(record) {
+                let elements = this.DeconstructionElements(forEach.Variable)
+                return elements == nil || elements.Any(
+                    (target Microsoft.CodeAnalysis.SyntaxNode) -> !this.IsDiscardTarget(target)
+                )
+            }
+            return true
+        }
+
+        private func DeconstructionElements(target Microsoft.CodeAnalysis.SyntaxNode?) IReadOnlyList[
+            Microsoft.CodeAnalysis.SyntaxNode
+        ]? {
+            return switch target {
+                case declaration is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .DeclarationExpressionSyntax: this.DeconstructionElements(declaration.Designation)
+                case designation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedVariableDesignationSyntax: designation
+                    .Variables
+                    .Cast[Microsoft.CodeAnalysis.SyntaxNode]()
+                    .ToList()
+                case tuple is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .TupleExpressionSyntax: tuple
+                    .Arguments
+                    .Select((argument ArgumentSyntax) -> cast[Microsoft.CodeAnalysis.SyntaxNode](argument.Expression))
+                    .ToList()
+                default: nil
+            }
+        }
+
+        private func IsDiscardTarget(element Microsoft.CodeAnalysis.SyntaxNode) bool {
+            return element is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardDesignationSyntax ||
+                element is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DeclarationExpressionSyntax{
+                Designation: Microsoft.CodeAnalysis.CSharp.Syntax.DiscardDesignationSyntax
+            } ||
+                (element is IdentifierNameSyntax && this.context.GetSymbolInfo(element).Symbol is IDiscardSymbol)
+        }
+
+        /// ADR-0208 (#5650): gsc binds the `else` branch of an `if` from the state before the `then` branch for the
+        /// effects of a loop, so a loop in the `then` branch does not reach a read in the `else` branch. A write or an
+        /// accessor in the `then` branch does reach it, and a loop in an earlier `switch` section reaches a later one.
+        private func IsLoopInThenBranchOfElseRead(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if !(
+                node is CommonForEachStatementSyntax ||
+                    node is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .WhileStatementSyntax ||
+                    node is DoStatementSyntax ||
+                    node is ForStatementSyntax
+            ) {
+                return false
+            }
+            return node.Ancestors().Any(
+                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .IfStatementSyntax ifStatement &&
+                    ifStatement.Else != nil &&
+                    ifStatement
+                    .Statement
+                    .Span
+                    .Contains(node.Span) &&
+                    ifStatement.Else!!
+                    .Span
+                    .Contains(use.Span)
+            )
+        }
+
+        /// Whether the condition of a `while`, `do` or `for` loop is the literal `false`. gsc does not apply a loop's
+        /// region at the entry of such a loop (`HeaderIsLiteralFalse`), because it has no back edge.
+        private func LoopHeaderIsLiteralFalse(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
+            var condition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
+            if loop is Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax whileLoop {
+                condition = whileLoop.Condition
+            } else if loop is DoStatementSyntax doLoop {
+                condition = doLoop.Condition
+            } else if loop is ForStatementSyntax forLoop {
+                condition = forLoop.Condition
+            }
+            while condition is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                condition = parenthesized.Expression
+            }
+            return condition != nil && condition.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.FalseLiteralExpression)
+        }
+
+        /// ADR-0213 section 9 (#5650): gsc scans a loop's region without types, so a `for ... in` nested in the body
+        /// of a loop counts as an iteration that runs user code for the enclosing loop, whatever its collection is.
+        /// The loop then removes the fact at its entry, and the fact stays removed after the loop.
+        private func ContainsNestedForEach(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
+            return loop.DescendantNodes(
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                    node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
+                )
+            )
+                .Any((node Microsoft.CodeAnalysis.SyntaxNode) -> node is CommonForEachStatementSyntax)
         }
 
         /// Whether the `ref` expression [`reference`](paramref) initializes or reassigns a `ref readonly` local, which
@@ -5621,10 +5814,11 @@ partial class CSharpToGSharpTranslator {
             let RunsSourceCode = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return closureAssigned && this.NodeMayRunEscapedClosure(node)
             }
-            // ADR-0208 R11, R12, R14, R16 and R17 (#5520, #5617): a by-reference variable loses its fact at a node
-            // that gsc counts as a write of by-reference storage. (gsc also drops it at a constructor call, which is
-            // not mirrored here: #5562.) gsc applies the effect after the statement that holds it (R18), but the
-            // translator can move an operand into an earlier statement, so every such node before the read counts.
+            // ADR-0208 R11, R12, R14, R16 and R17 (#5520, #5617, #5650): a by-reference variable loses its fact at a
+            // node that gsc counts as a write of by-reference storage, which includes a loop whose iteration runs user
+            // code. (gsc also drops it at a constructor call, which is not mirrored here: #5562.) gsc applies the
+            // effect after the statement that holds it (R18), but the translator can move an operand into an earlier
+            // statement, so every such node before the read counts.
             let WritesReferenceStorage = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return byReference &&
                     (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node))
@@ -5659,7 +5853,10 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= use.SpanStart &&
-                    (RunsSourceCode(node) || WritesReferenceStorage(node))
+                    (
+                    RunsSourceCode(node) ||
+                        (WritesReferenceStorage(node) && !this.IsLoopInThenBranchOfElseRead(node, use))
+                )
             ) {
                 return true
             }
@@ -5749,6 +5946,23 @@ partial class CSharpToGSharpTranslator {
                     node is ForStatementSyntax ||
                     node is ForEachStatementSyntax ||
                     node is ForEachVariableStatementSyntax {
+                    // The collection and a `for` initializer run once, before the loop's region (ADR-0213 table T5).
+                    // A loop whose condition is the literal `false` has no back edge, so its body runs once from the
+                    // entry state, and the nodes before the read are counted above.
+                    if (node is CommonForEachStatementSyntax loop && loop.Expression.Span.Contains(use.Span)) ||
+                        this.LoopHeaderIsLiteralFalse(node) {
+                        continue
+                    }
+                    if node is ForStatementSyntax forLoop &&
+                        (
+                        forLoop.Declaration?.Span.Contains(use.Span) == true || forLoop.Initializers.Any(
+                            (initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> initializer
+                                .Span
+                                .Contains(use.Span)
+                        )
+                    ) {
+                        continue
+                    }
                     if !node.Span.Contains(narrowingGuard.Span) && node.DescendantNodesAndSelf(OutsideNestedFunctions)
                         .Any(
                         (candidate Microsoft.CodeAnalysis.SyntaxNode) -> RunsSourceCode(candidate) ||

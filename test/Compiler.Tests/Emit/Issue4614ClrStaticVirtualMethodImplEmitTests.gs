@@ -308,6 +308,39 @@ Console.WriteLine("x")`, nullableMismatchPath, "/target:exe", "/reference:" + li
             )
             Assert.Contains(" error GS", nullableMismatchLog, StringComparison.Ordinal)
 
+            let userMismatchPath = Path.Combine(tempDir, "UserMismatch.dll")
+            let userMismatchLog = Compile(tempDir, "UserMismatch.gs", `package P
+import System
+import NonSzLib
+
+class ShapeA { }
+class ShapeB { }
+func CheckUser(x INonSz[ShapeA], y INonSz[ShapeB]) int32 {
+    let ok = x.M(x.R())
+    return ok + x.M(y.R())
+}
+Console.WriteLine("x")`, userMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(userMismatchPath),
+                "Projected rank-1 non-SZ arrays over distinct user types must not convert. Log:\n" + userMismatchLog
+            )
+            Assert.Contains(" error GS", userMismatchLog, StringComparison.Ordinal)
+
+            let sliceMismatchPath = Path.Combine(tempDir, "SliceMismatch.dll")
+            let sliceMismatchLog = Compile(tempDir, "SliceMismatch.gs", `package P
+import System
+import NonSzLib
+
+func CheckSlice(x INonSz[int32]) []int32 {
+    return x.R()
+}
+Console.WriteLine("x")`, sliceMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(sliceMismatchPath),
+                "Projected rank-1 non-SZ array must not convert to a G# slice. Log:\n" + sliceMismatchLog
+            )
+            Assert.Contains(" error GS", sliceMismatchLog, StringComparison.Ordinal)
+
             let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
             let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
 import System
