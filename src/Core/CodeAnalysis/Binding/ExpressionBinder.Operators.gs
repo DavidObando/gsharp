@@ -4035,6 +4035,18 @@ internal partial class ExpressionBinder {
                     nullableMethodTypeArgs
                 )
             }
+            if !method.IsGenericMethod &&
+                method
+                .DeclaringType
+                ?.IsGenericType != true &&
+                parameter
+                .ParameterType
+                .IsByRef &&
+                !parameter
+                .ParameterType
+                .ContainsGenericParameters {
+                return ClrNullability.GetParameterTypeSymbol(parameter)
+            }
             return nil
         }
 

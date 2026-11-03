@@ -346,6 +346,10 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
     @InlineData("var f () -> int32 = () -> 1\nConsole.Write(S.F(&f))", "f")
     @InlineData("var h Func[int32] = () -> 1\nConsole.Write(S.In(&h, 1))", "f")
     @InlineData("enum E { A = 1 }\nvar h int32 = 1\nConsole.Write(Holder[E](&h).Value)", "value")
+    @InlineData(
+        "import System.Collections.Generic\nclass A {}\nclass B {}\nvar bs = List[B]()\nConsole.Write(Holder[List[A]](&bs).Value.Count)",
+        "value"
+    )
     func ClrCallee_DifferentStorageTypeAtByRefParameter_IsGS0154(body string, parameterName string) {
         using let fixture = CSharpFixture(`namespace Storage {
     public static class S {

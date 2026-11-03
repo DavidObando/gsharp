@@ -2079,15 +2079,40 @@ class Program {
     }
 }
 `, "CS1503", line: 5, column: 36, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import System.Collections.Generic
+import FunctionControl
+class A {}
+class B {}
+func Main() {
+    var bs = List[B]()
+    Console.Write(RefHolder[List[A]](&bs).Value.Count)
+}
+`, `using System;
+using System.Collections.Generic;
+using FunctionControl;
+class A {}
+class B {}
+class Program {
+    static void Main() {
+        var bs = new List<B>();
+        Console.Write(new RefHolder<List<A>>(ref bs).Value.Count);
+    }
+}
+`, "CS1503", line: 8, column: 38, length: 3, diagnostic: "GS0154")
         Check(fixture, `import System
+import System.Collections.Generic
 import FunctionControl
 enum E { A = 1, B = 2 }
+class A {}
 func Main() {
     var h int64 = 3
     var f () -> int64 = () -> 4
     var e = E.B
     var next = E.A
     let holder = RefHolder[E](&e)
+    var as_ = List[A]{A()}
+    let listHolder = RefHolder[List[A]](&as_)
     Console.Write(S.R(&h))
     Console.Write(S.I(&h))
     Console.Write(S.I(in h))
@@ -2097,10 +2122,13 @@ func Main() {
     Console.Write(int32(holder.Swap(&next)))
     Console.Write(int32(holder.Value))
     Console.Write(int32(RefHolder[E].Echo(&next)))
+    Console.Write(listHolder.Value.Count)
 }
 `, `using System;
+using System.Collections.Generic;
 using FunctionControl;
 enum E { A = 1, B = 2 }
+class A {}
 class Program {
     static void Main() {
         long h = 3;
@@ -2108,6 +2136,8 @@ class Program {
         var e = E.B;
         var next = E.A;
         var holder = new RefHolder<E>(ref e);
+        var as_ = new List<A> { new A() };
+        var listHolder = new RefHolder<List<A>>(ref as_);
         Console.Write(S.R(ref h));
         Console.Write(S.I(in h));
         Console.Write(S.I(in h));
@@ -2117,9 +2147,10 @@ class Program {
         Console.Write((int)holder.Swap(ref next));
         Console.Write((int)holder.Value);
         Console.Write((int)RefHolder<E>.Echo(ref next));
+        Console.Write(listHolder.Value.Count);
     }
 }
-`, "333442211")
+`, "3334422111")
     }
 
     /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better

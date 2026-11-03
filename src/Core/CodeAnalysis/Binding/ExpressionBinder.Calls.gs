@@ -3121,7 +3121,21 @@ internal partial class ExpressionBinder {
             symbolicTypeArguments ImmutableArray[TypeSymbol]
         ) TypeSymbol? {
             if openGenericDefinition == nil || symbolicTypeArguments.IsDefaultOrEmpty {
-                return nil
+                let closedParameters = constructor.GetParameters()
+                return if uint32(parameterIndex) < uint32(closedParameters.Length) &&
+                    closedParameters[parameterIndex]
+                    .ParameterType
+                    .IsByRef &&
+                    !closedParameters[parameterIndex]
+                    .ParameterType
+                    .ContainsGenericParameters &&
+                    constructor
+                    .DeclaringType
+                    ?.IsGenericType != true {
+                    ClrNullability.GetParameterTypeSymbol(closedParameters[parameterIndex])
+                } else {
+                    default(TypeSymbol?)
+                }
             }
             let openConstructor ConstructorInfo? = ClrTypeUtilities.SafeGetConstructors(
                 openGenericDefinition,

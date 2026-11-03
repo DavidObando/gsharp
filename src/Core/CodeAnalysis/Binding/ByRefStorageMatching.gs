@@ -6,6 +6,8 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
 import System
+import System.Collections.Immutable
+import System.Linq
 
 /// Issue #4422: decides whether the storage behind a by-reference argument
 /// (`&x` at a `ref`, `out` or `in` parameter of a G#
@@ -133,20 +135,214 @@ internal shared class ByRefStorageMatching {
     /// @param storage The storage type.
     /// @param parameter The parameter type.
     /// @returns `true` when they are one runtime type.
-    private func IsSameRuntimeType(storage TypeSymbol, parameter TypeSymbol) bool {
-        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(storage, parameter) {
+    private func IsSameRuntimeType(storage TypeSymbol?, parameter TypeSymbol?) bool {
+        if storage == nil || parameter == nil {
+            return storage == parameter
+        }
+        let bareStorage = storage.StripToBareShape()
+        let bareParameter = parameter.StripToBareShape()
+        if bareStorage is NullableTypeSymbol || bareParameter is NullableTypeSymbol {
+            return bareStorage is NullableTypeSymbol storageNullable &&
+                bareParameter is NullableTypeSymbol parameterNullable &&
+                IsSameRuntimeType(storageNullable.UnderlyingType, parameterNullable.UnderlyingType)
+        }
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(bareStorage, bareParameter) {
             return true
         }
-        // Two representations of one CLR type, such as an imported `int[]`
-        // (an ImportedTypeSymbol) and the `[]int32` a G# parameter spells (a
-        // SliceTypeSymbol). A composite symbol's CLR type is built from its
-        // parts' effective CLR types (`[]int32?` is `Nullable<int32>[]`), so
-        // it keeps value-type nullability; only a top-level NullableTypeSymbol
-        // relays its underlying type, and the caller has removed that.
-        let storageClr Type? = storage.ClrType
-        let parameterClr Type? = parameter.ClrType
+        if TryGetSingleDimensionalArrayElement(bareStorage, out var storageArrayElement) &&
+            TryGetSingleDimensionalArrayElement(bareParameter, out var parameterArrayElement) {
+            return IsSameRuntimeType(storageArrayElement, parameterArrayElement)
+        }
+        if TryGetMultiDimensionalArrayShape(bareStorage, out var storageMultiElement, out var storageRank) &&
+            TryGetMultiDimensionalArrayShape(bareParameter, out var parameterMultiElement, out var parameterRank) {
+            return storageRank == parameterRank && IsSameRuntimeType(storageMultiElement, parameterMultiElement)
+        }
+        if MapTypeSymbol.TryGetMapShape(bareStorage, out var storageKey, out var storageValue) &&
+            MapTypeSymbol
+            .TryGetMapShape(bareParameter, out var parameterKey, out var parameterValue) {
+            return IsSameRuntimeType(storageKey, parameterKey) && IsSameRuntimeType(storageValue, parameterValue)
+        }
+        if TupleTypeSymbol.TryGetTupleShape(bareStorage, out var storageTupleElements) &&
+            TupleTypeSymbol
+            .TryGetTupleShape(bareParameter, out var parameterTupleElements) {
+            return AreSameRuntimeElementSequence(storageTupleElements, parameterTupleElements)
+        }
+        if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            bareStorage,
+            out var storageSeqDef,
+            out var storageSeqElement
+        ) &&
+            SequenceTypeSymbol
+            .TryGetEnumerableInterfaceShape(bareParameter, out var parameterSeqDef, out var parameterSeqElement) {
+            return ClrTypeUtilities.AreSame(storageSeqDef, parameterSeqDef) &&
+                IsSameRuntimeType(storageSeqElement, parameterSeqElement)
+        }
+        if ChannelTypeSymbol.TryGetChannelShape(
+            bareStorage,
+            out var storageChanElement,
+            out var storageChanDirection,
+            out var storageChanConstructed
+        ) &&
+            ChannelTypeSymbol
+            .TryGetChannelShape(
+            bareParameter,
+            out var parameterChanElement,
+            out var parameterChanDirection,
+            out var parameterChanConstructed
+        ) {
+            return storageChanDirection == parameterChanDirection &&
+                storageChanConstructed == parameterChanConstructed &&
+                IsSameRuntimeType(storageChanElement, parameterChanElement)
+        }
+        if TryMatchFunctionShape(bareStorage, bareParameter) {
+            return true
+        }
+        if TryGetConstructedImportedGenericShape(bareStorage, out var storageOpenDef, out var storageTypeArgs) &&
+            TryGetConstructedImportedGenericShape(bareParameter, out var parameterOpenDef, out var parameterTypeArgs) {
+            return ClrTypeUtilities.AreSame(storageOpenDef, parameterOpenDef) &&
+                AreSameRuntimeElementSequence(storageTypeArgs, parameterTypeArgs)
+        }
+        if HasErasedRuntimeShape(bareStorage) || HasErasedRuntimeShape(bareParameter) {
+            return false
+        }
+        // Two representations of one non-erased CLR type, such as a built-in
+        // primitive symbol and an ImportedTypeSymbol for the same CLR Type.
+        let storageClr Type? = bareStorage.ClrType
+        let parameterClr Type? = bareParameter.ClrType
         return storageClr != nil && parameterClr != nil && ClrTypeUtilities.AreSame(storageClr, parameterClr)
     }
+
+    private func AreSameRuntimeElementSequence(left ImmutableArray[TypeSymbol], right ImmutableArray[TypeSymbol]) bool {
+        if left.Length != right.Length {
+            return false
+        }
+        for var i = 0; i < left.Length; i++ {
+            if !IsSameRuntimeType(left[i], right[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func TryGetSingleDimensionalArrayElement(type TypeSymbol, out elementType TypeSymbol?) bool {
+        if type is SliceTypeSymbol slice {
+            elementType = slice.ElementType
+            return true
+        }
+        if type is ImportedTypeSymbol imported && imported.ClrType is {IsSZArray: true} {
+            let positions = imported.GetElementPositions()
+            if positions.Length == 1 {
+                elementType = positions[0]
+                return true
+            }
+        }
+        elementType = nil
+        return false
+    }
+
+    private func TryGetMultiDimensionalArrayShape(type TypeSymbol, out elementType TypeSymbol?, out rank int32) bool {
+        if type is RectangularArrayTypeSymbol rectangular {
+            elementType = rectangular.ElementType
+            rank = rectangular.Rank
+            return true
+        }
+        if type is ImportedTypeSymbol imported && imported.ClrType is {IsArray: true, IsSZArray: false} arrayClr {
+            let positions = imported.GetElementPositions()
+            if positions.Length == 1 {
+                elementType = positions[0]
+                rank = arrayClr.GetArrayRank()
+                return true
+            }
+        }
+        elementType = nil
+        rank = 0
+        return false
+    }
+
+    private func TryMatchFunctionShape(left TypeSymbol, right TypeSymbol) bool {
+        if left is FunctionTypeSymbol leftFunction && right is FunctionTypeSymbol rightFunction {
+            return leftFunction.IsVariadic.SequenceEqual(rightFunction.IsVariadic) &&
+                AreSameRuntimeElementSequence(leftFunction.ParameterTypes, rightFunction.ParameterTypes) &&
+                IsSameRuntimeType(leftFunction.ReturnType, rightFunction.ReturnType)
+        }
+        return TryMatchNaturalDelegate(left, right) || TryMatchNaturalDelegate(right, left)
+    }
+
+    private func TryMatchNaturalDelegate(source TypeSymbol, target TypeSymbol) bool {
+        if source is not FunctionTypeSymbol sourceFunction ||
+            sourceFunction.HasVariadic ||
+            sourceFunction.Arity > 16 ||
+            target.ClrType == nil {
+            return false
+        }
+        let isVoid = FunctionTypeSymbol.IsVoidReturn(sourceFunction.ReturnType)
+        let naturalFullName = if isVoid {
+            (
+                if sourceFunction.Arity == 0 {
+                    "System.Action"
+                } else {
+                    "System.Action`" + sourceFunction.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }
+            )
+        } else {
+            "System.Func`" + (sourceFunction.Arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        }
+        let targetDefinition = if target.ClrType!!.IsGenericType {
+            target.ClrType!!.GetGenericTypeDefinition()
+        } else {
+            target.ClrType!!
+        }
+        let baseType Type? = targetDefinition.BaseType
+        if !string.Equals(targetDefinition.FullName, naturalFullName, StringComparison.Ordinal) ||
+            baseType == nil ||
+            !string.Equals(baseType.FullName, "System.MulticastDelegate", StringComparison.Ordinal) || !string.Equals(
+            targetDefinition.Assembly.FullName,
+            baseType.Assembly.FullName,
+            StringComparison.Ordinal
+        ) {
+            return false
+        }
+        let targetArgs = target.ConstructedTypeArguments
+        let expectedArgCount = if isVoid {
+            sourceFunction.Arity
+        } else {
+            sourceFunction.Arity + 1
+        }
+        if targetArgs.Length != expectedArgCount {
+            return false
+        }
+        for var i = 0; i < sourceFunction.Arity; i++ {
+            if !IsSameRuntimeType(sourceFunction.ParameterTypes[i], targetArgs[i]) {
+                return false
+            }
+        }
+        return isVoid || IsSameRuntimeType(sourceFunction.ReturnType, targetArgs[sourceFunction.Arity])
+    }
+
+    private func TryGetConstructedImportedGenericShape(
+        type TypeSymbol,
+        out openDefinition Type?,
+        out typeArguments ImmutableArray[TypeSymbol]
+    ) bool {
+        if type is ImportedTypeSymbol imported {
+            if imported.OpenDefinition != nil && !imported.TypeArguments.IsDefaultOrEmpty {
+                openDefinition = imported.OpenDefinition
+                typeArguments = imported.TypeArguments
+                return true
+            }
+            if imported.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} genericClr {
+                openDefinition = genericClr.GetGenericTypeDefinition()
+                typeArguments = imported.ConstructedTypeArguments
+                return !typeArguments.IsDefaultOrEmpty
+            }
+        }
+        openDefinition = nil
+        typeArguments = default(ImmutableArray[TypeSymbol])
+        return false
+    }
+
+    private func HasErasedRuntimeShape(type TypeSymbol) bool -> TypeSymbol.ContainsSameCompilationUserType(type) ||
+        TypeSymbol.ContainsTypeParameter(type) || TypeSymbol.ContainsFixedLengthArray(type)
 
     /// Whether any element or type-argument position of the two types differs
     /// in stated reference nullability, at any depth.
