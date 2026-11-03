@@ -1554,33 +1554,35 @@ partial class CSharpToGSharpTranslator {
             parameterKind string,
             coerceToParameterType bool
         ) GExpression? {
+            let parameter = argumentOperation.Parameter!!
             let constant = argumentOperation.Value.ConstantValue
             var defaultValue GExpression? = if constant.HasValue {
                 this.MapConstantValue(
                     constant.Value,
-                    argumentOperation.Parameter!!.Type,
+                    parameter.Type,
                     callSyntax,
-                    "parameter '${argumentOperation.Parameter!!.Name}''s default value"
+                    "parameter '${parameter.Name}''s default value"
                 )
             } else {
-                default(GExpression?)
+                let mappedType GTypeReference? = this.typeMapper.Map(
+                    parameter.Type,
+                    this.context,
+                    callSyntax?.GetLocation() ?? parameter.Locations.FirstOrDefault()
+                )
+                this.BuildOptionalParameterDefault(parameter, mappedType, callSyntax)
             }
             if defaultValue == nil {
                 let legitimateNull = constant.HasValue && constant.Value == nil
                 if !legitimateNull {
                     this.context.ReportUnsupported(
                         callSyntax,
-                        "$parameterKind default value of type '${argumentOperation.Parameter!!.Type}' has no gsc constant form."
+                        "$parameterKind default value of type '${parameter.Type}' has no gsc constant form."
                     )
                 }
                 defaultValue = IdentifierExpression("nil")
             }
             return if coerceToParameterType {
-                this.CoerceMaterializedArgument(
-                    defaultValue,
-                    argumentOperation.Parameter!!.Type,
-                    callSyntax!!.GetLocation()
-                )
+                this.CoerceMaterializedArgument(defaultValue, parameter.Type, callSyntax!!.GetLocation())
             } else {
                 defaultValue
             }
