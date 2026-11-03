@@ -1312,7 +1312,13 @@ internal class TypeDefEmitter {
     /// @param bodyOffset Pre-emitted IL body offset; ignored when [`hasBody`](paramref) is false.
     func EmitStaticVirtualMethod(method FunctionSymbol, hasBody bool, bodyOffset int32) {
         let sigBlob = BlobBuilder()
-        BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false).Parameters(
+        let methodGenericArity = if method.TypeParameters.IsDefaultOrEmpty {
+            0
+        } else {
+            method.TypeParameters.Length
+        }
+        BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false, genericParameterCount: methodGenericArity)
+            .Parameters(
             method.Parameters.Length,
             (r ReturnTypeEncoder) -> this.encodeReturnSymbol(r, method.Type, method.ReturnRefKind),
             (ps ParametersEncoder) -> {
@@ -1350,6 +1356,9 @@ internal class TypeDefEmitter {
             },
             parameterList: firstParamHandle
         )
+        if methodGenericArity > 0 {
+            EmitGenericParamRows(this.emitCtx, handle, method.TypeParameters)
+        }
         // Issue #1913: same as EmitAbstractMethod — static-virtual interface
         // slots must keep their parameter annotations.
         this.EmitUserAttributesOnParameters(paramHandles, method.Parameters)

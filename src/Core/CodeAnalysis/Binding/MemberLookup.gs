@@ -21,6 +21,7 @@ import System.Collections.Concurrent
 import SystemObject = System.Object
 import System.Globalization
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Syntax
 
 /// Result of resolving an imported CLR indexer overload set.
@@ -4486,6 +4487,35 @@ internal class MemberLookup {
             return nil
         }
 
+        private func TryGetComparableClrReturnType(
+            candidate FunctionSymbol,
+            clrMethod MethodInfo,
+            @NotNullWhen(true) out comparableClrReturnType Type?
+        ) bool {
+            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            comparableClrReturnType = if clrMethod.ReturnType.IsByRef {
+                clrMethod.ReturnType.GetElementType()!!
+            } else {
+                clrMethod.ReturnType
+            }
+            if !candidate.IsAsync || AsyncIteratorDetection.IsAsyncIteratorReturnType(candidate.Type) {
+                return true
+            }
+            if candidate.IsAsyncVoid {
+                return !clrMethod.ReturnType.IsByRef && clrMethod.ReturnType.IsSameAs(typeof(Void))
+            }
+            if !clrMethod.ReturnType.IsByRef && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(
+                clrMethod.ReturnType,
+                out var awaitedReturnClr,
+                out var isValueTask
+            ) &&
+                isValueTask == candidate.AsyncReturnsValueTask {
+                comparableClrReturnType = awaitedReturnClr
+                return true
+            }
+            return false
+        }
+
         /// Determines whether one G# method matches an imported CLR method signature.
         /// @param candidate The candidate G# method.
         /// @param clrMethod The imported CLR method.
@@ -4493,12 +4523,6 @@ internal class MemberLookup {
         func MethodMatchesClrSignature(candidate FunctionSymbol, clrMethod MethodInfo) bool {
             if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrMethod) {
                 return false
-            }
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
-            let clrReturnType = if clrMethod.ReturnType.IsByRef {
-                clrMethod.ReturnType.GetElementType()!!
-            } else {
-                clrMethod.ReturnType
             }
             let clrParams = clrMethod.GetParameters()
             // Issue #2230: an imported (metadata) interface method may itself be
@@ -4526,19 +4550,8 @@ internal class MemberLookup {
             if methodGenericParams.Length != candidateTypeParams.Length {
                 return false
             }
-            if candidate.IsAsync && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(
-                clrMethod.ReturnType,
-                out var awaitedReturnClr
-            ) {
-                if !ClrParamTypeMatchesGenericMethodParam(
-                    candidate.Type,
-                    awaitedReturnClr,
-                    methodGenericParams,
-                    candidateTypeParams
-                ) {
-                    return false
-                }
-            } else if !ClrParamTypeMatchesGenericMethodParam(
+            if !TryGetComparableClrReturnType(candidate, clrMethod, out var clrReturnType) ||
+                !ClrParamTypeMatchesGenericMethodParam(
                 candidate.Type,
                 clrReturnType,
                 methodGenericParams,
@@ -4662,18 +4675,11 @@ internal class MemberLookup {
             if callable.Length != clrParams.Length {
                 return false
             }
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            if !TryGetComparableClrReturnType(candidate, openMethod, out var openReturnType) {
+                return false
+            }
             if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod) ||
-                !ReturnTypeMatchesSubstituted(
-                candidate.Type,
-                if openMethod.ReturnType.IsByRef {
-                    openMethod.ReturnType.GetElementType()!!
-                } else {
-                    openMethod.ReturnType
-                },
-                symbolicArgs,
-                methodTypeArgs
-            ) {
+                !ReturnTypeMatchesSubstituted(candidate.Type, openReturnType, symbolicArgs, methodTypeArgs) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {
@@ -4831,18 +4837,11 @@ internal class MemberLookup {
             if callable.Length != clrParams.Length {
                 return false
             }
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            if !TryGetComparableClrReturnType(method, slot.Method, out var slotReturnType) {
+                return false
+            }
             if method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method) ||
-                !ReturnTypeMatchesSubstituted(
-                method.Type,
-                if slot.Method.ReturnType.IsByRef {
-                    slot.Method.ReturnType.GetElementType()!!
-                } else {
-                    slot.Method.ReturnType
-                },
-                slot.SymbolicArgs,
-                methodTypeArgs
-            ) {
+                !ReturnTypeMatchesSubstituted(method.Type, slotReturnType, slot.SymbolicArgs, methodTypeArgs) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {
