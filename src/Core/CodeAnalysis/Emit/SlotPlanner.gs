@@ -546,6 +546,14 @@ internal class SlotPlanner {
                             AllocatePatternBindings(field.Pattern, locals, localTypes, typePatternScratchSlots)
                         }
                     }
+                    case rp is BoundRelationalPattern {
+                        if rp.InputVariable != nil {
+                            AllocatePatternLocal(rp.InputVariable, locals, localTypes)
+                        }
+                        if rp.ValueVariable != nil {
+                            AllocatePatternLocal(rp.ValueVariable, locals, localTypes)
+                        }
+                    }
                     case lp is BoundListPattern {
                         if lp.InputVariable != nil {
                             AllocatePatternLocal(lp.InputVariable, locals, localTypes)

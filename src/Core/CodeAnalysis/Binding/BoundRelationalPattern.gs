@@ -17,6 +17,13 @@ class BoundRelationalPattern : BoundPattern {
     init(syntax SyntaxNode?, type TypeSymbol, op BoundBinaryOperator, value BoundExpression) : base(syntax, type) {
         Op = op
         Value = value
+        // Issue #5681: the emitter reads `HasValue` through an address, so a value-type `T?` operand needs a local.
+        if type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
+            InputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, type)
+            if value.Type != nullable.UnderlyingType {
+                ValueVariable = LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, type)
+            }
+        }
     }
 
     /// ```xmldoc
@@ -30,7 +37,18 @@ class BoundRelationalPattern : BoundPattern {
     }
 
     /// Gets the right-hand value expression.
+    /// For a value-type `T?` input, the value has type `T` when the binder can compare the underlying values.
     prop Value BoundExpression {
+        get;
+    }
+
+    /// Gets the temporary that holds a value-type `T?` input.
+    prop InputVariable LocalVariableSymbol? {
+        get;
+    }
+
+    /// Gets the temporary that holds a `T?` value for a value-type `T?` input.
+    prop ValueVariable LocalVariableSymbol? {
         get;
     }
 }
