@@ -982,7 +982,16 @@ internal class UserTokenResolver {
             for plan in this.outer.stateMachines.AsyncStateMachinePlans {
                 if plan.KickoffMethod == fn ||
                     (fn.Declaration != nil && object.ReferenceEquals(plan.KickoffMethod.Declaration, fn.Declaration)) {
-                    this.outer.EncodeAsyncReturnType(encoder, plan)
+                    if this.outer.GetAsyncReturnTypeSymbol(plan) is not{} asyncReturnType {
+                        encoder.Void()
+                    } else {
+                        let effectiveReturnType = if fn.StaticOwnerType is StructSymbol owner {
+                            owner.SubstituteMemberType(asyncReturnType) ?? asyncReturnType
+                        } else {
+                            asyncReturnType
+                        }
+                        this.signatures.EncodeTypeSymbol(encoder.Type(), effectiveReturnType)
+                    }
                     return
                 }
             }

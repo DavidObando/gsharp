@@ -61,6 +61,117 @@ internal shared class ClrSignatureMetadata {
         return result.ToImmutable()
     }
 
+    internal func TryGetInterfaceSlotOverrideIsAbstract(
+        derivedInterface Type,
+        slotOwner Type,
+        slot MethodInfo,
+        out isAbstract bool
+    ) bool {
+        isAbstract = false
+        if ClrTypeUtilities.AreSame(derivedInterface, slotOwner) || !ClrTypeUtilities.ImplementsInterfaceByName(
+            derivedInterface,
+            slotOwner
+        ) {
+            return false
+        }
+        using let image = ReferenceResolver.OpenAssemblyImage(derivedInterface.Assembly)
+        if image == nil {
+            return false
+        }
+        using let pe = PEReader(image)
+        if !pe.HasMetadata {
+            return false
+        }
+        let reader = pe.GetMetadataReader()
+        let definition = reader.GetTypeDefinition(
+            MetadataTokens.TypeDefinitionHandle(derivedInterface.MetadataToken & 0xffffff)
+        )
+        let methodImpls = definition.GetMethodImplementations()
+        if methodImpls.Count == 0 {
+            return false
+        }
+        let ifaceMatcher = SignatureMatcher(derivedInterface, nil)
+        let candidates = derivedInterface.GetInterfaces()
+        let slotParams = slot.GetParameters()
+        let slotGenericArity = if slot.IsGenericMethod {
+            slot.GetGenericArguments().Length
+        } else {
+            0
+        }
+        for handle in methodImpls {
+            let impl = reader.GetMethodImplementation(handle)
+            if impl.MethodBody.Kind != HandleKind.MethodDefinition {
+                continue
+            }
+            var matchesSlot = false
+            switch impl.MethodDeclaration.Kind {
+                case HandleKind.MethodDefinition {
+                    matchesSlot = derivedInterface.Module == slot.Module && MetadataTokens.GetToken(
+                        impl.MethodDeclaration
+                    ) == slot.MetadataToken
+                }
+                case HandleKind.MemberReference {
+                    let memberRef = reader.GetMemberReference(cast[MemberReferenceHandle](impl.MethodDeclaration))
+                    if reader.GetString(memberRef.Name) != slot.Name {
+                        continue
+                    }
+                    let matchedIface = TryMatch(reader, memberRef.Parent, ifaceMatcher, candidates)
+                    if matchedIface == nil || !ClrTypeUtilities.AreSame(matchedIface, slotOwner) {
+                        continue
+                    }
+                    let sig = memberRef.DecodeMethodSignature(SignatureMatcher(matchedIface, slot), default(object))
+                    if sig.GenericParameterCount != slotGenericArity ||
+                        sig
+                        .ParameterTypes
+                        .Length != slotParams.Length ||
+                        !sig.ReturnType(slot.ReturnType) {
+                        continue
+                    }
+                    var allParamsMatch = true
+                    for var i = 0; i < slotParams.Length; i++ {
+                        let paramMatcher = sig.ParameterTypes[i]
+                        if !paramMatcher(slotParams[i].ParameterType) {
+                            allParamsMatch = false
+                            break
+                        }
+                    }
+                    matchesSlot = allParamsMatch
+                }
+                default { }
+            }
+            if matchesSlot {
+                let bodyDef = reader.GetMethodDefinition(cast[MethodDefinitionHandle](impl.MethodBody))
+                isAbstract = (bodyDef.Attributes & MethodAttributes.Abstract) != 0
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TryMatch(
+        reader MetadataReader,
+        handle EntityHandle,
+        matcher SignatureMatcher,
+        candidates[]Type
+    ) Type? {
+        let predicate = switch handle.Kind {
+            case HandleKind.TypeSpecification:
+            reader.GetTypeSpecification(cast[TypeSpecificationHandle](handle)).DecodeSignature(matcher, default(object))
+            case HandleKind.TypeDefinition: matcher.GetTypeFromDefinition(reader, cast[TypeDefinitionHandle](handle), 0)
+            case HandleKind.TypeReference: matcher.GetTypeFromReference(reader, cast[TypeReferenceHandle](handle), 0)
+            default: default(Func[Type, bool]?)
+        }
+        if predicate == nil {
+            return nil
+        }
+        let matches = candidates.Where(predicate).ToArray()
+        return if matches.Length == 1 {
+            matches[0]
+        } else {
+            default(Type?)
+        }
+    }
+
     private func Match(reader MetadataReader, handle EntityHandle, matcher SignatureMatcher, candidates[]Type) Type {
         let predicate = switch handle.Kind {
             case HandleKind.TypeSpecification:
@@ -279,10 +390,10 @@ internal shared class ClrSignatureMetadata {
         }
 
         func GetGenericTypeParameter(context object, index int32) Func[Type, bool] ->
-        (actual Type) -> index < typeArguments.Length && actual == typeArguments[index]
+        (actual Type) -> index < typeArguments.Length && ClrTypeUtilities.AreSame(actual, typeArguments[index])
 
         func GetGenericMethodParameter(context object, index int32) Func[Type, bool] ->
-        (actual Type) -> index < methodArguments.Length && actual == methodArguments[index]
+        (actual Type) -> index < methodArguments.Length && ClrTypeUtilities.AreSame(actual, methodArguments[index])
 
         func GetPrimitiveType(code PrimitiveTypeCode) Func[Type, bool] ->
         (actual Type) -> actual.FullName == "System." + code.ToString()

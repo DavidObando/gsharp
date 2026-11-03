@@ -188,6 +188,8 @@ public interface IM2<T> { static abstract int M<U>(T x, U y); }
 public interface IInst<T> { int N<U>(T x, U y); }
 public interface IMA<T> { static abstract int M<U>(U[] us, T x); }
 public interface IArr<T> { int A(T[] xs); int B<U>(U[] us, T x); }
+public interface IDefaultedByDerived : IS { static int IS.Z() => 100; }
+public interface IAsync<T> { static abstract System.Threading.Tasks.Task<T> Load(T x); }
 
 public static class Probe
 {
@@ -201,6 +203,7 @@ public static class Probe
     public static int N<T, U>(IInst<T> i, T x, U y) => i.N(x, y);
     public static int A<T>(IArr<T> i, T[] xs) => i.A(xs);
     public static int B<T, U>(IArr<T> i, U[] us, T x) => i.B(us, x);
+    public static T Load<T, TImpl>(T x) where TImpl : IAsync<T> => TImpl.Load(x).GetAwaiter().GetResult();
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -516,6 +519,17 @@ struct VN : ISV2 {
 }
 
 Console.WriteLine(Probe.V[VN]())`, []string{"100"}}
+            // A derived CLR interface that supplies an explicit default for an
+            // abstract base slot (`static int IS.Z() => 100;`) leaves the slot
+            // defaulted for implementers of the derived interface.
+            yield[]object{"defaulted-in-derived-clr-interface", `package P
+import System
+import Clib
+
+struct SDefault : IDefaultedByDerived {
+}
+
+Console.WriteLine(Probe.Z[SDefault]())`, []string{"100"}}
         }
 
         /// Issue #4620: static methods, properties and events inherited from a
@@ -634,6 +648,35 @@ Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[1].Invo
                     "71",
                     "72"
                 }}
+            yield[]object{"inherited-async-static-method-from-generic-gs-base", `package P
+import System
+import Clib
+
+open class BAsync[T] {
+    shared {
+        async func Load(x T) T { return x }
+    }
+}
+class DAsync : BAsync[int32], IAsync[int32] {
+}
+
+Console.WriteLine(Probe.Load[int32, DAsync](77))`, []string{"77"}}
+            yield[]object{"private-static-on-gs-base-that-already-implements-interface", `package P
+import System
+import Clib
+
+open class BPriv : IS {
+    shared {
+        private func Z() int32 { return 31 }
+    }
+}
+class DPriv : BPriv, IS {
+}
+class DPriv2 : BPriv, IS2 {
+}
+
+Console.WriteLine(Probe.Z[DPriv]())
+Console.WriteLine(Probe.Z[DPriv2]())`, []string{"31", "31"}}
         }
 
         /// Issue #4618: missing or mismatched implementations of imported
@@ -733,6 +776,23 @@ import Clib
 struct SM : IEv2 {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IEv.Changed'"}
+            yield[]object{"mismatched-ref-kind-on-gsharp-interface-static-method", `package P
+import System
+import Clib
+
+interface IGsRef {
+    shared {
+        func Z(x int32) int32;
+    }
+}
+open class BRef {
+    shared {
+        func Z(ref x int32) int32 { return x }
+    }
+}
+class DRef : BRef, IGsRef {
+}
+Console.WriteLine("x")`, "GS0331", "'IGsRef.Z'"}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {

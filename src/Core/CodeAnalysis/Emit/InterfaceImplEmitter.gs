@@ -1309,9 +1309,22 @@ internal class InterfaceImplEmitter {
             bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il))
         }
         let signature = this.outer.userTokens.EncodeOpenMethodSignature(effectiveMethod)
+        var returnTypeForMetadata = effectiveMethod.Type
+        if defMethod.IsAsyncOrSuspending && defMethod.StateMachineType != nil {
+            for plan in this.outer.stateMachines.AsyncStateMachinePlans {
+                if plan.KickoffMethod == defMethod {
+                    returnTypeForMetadata = if this.outer.GetAsyncReturnTypeSymbol(plan) is {} asyncReturnType {
+                        bridge.DeclaringType.SubstituteMemberType(asyncReturnType) ?? asyncReturnType
+                    } else {
+                        TypeSymbol.Void
+                    }
+                    break
+                }
+            }
+        }
         let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
             this.emitCtx,
-            effectiveMethod.Type,
+            returnTypeForMetadata,
             effectiveMethod.ReturnRefKind,
             effectiveMethod.EmittedParameters
         )
@@ -2183,7 +2196,8 @@ internal class InterfaceImplEmitter {
                         (
                         object.ReferenceEquals(current, structSymbol) || candidate.Accessibility == Accessibility.Public
                     ) &&
-                        StaticVirtualSignatureEquals(
+                        DeclarationBinder
+                        .StaticVirtualSignaturesMatch(
                         slot,
                         DeclarationBinder.SubstituteStaticMethodForOwner(current, candidate)
                     ) {
@@ -2286,35 +2300,6 @@ internal class InterfaceImplEmitter {
                 }
             }
             return slot
-        }
-
-        private func StaticVirtualSignatureEquals(a FunctionSymbol?, b FunctionSymbol?) bool {
-            // ADR-0186: a platform position at any depth (a static member
-            // declared in an ADR-0186 §9 oblivious scope) conforms as its
-            // underlying type, as the binder's StaticVirtualSignaturesMatch
-            // already decided.
-            let Same = func (x TypeSymbol?, y TypeSymbol?) bool {
-                return object.ReferenceEquals(x, y) ||
-                    x?.Name == y?.Name ||
-                    DeclarationBinder.ConformanceSignaturesEquivalent(x, y)
-            }
-            if a == nil || b == nil {
-                return false
-            }
-            if a.Parameters.Length != b.Parameters.Length {
-                return false
-            }
-            // FunctionSymbol.Type and parameter Type values are compiler symbols
-            // canonicalized for this emit pass, not reflection Type instances.
-            if !Same(a.Type, b.Type) {
-                return false
-            }
-            for var i = 0; i < a.Parameters.Length; i++ {
-                if !Same(a.Parameters[i].Type, b.Parameters[i].Type) {
-                    return false
-                }
-            }
-            return true
         }
     }
 }

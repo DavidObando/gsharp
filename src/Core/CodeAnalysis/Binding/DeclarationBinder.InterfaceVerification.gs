@@ -1141,8 +1141,9 @@ internal partial class DeclarationBinder {
                 if TryResolveExplicitInterfaceStaticImplementation(structSymbol, iface, imethod) != nil {
                     continue
                 }
+                let satisfiedByBase = SourceBaseImplementsInterface(structSymbol.BaseClass, iface)
                 var sigMatch = false
-                var nameMatch = false
+                var hasStaticNameMatch = false
                 for current in structSymbol.GetHierarchy() {
                     for candidate in current.GetStaticMethods(imethod.Name) {
                         // Issue #4614: an explicit-interface-clause member keeps the
@@ -1157,7 +1158,7 @@ internal partial class DeclarationBinder {
                         ) {
                             continue
                         }
-                        nameMatch = true
+                        hasStaticNameMatch = true
                         if StaticVirtualSignaturesMatch(imethod, SubstituteStaticMethodForOwner(current, candidate)) {
                             sigMatch = true
                             break
@@ -1170,7 +1171,8 @@ internal partial class DeclarationBinder {
                 if sigMatch {
                     continue
                 }
-                if !nameMatch {
+                var reportedNonStatic = false
+                if !hasStaticNameMatch {
                     // Detect a non-static instance candidate with the same
                     // name → GS0332 — instance member cannot satisfy a
                     // static-virtual slot.
@@ -1182,17 +1184,12 @@ internal partial class DeclarationBinder {
                                 iface.Name,
                                 imethod.Name
                             )
-                            nameMatch = true
+                            reportedNonStatic = true
                             break
                         }
                     }
                 }
-                if sigMatch || nameMatch {
-                    continue
-                }
-                // No same-name candidate at all. If the interface itself
-                // provides a default body, the implementer inherits it.
-                if InterfaceSymbol.HasDefaultBody(imethod) {
+                if reportedNonStatic || satisfiedByBase || InterfaceSymbol.HasDefaultBody(imethod) {
                     continue
                 }
                 Diagnostics.ReportStaticVirtualInterfaceMethodNotImplemented(
@@ -1231,6 +1228,7 @@ internal partial class DeclarationBinder {
             if staticPropDefIface.Properties.IsDefaultOrEmpty {
                 continue
             }
+            let satisfiedByBase = SourceBaseImplementsInterface(structSymbol.BaseClass, iface)
             for iprop in staticPropDefIface.Properties {
                 if !iprop.IsStatic {
                     continue
@@ -1240,8 +1238,12 @@ internal partial class DeclarationBinder {
                 // an implementer is NOT required to provide it. Only abstract
                 // accessors must be satisfied. Compute per-accessor whether an
                 // abstract slot remains for the implementer to fill.
-                let getterIsAbstract = iprop.HasGetter && (iprop.GetterSymbol == nil || iprop.GetterSymbol!!.IsAbstract)
-                let setterIsAbstract = iprop.HasSetter && (iprop.SetterSymbol == nil || iprop.SetterSymbol!!.IsAbstract)
+                let getterIsAbstract = iprop.HasGetter &&
+                    (iprop.GetterSymbol == nil || iprop.GetterSymbol!!.IsAbstract) &&
+                    !satisfiedByBase
+                let setterIsAbstract = iprop.HasSetter &&
+                    (iprop.SetterSymbol == nil || iprop.SetterSymbol!!.IsAbstract) &&
+                    !satisfiedByBase
                 if !getterIsAbstract && !setterIsAbstract {
                     // Fully default-bodied property: nothing the implementer
                     // must provide.
@@ -1312,7 +1314,8 @@ internal partial class DeclarationBinder {
         if structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty {
             return
         }
-        for (symbolicIface, concreteIface) in EnumerateClrInterfaceClosure(structSymbol) {
+        let closure = EnumerateClrInterfaceClosure(structSymbol).ToList()
+        for (symbolicIface, concreteIface) in closure {
             var openIface Type? = nil
             var symbolicArgs = default(ImmutableArray[TypeSymbol])
             if symbolicIface != nil && !MemberLookup.TryGetSymbolicClrGenericInterface(
@@ -1339,7 +1342,7 @@ internal partial class DeclarationBinder {
             } else {
                 SymbolDisplay.ToTypeDisplayString(slotOwner)
             }
-            let satisfiedByImportedBase = ImportedBaseImplementsClrInterface(structSymbol, slotOwnerSymbol)
+            let satisfiedByBase = BaseImplementsClrInterface(structSymbol, slotOwnerSymbol)
             for slot in ClrTypeUtilities.SafeGetMethods(
                 slotOwner,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
@@ -1374,7 +1377,7 @@ internal partial class DeclarationBinder {
                     )
                     continue
                 }
-                if !slot.IsAbstract || satisfiedByImportedBase {
+                if !IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slot) || satisfiedByBase {
                     continue
                 }
                 var reportedNonStatic = false
@@ -1418,8 +1421,10 @@ internal partial class DeclarationBinder {
                 if slotGetter == nil && slotSetter == nil {
                     continue
                 }
-                let requiresGetter = slotGetter?.IsAbstract == true && !satisfiedByImportedBase
-                let requiresSetter = slotSetter?.IsAbstract == true && !satisfiedByImportedBase
+                let requiresGetter = IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotGetter) &&
+                    !satisfiedByBase
+                let requiresSetter = IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotSetter) &&
+                    !satisfiedByBase
                 if !TryFindClrStaticVirtualPropertyImplementation(
                     structSymbol,
                     slotOwnerSymbol,
@@ -1501,8 +1506,11 @@ internal partial class DeclarationBinder {
                 if slotAdd == nil && slotRemove == nil {
                     continue
                 }
-                let isRequired = (slotAdd?.IsAbstract == true || slotRemove?.IsAbstract == true) &&
-                    !satisfiedByImportedBase
+                let isRequired = (
+                    IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotAdd) ||
+                        IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotRemove)
+                ) &&
+                    !satisfiedByBase
                 if !isRequired {
                     continue
                 }
@@ -2373,9 +2381,26 @@ internal partial class DeclarationBinder {
             // platform position at any depth (`List[Item!]?` against
             // `List[Item]?`) and is otherwise the ordinary signature comparison.
             let StaticVirtualTypesMatch = func (a TypeSymbol, b TypeSymbol) bool {
-                return EqualityComparer[TypeSymbol].Default.Equals(a, b) || ConformanceSignaturesEquivalent(a, b)
+                return EqualityComparer[TypeSymbol].Default.Equals(a, b) ||
+                    (
+                    a is TypeParameterSymbol tpA &&
+                        b is TypeParameterSymbol tpB &&
+                        tpA.IsMethodTypeParameter &&
+                        tpB.IsMethodTypeParameter &&
+                        tpA.Ordinal == tpB.Ordinal
+                ) ||
+                    ConformanceSignaturesEquivalent(a, b)
             }
-            if iface.Parameters.Length != impl.Parameters.Length {
+            if iface
+                .TypeParameters
+                .Length != impl
+                .TypeParameters
+                .Length ||
+                iface
+                .Parameters
+                .Length != impl
+                .Parameters
+                .Length {
                 return false
             }
             if !StaticVirtualTypesMatch(iface.Type, impl.Type) {
@@ -2393,6 +2418,83 @@ internal partial class DeclarationBinder {
                 }
             }
             return true
+        }
+
+        internal func SourceBaseImplementsInterface(baseClass StructSymbol?, iface InterfaceSymbol) bool {
+            if baseClass == nil {
+                return false
+            }
+            for ancestor in baseClass.GetHierarchy() {
+                for implemented in ancestor.Interfaces {
+                    if ConformanceSignaturesEquivalent(implemented, iface) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func BaseImplementsClrInterface(structSymbol StructSymbol, slotOwner TypeSymbol) bool {
+            if ImportedBaseImplementsClrInterface(structSymbol, slotOwner) {
+                return true
+            }
+            let baseClass = structSymbol.BaseClass
+            if baseClass == nil {
+                return false
+            }
+            for ancestor in baseClass.GetHierarchy() {
+                for (symbolicIface, concreteIface) in EnumerateClrInterfaceClosure(ancestor) {
+                    let candidateOwner = symbolicIface ??
+                        (
+                        if concreteIface == nil {
+                            default(TypeSymbol?)
+                        } else {
+                            TypeSymbol.FromClrTypeWithoutNullability(concreteIface, NullabilityFreeReason.TypeStructure)
+                        }
+                    )
+                    if candidateOwner != nil && ExactInterfaceTypeMatches(candidateOwner, slotOwner) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsClrInterfaceSlotAbstractInClosure(
+            closure IReadOnlyList[(Symbolic TypeSymbol?, Concrete Type?)],
+            slotOwner Type,
+            slot MethodInfo?
+        ) bool {
+            if slot == nil {
+                return false
+            }
+            var currentOwner = slotOwner
+            var isAbstract = slot.IsAbstract
+            for (symbolicIface, concreteIface) in closure {
+                let candidateOwner Type? = if symbolicIface != nil {
+                    symbolicIface.ClrType
+                } else {
+                    concreteIface
+                }
+                if candidateOwner == nil || ClrTypeUtilities.AreSame(candidateOwner, slotOwner) {
+                    continue
+                }
+                if ClrSignatureMetadata.TryGetInterfaceSlotOverrideIsAbstract(
+                    candidateOwner,
+                    slotOwner,
+                    slot,
+                    out var overrideIsAbstract
+                ) {
+                    if ClrTypeUtilities.AreSame(currentOwner, slotOwner) || ClrTypeUtilities.ImplementsInterfaceByName(
+                        candidateOwner,
+                        currentOwner
+                    ) {
+                        currentOwner = candidateOwner
+                        isAbstract = overrideIsAbstract
+                    }
+                }
+            }
+            return isAbstract
         }
 
         internal func EnumerateClrInterfaceClosure(structSymbol StructSymbol) sequence[
@@ -2473,7 +2575,7 @@ internal partial class DeclarationBinder {
                 }
                 paramBuilder.Add(ParameterSymbol(param, substitutedParamType))
             }
-            if !paramsChanged && object.ReferenceEquals(returnType, method.Type) {
+            if !paramsChanged && object.ReferenceEquals(returnType, method.Type) && !method.IsAsyncOrSuspending {
                 return method
             }
             let clone = FunctionSymbol(
