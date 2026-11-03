@@ -23,8 +23,9 @@ import Xunit
 /// Issue #5617: gsc removes the narrowing fact of a by-reference variable at an accessor that can run user code
 /// (ADR-0208 R14, R16 and R17) and at a write through a member or an element (R12). C# flow analysis keeps the
 /// fact, so the translated read needs its own `!!`. An accessor that runs no user code keeps the fact, so its read
-/// stays bare. Each test translates the C#, compiles the G# with the repository's `gsc.dll`, runs it, and compares
-/// the output with the output of the C#.
+/// stays bare. Issue #5650: a loop whose iteration can run user code (ADR-0208 R11, ADR-0213) removes the fact
+/// too. Each test translates the C#, compiles the G# with the repository's `gsc.dll`, runs it, and compares the
+/// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
     /// The issue shape: `Lazy<T>.Value` is an imported getter that is not on the stable list (R16).
     @Fact
@@ -596,6 +597,347 @@ public class Demo
     }
 }`)
         Assert.DoesNotContain("s!!", printed)
+    }
+
+    /// Issue #5650: gsc iterates every collection other than a single-dimensional array and a `string` through an
+    /// enumerator, which can run user code (ADR-0208 R11), so the fact ends at the loop: inside the body and after it.
+    /// This holds for an `in` and an `out` parameter as for a `ref` parameter.
+    @Fact
+    func RefParameter_ReadAfterOrInAForEachOverAnEnumerable_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using System.Collections.Generic;
+public class Demo
+{
+    static IEnumerable<int> Numbers() { yield return 1; yield return 2; }
+    public static int Compute(ref string? s, List<int> items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item;
+        return s.Length + total;
+    }
+    public static int Inside(ref string? s, List<int> items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item + s.Length;
+        return total;
+    }
+    public static int Sequence(in string? s, IEnumerable<int> items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item;
+        return s.Length + total;
+    }
+    public static int Map(out string? s, Dictionary<int, int> items)
+    {
+        s = items.Count > 0 ? "abcd" : null;
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var pair in items) total += pair.Value;
+        return s.Length + total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var items = new List<int> { 1, 2 };
+        return Compute(ref text, items) + "," + Inside(ref text, items) + "," + Sequence(in text, Numbers()) + "," +
+            Map(out _, new Dictionary<int, int> { [1] = 5 });
+    }
+}`)
+        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("total += item + s!!.Length", printed)
+        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// A span, an immutable array and a multi-dimensional array are pattern enumerators in gsc (ADR-0208 R11).
+    @Fact
+    func RefParameter_ReadAfterOrInAForEachOverAPatternEnumerator_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+using System.Collections.Immutable;
+public class Demo
+{
+    public static int Spans(ref string? s, Span<int> items, ReadOnlySpan<int> readOnly)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item + s.Length;
+        foreach (var item in readOnly) total += item;
+        return s.Length + total;
+    }
+    public static int Immutable(ref string? s, ImmutableArray<int> items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item + s.Length;
+        return total;
+    }
+    public static int Grid(ref string? s, int[,] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item + s.Length;
+        return s.Length + total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Spans(ref text, new[] { 1, 2 }.AsSpan(), new[] { 3 }) + "," +
+            Immutable(ref text, ImmutableArray.Create(4, 5)) + "," + Grid(ref text, new int[2, 2]);
+    }
+}`)
+        Assert.Equal(5, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// gsc iterates a single-dimensional array and a `string` by index, which runs no user code, also with a typed
+    /// loop variable that converts the element and with a tuple-target loop over value tuples (ADR-0213 table T5). A
+    /// loop that holds a `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
+    @Fact
+    func RefParameter_ReadAfterAForEachOverAnArrayOrAString_StaysBare() {
+        let printed = AssertRunsLikeCSharp(`
+using System.Text;
+public class Demo
+{
+    public static int Arrays(ref string? s, int[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items) total += item + s.Length;
+        foreach (var item in items) total += item;
+        return s.Length + total;
+    }
+    public static int Strings(ref string? s, string text, StringBuilder builder)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var c in text) total += 1 + s.Length;
+        foreach (var c in builder.ToString()) total += 1;
+        foreach (var part in "a,b".Split(',')) total += 1;
+        return s.Length + total;
+    }
+    public static int Typed(ref string? s, int[] items, (int, int)[] pairs)
+    {
+        if (s == null) return 0;
+        long sum = 0;
+        var n = 0;
+        foreach (long item in items) sum += item;
+        foreach (var (a, b) in pairs) n += s.Length;
+        return s.Length + n + (int)sum;
+    }
+    public static int InnerWhile(ref string? s, int[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in items)
+        {
+            var m = 0;
+            while (m < 2) { total += item; m++; }
+        }
+        return s.Length + total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var items = new[] { 1, 2 };
+        return Arrays(ref text, items) + "," + Strings(ref text, "xy", new StringBuilder("q")) + "," +
+            Typed(ref text, items, new[] { (1, 2) }) + "," + InnerWhile(ref text, items);
+    }
+}`)
+        Assert.DoesNotContain("s!!", printed)
+    }
+
+    /// The loop variable's prelude runs before every body run (ADR-0213 table T5): a `Deconstruct` of a record and a
+    /// user-defined conversion of a typed loop variable are calls, so the fact ends even over an array.
+    @Fact
+    func RefParameter_ReadAfterAForEachWhosePreludeRunsUserCode_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using System.Collections.Generic;
+public record Point(int X, int Y);
+public sealed class Wrapper
+{
+    public int V;
+    public static implicit operator Wrapper(int v) => new Wrapper { V = v };
+}
+public class Demo
+{
+    public static int Records(ref string? s, Point[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (x, y) in items) total += s.Length;
+        return s.Length + total;
+    }
+    public static int Pairs(ref string? s, Dictionary<int, int> items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (k, v) in items) total += v;
+        return s.Length + total;
+    }
+    public static int Converted(ref string? s, int[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (Wrapper w in items) total += w.V;
+        return s.Length + total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Records(ref text, new[] { new Point(1, 2) }) + "," +
+            Pairs(ref text, new Dictionary<int, int> { [1] = 2 }) + "," + Converted(ref text, new[] { 7 });
+    }
+}`)
+        Assert.Contains("total += s!!.Length", printed)
+        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// gsc scans a loop's region without types, so a `for ... in` nested in a loop counts as an iteration that runs
+    /// user code for the enclosing loop, whatever its collection (ADR-0213 section 9). The fact ends at the entry of
+    /// the enclosing loop and stays removed after it. A guard inside the enclosing loop is after that entry, so only
+    /// the inner loop counts for its reads.
+    @Fact
+    func RefParameter_ReadAroundALoopThatHoldsAForEach_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+using System.Collections.Generic;
+public class Demo
+{
+    public static int NestedArrays(ref string? s, int[] outer, int[] inner)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var o in outer)
+        {
+            total += s.Length;
+            foreach (var i in inner) total += i;
+        }
+        return s.Length + total;
+    }
+    public static int WhileLoop(ref string? s, int[] inner)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var n = 0;
+        while (n < 2)
+        {
+            total += s.Length;
+            foreach (var i in inner) total += i;
+            n++;
+        }
+        return total;
+    }
+    public static int ForLoop(ref string? s, int[] inner)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        for (var n = 0; n < 2; n++)
+        {
+            foreach (var i in inner) total += i;
+        }
+        return s.Length + total;
+    }
+    public static int DoLoop(ref string? s, int[] inner)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var n = 0;
+        do
+        {
+            foreach (var i in inner) total += i;
+            n++;
+        } while (n < 2);
+        return s.Length + total;
+    }
+    public static int GuardInLoopOverArrays(ref string? s, int[] outer, int[] inner)
+    {
+        var total = 0;
+        foreach (var o in outer)
+        {
+            if (s == null) continue;
+            foreach (var i in inner) total += i;
+            total += s.Length + 1;
+        }
+        return total;
+    }
+    public static int GuardInLoopOverList(ref string? s, int[] outer, List<int> inner)
+    {
+        var total = 0;
+        foreach (var o in outer)
+        {
+            if (s == null) continue;
+            foreach (var i in inner) total += i;
+            total += s.Length + 2;
+        }
+        return total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var inner = new[] { 2 };
+        return NestedArrays(ref text, new[] { 1 }, inner) + "," + WhileLoop(ref text, inner) + "," +
+            ForLoop(ref text, inner) + "," + DoLoop(ref text, inner) + "," +
+            GuardInLoopOverArrays(ref text, new[] { 1 }, inner) + "," +
+            GuardInLoopOverList(ref text, new[] { 1 }, new List<int> { 2 });
+    }
+}`)
+        Assert.Contains("total += s.Length + 1", printed)
+        Assert.Contains("total += s!!.Length + 2", printed)
+        Assert.Equal(6, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// The collection of a `for ... in` and the initializer of a `for` run once, before the loop's region, so effects
+    /// in the loop do not reach a read in them (ADR-0213 table T5). A collection read in a loop that is nested in
+    /// another loop is in the enclosing loop's region.
+    @Fact
+    func RefParameter_ReadInALoopCollectionOrInitializer_IsAssertedOnlyInAnEnclosingLoop() {
+        let printed = AssertRunsLikeCSharp(`
+using System.Collections.Generic;
+public sealed class Box
+{
+    public int F;
+}
+public class Demo
+{
+    static List<int> Make(int n) => new List<int> { n, 2 };
+    public static int Collection(ref string? s, Box box)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var item in Make(s.Length)) { total += item; box.F = item; }
+        return total;
+    }
+    public static int Initializer(ref string? s, int[] inner)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        for (var n = s.Length; n < 5; n++)
+        {
+            foreach (var i in inner) total += i;
+        }
+        return total;
+    }
+    public static int Nested(ref string? s, int[] outer)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var o in outer)
+        {
+            foreach (var item in Make(s.Length + 1)) total += item;
+        }
+        return total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Collection(ref text, new Box()) + "," + Initializer(ref text, new[] { 2 }) + "," +
+            Nested(ref text, new[] { 1 });
+    }
+}`)
+        Assert.Contains("Make(s.Length)", printed)
+        Assert.Contains("Make(s!!.Length + 1)", printed)
+        Assert.Equal(1, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {
