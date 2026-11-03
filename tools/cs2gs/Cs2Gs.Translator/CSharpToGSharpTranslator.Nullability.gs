@@ -1449,6 +1449,8 @@ partial class CSharpToGSharpTranslator {
         private func GetExpressionNullablePositions(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) ObliviousPositionSet? {
+            let dropsTopLevelSuppression = expression?.Parent is ArgumentSyntax parentArgument &&
+                this.PassesArgumentStorageUnasserted(parentArgument)
             var unwrapped = expression
             var suppressedTopLevel = false
             while (
@@ -1465,7 +1467,7 @@ partial class CSharpToGSharpTranslator {
                     PostfixUnaryExpressionSyntax and
                     {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
             ) {
-                if unwrapped is PostfixUnaryExpressionSyntax {
+                if unwrapped is PostfixUnaryExpressionSyntax && !dropsTopLevelSuppression {
                     suppressedTopLevel = true
                 }
                 unwrapped = switch unwrapped {
@@ -1525,7 +1527,15 @@ partial class CSharpToGSharpTranslator {
             }
             if !suppressedTopLevel &&
                 symbol != nil &&
-                (this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol)) {
+                (
+                this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) ||
+                    this
+                    .GetDeclaredValueType(unwrapped)
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            ) {
                 result ??= ObliviousPositionSet()
                 result!!.Nullable.Add("")
             }

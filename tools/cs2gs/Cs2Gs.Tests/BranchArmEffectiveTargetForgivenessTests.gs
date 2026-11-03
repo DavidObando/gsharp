@@ -304,6 +304,14 @@ namespace App
         public static string NestedActionWithNullableContainingTypeAllowsInference(Model.Arg argument, int i) =>
             NestedActionParams(ConsumeNullableOuterInner, i > 0 ? argument.Value : argument.Name, "tail");
 
+        public static T InParams<T>(in T value, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string SuppressedInPromotedLocalAllowsInference(Model.Arg argument, int i)
+        {
+            string x = null;
+            return InParams(in x!, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
 
