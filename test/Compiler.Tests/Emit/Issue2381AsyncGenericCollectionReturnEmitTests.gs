@@ -303,7 +303,7 @@ class ExportCheckMeta {
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
             File.WriteAllText(srcPath, source)
-            let compileExit = CompileQuiet(srcPath, outPath, out var stdout, out var stderr)
+            let compileExit = CompileQuiet(srcPath, outPath, out var stdout, out var stderr, library: true)
             Assert.True(compileExit == 0, (`gsc failed:
 stdout:
 ` + "$stdout" + `
@@ -330,7 +330,13 @@ stderr:
     }
 
     shared {
-        private func CompileQuiet(srcPath string, outPath string, out stdout string, out stderr string) int32 {
+        private func CompileQuiet(
+            srcPath string,
+            outPath string,
+            out stdout string,
+            out stderr string,
+            library bool = false
+        ) int32 {
             using let compileOut = StringWriter()
             using let compileErr = StringWriter()
             let prevOut = Console.Out
@@ -340,7 +346,16 @@ stderr:
             var compileExit int32
             try {
                 compileExit = Program.Main(
-                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                    []string{
+                        "/out:" + outPath,
+                        if library {
+                            "/target:library"
+                        } else {
+                            "/target:exe"
+                        },
+                        "/targetframework:net10.0",
+                        srcPath
+                    }
                 )
             } finally {
                 Console.SetOut(prevOut)
