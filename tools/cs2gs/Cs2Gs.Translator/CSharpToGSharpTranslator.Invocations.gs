@@ -32,12 +32,18 @@ partial class CSharpToGSharpTranslator {
                         this
                         .context
                         .GetDeclaredSymbol(designation) is ILocalSymbol local {
+                        let type = this.PromoteIfUsedAsNullable(
+                            this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
+                            local
+                        )
+                        this.state.LocalHoldsPromotedValueAnswers.Clear()
+                        if type != nil {
+                            this.state.EmittedLocalTypeClauses.Add(local)
+                        }
+                        this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
+                        this.RecordEmittedLocalNullability(local, type, nil, nil)
                         (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(
-                            LocalDeclarationStatement(
-                                BindingKind.Var,
-                                this.EmittedName(local, local.Name),
-                                this.typeMapper.Map(local.Type, this.context, argument.GetLocation())
-                            )
+                            LocalDeclarationStatement(BindingKind.Var, this.EmittedName(local, local.Name), type)
                         )
                     }
                 }
@@ -1554,33 +1560,35 @@ partial class CSharpToGSharpTranslator {
             parameterKind string,
             coerceToParameterType bool
         ) GExpression? {
+            let parameter = argumentOperation.Parameter!!
             let constant = argumentOperation.Value.ConstantValue
             var defaultValue GExpression? = if constant.HasValue {
                 this.MapConstantValue(
                     constant.Value,
-                    argumentOperation.Parameter!!.Type,
+                    parameter.Type,
                     callSyntax,
-                    "parameter '${argumentOperation.Parameter!!.Name}''s default value"
+                    "parameter '${parameter.Name}''s default value"
                 )
             } else {
-                default(GExpression?)
+                let mappedType GTypeReference? = this.typeMapper.Map(
+                    parameter.Type,
+                    this.context,
+                    callSyntax?.GetLocation() ?? parameter.Locations.FirstOrDefault()
+                )
+                this.BuildOptionalParameterDefault(parameter, mappedType, callSyntax)
             }
             if defaultValue == nil {
                 let legitimateNull = constant.HasValue && constant.Value == nil
                 if !legitimateNull {
                     this.context.ReportUnsupported(
                         callSyntax,
-                        "$parameterKind default value of type '${argumentOperation.Parameter!!.Type}' has no gsc constant form."
+                        "$parameterKind default value of type '${parameter.Type}' has no gsc constant form."
                     )
                 }
                 defaultValue = IdentifierExpression("nil")
             }
             return if coerceToParameterType {
-                this.CoerceMaterializedArgument(
-                    defaultValue,
-                    argumentOperation.Parameter!!.Type,
-                    callSyntax!!.GetLocation()
-                )
+                this.CoerceMaterializedArgument(defaultValue, parameter.Type, callSyntax!!.GetLocation())
             } else {
                 defaultValue
             }

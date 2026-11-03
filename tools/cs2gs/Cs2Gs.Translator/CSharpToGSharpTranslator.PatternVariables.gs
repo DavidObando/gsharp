@@ -597,6 +597,20 @@ partial class CSharpToGSharpTranslator {
             if this.state.NativePatternConditionCache.TryGetValue(condition, out var cached) {
                 return cached
             }
+            if (
+                condition.Parent is WhileStatementSyntax ||
+                    condition.Parent is DoStatementSyntax ||
+                    (
+                    condition.Parent is ForStatementSyntax forStmt && object.ReferenceEquals(
+                        forStmt.Condition,
+                        condition
+                    )
+                )
+            ) &&
+                this.ClauseRequiresOutPredeclaration(condition) {
+                this.state.NativePatternConditionCache[condition] = false
+                return false
+            }
             var any = false
             var all = true
             for isPattern in condition.DescendantNodesAndSelf(
