@@ -241,6 +241,24 @@ public class BaseG<T> : IG<T> { public T Get() => default!; }
 public interface IMark<T> { }
 public interface IMark2<T> : IMark<T> { }
 
+public interface IF<T>
+{
+    int F(T x);
+}
+public interface IF2<T> : IF<T> { }
+
+public interface IFProp<T>
+{
+    T Value { get; set; }
+}
+public interface IFProp2<T> : IFProp<T> { }
+
+public interface IFEvent<T>
+{
+    event System.Action<T>? Changed;
+}
+public interface IFEvent2<T> : IFEvent<T> { }
+
 public static class Probe
 {
     public static bool Is<T>(object o) => o is IMark<T>;
@@ -248,6 +266,10 @@ public static class Probe
     public static int M(IM x) => x.M();
     public static int A(IA x) => x.A();
     public static string G(IG<string> x) => x.Get() ?? "null";
+    public static int F<T>(IF<T> i, T x) => i.F(x);
+    public static T GetValue<T>(IFProp<T> i) => i.Value;
+    public static void SetValue<T>(IFProp<T> i, T v) => i.Value = v;
+    public static void Subscribe<T>(IFEvent<T> i, System.Action<T> h) => i.Changed += h;
 }`
 
         /// Shapes whose dispatch was wrong before the fix: a member declared for a
@@ -297,6 +319,39 @@ class Coll : Collection[int32], IList[int32] {
 }
 
 Console.WriteLine((Coll() as ICollection[int32])!!.IsReadOnly)`, []string{"True"}}
+            // Issue #4615: explicit implementation of a base-interface slot
+            // closed over a G# type must not emit an erased `IF<object>` row.
+            yield[]object{"explicit-base-interface-slot-closed-over-gs-type", `package P
+import System
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+class W2 : IF2[Shape] {
+    func (IF[Shape]) F(x Shape) int32 { return x.Tag + 1 }
+}
+
+class WProp : IFProp2[Shape] {
+    private var _value Shape = Shape{Tag: 9}
+    prop (IFProp[Shape]) Value Shape {
+        get { return _value }
+        set { _value = value }
+    }
+}
+
+class WEvent : IFEvent2[Shape] {
+    event (IFEvent[Shape]) Changed Action[Shape]?
+}
+
+Console.WriteLine(Probe.F[Shape](W2(), Shape{Tag: 4}))
+let wp = WProp()
+Console.WriteLine(Probe.GetValue[Shape](wp).Tag)
+Probe.SetValue[Shape](wp, Shape{Tag: 12})
+Console.WriteLine(Probe.GetValue[Shape](wp).Tag)
+let we = WEvent()
+Probe.Subscribe[Shape](we, (s Shape) -> { })`, []string{"5", "9", "12"}}
         }
 
         /// Neighbours whose dispatch was already right and must stay so.
@@ -415,6 +470,17 @@ import Clib
 class DD : BaseD, ID {
     func A() int32 { return 4 }
 }`, "DD", []string{"ID", "IB", "IA", "IC"}}
+            // Issue #4615: an explicit implementation on an inherited generic
+            // interface closed over a G# type keeps only the symbolic rows,
+            // never an erased `IF`1<Object>` row.
+            yield[]object{"explicit-symbolic-base-interface-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class W2 : IF2[Shape] {
+    func (IF[Shape]) F(x Shape) int32 { return 1 }
+}`, "W2", []string{"IF2`1<Shape>", "IF`1<Shape>"}}
         }
 
         private func ReadInterfaceRows(assemblyPath string, typeName string) List[string] {

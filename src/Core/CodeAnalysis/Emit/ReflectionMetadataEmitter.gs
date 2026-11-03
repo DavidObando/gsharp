@@ -2414,43 +2414,19 @@ internal class ReflectionMetadataEmitter {
             // resolves against a declared interface.
             if !c.Methods.IsDefaultOrEmpty {
                 for method in c.Methods {
-                    let declaringIface Type? = method.ExplicitInterfaceSlot?.DeclaringType
-                    if declaringIface == nil {
+                    if method.ExplicitInterfaceSlot is not{} explicitSlot ||
+                        explicitSlot.DeclaringType is not{} declaringIface {
                         continue
                     }
-                    var alreadyDeclared = false
-                    for implemented in c.ImplementedClrInterfaces {
-                        if implemented?.ClrType != nil && ClrTypeUtilities.AreSame(
-                            implemented.ClrType,
-                            declaringIface
-                        ) {
-                            alreadyDeclared = true
-                            break
+                    if method.ExplicitInterfaceSlotContainingType is {} slotContainingType {
+                        let declaringOwner = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                            slotContainingType,
+                            explicitSlot
+                        )
+                        if MemberLookup.TryGetSymbolicClrGenericInterface(declaringOwner, out _, out _) {
+                            EmitSymbolicInterfaceRow(declaringOwner)
+                            continue
                         }
-                        if implemented != nil && MemberLookup.TryGetSymbolicClrGenericInterface(
-                            implemented,
-                            out var openImplemented,
-                            out _
-                        ) &&
-                            openImplemented != nil &&
-                            ClrTypeUtilities.AreSame(openImplemented, declaringIface) {
-                            alreadyDeclared = true
-                            break
-                        }
-                    }
-                    if alreadyDeclared {
-                        continue
-                    }
-                    if method.ExplicitInterfaceSlotContainingType is {} symbolicDeclaring &&
-                        MemberLookup.TryGetSymbolicClrGenericInterface(
-                        symbolicDeclaring,
-                        out var openDeclaring,
-                        out _
-                    ) &&
-                        openDeclaring != nil &&
-                        ClrTypeUtilities.AreSame(openDeclaring, declaringIface) {
-                        EmitSymbolicInterfaceRow(symbolicDeclaring)
-                        continue
                     }
                     EmitClrInterfaceRow(declaringIface)
                 }
