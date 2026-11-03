@@ -894,7 +894,7 @@ abstract class BoundTreeRewriter {
                                 relational.Op,
                                 relValue,
                                 relational.InputVariable!!,
-                                relational.ValueVariable!!,
+                                relational.ValueVariable,
                                 relTest
                             )
                         )

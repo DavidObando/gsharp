@@ -172,11 +172,41 @@ System.Console.Write("|" + Trace.Events)
     }
 
     @Fact
-    func UndefinedEquality_ReportsTheRelationalPatternDiagnostic() {
+    func NilAndMixedTypeValues_MatchTheExpression() {
+        const source = `class Box {
+    var V int32
+}
+func (left Box?) operator ==(right Box?) bool -> true
+func (left Box?) operator !=(right Box?) bool -> false
+struct Meters {
+    var V int32
+}
+func (left Meters) operator ==(right int32) bool -> left.V == right
+func (left Meters) operator !=(right int32) bool -> left.V != right
+func Bit(value bool) string -> if value { "1" } else { "0" }
+func NilPattern(x Box?) bool -> x is == nil
+func NilExpression(x Box?) bool -> x == nil
+func NotNilPattern(x Box?) bool -> x is != nil
+func NotNilExpression(x Box?) bool -> x != nil
+func FivePattern(m Meters) bool -> m is == 5
+func FiveExpression(m Meters) bool -> m == 5
+func Zero(b uint8) bool -> b is == 0
+func Default(n int32) bool -> n is == default
+let box = Box{V: 1}
+System.Console.Write(Bit(NilPattern(box)) + Bit(NilExpression(box)) + Bit(NotNilPattern(box)) + Bit(NotNilExpression(box)) + "|")
+System.Console.Write(Bit(FivePattern(Meters{V: 5})) + Bit(FiveExpression(Meters{V: 5})) + Bit(FivePattern(Meters{V: 4})) + "|")
+System.Console.Write(Bit(Zero(uint8(0))) + Bit(Default(0)) + Bit(Default(1)))
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "0011|110|110", "5688")
+    }
+
+    @Fact
+    func UndefinedEquality_ReportsThePatternOrOperatorDiagnostic() {
         const source = `struct Plain {
     var Value int32
 }
 func Same(p Plain) bool -> p is == Plain{Value: 1}
+func Text(n int32) bool -> n is == "x"
 `
         let directory = Path.Combine(AppContext.BaseDirectory, "Issue5688", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
@@ -197,8 +227,9 @@ func Same(p Plain) bool -> p is == Plain{Value: 1}
             let lines = stdout.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
             let errors = Array.FindAll(lines, (line string) -> line.Contains(": error GS"))
             Assert.NotEqual(0, code)
-            Assert.Single(errors)
+            Assert.Equal(2, errors.Length)
             Assert.Contains("Program.gs(4,33,4,35): error GS0174:", errors[0])
+            Assert.Contains("Program.gs(5,33,5,35): error GS0129:", errors[1])
         } finally {
             Directory.Delete(directory, recursive: true)
         }

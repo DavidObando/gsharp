@@ -884,11 +884,11 @@ internal class PatternBinder {
     }
 
     private func BindRelationalPattern(syntax RelationalPatternSyntax, discriminantType TypeSymbol) BoundPattern {
-        var value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
         let operatorKind = syntax.OperatorToken.Kind
         if operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken {
-            return BindRelationalEqualityPattern(syntax, discriminantType, value)
+            return BindRelationalEqualityPattern(syntax, discriminantType)
         }
+        var value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
         var operandType = discriminantType
         // Issue #5681: a value-type `T?` input with a non-nullable value compares the underlying `T` values.
         // The emitter tests `HasValue` first, so the pattern has the lifted operator result.
@@ -929,12 +929,21 @@ internal class PatternBinder {
 
     // Issue #5688: `== value` and `!= value` bind the operation `input op value` as the binary expression does.
     // String, data struct, user operator, CLR operator, nullable, enum, and floating-point operands then make the
-    // same operator decision in the pattern and in the expression.
+    // same operator decision in the pattern and in the expression. The value keeps its own type, as the right
+    // operand of the expression does; only a target-dependent value (bare `default`, an untyped lambda) and a
+    // method group take the input type.
     private func BindRelationalEqualityPattern(
         syntax RelationalPatternSyntax,
-        discriminantType TypeSymbol,
-        value BoundExpression
+        discriminantType TypeSymbol
     ) BoundPattern {
+        var value = if ExpressionBinder.IsTargetDependentExpressionSyntax(syntax.Expression) {
+            conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
+        } else {
+            bindExpression(syntax.Expression)
+        }
+        if value is BoundMethodGroupExpression || value is BoundClrMethodGroupExpression {
+            value = conversions.BindConversion(syntax.Expression.Location, value, discriminantType)
+        }
         let kind = syntax.OperatorToken.Kind
         let op = BoundBinaryOperator.Bind(kind, discriminantType, discriminantType) ?? BoundBinaryOperator.Bind(
             kind,
@@ -947,17 +956,33 @@ internal class PatternBinder {
             return BoundRelationalPattern(syntax, discriminantType, op, value)
         }
         let inputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, discriminantType)
-        let valueVariable = LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, value.Type)
+        // A literal (`nil`, `3`, `"abc"`) stays in the test, so the operator binding sees it as the expression does.
+        let valueVariable = if value is BoundLiteralExpression {
+            default(LocalVariableSymbol?)
+        } else {
+            LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, value.Type)
+        }
         let mark = Diagnostics.Count
         let test = bindEqualityOperation(
             syntax,
             BoundPatternOperandExpression(inputVariable),
-            BoundPatternOperandExpression(valueVariable)
+            if valueVariable != nil {
+                BoundPatternOperandExpression(valueVariable)
+            } else {
+                value
+            }
         )
         if test is BoundErrorExpression || test.Type != TypeSymbol.Bool {
-            // Keep the pattern diagnostic: the operator is undefined for the tested type.
-            Diagnostics.TruncateTo(mark)
-            Diagnostics.ReportRelationalPatternOperatorUndefined(syntax.OperatorToken.Location, kind, discriminantType)
+            // An operator that is undefined for the tested type keeps the pattern diagnostic. A value of another
+            // type keeps the binary-operator diagnostic, which names both types.
+            if value.Type == discriminantType || test.Type != TypeSymbol.Error || Diagnostics.Count == mark {
+                Diagnostics.TruncateTo(mark)
+                Diagnostics.ReportRelationalPatternOperatorUndefined(
+                    syntax.OperatorToken.Location,
+                    kind,
+                    discriminantType
+                )
+            }
             return BoundRelationalPattern(syntax, discriminantType, op, value)
         }
         return BoundRelationalPattern(syntax, discriminantType, op, value, inputVariable, valueVariable, test)

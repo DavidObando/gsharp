@@ -619,8 +619,11 @@ internal partial class MethodBodyEmitter {
             // operator that the binary expression `input op value` uses.
             loadValue()
             this.il.StoreLocal(this.locals[rp.InputVariable!!])
-            this.EmitExpression(rp.Value)
-            this.il.StoreLocal(this.locals[rp.ValueVariable!!])
+            // A literal value is part of the test.
+            if rp.ValueVariable is {} valueVariable {
+                this.EmitExpression(rp.Value)
+                this.il.StoreLocal(this.locals[valueVariable])
+            }
             this.EmitExpression(test)
             this.il.Branch(ILOpCode.Brfalse, failLabel)
             return

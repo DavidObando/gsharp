@@ -36,7 +36,7 @@ class BoundRelationalPattern : BoundPattern {
     /// @param op The operator.
     /// @param value The right-hand value.
     /// @param inputVariable The temporary that holds the input.
-    /// @param valueVariable The temporary that holds the value.
+    /// @param valueVariable The temporary that holds the value, or `nil` when the test contains the literal value.
     /// @param test The operation `input op value`, of type `bool`.
     internal init(
         syntax SyntaxNode?,
@@ -44,7 +44,7 @@ class BoundRelationalPattern : BoundPattern {
         op BoundBinaryOperator,
         value BoundExpression,
         inputVariable LocalVariableSymbol,
-        valueVariable LocalVariableSymbol,
+        valueVariable LocalVariableSymbol?,
         test BoundExpression
     ) : base(syntax, type) {
         Op = op
@@ -76,7 +76,7 @@ class BoundRelationalPattern : BoundPattern {
     }
 
     /// Gets the temporary that holds a value that is not a literal, or a `T?` value, for a value-type `T?` input.
-    /// A pattern with a (cref:Test) always has this temporary.
+    /// A pattern with a (cref:Test) has this temporary when its value is not a literal.
     internal prop ValueVariable LocalVariableSymbol? {
         get;
     }
