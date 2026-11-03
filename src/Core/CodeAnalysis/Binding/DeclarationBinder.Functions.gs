@@ -1912,17 +1912,7 @@ internal partial class DeclarationBinder {
                 if TypeSignaturesEquivalent(candidateIface, boundType) {
                     return candidateIface
                 }
-                let candidateClr Type? = candidateIface.ClrType
-                var inheritsBoundInterface = false
-                if candidateClr != nil {
-                    for inherited in candidateClr.GetInterfaces() {
-                        if ClrTypeUtilities.AreSame(inherited, boundType!!.ClrType) {
-                            inheritsBoundInterface = true
-                            break
-                        }
-                    }
-                }
-                if inheritsBoundInterface {
+                if ClrTypeImplementsInterface(candidateIface, boundType!!) {
                     return boundType!!
                 }
             }

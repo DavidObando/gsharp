@@ -294,7 +294,7 @@ internal class TypeDefEmitter {
     private func EmitStructAutoPropertyBackingFields(structSym StructSymbol, ref firstField FieldDefinitionHandle) {
         // ADR-0051 Phase 6: emit backing FieldDefs for auto-properties.
         for prop in structSym.Properties {
-            if !prop.IsAutoProperty || prop.BackingField == nil {
+            if !prop.IsAutoProperty || prop.BackingField == nil || !prop.OwnsBackingField(structSym) {
                 continue
             }
             // #573: when a field-backed synthesized property reuses an existing

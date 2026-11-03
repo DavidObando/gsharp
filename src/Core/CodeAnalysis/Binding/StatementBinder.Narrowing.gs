@@ -1131,26 +1131,7 @@ internal partial class StatementBinder {
     private func ComputeCleanupFallthroughNonNull(
         cleanup BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
-    ) Dictionary[AccessPath, TypeSymbol]? {
-        let state = Dictionary[AccessPath, TypeSymbol]()
-        let aliases = HashSet[VariableSymbol](callableAliases)
-        let statements = if cleanup is BoundBlockStatement block {
-            block.Statements
-        } else {
-            ImmutableArray.Create(cleanup)
-        }
-        for statement in statements {
-            if !ProcessBranchStatement(statement, state, aliases) {
-                return nil
-            }
-            let aliasesAtEntry = aliases.ToArray()
-            let mutations = NewCollector(AssignmentPreservesNarrowing, aliasesAtEntry)
-            mutations.Visit(statement)
-            ApplyMutationsToState(state, mutations)
-            ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations)
-        }
-        return state
-    }
+    ) Dictionary[AccessPath, TypeSymbol]? -> ComputeBranchFallthroughNonNull(cleanup, entry: nil, callableAliases)
 
     private func ApplyMutationsToState(state Dictionary[AccessPath, TypeSymbol], mutations AssignedRootsCollector) {
         for entry in state.ToArray() {
@@ -1406,7 +1387,11 @@ internal partial class StatementBinder {
     /// fresh join narrowing supersedes the clearing pass; a later statement that
     /// reassigns the local to a nullable value re-nullable-izes it through its
     /// own invalidation pass.
-    private func ApplyIfJoinNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
+    private func ApplyIfJoinNarrowings(
+        statement BoundStatement?,
+        persistentFrame NarrowingFrame,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
         // Issues #4285 and #4290: arbitrary user jumps invalidate the
         // dominance assumptions behind branch-exit narrowing.
         if binderCtx.FunctionContainsUserGotoOrLabel {
@@ -1425,7 +1410,7 @@ internal partial class StatementBinder {
         if ifStmt.ElseStatement != nil && EndsInUnconditionalExit(ifStmt.ElseStatement) {
             return
         }
-        let joined Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(ifStmt, entry: nil)
+        let joined Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(ifStmt, entry: nil, callableAliases)
         if joined == nil || joined.Count == 0 {
             return
         }
@@ -1457,21 +1442,48 @@ internal partial class StatementBinder {
     private func ComputeIfJoinNonNull(
         ifStmt BoundIfStatement,
         entry Dictionary[AccessPath, TypeSymbol]?,
-        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil,
+        updatedAliases HashSet[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
-        let (thenNarrow, elseNarrow) = ComputeConditionNarrowing(ifStmt.Condition)
+        var conditionEntry Dictionary[AccessPath, TypeSymbol]? = nil
+        if entry != nil && entry.Count > 0 {
+            conditionEntry = Dictionary[AccessPath, TypeSymbol](entry)
+            ClearAssignedRoots(ifStmt.Condition, conditionEntry, callableAliases)
+        }
+        let initialAliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        let (thenNarrow, elseNarrow, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
+            ifStmt.Condition,
+            initialAliases
+        )
+        let thenAliases = HashSet[VariableSymbol](trueAliases)
         let thenState Dictionary[AccessPath, TypeSymbol]? = ComputeBranchFallthroughNonNull(
             ifStmt.ThenStatement,
-            MergeLocalNonNull(entry, thenNarrow),
-            callableAliases
+            MergeLocalNonNull(conditionEntry, thenNarrow),
+            thenAliases
         )
+        let elseAliases = HashSet[VariableSymbol](falseAliases)
         let elseState Dictionary[AccessPath, TypeSymbol]? = if ifStmt.ElseStatement == nil {
-            MergeLocalNonNull(entry, elseNarrow)
+            MergeLocalNonNull(conditionEntry, elseNarrow)
         } else {
-            ComputeBranchFallthroughNonNull(ifStmt.ElseStatement, MergeLocalNonNull(entry, elseNarrow), callableAliases)
+            ComputeBranchFallthroughNonNull(
+                ifStmt.ElseStatement,
+                MergeLocalNonNull(conditionEntry, elseNarrow),
+                elseAliases
+            )
         }
         if thenState == nil && elseState == nil {
             return nil
+        }
+        if updatedAliases != nil {
+            updatedAliases.Clear()
+            if thenState == nil {
+                updatedAliases.UnionWith(elseAliases)
+            } else if elseState == nil {
+                updatedAliases.UnionWith(thenAliases)
+            } else {
+                updatedAliases.UnionWith(thenAliases)
+                updatedAliases.IntersectWith(elseAliases)
+            }
         }
         // When one branch exits, the join is reached only through the other, so
         // that branch's non-null set holds unconditionally at the join.
@@ -1494,7 +1506,12 @@ internal partial class StatementBinder {
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
         let state = entry ?? Dictionary[AccessPath, TypeSymbol]()
-        return if ProcessBranchStatement(branch, state, callableAliases) {
+        let aliases = if callableAliases is HashSet[VariableSymbol]mutableAliases {
+            mutableAliases
+        } else {
+            HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        }
+        return if ProcessBranchStatement(branch, state, aliases) {
             state
         } else {
             default(Dictionary[AccessPath, TypeSymbol]?)
@@ -1508,7 +1525,7 @@ internal partial class StatementBinder {
     private func ProcessBranchStatement(
         stmt BoundStatement,
         state Dictionary[AccessPath, TypeSymbol],
-        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+        aliases HashSet[VariableSymbol]
     ) bool {
         switch stmt {
             case BoundReturnStatement, BoundThrowStatement, BoundRethrowStatement, BoundGotoStatement {
@@ -1516,7 +1533,7 @@ internal partial class StatementBinder {
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
                 // The right-hand side can write other roots, aliases included.
-                ClearAssignedRoots(assign, state, callableAliases)
+                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
                     RemoveSharingStorage(
                         state,
@@ -1554,7 +1571,8 @@ internal partial class StatementBinder {
                     let nestedResult Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(
                         nested,
                         Dictionary[AccessPath, TypeSymbol](state),
-                        callableAliases
+                        aliases,
+                        aliases
                     )
                     if nestedResult == nil {
                         return false
@@ -1570,11 +1588,11 @@ internal partial class StatementBinder {
                 if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
                     // Internal jumps do not exit the branch. Without a CFG,
                     // retain only entry facts untouched by the whole block.
-                    ClearAssignedRoots(inner, state, callableAliases)
+                    ClearAssignedRootsAndUpdateAliases(inner, state, aliases)
                     return true
                 }
                 for s in inner.Statements {
-                    if !ProcessBranchStatement(s, state, callableAliases) {
+                    if !ProcessBranchStatement(s, state, aliases) {
                         return false
                     }
                 }
@@ -1584,36 +1602,31 @@ internal partial class StatementBinder {
                 if EndsInUnconditionalExit(tryStatement) {
                     return false
                 }
-                ClearAssignedRoots(tryStatement, state, callableAliases)
-                if tryStatement.FinallyBlock == nil {
+                if tryStatement.FinallyBlock is not{} finallyBlock {
+                    ClearAssignedRootsAndUpdateAliases(tryStatement, state, aliases)
                     return true
                 }
-                let finallyState Dictionary[AccessPath, TypeSymbol]? = if ContainsUserGotoOrLabel(
-                    tryStatement.FinallyBlock.Syntax
-                ) {
-                    (
-                        if EndsInUnconditionalExit(tryStatement.FinallyBlock) {
-                            default(Dictionary[AccessPath, TypeSymbol]?)
-                        } else {
-                            Dictionary[AccessPath, TypeSymbol]()
-                        }
-                    )
-                } else {
-                    ComputeBranchFallthroughNonNull(tryStatement.FinallyBlock, entry: nil, callableAliases)
+                let withoutFinally = BoundTryStatement(
+                    tryStatement.Syntax,
+                    tryStatement.TryBlock,
+                    tryStatement.CatchClauses,
+                    finallyBlock: nil
+                )
+                ClearAssignedRootsAndUpdateAliases(withoutFinally, state, aliases)
+                if ContainsUserGotoOrLabel(finallyBlock.Syntax) {
+                    if EndsInUnconditionalExit(finallyBlock) {
+                        return false
+                    }
+                    ClearAssignedRootsAndUpdateAliases(finallyBlock, state, aliases)
+                    return true
                 }
-                if finallyState == nil {
-                    return false
-                }
-                for entry in finallyState {
-                    state[entry.Key] = entry.Value
-                }
-                return true
+                return ProcessBranchStatement(finallyBlock, state, aliases)
             }
             default {
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local
                 // the statement's subtree assigns anywhere.
-                ClearAssignedRoots(stmt, state, callableAliases)
+                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 return true
             }
         }
@@ -1624,20 +1637,78 @@ internal partial class StatementBinder {
     /// (cref:BindIfStatement) performs (nil guard, `[NotNullWhen]`
     /// bool call, and type-test), so the join analysis sees the same seeds the
     /// branches were bound under.
-    private func ComputeConditionNarrowing(condition BoundExpression)(
+    private func ComputeConditionNarrowing(
+        condition BoundExpression,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+        let aliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        let (thenNarrow, elseNarrow, _, _) = ComputeConditionNarrowingInOrder(condition, aliases)
+        return (thenNarrow, elseNarrow)
+    }
+
+    private func ComputeConditionNarrowingInOrder(condition BoundExpression, beforeAliases HashSet[VariableSymbol])(
         Then Dictionary[AccessPath, TypeSymbol]?,
-        Else Dictionary[AccessPath, TypeSymbol]?
+        Else Dictionary[AccessPath, TypeSymbol]?,
+        WhenTrueAliases HashSet[VariableSymbol],
+        WhenFalseAliases HashSet[VariableSymbol]
     ) {
-        var thenNarrow Dictionary[AccessPath, TypeSymbol]?
-        var elseNarrow Dictionary[AccessPath, TypeSymbol]?
-        thenNarrow, elseNarrow = TryClassifyNilGuard(condition)
+        switch condition {
+            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                let (inThen, inElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
+                    unary.Operand,
+                    beforeAliases
+                )
+                return (inElse, inThen, falseAliases, trueAliases)
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                var (leftThen, _, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
+                    bin.Left,
+                    beforeAliases
+                )
+                if leftThen != nil && leftThen.Count > 0 {
+                    leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
+                    ClearAssignedRoots(bin.Right, leftThen, leftTrueAliases)
+                    if leftThen.Count == 0 {
+                        leftThen = nil
+                    }
+                }
+                let (rightThen, _, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
+                    bin.Right,
+                    leftTrueAliases
+                )
+                let combinedThen = MergeNarrowingFrames(leftThen, rightThen)
+                return (combinedThen, nil, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                var (leftThen, leftElse, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
+                    bin.Left,
+                    beforeAliases
+                )
+                if leftElse != nil && leftElse.Count > 0 {
+                    leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
+                    ClearAssignedRoots(bin.Right, leftElse, leftFalseAliases)
+                    if leftElse.Count == 0 {
+                        leftElse = nil
+                    }
+                }
+                let (rightThen, rightElse, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
+                    bin.Right,
+                    leftFalseAliases
+                )
+                let combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
+                let combinedElse = MergeNarrowingFrames(leftElse, rightElse)
+                return (combinedThen, combinedElse, JoinAliases(leftTrueAliases, rightTrueAliases), rightFalseAliases)
+            }
+        }
+        var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition)
         if thenNarrow == nil && elseNarrow == nil {
             thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
         }
-        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition)
+        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts: nil, beforeAliases)
         thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
-        return (thenNarrow, elseNarrow)
+        let afterAliases = AliasesAfter(condition, beforeAliases)
+        return (thenNarrow, elseNarrow, afterAliases, afterAliases)
     }
 
     // An unknown callable can reach a member path, a global or an implicit
@@ -2012,6 +2083,18 @@ internal partial class StatementBinder {
         () -> ComputeClosureAssignedNames(anchor)
     )
 
+    private func ClearAssignedRootsAndUpdateAliases(
+        statement BoundStatement,
+        state Dictionary[AccessPath, TypeSymbol],
+        aliases HashSet[VariableSymbol]
+    ) {
+        let aliasesAtEntry = aliases.ToArray()
+        let collector = NewCollector(nil, aliasesAtEntry)
+        collector.Visit(statement)
+        ClearAssignedRoots(statement, state, collector)
+        ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, collector)
+    }
+
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// [`node`](paramref)'s bound subtree assigns anywhere.
     private func ClearAssignedRoots(
@@ -2024,6 +2107,17 @@ internal partial class StatementBinder {
         }
         let collector = NewCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)
+        ClearAssignedRoots(node, state, collector)
+    }
+
+    private func ClearAssignedRoots(
+        node BoundNode,
+        state Dictionary[AccessPath, TypeSymbol],
+        collector AssignedRootsCollector
+    ) {
+        if state.Count == 0 {
+            return
+        }
         if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
             let filters = CollectCatchFiltersAbove(syntax)
             if filters.Count > 0 {
@@ -2036,30 +2130,9 @@ internal partial class StatementBinder {
                 }
             }
         }
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            for path in state.Keys.Where((path AccessPath) -> MayBeMutatedByUnknownWrite(collector, path)).ToArray() {
-                state.Remove(path)
-            }
-        }
-        if collector.MayMutateGlobalRoots {
-            for path in state
-                .Keys
-                .Where((path AccessPath) -> path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly)
-                .ToArray() {
-                state.Remove(path)
-            }
-        }
+        ApplyMutationsToState(state, collector)
         for root in collector.Roots {
             RemoveByRoot(state, root)
-        }
-        for path in state
-            .Keys
-            .Where(
-            (path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root) ||
-                DropsOnMemberMutation(path, collector)
-        )
-            .ToArray() {
-            state.Remove(path)
         }
     }
 
@@ -2132,17 +2205,15 @@ internal partial class StatementBinder {
             VariableSymbol,
             BoundExpression
         ]()
-        private let functionLiterals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]] = Dictionary[
-            VariableSymbol,
-            HashSet[BoundFunctionLiteralExpression]
-        ]()
-        private let unknownFunctionValues HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-        private let externalFunctionValues HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+        private let normalCallableState CallableAliasState = CallableAliasState()
+        private let allEntryCallableState CallableAliasState = CallableAliasState()
         private let visitedFunctionLiterals HashSet[BoundFunctionLiteralExpression] = HashSet[
             BoundFunctionLiteralExpression
         ]()
         private let pendingConditionalTargets HashSet[BoundLabel] = HashSet[BoundLabel]()
         private let visitedLabels HashSet[BoundLabel] = HashSet[BoundLabel]()
+        private let declaredRegionLabels List[BoundLabel] = List[BoundLabel]()
+        private let jumpedRegionLabels List[BoundLabel] = List[BoundLabel]()
         private let callableInvocationCountsAtLabel Dictionary[BoundLabel, int32] = Dictionary[BoundLabel, int32]()
         private let callableInvocations List[VariableSymbol] = List[VariableSymbol]()
         private let enclosingGlobalAssignments Stack[VariableSymbol] = Stack[VariableSymbol]()
@@ -2164,7 +2235,8 @@ internal partial class StatementBinder {
             WritableReferenceRoots = HashSet[VariableSymbol]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
             if externalFunctionValues != nil {
-                this.externalFunctionValues.UnionWith(externalFunctionValues)
+                this.normalCallableState.External.UnionWith(externalFunctionValues)
+                this.allEntryCallableState.External.UnionWith(externalFunctionValues)
             }
         }
 
@@ -2229,10 +2301,10 @@ internal partial class StatementBinder {
         // A variable with a known local target on any branch is a mixed alias;
         // the exported alias set forgets local bodies, so treat it as unknown
         // rather than external-only (fail-safe).
-        prop DefinitelyExternalFunctionValues IEnumerable[VariableSymbol] -> externalFunctionValues.Except(
-            unknownFunctionValues
-        )
-            .Where((variable VariableSymbol) -> !functionLiterals.ContainsKey(variable))
+        prop DefinitelyExternalFunctionValues IEnumerable[VariableSymbol] -> normalCallableState
+            .External
+            .Except(normalCallableState.Unknown)
+            .Where((variable VariableSymbol) -> !normalCallableState.Literals.ContainsKey(variable))
 
         protected open override func VisitIndirectAssignmentExpression(node BoundIndirectAssignmentExpression) {
             var pointer = node.Pointer
@@ -2257,11 +2329,19 @@ internal partial class StatementBinder {
         }
 
         open override func VisitStatement(node BoundStatement?) {
+            if node is BoundLoopStatement loop {
+                declaredRegionLabels.Add(loop.BreakLabel)
+                if loop.ContinueLabel is {} continueLabel {
+                    declaredRegionLabels.Add(continueLabel)
+                }
+            }
             if node is BoundLabelStatement label {
+                declaredRegionLabels.Add(label.Label)
                 visitedLabels.Add(label.Label)
                 pendingConditionalTargets.Remove(label.Label)
                 callableInvocationCountsAtLabel[label.Label] = callableInvocations.Count
             } else if node is BoundGotoStatement gotoStatement {
+                jumpedRegionLabels.Add(gotoStatement.Label)
                 if !visitedLabels.Contains(gotoStatement.Label) {
                     pendingConditionalTargets.Add(gotoStatement.Label)
                 } else if callableInvocationCountsAtLabel.TryGetValue(gotoStatement.Label, out var invocationStart) {
@@ -2709,17 +2789,25 @@ internal partial class StatementBinder {
                 if !IsCallableType(argument.Type) {
                     continue
                 }
-                let hasKnownTargets = TryGetFunctionLiterals(argument, out var literals)
-                if literals != nil {
-                    for literal in literals {
-                        VisitFunctionLiteralBody(literal)
-                    }
-                }
-                let isExternal = IsExternalCallable(argument)
+                let hasNormalTargets = normalCallableState.TryGetFunctionLiterals(argument, out var normalLiterals)
+                let normalTargetArray = normalLiterals?.ToArray()
+                let isNormalExternal = normalCallableState.IsExternalCallable(argument)
+                let isNormalUnknown = normalCallableState.IsUnknownCallable(argument) ||
+                    (!hasNormalTargets && !isNormalExternal)
+                let hasAllTargets = allEntryCallableState.TryGetFunctionLiterals(argument, out var allLiterals)
+                let allTargetArray = allLiterals?.ToArray()
+                let isExternal = allEntryCallableState.IsExternalCallable(argument)
+                let isUnknown = allEntryCallableState.IsUnknownCallable(argument) || (!hasAllTargets && !isExternal)
+                VisitCallableTargets(
+                    normalTargetArray,
+                    isNormalExternal || isNormalUnknown,
+                    allTargetArray,
+                    isExternal || isUnknown
+                )
                 if isExternal {
                     MarkMayMutateGlobalRoots(runsSourceCode: false)
                 }
-                if IsUnknownCallable(argument) || (!hasKnownTargets && !isExternal) {
+                if isUnknown {
                     MayMutateAnyRoot = true
                 }
             }
@@ -2729,21 +2817,8 @@ internal partial class StatementBinder {
             if node.Initializer != nil && TryGetWritableReferenceOperand(node.Initializer, out var operand) {
                 writableReferenceAliases[node.Variable] = operand!!
             }
-            let externalCallable = node.Initializer != nil && IsExternalCallable(node.Initializer)
-            if node.Initializer != nil && TryGetFunctionLiterals(node.Initializer, out var literals) {
-                functionLiterals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
-                if UnwrapCallable(node.Initializer!!) is BoundVariableExpression source &&
-                    unknownFunctionValues.Contains(source.Variable) {
-                    unknownFunctionValues.Add(node.Variable)
-                }
-                if externalCallable {
-                    externalFunctionValues.Add(node.Variable)
-                }
-            } else if externalCallable {
-                externalFunctionValues.Add(node.Variable)
-            } else if node.Initializer != nil {
-                unknownFunctionValues.Add(node.Variable)
-            }
+            normalCallableState.ApplyVariableDeclaration(node)
+            allEntryCallableState.ApplyVariableDeclaration(node)
             base.VisitVariableDeclaration(node)
         }
 
@@ -2755,11 +2830,7 @@ internal partial class StatementBinder {
             RestoreCallableState(branchStart)
             VisitStatement(node.ElseStatement)
             let elseState = CaptureCallableState()
-            var joined(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            )? = nil
+            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
             if !StatementBinder.EndsInUnconditionalExit(node.ThenStatement, gotoExits: false) {
                 joined = JoinCallableStates(joined, thenState)
             }
@@ -2774,6 +2845,7 @@ internal partial class StatementBinder {
 
         protected open override func VisitConditionalGotoStatement(node BoundConditionalGotoStatement) {
             VisitExpression(node.Condition)
+            jumpedRegionLabels.Add(node.Label)
             if !visitedLabels.Contains(node.Label) {
                 pendingConditionalTargets.Add(node.Label)
             }
@@ -2808,11 +2880,7 @@ internal partial class StatementBinder {
         protected open override func VisitPatternSwitchStatement(node BoundPatternSwitchStatement) {
             VisitExpression(node.Discriminant)
             let branchStart = CaptureCallableState()
-            var joined(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            )? = if node.IsExhaustive {
+            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = if node.IsExhaustive {
                 nil
             } else {
                 CloneCallableState(branchStart)
@@ -2834,11 +2902,7 @@ internal partial class StatementBinder {
             let branchStart = CaptureCallableState()
             var dispatchState = CloneCallableState(branchStart)
             var canMiss = true
-            var joined(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            )? = nil
+            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
             for arm in node.GetDispatchArms() {
                 RestoreCallableState(dispatchState)
                 VisitPattern(arm.Pattern)
@@ -2876,12 +2940,17 @@ internal partial class StatementBinder {
             tryAssignedVariables = outerTryAssignments
             outerTryAssignments?.UnionWith(assignedInTry)
             let tryState = CaptureCallableState()
-            var exceptionalState = CloneCallableState(branchStart)
+            let exceptionalNormal = branchStart.Normal.Clone()
+            let exceptionalAllEntry = branchStart.AllEntry.Clone()
             for variable in assignedInTry {
-                exceptionalState.Literals.Remove(variable)
-                exceptionalState.External.Remove(variable)
-                exceptionalState.Unknown.Add(variable)
+                exceptionalNormal.Literals.Remove(variable)
+                exceptionalNormal.External.Remove(variable)
+                exceptionalNormal.Unknown.Add(variable)
+                exceptionalAllEntry.Literals.Remove(variable)
+                exceptionalAllEntry.External.Remove(variable)
+                exceptionalAllEntry.Unknown.Add(variable)
             }
+            var exceptionalState = (Normal: exceptionalNormal, AllEntry: exceptionalAllEntry)
             // ADR-0208 R10 (#5168): a replacement exception reaches a clause after the filters of
             // all clauses ran, so every handler starts from the state with their effects.
             for clause in node.CatchClauses {
@@ -2891,44 +2960,71 @@ internal partial class StatementBinder {
                     exceptionalState = JoinCallableStates(exceptionalState, CaptureCallableState())
                 }
             }
-            var finallyEntries = JoinCallableStates(CloneCallableState(tryState), exceptionalState)
-            var joined(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            )? = if StatementBinder.EndsInUnconditionalExit(node.TryBlock, gotoExits: false) {
+            var finallyEntries = CallableAliasState.Join(tryState.AllEntry.Clone(), exceptionalState.AllEntry)
+            var joinedNormal CallableAliasState? = if StatementBinder.EndsInUnconditionalExit(
+                node.TryBlock,
+                gotoExits: false
+            ) {
                 nil
             } else {
-                tryState
+                tryState.Normal
+            }
+            var joinedAllEntry CallableAliasState? = if StatementBinder.EndsInUnconditionalExit(
+                node.TryBlock,
+                gotoExits: false
+            ) {
+                nil
+            } else {
+                tryState.AllEntry
             }
             for clause in node.CatchClauses {
                 RestoreCallableState(exceptionalState)
                 VisitExpression(clause.Filter)
                 VisitStatement(clause.Body)
                 let catchState = CaptureCallableState()
-                finallyEntries = JoinCallableStates(finallyEntries, catchState)
+                finallyEntries = CallableAliasState.Join(finallyEntries, catchState.AllEntry)
                 if !StatementBinder.EndsInUnconditionalExit(clause.Body, gotoExits: false) {
-                    joined = JoinCallableStates(joined, catchState)
+                    joinedNormal = CallableAliasState.Join(joinedNormal, catchState.Normal)
+                    joinedAllEntry = CallableAliasState.Join(joinedAllEntry, catchState.AllEntry)
                 }
             }
             if node.FinallyBlock != nil {
-                RestoreCallableState(finallyEntries)
+                let declaredStart = declaredRegionLabels.Count
+                let jumpedStart = jumpedRegionLabels.Count
+                normalCallableState.RestoreFrom(joinedNormal ?? finallyEntries)
+                allEntryCallableState.RestoreFrom(finallyEntries)
                 VisitStatement(node.FinallyBlock)
+                if joinedNormal == nil || StatementBinder.EndsInUnconditionalExit(
+                    node.FinallyBlock,
+                    gotoExits: false
+                ) ||
+                    HasEscapingRegionJump(declaredStart, jumpedStart) {
+                    normalCallableState.RestoreFrom(allEntryCallableState)
+                }
             } else {
-                RestoreCallableState(joined ?? branchStart)
+                normalCallableState.RestoreFrom(joinedNormal ?? finallyEntries)
+                allEntryCallableState.RestoreFrom(joinedAllEntry ?? finallyEntries)
             }
         }
 
-        // An assignment reached only on some paths (pendingConditionalTargets
-        // is non-empty: a conditional goto to a later label is still pending) leaves the other paths with whatever
-        // the variable held before. Only a variable already known external
-        // stays external; anything else becomes unknown (fail-safe).
-        private func MarkExternalAssignment(variable VariableSymbol) {
-            if pendingConditionalTargets.Count > 0 && !externalFunctionValues.Contains(variable) {
-                unknownFunctionValues.Add(variable)
-                return
+        private func HasEscapingRegionJump(declaredStart int32, jumpedStart int32) bool {
+            if jumpedRegionLabels.Count <= jumpedStart {
+                return false
             }
-            externalFunctionValues.Add(variable)
+            for var i = jumpedStart; i < jumpedRegionLabels.Count; i++ {
+                let target = jumpedRegionLabels[i]
+                var isLocal = false
+                for var j = declaredStart; j < declaredRegionLabels.Count; j++ {
+                    if declaredRegionLabels[j] == target {
+                        isLocal = true
+                        break
+                    }
+                }
+                if !isLocal {
+                    return true
+                }
+            }
+            return false
         }
 
         private func VisitPossiblySkippedBody(body BoundStatement) {
@@ -2947,65 +3043,20 @@ internal partial class StatementBinder {
             }
         }
 
-        private func CaptureCallableState()(
-            Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-            Unknown HashSet[VariableSymbol],
-            External HashSet[VariableSymbol]
-        ) -> (
-            functionLiterals.ToDictionary(
-                (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> entry.Key,
-                (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> HashSet[
-                    BoundFunctionLiteralExpression
-                ](entry.Value)
-            ),
-            HashSet[VariableSymbol](unknownFunctionValues),
-            HashSet[VariableSymbol](externalFunctionValues)
+        private func CaptureCallableState()(Normal CallableAliasState, AllEntry CallableAliasState) -> (
+            normalCallableState.Clone(),
+            allEntryCallableState.Clone()
         )
 
-        private func RestoreCallableState(
-            state(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            )
-        ) {
-            functionLiterals.Clear()
-            unknownFunctionValues.Clear()
-            externalFunctionValues.Clear()
-            MergeCallableState(state)
+        private func RestoreCallableState(state(Normal CallableAliasState, AllEntry CallableAliasState)) {
+            normalCallableState.RestoreFrom(state.Normal)
+            allEntryCallableState.RestoreFrom(state.AllEntry)
         }
 
-        private func MergeCallableState(
-            state(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            )
-        ) {
-            for entry in state.Literals {
-                if !functionLiterals.TryGetValue(entry.Key, out var literals) {
-                    literals = HashSet[BoundFunctionLiteralExpression]()
-                    functionLiterals.Add(entry.Key, literals)
-                }
-                literals.UnionWith(entry.Value)
-            }
-            unknownFunctionValues.UnionWith(state.Unknown)
-            externalFunctionValues.UnionWith(state.External)
+        private func MergeCallableState(state(Normal CallableAliasState, AllEntry CallableAliasState)) {
+            normalCallableState.MergeFrom(state.Normal)
+            allEntryCallableState.MergeFrom(state.AllEntry)
         }
-
-        private func IsExternalCallable(expression BoundExpression) bool {
-            return UnwrapCallable(expression) is BoundVariableExpression variable &&
-                (
-                (variable.Variable is ParameterSymbol and {IsReadOnly: true}) || externalFunctionValues.Contains(
-                    variable.Variable
-                )
-            )
-        }
-
-        private func IsUnknownCallable(expression BoundExpression) bool -> UnwrapCallable(
-            expression
-        ) is BoundVariableExpression variable &&
-            unknownFunctionValues.Contains(variable.Variable)
 
         private func AnalyzeCallableInvocation(expression BoundExpression) {
             let callable = UnwrapCallable(expression)
@@ -3022,25 +3073,100 @@ internal partial class StatementBinder {
         }
 
         private func AnalyzeCallableVariable(variable VariableSymbol) {
-            if functionLiterals.TryGetValue(variable, out var literals) {
-                for literal in literals {
-                    VisitFunctionLiteralBody(literal)
-                }
-            }
+            let isReadonlyCallableParameter = variable is ParameterSymbol && variable.IsReadOnly == true
+            normalCallableState.Literals.TryGetValue(variable, out var normalLiterals)
+            let normalTargetArray = normalLiterals?.ToArray()
+            let isNormalExternal = isReadonlyCallableParameter || normalCallableState.External.Contains(variable)
+            let isNormalUnknown = normalCallableState.Unknown.Contains(variable) ||
+                (!isNormalExternal && normalLiterals == nil)
+            allEntryCallableState.Literals.TryGetValue(variable, out var allLiterals)
+            let allTargetArray = allLiterals?.ToArray()
+            let isExternal = isReadonlyCallableParameter || allEntryCallableState.External.Contains(variable)
+            let isUnknown = allEntryCallableState.Unknown.Contains(variable) || (!isExternal && allLiterals == nil)
+            VisitCallableTargets(
+                normalTargetArray,
+                isNormalExternal || isNormalUnknown,
+                allTargetArray,
+                isExternal || isUnknown
+            )
             // A read-only callable parameter originates outside this function
             // and cannot capture this function's local slots.
-            MayMutateAnyRoot |= unknownFunctionValues.Contains(variable) ||
-                (
-                !(variable is ParameterSymbol && variable.IsReadOnly == true) && !externalFunctionValues.Contains(
-                    variable
-                ) &&
-                    !functionLiterals.ContainsKey(variable)
-            )
-            if variable is ParameterSymbol && variable.IsReadOnly == true || externalFunctionValues.Contains(variable) {
+            MayMutateAnyRoot |= isUnknown
+            if isExternal {
                 MarkMayMutateGlobalRoots(runsSourceCode: false)
                 MayMutateWritableReferenceRoots = true
                 MayMutateReferenceStorage = true
             }
+        }
+
+        private func VisitCallableTargets(
+            normalTargets[]?BoundFunctionLiteralExpression,
+            normalKeepsEntry bool,
+            allTargets[]?BoundFunctionLiteralExpression,
+            allKeepsEntry bool
+        ) {
+            if (normalTargets == nil || normalTargets.Length == 0) && (allTargets == nil || allTargets.Length == 0) {
+                return
+            }
+            let entryState = CaptureCallableState()
+            let normalSet = if normalTargets == nil {
+                default(HashSet[BoundFunctionLiteralExpression]?)
+            } else {
+                HashSet[BoundFunctionLiteralExpression](normalTargets)
+            }
+            let allSet = if allTargets == nil {
+                default(HashSet[BoundFunctionLiteralExpression]?)
+            } else {
+                HashSet[BoundFunctionLiteralExpression](allTargets)
+            }
+            let combined = List[BoundFunctionLiteralExpression]()
+            let seen = HashSet[BoundFunctionLiteralExpression]()
+            if normalTargets != nil {
+                for literal in normalTargets {
+                    if seen.Add(literal) {
+                        combined.Add(literal)
+                    }
+                }
+            }
+            if allTargets != nil {
+                for literal in allTargets {
+                    if seen.Add(literal) {
+                        combined.Add(literal)
+                    }
+                }
+            }
+            var joinedNormal CallableAliasState? = if normalKeepsEntry {
+                entryState.Normal.Clone()
+            } else {
+                default(CallableAliasState?)
+            }
+            var joinedAllEntry CallableAliasState? = if allKeepsEntry {
+                entryState.AllEntry.Clone()
+            } else {
+                default(CallableAliasState?)
+            }
+            for literal in combined {
+                if literal.Body == nil || visitedFunctionLiterals.Contains(literal) {
+                    if normalSet != nil && normalSet.Contains(literal) {
+                        joinedNormal = CallableAliasState.Join(joinedNormal, entryState.Normal)
+                    }
+                    if allSet != nil && allSet.Contains(literal) {
+                        joinedAllEntry = CallableAliasState.Join(joinedAllEntry, entryState.AllEntry)
+                    }
+                    continue
+                }
+                RestoreCallableState(CloneCallableState(entryState))
+                VisitFunctionLiteralBody(literal)
+                let exitState = CaptureCallableState()
+                if normalSet != nil && normalSet.Contains(literal) {
+                    joinedNormal = CallableAliasState.Join(joinedNormal, exitState.Normal)
+                }
+                if allSet != nil && allSet.Contains(literal) {
+                    joinedAllEntry = CallableAliasState.Join(joinedAllEntry, exitState.AllEntry)
+                }
+            }
+            normalCallableState.RestoreFrom(joinedNormal ?? entryState.Normal)
+            allEntryCallableState.RestoreFrom(joinedAllEntry ?? entryState.AllEntry)
         }
 
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
@@ -3095,93 +3221,31 @@ internal partial class StatementBinder {
         func MayRunEscapedClosureOn(root VariableSymbol) bool -> MayRunEscapedClosure &&
             (escapedClosureProtectedRoots == nil || !escapedClosureProtectedRoots!!.Contains(root))
 
-        private func TryGetFunctionLiterals(
-            expression BoundExpression,
-            @System
-                .Diagnostics
-                .CodeAnalysis
-                .NotNullWhen(true) out literals IReadOnlyCollection[BoundFunctionLiteralExpression]?
-        ) bool {
-            let callable = UnwrapCallable(expression)
-            if callable is BoundFunctionLiteralExpression direct {
-                literals = []BoundFunctionLiteralExpression{direct}
-                return true
-            }
-            if callable is BoundVariableExpression variable && functionLiterals.TryGetValue(
-                variable.Variable,
-                out var stored
-            ) {
-                literals = stored
-                return true
-            }
-            literals = nil
-            return false
-        }
-
         private func VisitFunctionLiteralBody(literal BoundFunctionLiteralExpression) {
             if literal.Body is not{} body || !visitedFunctionLiterals.Add(literal) {
                 return
             }
+            let declaredBefore = declaredRegionLabels.Count
+            let jumpedBefore = jumpedRegionLabels.Count
             try {
                 VisitStatement(body)
             } finally {
+                if declaredRegionLabels.Count > declaredBefore {
+                    declaredRegionLabels.RemoveRange(declaredBefore, declaredRegionLabels.Count - declaredBefore)
+                }
+                if jumpedRegionLabels.Count > jumpedBefore {
+                    jumpedRegionLabels.RemoveRange(jumpedBefore, jumpedRegionLabels.Count - jumpedBefore)
+                }
                 visitedFunctionLiterals.Remove(literal)
             }
         }
 
         protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             if node.Variable != nil {
-                // ADR-0208 R12 (#5171): a callable stored through a `ref` alias is stored in every
-                // variable that shares its storage, and the callee is unknown.
-                if mayShareStorage != nil {
-                    for other in functionLiterals
-                        .Keys
-                        .Concat(externalFunctionValues)
-                        .Concat(unknownFunctionValues)
-                        .ToArray() {
-                        if !object.ReferenceEquals(other, node.Variable) && mayShareStorage!!(node.Variable, other) {
-                            functionLiterals.Remove(other)
-                            externalFunctionValues.Remove(other)
-                            unknownFunctionValues.Add(other)
-                        }
-                    }
-                }
                 writableReferenceAliases.Remove(node.Variable)
                 tryAssignedVariables?.Add(node.Variable)
-                let externalCallable = IsExternalCallable(node.Expression)
-                if TryGetFunctionLiterals(node.Expression, out var literals) {
-                    if pendingConditionalTargets.Count > 0 && functionLiterals.TryGetValue(
-                        node.Variable,
-                        out var existing
-                    ) {
-                        existing.UnionWith(literals!!)
-                    } else {
-                        functionLiterals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
-                    }
-                    if UnwrapCallable(node.Expression) is BoundVariableExpression source &&
-                        unknownFunctionValues.Contains(source.Variable) {
-                        unknownFunctionValues.Add(node.Variable)
-                    } else if pendingConditionalTargets.Count == 0 {
-                        unknownFunctionValues.Remove(node.Variable)
-                    }
-                    if externalCallable {
-                        MarkExternalAssignment(node.Variable)
-                    } else if pendingConditionalTargets.Count == 0 {
-                        externalFunctionValues.Remove(node.Variable)
-                    }
-                } else if externalCallable {
-                    if pendingConditionalTargets.Count == 0 {
-                        functionLiterals.Remove(node.Variable)
-                        unknownFunctionValues.Remove(node.Variable)
-                    }
-                    MarkExternalAssignment(node.Variable)
-                } else {
-                    if pendingConditionalTargets.Count == 0 {
-                        functionLiterals.Remove(node.Variable)
-                        externalFunctionValues.Remove(node.Variable)
-                    }
-                    unknownFunctionValues.Add(node.Variable)
-                }
+                normalCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
+                allEntryCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
                 Roots.Add(node.Variable)
                 if !assignments.TryGetValue(node.Variable, out var rootAssignments) {
                     rootAssignments = List[BoundAssignmentExpression]()
@@ -3280,6 +3344,210 @@ internal partial class StatementBinder {
             AssignedProperty
         ] { }
 
+        private sealed class CallableAliasState {
+            let Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]] = Dictionary[
+                VariableSymbol,
+                HashSet[BoundFunctionLiteralExpression]
+            ]()
+            let Unknown HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+            let External HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+
+            func Clone() CallableAliasState {
+                let copy = CallableAliasState()
+                copy.MergeFrom(this)
+                return copy
+            }
+
+            func RestoreFrom(other CallableAliasState) {
+                Literals.Clear()
+                Unknown.Clear()
+                External.Clear()
+                MergeFrom(other)
+            }
+
+            func MergeFrom(other CallableAliasState) {
+                for entry in other.Literals {
+                    if !Literals.TryGetValue(entry.Key, out var literals) {
+                        literals = HashSet[BoundFunctionLiteralExpression]()
+                        Literals.Add(entry.Key, literals)
+                    }
+                    literals.UnionWith(entry.Value)
+                }
+                Unknown.UnionWith(other.Unknown)
+                External.UnionWith(other.External)
+            }
+
+            func EqualsState(other CallableAliasState) bool {
+                return Unknown.SetEquals(other.Unknown) && External.SetEquals(other.External) &&
+                    Literals.Count == other
+                    .Literals
+                    .Count &&
+                    Literals
+                    .All(
+                    (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> other
+                        .Literals
+                        .TryGetValue(entry.Key, out var literals) && entry.Value.SetEquals(literals)
+                )
+            }
+
+            func IsExternalCallable(expression BoundExpression) bool {
+                return UnwrapCallable(expression) is BoundVariableExpression variable &&
+                    (
+                    (variable.Variable is ParameterSymbol and {IsReadOnly: true}) || External.Contains(
+                        variable.Variable
+                    )
+                )
+            }
+
+            func IsUnknownCallable(expression BoundExpression) bool -> UnwrapCallable(
+                expression
+            ) is BoundVariableExpression variable &&
+                Unknown.Contains(variable.Variable)
+
+            func TryGetFunctionLiterals(
+                expression BoundExpression,
+                @System
+                    .Diagnostics
+                    .CodeAnalysis
+                    .NotNullWhen(true) out literals IReadOnlyCollection[BoundFunctionLiteralExpression]?
+            ) bool {
+                let callable = UnwrapCallable(expression)
+                if callable is BoundFunctionLiteralExpression direct {
+                    literals = []BoundFunctionLiteralExpression{direct}
+                    return true
+                }
+                if callable is BoundVariableExpression variable && Literals.TryGetValue(
+                    variable.Variable,
+                    out var stored
+                ) {
+                    literals = stored
+                    return true
+                }
+                literals = nil
+                return false
+            }
+
+            func ApplyVariableDeclaration(node BoundVariableDeclaration) {
+                if node.Initializer is not{} initializer {
+                    return
+                }
+                let externalCallable = IsExternalCallable(initializer)
+                if TryGetFunctionLiterals(initializer, out var literals) {
+                    Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                    if UnwrapCallable(initializer) is BoundVariableExpression source && Unknown.Contains(
+                        source.Variable
+                    ) {
+                        Unknown.Add(node.Variable)
+                    }
+                    if externalCallable {
+                        External.Add(node.Variable)
+                    }
+                } else if externalCallable {
+                    External.Add(node.Variable)
+                } else {
+                    Unknown.Add(node.Variable)
+                }
+            }
+
+            func ApplyAssignment(
+                node BoundAssignmentExpression,
+                pendingConditionalTargetsCount int32,
+                mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
+            ) {
+                if node.Variable == nil {
+                    return
+                }
+                // ADR-0208 R12 (#5171): a callable stored through a `ref` alias is stored in every
+                // variable that shares its storage, and the callee is unknown.
+                if mayShareStorage != nil {
+                    for other in Literals.Keys.Concat(External).Concat(Unknown).ToArray() {
+                        if !object.ReferenceEquals(other, node.Variable) && mayShareStorage(node.Variable, other) {
+                            Literals.Remove(other)
+                            External.Remove(other)
+                            Unknown.Add(other)
+                        }
+                    }
+                }
+                let externalCallable = IsExternalCallable(node.Expression)
+                if TryGetFunctionLiterals(node.Expression, out var literals) {
+                    if pendingConditionalTargetsCount > 0 && Literals.TryGetValue(node.Variable, out var existing) {
+                        existing.UnionWith(literals!!)
+                    } else {
+                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                    }
+                    if UnwrapCallable(node.Expression) is BoundVariableExpression source && Unknown.Contains(
+                        source.Variable
+                    ) {
+                        Unknown.Add(node.Variable)
+                    } else if pendingConditionalTargetsCount == 0 {
+                        Unknown.Remove(node.Variable)
+                    }
+                    if externalCallable {
+                        MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
+                    } else if pendingConditionalTargetsCount == 0 {
+                        External.Remove(node.Variable)
+                    }
+                } else if externalCallable {
+                    if pendingConditionalTargetsCount == 0 {
+                        Literals.Remove(node.Variable)
+                        Unknown.Remove(node.Variable)
+                    }
+                    MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
+                } else {
+                    if pendingConditionalTargetsCount == 0 {
+                        Literals.Remove(node.Variable)
+                        External.Remove(node.Variable)
+                    }
+                    Unknown.Add(node.Variable)
+                }
+            }
+
+            // An assignment reached only on some paths (pendingConditionalTargetsCount > 0:
+            // a conditional goto to a later label is still pending) leaves the other paths with whatever
+            // the variable held before. Only a variable already known external
+            // stays external; anything else becomes unknown (fail-safe).
+            private func MarkExternalAssignment(variable VariableSymbol, pendingConditionalTargetsCount int32) {
+                if pendingConditionalTargetsCount > 0 && !External.Contains(variable) {
+                    Unknown.Add(variable)
+                    return
+                }
+                External.Add(variable)
+            }
+
+            shared {
+                func Join(left CallableAliasState?, right CallableAliasState) CallableAliasState {
+                    if left == nil {
+                        return right.Clone()
+                    }
+                    let joined = left.Clone()
+                    let variables = joined
+                        .Literals
+                        .Keys
+                        .Concat(joined.Unknown)
+                        .Concat(joined.External)
+                        .Concat(right.Literals.Keys)
+                        .Concat(right.Unknown)
+                        .Concat(right.External)
+                        .ToHashSet()
+                    for variable in variables {
+                        let hasLeft = joined.Literals.ContainsKey(variable) || joined.Unknown.Contains(variable) ||
+                            joined
+                            .External
+                            .Contains(variable)
+                        let hasRight = right.Literals.ContainsKey(variable) || right.Unknown.Contains(variable) ||
+                            right
+                            .External
+                            .Contains(variable)
+                        if !hasLeft || !hasRight {
+                            joined.Unknown.Add(variable)
+                        }
+                    }
+                    joined.MergeFrom(right)
+                    return joined
+                }
+            }
+        }
+
         shared {
             private func TryGetWritableReferenceOperand(
                 expression BoundExpression,
@@ -3297,105 +3565,24 @@ internal partial class StatementBinder {
             }
 
             private func CallableStatesEqual(
-                left(
-                    Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                    Unknown HashSet[VariableSymbol],
-                    External HashSet[VariableSymbol]
-                ),
-                right(
-                    Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                    Unknown HashSet[VariableSymbol],
-                    External HashSet[VariableSymbol]
-                )
-            ) bool {
-                return left.Unknown.SetEquals(right.Unknown) && left.External.SetEquals(right.External) &&
-                    left
-                    .Literals
-                    .Count == right
-                    .Literals
-                    .Count &&
-                    left
-                    .Literals
-                    .All(
-                    (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> right
-                        .Literals
-                        .TryGetValue(entry.Key, out var literals) && entry.Value.SetEquals(literals)
-                )
-            }
+                left(Normal CallableAliasState, AllEntry CallableAliasState),
+                right(Normal CallableAliasState, AllEntry CallableAliasState)
+            ) bool -> left
+                .Normal
+                .EqualsState(right.Normal) && left.AllEntry.EqualsState(right.AllEntry)
 
-            private func CloneCallableState(
-                state(
-                    Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                    Unknown HashSet[VariableSymbol],
-                    External HashSet[VariableSymbol]
-                )
-            )(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            ) -> (
-                state.Literals.ToDictionary(
-                    (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> entry.Key,
-                    (entry KeyValuePair[VariableSymbol, HashSet[BoundFunctionLiteralExpression]]) -> HashSet[
-                        BoundFunctionLiteralExpression
-                    ](entry.Value)
-                ),
-                HashSet[VariableSymbol](state.Unknown),
-                HashSet[VariableSymbol](state.External)
-            )
+            private func CloneCallableState(state(Normal CallableAliasState, AllEntry CallableAliasState))(
+                Normal CallableAliasState,
+                AllEntry CallableAliasState
+            ) -> (state.Normal.Clone(), state.AllEntry.Clone())
 
             private func JoinCallableStates(
-                left(
-                    Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                    Unknown HashSet[VariableSymbol],
-                    External HashSet[VariableSymbol]
-                )?,
-                right(
-                    Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                    Unknown HashSet[VariableSymbol],
-                    External HashSet[VariableSymbol]
-                )
-            )(
-                Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]],
-                Unknown HashSet[VariableSymbol],
-                External HashSet[VariableSymbol]
-            ) {
-                if left == nil {
-                    return right
-                }
-                let variables = left
-                    .Literals
-                    .Keys
-                    .Concat(left.Unknown)
-                    .Concat(left.External)
-                    .Concat(right.Literals.Keys)
-                    .Concat(right.Unknown)
-                    .Concat(right.External)
-                    .ToHashSet()
-                for variable in variables {
-                    let hasLeft = left.Literals.ContainsKey(variable) || left.Unknown.Contains(variable) ||
-                        left
-                        .External
-                        .Contains(variable)
-                    let hasRight = right.Literals.ContainsKey(variable) || right.Unknown.Contains(variable) ||
-                        right
-                        .External
-                        .Contains(variable)
-                    if !hasLeft || !hasRight {
-                        left.Unknown.Add(variable)
-                    }
-                }
-                for entry in right.Literals {
-                    if !left.Literals.TryGetValue(entry.Key, out var literals) {
-                        literals = HashSet[BoundFunctionLiteralExpression]()
-                        left.Literals.Add(entry.Key, literals)
-                    }
-                    literals.UnionWith(entry.Value)
-                }
-                left.Unknown.UnionWith(right.Unknown)
-                left.External.UnionWith(right.External)
-                return left
-            }
+                left(Normal CallableAliasState, AllEntry CallableAliasState)?,
+                right(Normal CallableAliasState, AllEntry CallableAliasState)
+            )(Normal CallableAliasState, AllEntry CallableAliasState) -> (
+                CallableAliasState.Join(left?.Normal, right.Normal),
+                CallableAliasState.Join(left?.AllEntry, right.AllEntry)
+            )
 
             private func IsCallableType(type TypeSymbol?) bool -> (type is FunctionTypeSymbol or DelegateTypeSymbol) ||
                 (type?.ClrType is {} clrType && ClrTypeUtilities.IsDelegateType(clrType))
