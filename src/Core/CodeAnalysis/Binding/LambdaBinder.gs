@@ -3941,12 +3941,12 @@ internal class LambdaBinder {
                         CheckType(cast[TypeSymbol?](property.StructType) ?? property.InterfaceType)
                         RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility)
                     }
-                    case literal is BoundFunctionLiteralExpression when(
-                        literal.Function.LocalDeclaration == nil || !literal.CapturedVariables.IsEmpty
-                    ) &&
-                        !literal
+                    case literal is BoundFunctionLiteralExpression when literal
                         .Function
-                        .IsGeneric {
+                        .LocalDeclaration == nil ||
+                        !literal
+                        .CapturedVariables
+                        .IsEmpty {
                         RequiresLexicalOwner |= literal.Function.LexicalEnclosingType != nil
                     }
                 }

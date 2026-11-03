@@ -1307,6 +1307,7 @@ internal class ReflectionMetadataEmitter {
         this.RetargetIteratorPlans(lambdaLiterals)
         if hostPackageGuess != nil {
             this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess)
+            this.closures.ReconcileClosureTypeParameters(this.userTokens.GetPromotedExtras)
             this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess)
             this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess)
             this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess)

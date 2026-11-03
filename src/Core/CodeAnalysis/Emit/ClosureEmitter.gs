@@ -565,59 +565,15 @@ internal class ClosureEmitter {
         // requiring a valid slot in Invoke. The
         // returned constructed instance carries the original parameters as type
         // arguments for the capture-site `newobj`/field stores/delegate ctor.
-        let enclosingRefSink = List[TypeSymbol]()
-        for captured in capturedVariables {
-            enclosingRefSink.Add(captured.Type)
-        }
-        for parameter in parameters {
-            enclosingRefSink.Add(parameter.Type)
-        }
-        enclosingRefSink.Add(returnType)
-        let bodyTypeParameters = List[TypeParameterSymbol]()
-        LambdaEnclosingTypeParameterCollector.Collect(body, bodyTypeParameters)
-        enclosingRefSink.AddRange(bodyTypeParameters)
-        var origTPs = SynthesizedClosureReifier
-            .CollectOrdered(enclosingRefSink)
-            .Where(
-            (tp TypeParameterSymbol) -> excludedTypeParameters.IsDefaultOrEmpty || !excludedTypeParameters.Contains(tp)
+        let origTPs = CollectDisplayClassTypeParameters(
+            capturedVariables,
+            parameters,
+            returnType,
+            body,
+            requiredTypeParameters,
+            excludedTypeParameters,
+            getPromotedExtras: nil
         )
-            .ToImmutableArray()
-        // Issue #3933: when the display class is about to be nested inside a
-        // GENERIC encloser, re-declare that encloser's type parameters
-        // positionally (ECMA-335 §II.10.3.1, and what csc emits for `<>c`)
-        // rather than trusting discovery.
-        //
-        // Discovery is signature- and body-driven, and for a CAPTURING closure
-        // that is enough — it holds the encloser's parameters in its own capture
-        // fields, so they are always in the scanned set. A CAPTURE-FREE host has
-        // no such guarantee: the lambda may reference only SOME of the
-        // encloser's parameters (inside `Pair[T, U]`, mentioning only `U`) or
-        // none of them in any scanned position. The dangerous case is the last
-        // one — a body that reaches the encloser only through a path the
-        // collector does not walk, e.g. a call to a `private shared` member,
-        // which the emitter renders as `Reg`1<!0>::Bump`. Reified from discovery
-        // alone that host has arity 0, the `!0` has no slot, and the result
-        // ILVERIFIES CLEAN and throws BadImageFormatException at the first call
-        // (measured, not assumed). Seeding the ordered list with the encloser's
-        // own parameters makes the re-declaration total and closes that hole for
-        // every such path at once.
-        //
-        // The seed is a no-op whenever discovery already found exactly the
-        // encloser's parameters — the common case, and the one #3933 reported —
-        // because CollectOrdered emits class parameters ahead of method
-        // parameters by ordinal, which is the same order the seed imposes.
-        if !requiredTypeParameters.IsDefaultOrEmpty {
-            let seeded = ImmutableArray.CreateBuilder[TypeParameterSymbol](
-                requiredTypeParameters.Length + origTPs.Length
-            )
-            seeded.AddRange(requiredTypeParameters)
-            for tp in origTPs {
-                if !requiredTypeParameters.Contains(tp) {
-                    seeded.Add(tp)
-                }
-            }
-            origTPs = seeded.ToImmutable()
-        }
         var constructedClass = closureClass
         if !origTPs.IsDefaultOrEmpty {
             // Issue #2037: project imported constructed-generic capture field
@@ -649,9 +605,132 @@ internal class ClosureEmitter {
         }
         this.lambdaBodies[invokeMethod] = cast[BoundBlockStatement](Lowerer.Lower(rewrittenBody))
         this.SynthesizedClosureClasses.Add(closureClass)
-        let info = ClosureInfo(closureClass, invokeMethod, captureFields, constructedClass)
+        let info = ClosureInfo(
+            closureClass,
+            invokeMethod,
+            captureFields,
+            constructedClass,
+            body,
+            requiredTypeParameters,
+            excludedTypeParameters
+        )
         this.ClosureInvokeToInfo[invokeMethod] = info
         return info
+    }
+
+    internal func ReconcileClosureTypeParameters(
+        getPromotedExtras(FunctionSymbol) -> ImmutableArray[TypeParameterSymbol]
+    ) {
+        let allClosures = List[ClosureInfo](this.ClosureInfos.Count + this.GoClosureInfos.Count)
+        allClosures.AddRange(this.ClosureInfos.Values)
+        allClosures.AddRange(this.GoClosureInfos.Values)
+        if allClosures.Count == 0 {
+            return
+        }
+        let getClosureAndPromotedExtras = (fn FunctionSymbol) -> {
+            let promoted = getPromotedExtras(fn)
+            if !promoted.IsDefaultOrEmpty {
+                return promoted
+            }
+            if this.GenericLocalClosures.TryGetValue(fn, out var genericLocal) &&
+                !genericLocal
+                .Info
+                .ClassSym
+                .ReifiedFromTypeParameters
+                .IsDefaultOrEmpty {
+                return genericLocal.Info.ClassSym.ReifiedFromTypeParameters
+            }
+            return ImmutableArray[TypeParameterSymbol].Empty
+        }
+        let maxPasses = Math.Max(4, allClosures.Count + 1)
+        for var pass = 0; pass < maxPasses; pass++ {
+            var changed = false
+            for info in allClosures {
+                if info.OriginalBody is not{} originalBody {
+                    continue
+                }
+                let origTPs = CollectDisplayClassTypeParameters(
+                    info.CaptureFields.Keys,
+                    info.InvokeMethod.Parameters,
+                    info.InvokeMethod.Type,
+                    originalBody,
+                    info.RequiredTypeParameters,
+                    info.ExcludedTypeParameters,
+                    getClosureAndPromotedExtras
+                )
+                let currentTPs = info.ClassSym.ReifiedFromTypeParameters
+                let currentCount = if currentTPs.IsDefault {
+                    0
+                } else {
+                    currentTPs.Length
+                }
+                if origTPs.Length == currentCount {
+                    continue
+                }
+                let constructedClass = SynthesizedClosureReifier.Reify(
+                    info.ClassSym,
+                    origTPs,
+                    this.emitCtx.References.MapClrTypeToReferences
+                )
+                info.ConstructedClassSym = constructedClass
+                let rewriter = CaptureRewriter(
+                    constructedClass,
+                    info.CaptureFields,
+                    Invariant.Required(
+                        info.InvokeMethod.ThisParameter,
+                        "a closure Invoke method has an instance receiver",
+                        expression: "info.InvokeMethod.ThisParameter"
+                    )
+                )
+                let rewrittenBody = cast[BoundBlockStatement](rewriter.RewriteStatement(originalBody))
+                this.lambdaBodies[info.InvokeMethod] = cast[BoundBlockStatement](Lowerer.Lower(rewrittenBody))
+                changed = true
+            }
+            if !changed {
+                break
+            }
+        }
+    }
+
+    private func CollectDisplayClassTypeParameters(
+        capturedVariables IEnumerable[VariableSymbol],
+        parameters ImmutableArray[ParameterSymbol],
+        returnType TypeSymbol,
+        body BoundBlockStatement,
+        requiredTypeParameters ImmutableArray[TypeParameterSymbol],
+        excludedTypeParameters ImmutableArray[TypeParameterSymbol],
+        getPromotedExtras((FunctionSymbol) -> ImmutableArray[TypeParameterSymbol])?
+    ) ImmutableArray[TypeParameterSymbol] {
+        let enclosingRefSink = List[TypeSymbol]()
+        for captured in capturedVariables {
+            enclosingRefSink.Add(captured.Type)
+        }
+        for parameter in parameters {
+            enclosingRefSink.Add(parameter.Type)
+        }
+        enclosingRefSink.Add(returnType)
+        let bodyTypeParameters = List[TypeParameterSymbol]()
+        LambdaEnclosingTypeParameterCollector.Collect(body, bodyTypeParameters, getPromotedExtras)
+        enclosingRefSink.AddRange(bodyTypeParameters)
+        var origTPs = SynthesizedClosureReifier
+            .CollectOrdered(enclosingRefSink)
+            .Where(
+            (tp TypeParameterSymbol) -> excludedTypeParameters.IsDefaultOrEmpty || !excludedTypeParameters.Contains(tp)
+        )
+            .ToImmutableArray()
+        if !requiredTypeParameters.IsDefaultOrEmpty {
+            let seeded = ImmutableArray.CreateBuilder[TypeParameterSymbol](
+                requiredTypeParameters.Length + origTPs.Length
+            )
+            seeded.AddRange(requiredTypeParameters)
+            for tp in origTPs {
+                if !requiredTypeParameters.Contains(tp) {
+                    seeded.Add(tp)
+                }
+            }
+            origTPs = seeded.ToImmutable()
+        }
+        return origTPs
     }
 
     /// Captured-variable metadata for a single synthesized display class.
@@ -671,12 +750,18 @@ internal class ClosureEmitter {
             classSym StructSymbol,
             invokeMethod FunctionSymbol,
             captureFields Dictionary[VariableSymbol, FieldSymbol],
-            constructedClassSym StructSymbol
+            constructedClassSym StructSymbol,
+            originalBody BoundBlockStatement? = nil,
+            requiredTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol]),
+            excludedTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol])
         ) {
             this.ClassSym = classSym
             this.InvokeMethod = invokeMethod
             this.CaptureFields = captureFields
             this.ConstructedClassSym = constructedClassSym
+            this.OriginalBody = originalBody
+            this.RequiredTypeParameters = requiredTypeParameters
+            this.ExcludedTypeParameters = excludedTypeParameters
         }
 
         prop ClassSym StructSymbol {
@@ -690,6 +775,19 @@ internal class ClosureEmitter {
         /// constructed over the enclosing type parameters
         /// (`DisplayClass<!0,…>`) — issue #1477.
         prop ConstructedClassSym StructSymbol {
+            get;
+            internal set;
+        }
+
+        internal prop OriginalBody BoundBlockStatement? {
+            get;
+        }
+
+        internal prop RequiredTypeParameters ImmutableArray[TypeParameterSymbol] {
+            get;
+        }
+
+        internal prop ExcludedTypeParameters ImmutableArray[TypeParameterSymbol] {
             get;
         }
 

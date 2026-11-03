@@ -336,6 +336,7 @@ Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
         "var data = []int32{1}\nlet At = func(i int32) ref int32 { return ref data[i] }\nreturn At(0)",
         "GS0586"
     )
+    @InlineData("var data = []int32{1}\nlet Read[U] = func(v U) int32 { return data[0] }\nreturn Read(1)", "GS0586")
     func GenericOwnerDependencies_InNonGenericGroup_FailBeforeEmission(body string, diagnostic string) {
         let result = EmittedOracle.Evaluate((`class Holder[Outer] {
     shared {
@@ -399,9 +400,28 @@ Holder[string].Run("ok")`)
         let CallerSibling = func() string { return Caller() }
         return CallerSibling()
     }
+    func RunCapturingCallerOfPromotedDelegate[U](n int32) string {
+        let First = func(k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func(k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Caller = func() string {
+            let fn (int32) -> string = First
+            return fn(n)
+        }
+        return Caller()
+    }
 }
-"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}"`)
+class PlainBox {
+    func RunFunctionPointer[U]() string {
+        let First = func(n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func(n int32) string { return n < 0 ? First(n) : typeof(U).Name }
+        unsafe {
+            let fp = &First
+            return fp(1)
+        }
+    }
+}
+"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}:${Box[string]().RunCapturingCallerOfPromotedDelegate[int32](1)}:${PlainBox().RunFunctionPointer[int32]()}"`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
-        Assert.Equal("42:String", result.Value)
+        Assert.Equal("42:String:Int32:Int32", result.Value)
     }
 }

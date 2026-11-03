@@ -230,6 +230,26 @@ class Box[T] {
         let CallerSibling = func () string { return Caller() }
         return CallerSibling()
     }
+    func RunCapturingCallerOfPromotedDelegate[U](n int32) string {
+        let First = func (k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func (k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Caller = func () string {
+            let fn (int32) -> string = First
+            return fn(n)
+        }
+        return Caller()
+    }
+}
+
+class PlainBox {
+    func RunFunctionPointer[U]() string {
+        let First = func (n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func (n int32) string { return n < 0 ? First(n) : typeof(U).Name }
+        unsafe {
+            let fp = &First
+            return cast[nint](fp) != 0 ? First(1) : ""
+        }
+    }
 }
 
 struct SBox[T] {
@@ -247,15 +267,18 @@ struct SBox[T] {
 }
 
 let b = Box[string]()
+let pb = PlainBox()
 var sb = SBox[string]{}
 Console.WriteLine(b.RunGroup(4))
 Console.WriteLine(b.RunRef([]int32{1}))
 Console.WriteLine(b.RunGenericRefAndDelegate([]string{"old"}, "new"))
 Console.WriteLine(b.RunCapturingRefWithNestedLambda([]int32{1}))
 Console.WriteLine(b.RunFunctionPointerToPromotedLocal())
+Console.WriteLine(b.RunCapturingCallerOfPromotedDelegate[int32](1))
+Console.WriteLine(pb.RunFunctionPointer[int32]())
 Console.WriteLine(sb.RunGroup(4))
 Console.WriteLine(sb.RunRef([]int32{1}))`
-        let expected = string.Join(Environment.NewLine, "1", "35", "new", "77", "String", "1", "35") +
+        let expected = string.Join(Environment.NewLine, "1", "35", "new", "77", "String", "Int32", "Int32", "1", "35") +
             Environment.NewLine
         Assert.Equal(expected, CompileVerifyAndRun(Source))
     }

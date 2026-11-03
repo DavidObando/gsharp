@@ -301,7 +301,16 @@ internal class UserTokenResolver {
     /// @param fn The lambda function whose function pointer is loaded.
     /// @returns The MethodDef or MethodSpec token for the `ldftn`.
     internal func ResolveLambdaFunctionFtnToken(fn FunctionSymbol) EntityHandle {
-        let methodHandle = this.cache.FunctionHandles[fn]
+        if !this
+            .cache
+            .FunctionHandles
+            .TryGetValue(fn, out var methodHandle) &&
+            !this
+            .cache
+            .MethodHandles
+            .TryGetValue(fn, out methodHandle) {
+            throw InvalidOperationException("Function '${fn.Name}' has no emitted MethodDef.")
+        }
         if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var typeArgs) && !typeArgs.IsDefaultOrEmpty {
             let args = [typeArgs.Length]TypeSymbol
             for var i = 0; i < typeArgs.Length; i++ {

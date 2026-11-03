@@ -66,8 +66,15 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
             case BoundLiteralExpression{Value: BoundClrPropertyAccessExpression member} {
                 this.VisitExpression(member)
             }
-            case literal is BoundFunctionLiteralExpression when literal.Function?.IsGeneric != true {
-                this.VisitStatement(literal.Body)
+            case literal is BoundFunctionLiteralExpression {
+                if this.getPromotedExtras != nil && literal.Function != nil {
+                    for extra in this.getPromotedExtras(literal.Function) {
+                        this.sink.Add(extra)
+                    }
+                }
+                if literal.Function?.IsGeneric != true {
+                    this.VisitStatement(literal.Body)
+                }
             }
             case call is BoundCallExpression {
                 // Issue #4223: an implicit-receiver call to a `shared` member
