@@ -1025,8 +1025,18 @@ internal class UserTokenResolver {
     private func EncodeFunctionReturnSymbol(encoder ReturnTypeEncoder, fn FunctionSymbol) {
         if fn.IsAsyncOrSuspending && fn.StateMachineType != nil {
             for plan in this.outer.stateMachines.AsyncStateMachinePlans {
-                if plan.KickoffMethod == fn {
-                    this.outer.EncodeAsyncReturnType(encoder, plan)
+                if plan.KickoffMethod == fn ||
+                    (fn.Declaration != nil && object.ReferenceEquals(plan.KickoffMethod.Declaration, fn.Declaration)) {
+                    if this.outer.GetAsyncReturnTypeSymbol(plan) is not{} asyncReturnType {
+                        encoder.Void()
+                    } else {
+                        let effectiveReturnType = if fn.StaticOwnerType is StructSymbol owner {
+                            owner.SubstituteMemberType(asyncReturnType) ?? asyncReturnType
+                        } else {
+                            asyncReturnType
+                        }
+                        this.signatures.EncodeTypeSymbol(encoder.Type(), effectiveReturnType)
+                    }
                     return
                 }
             }
@@ -1488,7 +1498,7 @@ internal class UserTokenResolver {
     /// definition's property type is used so type parameters encode as
     /// `VAR(idx)`, and an init-only setter retains its
     /// `modreq(IsExternalInit)` return modifier.
-    private func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
+    internal func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
         let sigBlob = BlobBuilder()
         let indexParams = if property.Parameters.IsDefaultOrEmpty {
             ImmutableArray[ParameterSymbol].Empty

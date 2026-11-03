@@ -125,19 +125,35 @@ internal shared class AsyncReturnTypeNormalizer {
     /// @param type The CLR return type to unwrap.
     /// @param awaited The unwrapped awaited CLR result type, when this returns `true`.
     /// @returns `true` when [`type`](paramref) is a Task / ValueTask shape.
-    func TryUnwrapTaskClrType(type Type?, @NotNullWhen(true) out awaited Type?) bool {
+    func TryUnwrapTaskClrType(type Type?, @NotNullWhen(true) out awaited Type?) bool -> TryUnwrapTaskClrType(
+        type,
+        out awaited,
+        out _
+    )
+
+    /// CLR-type companion to (cref:TryUnwrapTaskReturnType(TypeSymbol, out TypeSymbol, out bool)):
+    /// unwraps the awaited result of a `Task` / `Task<T>` / `ValueTask` / `ValueTask<T>` CLR return type
+    /// and reports whether the wrapper was `ValueTask` / `ValueTask<T>`.
+    /// @param type The CLR return type to unwrap.
+    /// @param awaited The unwrapped awaited CLR result type, when this returns `true`.
+    /// @param isValueTask `true` when the unwrapped wrapper was `ValueTask` / `ValueTask<T>`.
+    /// @returns `true` when [`type`](paramref) is a Task / ValueTask shape.
+    func TryUnwrapTaskClrType(type Type?, @NotNullWhen(true) out awaited Type?, out isValueTask bool) bool {
         awaited = nil
+        isValueTask = false
         if type == nil {
             return false
         }
         if type.IsSameAs(typeof(Task)) || type.IsSameAs(typeof(ValueTask)) {
             awaited = typeof(Void)
+            isValueTask = type.IsSameAs(typeof(ValueTask))
             return true
         }
         if type.IsGenericType && !type.IsGenericTypeDefinition {
             let definition = type.GetGenericTypeDefinition()
             if definition.IsSameAs(typeof(Task[_])) || definition.IsSameAs(typeof(ValueTask[_])) {
                 awaited = type.GetGenericArguments()[0]
+                isValueTask = definition.IsSameAs(typeof(ValueTask[_]))
                 return true
             }
         }
