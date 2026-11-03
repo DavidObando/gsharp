@@ -993,6 +993,7 @@ partial class CSharpToGSharpTranslator {
                 candidate = stem + suffix.ToString(CultureInfo.InvariantCulture)
             }
             allocated.Add(candidate)
+            occupied.Add(candidate)
             return candidate
         }
 

@@ -293,6 +293,116 @@ namespace Demo
     }
 
     @Fact
+    func Oblivious_QueryClausePromotedOutLocal_AndSynthesizedTempDisambiguation() {
+        let printed = TranslateOblivious(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Demo
+{
+    public class Item
+    {
+        public int Code { get; set; }
+    }
+
+    public static class C
+    {
+        private static int step;
+
+        private static bool Next(out string item)
+        {
+            step++;
+            item = "s" + step;
+            return step <= 1;
+        }
+
+        private static bool TryLookup(int key, out string value)
+        {
+            value = "k" + key;
+            return key <= 2;
+        }
+
+        public static string RunQuery()
+        {
+            var keys = new[] { 1, 2, 3 };
+            var readers = (
+                from k in keys
+                select (TryLookup(k, out string value)
+                    ? new Func<string>(() => value ?? "nil")
+                    : new Func<string>(() => (value = null) ?? "nil"))
+            ).ToArray();
+            return string.Join(":", readers.Select(r => r()));
+        }
+
+        public static IEnumerable<int> YieldAfterLoops(bool flag)
+        {
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            yield return flag ? 1 : 2;
+        }
+
+        public static IEnumerable<int> YieldBeforeLoops(bool flag)
+        {
+            yield return flag ? 10 : 20;
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+        }
+
+        public static string PatternDesignatorAfterRenamedOut(object boxed)
+        {
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            step = 0;
+            switch (boxed)
+            {
+                case Item { Code: 7 } when Next(out string item):
+                    string seen = item;
+                    item = null;
+                    return seen + ":" + (item ?? "nil");
+                default:
+                    return "none";
+            }
+        }
+
+        public static string MainEntry() =>
+            RunQuery() + "|" +
+            string.Join(",", YieldAfterLoops(true)) + "|" +
+            string.Join(",", YieldBeforeLoops(true)) + "|" +
+            PatternDesignatorAfterRenamedOut(new Item { Code = 7 });
+    }
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "k1:k2:nil|1|10|s1:nil"
+        )
+    }
+
+    @Fact
     func Oblivious_NonNullOutVar_StaysBare() {
         // The out parameter is always assigned a non-null value, so neither the
         // parameter nor the receiving local is promoted and no `!!` appears.

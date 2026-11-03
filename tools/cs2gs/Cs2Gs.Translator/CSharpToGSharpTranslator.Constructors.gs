@@ -1814,7 +1814,14 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetEnclosingSymbol(site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)
                 ?.ContainingType
-            return LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryClaimLocalName(owner, name)
+            if !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryClaimLocalName(owner, name) {
+                return false
+            }
+            let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot()
+            if body != nil && this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
+                occupied.Add(name!!)
+            }
+            return true
         }
 
         private func SourceIdentifierClaimsSynthesizedLocalName(

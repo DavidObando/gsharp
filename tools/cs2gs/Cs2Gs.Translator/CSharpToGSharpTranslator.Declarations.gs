@@ -406,7 +406,7 @@ partial class CSharpToGSharpTranslator {
             if symbol is IDiscardSymbol {
                 return fallbackName
             }
-            if symbol is ILocalSymbol local &&
+            if symbol is ILocalSymbol local && !this.predeclaredOutLocalInProgress.Contains(local) &&
                 local
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()

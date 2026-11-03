@@ -27,6 +27,9 @@ partial class CSharpToGSharpTranslator {
         private let predeclaredOutLocalNames Dictionary[ILocalSymbol, string] = Dictionary[ILocalSymbol, string](
             SymbolEqualityComparer.Default
         )
+        private let predeclaredOutLocalInProgress HashSet[ILocalSymbol] = HashSet[ILocalSymbol](
+            SymbolEqualityComparer.Default
+        )
         private let claimedPredeclaredOutNamesByBody Dictionary[SyntaxNode, HashSet[string]] = Dictionary[
             SyntaxNode,
             HashSet[string]
@@ -3925,9 +3928,13 @@ partial class CSharpToGSharpTranslator {
             let body SyntaxNode = single.Ancestors().FirstOrDefault(
                 (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
                     node is AccessorDeclarationSyntax ||
+                    node is BasePropertyDeclarationSyntax ||
                     node is LocalFunctionStatementSyntax ||
                     node is AnonymousFunctionExpressionSyntax
             ) ??
+                this
+                .state
+                .CurrentBodyScope ??
                 single
                 .SyntaxTree
                 .GetRoot()
@@ -3936,19 +3943,35 @@ partial class CSharpToGSharpTranslator {
                 this.claimedPredeclaredOutNamesByBody.Add(body, claimed)
             }
             let stem = this.nameAllocator.GetName(local, context)!!
-            var candidate = stem
-            for var suffix = 2; claimed.Contains(candidate) || this.BodyHasConflictingLocalName(
-                body,
-                local,
-                candidate,
-                isOriginalStem: candidate == stem
-            );
-                suffix++ {
-                candidate = "${stem}_$suffix"
+            if !this.predeclaredOutLocalInProgress.Add(local) {
+                return stem
             }
-            claimed.Add(candidate)
-            this.predeclaredOutLocalNames.Add(local, candidate)
-            return candidate
+            try {
+                if !this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
+                    occupied = this.CollectOccupiedSynthesizedLocalNames(body)
+                    this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied)
+                }
+                var candidate = stem
+                for var suffix = 2; claimed.Contains(candidate) || this.BodyHasConflictingLocalName(
+                    body,
+                    local,
+                    candidate,
+                    isOriginalStem: candidate == stem
+                ) ||
+                    (candidate != stem && !this.TryClaimSynthesizedLocalName(candidate, single));
+                    suffix++ {
+                    candidate = "${stem}_$suffix"
+                }
+                if candidate == stem {
+                    this.ReserveSynthesizedLocalName(candidate, single)
+                }
+                claimed.Add(candidate)
+                occupied.Add(candidate)
+                this.predeclaredOutLocalNames.Add(local, candidate)
+                return candidate
+            } finally {
+                this.predeclaredOutLocalInProgress.Remove(local)
+            }
         }
 
         private func BodyHasConflictingLocalName(
