@@ -813,12 +813,17 @@ partial class CSharpToGSharpTranslator {
             if value == nil || !this.ObliviousContainerFlowState().HasNullable {
                 return false
             }
+            let written = this.WrittenWholeValue(value)
+            if this.GetUserDefinedConversionInputOperator(written, nil, out _) is {} directOperator {
+                return this.ObliviousContainerPositions(directOperator.Parameters[0])?.Contains("") == true
+            }
+            if this.UserDefinedConversionOperator(written, this.context.SemanticModel) is {} conversionOperator {
+                return this.ObliviousContainerPositions(conversionOperator.Parameters[0])?.Contains("") == true
+            }
             if this.WritesNullableSlot(value) {
                 return true
             }
-            return this.ReadsObliviousContainerStorageElement(value) && !this.SlotProvesNonNull(
-                this.WrittenWholeValue(value)
-            )
+            return this.ReadsObliviousContainerStorageElement(value) && !this.SlotProvesNonNull(written)
         }
 
         // Whether the slot that [`written`](paramref) is written into is proven
@@ -935,13 +940,14 @@ partial class CSharpToGSharpTranslator {
             let model = this.context.SemanticModel
             let indices = List[int32]{index}
             let rootTuple TupleExpressionSyntax = CollectTupleAncestors(tuple, indices)
+            let rootExpression ExpressionSyntax = UnwrapParenthesizedAncestors(rootTuple)
             var storage ISymbol? = nil
             var slotType ITypeSymbol? = nil
             var position = ""
             for step in indices {
                 position = JoinPosition(position, TupleElementPosition(step))
             }
-            switch rootTuple.Parent {
+            switch rootExpression.Parent {
                 case EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} {
                     storage = model.GetDeclaredSymbol(declarator)
                     if storage is ILocalSymbol local && IsImplicitlyTypedLocal(local) {
@@ -949,8 +955,9 @@ partial class CSharpToGSharpTranslator {
                     }
                     slotType = NestedTupleElementType(StorageType(storage?.OriginalDefinition), indices)
                 }
-                case assignment is AssignmentExpressionSyntax when assignment.Right == rootTuple {
-                    if assignment.Left is TupleExpressionSyntax targets {
+                case assignment is AssignmentExpressionSyntax when assignment.Right == rootExpression {
+                    let leftTarget = Unparenthesize(assignment.Left)
+                    if leftTarget is TupleExpressionSyntax targets {
                         // A deconstruction writes each element into its own target.
                         if ResolveDeconstructedTupleTarget(targets, indices, 0) is not{} target {
                             return false
@@ -972,7 +979,7 @@ partial class CSharpToGSharpTranslator {
                         storage = model.GetDeclaredSymbol(designation)
                         slotType = StorageType(storage?.OriginalDefinition)
                         position = ""
-                    } else if assignment.Left is DeclarationExpressionSyntax {
+                    } else if leftTarget is DeclarationExpressionSyntax {
                         return false
                     } else {
                         storage = model.GetSymbolInfo(assignment.Left).Symbol
@@ -981,8 +988,8 @@ partial class CSharpToGSharpTranslator {
                 }
                 case result is SyntaxNode when result is ReturnStatementSyntax ||
                     result is ArrowExpressionClauseSyntax {
-                    if !this.ResultSlotProvesNonNull(rootTuple) || model.GetEnclosingSymbol(
-                        rootTuple.SpanStart
+                    if !this.ResultSlotProvesNonNull(rootExpression) || model.GetEnclosingSymbol(
+                        rootExpression.SpanStart
                     ) is not IMethodSymbol method ||
                         method.IsAsync ||
                         method.MethodKind == MethodKind.AnonymousFunction {
@@ -1403,6 +1410,75 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        // The user-defined conversion operator that converts [`value`](paramref) to its
+        // target slot, or nil when no user-defined conversion applies.
+        private func UserDefinedConversionOperator(value ExpressionSyntax?, model SemanticModel) IMethodSymbol? {
+            if value == nil {
+                return nil
+            }
+            for var conversion IConversionOperation? = ObliviousNullabilityAnalyzer.GetResultConversion(value, model);
+                conversion != nil &&
+                conversion.IsImplicit == true;
+                conversion = conversion!!.Operand as IConversionOperation {
+                if conversion.OperatorMethod is {Parameters: {Length: 1}} method {
+                    return method
+                }
+            }
+            let directConversion = model.GetConversion(value)
+            if directConversion.IsUserDefined &&
+                directConversion.MethodSymbol is {Parameters: {Length: 1}} directMethod {
+                return directMethod
+            }
+            let convertedType ITypeSymbol? = model.GetTypeInfo(value).ConvertedType
+            if convertedType != nil && ObliviousNullabilityAnalyzer.GetContextualOperator(
+                value,
+                model,
+                convertedType
+            ) is {Parameters: {Length: 1}} contextual {
+                return contextual
+            }
+            let (creation, member) = this.InitializerWriteTarget(value, model)
+            if creation != nil && member != nil {
+                let slotType ITypeSymbol? = switch member {
+                    case parameter is IParameterSymbol: parameter.Type
+                    case field is IFieldSymbol: field.Type
+                    case property is IPropertySymbol: property.Type
+                    default: default(ITypeSymbol?)
+                }
+                if slotType != nil && ObliviousNullabilityAnalyzer.GetContextualOperator(value, model, slotType) is {
+                    Parameters: {Length: 1}
+                } initializerOperator {
+                    return initializerOperator
+                }
+            }
+            return nil
+        }
+
+        // The positions that [`value`](paramref) gives the slot that receives it: the
+        // return positions of its user-defined conversion operator when one converts
+        // it, and its own positions otherwise.
+        private func ConvertedObliviousPositionsOf(
+            value ExpressionSyntax?,
+            model SemanticModel,
+            flow ObliviousContainerFlow
+        ) ObliviousPositionSet? {
+            if value == nil {
+                return nil
+            }
+            if this.UserDefinedConversionOperator(value, model) is {} conversionOperator {
+                let result = ObliviousPositionSet()
+                let declared = DeclaredPositions(flow, conversionOperator)
+                if declared != nil {
+                    result.Nullable.UnionWith(declared)
+                }
+                if this.IsFrozenObliviousImportMember(conversionOperator) {
+                    CollectPlatformPositions(StorageType(UnreducedDefinition(conversionOperator)), "", result.Platform)
+                }
+                return Filtered(conversionOperator.ReturnType, result)
+            }
+            return this.ObliviousPositionsOf(value, model, flow)
+        }
+
         /// Issue #5541: the positions that G# gives the value of
         /// [`value`](paramref): the positions recorded for the storage that it reads,
         /// the platform positions of a frozen oblivious member, and the positions that
@@ -1720,12 +1796,12 @@ partial class CSharpToGSharpTranslator {
             if initializer != nil {
                 for written in InitializerWrites(initializer, model) {
                     let writtenPositions = if MentionsTypeParameter(written.Pattern) {
-                        this.ObliviousPositionsOf(written.Value, model, flow)
+                        this.ConvertedObliviousPositionsOf(written.Value, model, flow)
                     } else {
                         nil
                     }
                     if writtenPositions != nil {
-                        Unify(written.Pattern, model.GetTypeInfo(written.Value).Type, writtenPositions, found)
+                        Unify(written.Pattern, StoredValueType(written.Value, model), writtenPositions, found)
                     }
                 }
             }
@@ -1745,14 +1821,14 @@ partial class CSharpToGSharpTranslator {
                         for element in initializer.ElementValues {
                             let elementValue ExpressionSyntax? = ArgumentValueSyntax(element)
                             let elementPositions = if IsWrittenIn(call, elementValue) {
-                                this.ObliviousPositionsOf(elementValue, model, flow)
+                                this.ConvertedObliviousPositionsOf(elementValue, model, flow)
                             } else {
                                 nil
                             }
                             if elementPositions != nil {
                                 Unify(
                                     arrayParameter.ElementType,
-                                    model.GetTypeInfo(elementValue!!).Type,
+                                    StoredValueType(elementValue!!, model),
                                     elementPositions,
                                     found
                                 )
@@ -1771,9 +1847,9 @@ partial class CSharpToGSharpTranslator {
                     lambdas.Add((argumentParameter, lambda))
                     continue
                 }
-                let argumentPositions = this.ObliviousPositionsOf(argumentValue, model, flow)
+                let argumentPositions = this.ConvertedObliviousPositionsOf(argumentValue, model, flow)
                 if argumentPositions != nil {
-                    Unify(parameterType, model.GetTypeInfo(argumentValue!!).Type, argumentPositions, found)
+                    Unify(parameterType, StoredValueType(argumentValue!!, model), argumentPositions, found)
                 }
             }
             for (parameter, lambda) in lambdas {
@@ -1791,14 +1867,14 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 for result in LambdaResults(lambda) {
-                    let resultPositions = this.ObliviousPositionsOf(result, model, flow)
+                    let resultPositions = this.ConvertedObliviousPositionsOf(result, model, flow)
                     if resultPositions == nil {
                         continue
                     }
                     if isAsync {
                         Unify(invoke.ReturnType, lambdaTask, Prefixed(resultPositions, "0"), found)
                     } else {
-                        Unify(invoke.ReturnType, model.GetTypeInfo(result).Type, resultPositions, found)
+                        Unify(invoke.ReturnType, StoredValueType(result, model), resultPositions, found)
                     }
                 }
             }
@@ -1936,7 +2012,7 @@ partial class CSharpToGSharpTranslator {
                         changed |= this.TypeObliviousLambdaParameters(value, model, flow)
                         continue
                     }
-                    let positions = this.ObliviousPositionsOf(value, model, flow)
+                    let positions = this.ConvertedObliviousPositionsOf(value, model, flow)
                     if positions == nil && flow.Destinations.Count == 0 {
                         continue
                     }
@@ -2459,7 +2535,7 @@ partial class CSharpToGSharpTranslator {
             flow ObliviousContainerFlow,
             positions ObliviousPositionSet
         ) {
-            let elementPositions = this.ObliviousPositionsOf(element, model, flow)
+            let elementPositions = this.ConvertedObliviousPositionsOf(element, model, flow)
             if elementPositions == nil {
                 return
             }
@@ -2795,10 +2871,11 @@ partial class CSharpToGSharpTranslator {
                 indices List[int32],
                 depth int32
             ) ExpressionSyntax? {
+                let unwrapped = Unparenthesize(target)!!
                 if depth >= indices.Count {
-                    return target
+                    return unwrapped
                 }
-                if target is not TupleExpressionSyntax tupleTargets {
+                if unwrapped is not TupleExpressionSyntax tupleTargets {
                     return nil
                 }
                 let arguments = tupleTargets.Arguments
@@ -2810,11 +2887,19 @@ partial class CSharpToGSharpTranslator {
             }
 
             private func CollectTupleAncestors(tuple TupleExpressionSyntax, indices List[int32]) TupleExpressionSyntax {
-                if tuple.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax outerTuple} outerArgument {
+                let unwrapped = UnwrapParenthesizedAncestors(tuple)
+                if unwrapped.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax outerTuple} outerArgument {
                     indices.Insert(0, outerTuple.Arguments.IndexOf(outerArgument))
                     return CollectTupleAncestors(outerTuple, indices)
                 }
                 return tuple
+            }
+
+            private func UnwrapParenthesizedAncestors(expression ExpressionSyntax) ExpressionSyntax {
+                if expression.Parent is ParenthesizedExpressionSyntax parenthesized {
+                    return UnwrapParenthesizedAncestors(parenthesized)
+                }
+                return expression
             }
 
             private func EnclosingArrayLiteral(

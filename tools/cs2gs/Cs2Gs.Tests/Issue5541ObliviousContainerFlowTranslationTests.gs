@@ -1058,6 +1058,50 @@ public static class Use
             })
     }
 
+    /// Review of 125d853ab (#5571): an element that flows through a user-defined
+    /// conversion operator obeys the operator's input parameter contract and keeps
+    /// its operand positions separate from the converted result, and parenthesized
+    /// tuple literals in typed deconstructions still assert their leaf elements.
+    @Fact
+    func User_Defined_Conversions_And_Parenthesized_Tuple_Deconstructions_Keep_Leaf_Assertions() {
+        this.Check("Review30", `using System.Collections.Generic;
+using ObLib;
+
+public class Box
+{
+    public int N;
+    public Box(string s) { N = s.Length; }
+    public static implicit operator Box(string s) => new Box(s);
+}
+
+public static class Use
+{
+    public static int ConvertedInit(string p) { string[] lines; lines = Node.Holes(p); var list = new List<Box> { lines[0] }; list.Add(lines[0]); return list[0].N + list[1].N; }
+    public static int ConvertedNullableSink(string p) { string[] lines; lines = Node.Holes(p); var list = new List<Box?> { lines[0], null }; list.Add(lines[0]); Box? b = lines[0]; return list[0]!.N + list[2]!.N + b!.N + (list[1] == null ? 10 : 0); }
+    public static int ConvertedThrows(string p) { string[] lines; lines = Node.Holes(p); try { var list = new List<Box> { lines[1] }; return list[0].N; } catch (System.NullReferenceException) { return -1; } }
+    public static int ParenthesizedTuple(string p) { string[] lines; lines = Node.Lines(p); (string a, string b) = ((lines[0], lines[1])); ((string c, string d), int n) = (((lines[0], lines[1])), 3); return a.Length + b.Length + c.Length + d.Length + n; }
+    public static int ParenthesizedTupleThrows(string p) { string[] lines; lines = Node.Holes(p); try { (string a, string b) = ((lines[0], lines[1])); return a.Length + b.Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "let list = List[Box]{ lines[0]!! }",
+                "let list = List[Box?]{ lines[0]!!, nil }",
+                "list.Add(lines[0]!!)",
+                "let b Box? = lines[0]!!",
+                "let (a, b) = ((lines[0]!!, lines[1]!!))",
+                "return a.Length + b.Length + c.Length + d.Length + n"
+            }, []string{
+                "ConvertedInit",
+                "4",
+                "ConvertedNullableSink",
+                "16",
+                "ConvertedThrows",
+                "-1",
+                "ParenthesizedTuple",
+                "11",
+                "ParenthesizedTupleThrows",
+                "-1"
+            })
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {

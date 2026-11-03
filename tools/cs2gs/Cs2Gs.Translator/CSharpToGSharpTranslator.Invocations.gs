@@ -1861,11 +1861,16 @@ partial class CSharpToGSharpTranslator {
             } else {
                 targetRequiresNonNull = !analyzerNullableArgument
             }
+            let hasUserDefinedConversion = this.GetUserDefinedConversionInputOperator(
+                argument.Expression,
+                targetType,
+                out _
+            ) != nil
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
                 targetRequiresNonNull &&
                 !isFlowNarrowedLocal &&
-                this.GetUserDefinedConversionInputOperator(argument.Expression, targetType, out _) == nil &&
+                !hasUserDefinedConversion &&
                 this
                 .ReceiverNeedsNullForgiveness(
                 argument.Expression,
@@ -1904,7 +1909,7 @@ partial class CSharpToGSharpTranslator {
             )
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
-                targetRequiresNonNull &&
+                (targetRequiresNonNull || hasUserDefinedConversion) &&
                 targetParameter is {} parameter &&
                 targetType != nil {
                 // A warning-level C# null passed through a substituted generic
@@ -3160,6 +3165,13 @@ partial class CSharpToGSharpTranslator {
             targetType ITypeSymbol?,
             targetSymbolForPromotionCheck ISymbol?
         ) GExpression? {
+            var targetType = targetType
+            var targetSymbolForPromotionCheck = targetSymbolForPromotionCheck
+            if this.GetUserDefinedConversionInputOperator(valueExpression, targetType, out _) is {} conversionOperator {
+                let parameter = conversionOperator.Parameters[0]
+                targetType = parameter.Type
+                targetSymbolForPromotionCheck = parameter
+            }
             // ADR-0186 step 6 (PR 0): a `T!` element or member value is checked
             // by gsc at the non-null target.
             if translatedValue is NonNullAssertionExpression ||
