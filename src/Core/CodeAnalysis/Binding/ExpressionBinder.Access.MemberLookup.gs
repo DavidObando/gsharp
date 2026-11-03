@@ -1844,7 +1844,7 @@ internal partial class ExpressionBinder {
             // default/interpolated index; those two carry no natural type and
             // keep the historical int32 conversion driven by the target type.
             let index = if boundIndex != nil {
-                ConvertArrayElementIndex(indexSyntax.Location, boundIndex)
+                ConvertArrayElementIndex(indexSyntax.Location, boundIndex, target.Type)
             } else {
                 ConvertIndex(TypeSymbol.Int32)
             }
@@ -2884,9 +2884,9 @@ internal partial class ExpressionBinder {
         let element TypeSymbol? = GetIndexElementType(targetType)
         if element != nil {
             let index = if boundIndexOverride != nil {
-                ConvertArrayElementIndex(indexSyntax.Location, boundIndexOverride)
+                ConvertArrayElementIndex(indexSyntax.Location, boundIndexOverride, targetType)
             } else {
-                BindArrayElementIndex(indexSyntax)
+                BindArrayElementIndex(indexSyntax, targetType)
             }
             let value = BindValue(element)
             return MakeIndexAssignment(index, value, element)
@@ -4104,9 +4104,21 @@ internal partial class ExpressionBinder {
         )
     }
 
-    private func ConvertArrayElementIndex(location TextLocation, boundIndex BoundExpression) BoundExpression {
+    private func ConvertArrayElementIndex(
+        location TextLocation,
+        boundIndex BoundExpression,
+        targetType TypeSymbol? = nil
+    ) BoundExpression {
         if IsWideIntegerIndexType(boundIndex.Type) {
-            return conversions.BindConversion(location, boundIndex, TypeSymbol.NInt, allowExplicit: true)
+            let indexTarget = if targetType != nil && DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                targetType,
+                out _
+            ) {
+                TypeSymbol.Int32
+            } else {
+                TypeSymbol.NInt
+            }
+            return conversions.BindConversion(location, boundIndex, indexTarget, allowExplicit: true)
         }
         return conversions.BindConversion(location, boundIndex, TypeSymbol.Int32)
     }
@@ -4128,7 +4140,7 @@ internal partial class ExpressionBinder {
     // default/interpolated index carries no natural type, so it keeps the
     // historical target-typed int32 conversion; every other index is bound and
     // then converted via the integer-aware element-index rule above.
-    private func BindArrayElementIndex(indexSyntax ExpressionSyntax) BoundExpression {
+    private func BindArrayElementIndex(indexSyntax ExpressionSyntax, targetType TypeSymbol? = nil) BoundExpression {
         if indexSyntax is DefaultExpressionSyntax || indexSyntax is InterpolatedStringExpressionSyntax {
             return conversions.BindConversion(indexSyntax, TypeSymbol.Int32)
         }
@@ -4136,7 +4148,7 @@ internal partial class ExpressionBinder {
         if boundIndex is BoundErrorExpression {
             return boundIndex
         }
-        return ConvertArrayElementIndex(indexSyntax.Location, boundIndex)
+        return ConvertArrayElementIndex(indexSyntax.Location, boundIndex, targetType)
     }
 
     private func BindRectangularArrayElementIndex(indexSyntax ExpressionSyntax) BoundExpression {
@@ -6073,15 +6085,23 @@ internal partial class ExpressionBinder {
                 case imp is ImportedTypeSymbol when imp
                     .ClrType
                     ?.IsArray == true &&
-                    imp.ClrType!!.GetArrayRank() == 1: TypeSymbol.FromClrTypeWithoutNullability(
-                    imp.ClrType!!.GetElementType(),
-                    NullabilityFreeReason.TypeStructure
-                )
+                    imp.ClrType!!.GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
+                    imp.TypeArguments[0]
+                } else {
+                    ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                        imp.ClrType!!.GetElementType(),
+                        TypeSymbol.FromClrTypeWithoutNullability(
+                            imp.ClrType!!.GetElementType(),
+                            NullabilityFreeReason.TypeStructure
+                        )
+                    )
+                }
                 case annot is NullabilityAnnotatedTypeSymbol when annot
                     .ClrType
                     ?.IsArray == true &&
-                    annot.ClrType!!.GetArrayRank() == 1: annot.GetTypeArgumentSymbolForClrType(
-                    annot.ClrType!!.GetElementType()
+                    annot.ClrType!!.GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                    annot.ClrType!!.GetElementType(),
+                    annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
                 )
                 default: default(TypeSymbol?)
             }
@@ -6280,26 +6300,7 @@ internal partial class ExpressionBinder {
             type == TypeSymbol.NInt ||
             type == TypeSymbol.NUInt
 
-        private func GetIndexElementType(type TypeSymbol) TypeSymbol? {
-            return switch type {
-                case arr is ArrayTypeSymbol: arr.ElementType
-                case slice is SliceTypeSymbol: slice.ElementType
-                case imp is ImportedTypeSymbol when imp
-                    .ClrType
-                    ?.IsArray == true &&
-                    imp.ClrType!!.GetArrayRank() == 1: TypeSymbol.FromClrTypeWithoutNullability(
-                    imp.ClrType!!.GetElementType(),
-                    NullabilityFreeReason.TypeStructure
-                )
-                case annot is NullabilityAnnotatedTypeSymbol when annot
-                    .ClrType
-                    ?.IsArray == true &&
-                    annot.ClrType!!.GetArrayRank() == 1: annot.GetTypeArgumentSymbolForClrType(
-                    annot.ClrType!!.GetElementType()
-                )
-                default: default(TypeSymbol?)
-            }
-        }
+        private func GetIndexElementType(type TypeSymbol) TypeSymbol? -> GetArraySliceElementType(type)
 
         /// ADR-0089: substitute a type that may mention the constructed
         /// interface's open type parameter with the corresponding type

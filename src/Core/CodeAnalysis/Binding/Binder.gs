@@ -10548,7 +10548,11 @@ partial class Binder {
             if type.IsArray {
                 let element = MapAdapterMethodType(RequiredAdapterElementType(type), typeParameters)
                 return if type.GetArrayRank() == 1 {
-                    cast[TypeSymbol](SliceTypeSymbol.Get(element))
+                    if type.IsSZArray {
+                        cast[TypeSymbol](SliceTypeSymbol.Get(element))
+                    } else {
+                        MemberLookup.ConstructRankOneNonSzArray(element, type)
+                    }
                 } else {
                     cast[TypeSymbol](RectangularArrayTypeSymbol.Get(element, type.GetArrayRank()))
                 }

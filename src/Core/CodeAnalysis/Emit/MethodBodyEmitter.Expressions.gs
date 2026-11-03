@@ -362,13 +362,18 @@ internal partial class MethodBodyEmitter {
                 this.EmitStackAlloc(stackAlloc)
             }
             case idx is BoundIndexExpression {
-                if GetRectangularArrayType(idx.Target.Type) is {} rectangular {
+                if TryGetNonSzArrayShape(idx.Target.Type, out var nonSzArray, out var nonSzElement, out var nonSzRank) {
                     this.EmitExpression(idx.Target)
                     for index in idx.Indices {
                         this.EmitExpression(index)
                     }
                     this.il.OpCode(ILOpCode.Call)
-                    this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Get"))
+                    this.il.Token(
+                        this
+                            .outer
+                            .memberRefs
+                            .GetNonSzArrayMemberReference(nonSzArray!!, nonSzElement!!, nonSzRank, "Get")
+                    )
                 } else if idx.Target.Type is MapTypeSymbol {
                     this.EmitMapIndexRead(idx)
                 } else if idx.Target.Type == TypeSymbol.String {
@@ -387,7 +392,12 @@ internal partial class MethodBodyEmitter {
                 let ixaTargetType = ixa.TargetExpression?.Type ?? BoundNodeForm.VariableTarget(ixa).Type
                 if ixaTargetType is MapTypeSymbol {
                     this.EmitMapIndexAssignment(ixa)
-                } else if GetRectangularArrayType(ixaTargetType) is {} assignmentRectangular {
+                } else if TryGetNonSzArrayShape(
+                    ixaTargetType,
+                    out var assignmentNonSzArray,
+                    out var assignmentNonSzElement,
+                    out var assignmentNonSzRank
+                ) {
                     let tmp = this.indexAssignmentValueSlots[ixa]
                     if ixa.TargetExpression != nil {
                         this.EmitExpression(ixa.TargetExpression)
@@ -402,7 +412,15 @@ internal partial class MethodBodyEmitter {
                     this.il.StoreLocal(tmp)
                     this.il.OpCode(ILOpCode.Call)
                     this.il.Token(
-                        this.outer.memberRefs.GetRectangularArrayMemberReference(assignmentRectangular, "Set")
+                        this
+                            .outer
+                            .memberRefs
+                            .GetNonSzArrayMemberReference(
+                            assignmentNonSzArray!!,
+                            assignmentNonSzElement!!,
+                            assignmentNonSzRank,
+                            "Set"
+                        )
                     )
                     this.il.LoadLocal(tmp)
                 } else {
@@ -1073,7 +1091,9 @@ internal partial class MethodBodyEmitter {
         } else if len
             .Operand
             .Type is RectangularArrayTypeSymbol ||
-            (len.Operand.Type.ClrType is {IsArray: true} clrArray && clrArray.GetArrayRank() > 1) {
+            (
+            len.Operand.Type.ClrType is {IsArray: true} clrArray && (clrArray.GetArrayRank() > 1 || !clrArray.IsSZArray)
+        ) {
             this.il.OpCode(ILOpCode.Callvirt)
             this.il.Token(this.outer.wellKnown.GetArrayLengthReference())
         } else {
@@ -2176,12 +2196,17 @@ internal partial class MethodBodyEmitter {
             }
             case idx is BoundIndexExpression {
                 this.EmitExpression(idx.Target)
-                if GetRectangularArrayType(idx.Target.Type) is {} rectangular {
+                if TryGetNonSzArrayShape(idx.Target.Type, out var nonSzArray, out var nonSzElement, out var nonSzRank) {
                     for index in idx.Indices {
                         this.EmitExpression(index)
                     }
                     this.il.OpCode(ILOpCode.Call)
-                    this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Address"))
+                    this.il.Token(
+                        this
+                            .outer
+                            .memberRefs
+                            .GetNonSzArrayMemberReference(nonSzArray!!, nonSzElement!!, nonSzRank, "Address")
+                    )
                 } else {
                     this.EmitExpression(idx.Index)
                     this.EmitLoadElementAddress(idx.Type)
@@ -2542,6 +2567,51 @@ internal partial class MethodBodyEmitter {
     }
 
     shared {
+        internal func TryGetNonSzArrayShape(
+            type TypeSymbol,
+            out arrayType TypeSymbol?,
+            out elementType TypeSymbol?,
+            out rank int32
+        ) bool {
+            let coreType = if type is PlatformTypeSymbol platform {
+                platform.UnderlyingType
+            } else if type is NullableTypeSymbol nullable && nullable.UnderlyingType.ClrType?.IsValueType != true {
+                nullable.UnderlyingType
+            } else {
+                type
+            }
+            if coreType is RectangularArrayTypeSymbol rectangular {
+                arrayType = rectangular
+                elementType = rectangular.ElementType
+                rank = rectangular.Rank
+                return true
+            }
+            if DeclarationBinder.TryGetRankOneNonSzArrayElementType(coreType, out var nonSzElement) &&
+                coreType.ClrType is {IsArray: true} rankOneClr {
+                arrayType = MemberLookup.ConstructRankOneNonSzArray(nonSzElement!!, rankOneClr)
+                elementType = nonSzElement!!
+                rank = 1
+                return true
+            }
+            if coreType.ClrType is {IsArray: true} clrArray && clrArray.GetArrayRank() > 1 {
+                let converted = RectangularArrayTypeSymbol.Get(
+                    TypeSymbol.FromClrTypeWithoutNullability(
+                        clrArray.GetElementType(),
+                        NullabilityFreeReason.TypeStructure
+                    ),
+                    clrArray.GetArrayRank()
+                )
+                arrayType = converted
+                elementType = converted.ElementType
+                rank = converted.Rank
+                return true
+            }
+            arrayType = nil
+            elementType = nil
+            rank = 0
+            return false
+        }
+
         private func GetRectangularArrayType(type TypeSymbol) RectangularArrayTypeSymbol? {
             if type is RectangularArrayTypeSymbol rectangular {
                 return rectangular

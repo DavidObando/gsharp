@@ -283,6 +283,47 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 -1,
                 MetadataTokens.ParameterHandle(1)
             )
+            let nullableReturnParam = metadata.AddParameter(ParameterAttributes.None, default(StringHandle), 0)
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNullable"),
+                metadata.GetOrAddBlob(returnSig),
+                -1,
+                nullableReturnParam
+            )
+            let nullableContextType = metadata.AddTypeDefinition(
+                TypeAttributes.NotPublic,
+                metadata.GetOrAddString("System.Runtime.CompilerServices"),
+                metadata.GetOrAddString("NullableContextAttribute"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(7)
+            )
+            let nullableContextCtor = metadata.AddMemberReference(
+                nullableContextType,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x05})
+            )
+            metadata.AddCustomAttribute(ifaceHandle, nullableContextCtor, metadata.GetOrAddBlob([]uint8{1, 0, 1, 0, 0}))
+            let nullableAttrType = metadata.AddTypeDefinition(
+                TypeAttributes.NotPublic,
+                metadata.GetOrAddString("System.Runtime.CompilerServices"),
+                metadata.GetOrAddString("NullableAttribute"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(7)
+            )
+            let nullableAttrBytesCtor = metadata.AddMemberReference(
+                nullableAttrType,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x1D, 0x05})
+            )
+            metadata.AddCustomAttribute(
+                nullableReturnParam,
+                nullableAttrBytesCtor,
+                metadata.GetOrAddBlob([]uint8{1, 0, 2, 0, 0, 0, 1, 2, 0, 0})
+            )
             let peBlob = BlobBuilder()
             ManagedPEBuilder(
                 PEHeaderBuilder.CreateLibraryHeader(),
@@ -418,12 +459,32 @@ Console.WriteLine("x")`, listUserMismatchPath, "/target:exe", "/reference:" + li
             )
             Assert.Contains(" error GS", listUserMismatchLog, StringComparison.Ordinal)
 
+            let nullableElementMismatchPath = Path.Combine(tempDir, "NullableElementMismatch.dll")
+            let nullableElementMismatchLog = Compile(tempDir, "NullableElementMismatch.gs", `package P
+import System
+import NonSzLib
+
+class Shape { }
+func UnhandledNullable(x INonSz[Shape]) Shape {
+    return x.RNullable()[0]
+}
+Console.WriteLine("x")`, nullableElementMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(nullableElementMismatchPath),
+                "Nullable element from T?[*] must not implicitly convert to non-null Shape. Log:\n" +
+                    nullableElementMismatchLog
+            )
+            Assert.Contains(" error GS", nullableElementMismatchLog, StringComparison.Ordinal)
+            Assert.Contains("Shape?", nullableElementMismatchLog, StringComparison.Ordinal)
+
             let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
             let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
 import System
 import NonSzLib
 
-public class Shape { }
+public class Shape {
+    public var Tag int32
+}
 public func Forward(x INonSz[Shape]) int32 {
     let arr = x.R()
     return x.M(arr)
@@ -435,6 +496,30 @@ public func ForwardNested(x INonSz[Shape]) int32 {
 public func ForwardNullable(x INonSz[int32?]) int32 {
     let arr = x.R()
     return x.M(arr)
+}
+public func First(x INonSz[Shape]) Shape {
+    return x.R()[0]
+}
+public func TakeRef(ref s Shape) Shape {
+    return s
+}
+public func Mutate(x INonSz[Shape], v Shape) Shape {
+    let arr = x.R()
+    arr[0] = v
+    let byRef = TakeRef(&arr[0])
+    let sub []Shape = arr[0..1]
+    return if sub.Length == 1 { byRef } else { arr[^1] }
+}
+public func ReadNullableElement(x INonSz[Shape]) Shape? {
+    return x.RNullable()[0]
+}
+public func ForwardNullableArray(x INonSz[Shape]) -> x.RNullable()
+public func CountLoop(x INonSz[Shape]) int32 {
+    var sum = 0
+    for item in x.R() {
+        sum = sum + item.Tag
+    }
+    return sum
 }
 Console.WriteLine("ok")`, validPath, "/target:exe", "/reference:" + libPath)
             Assert.DoesNotContain(" error ", validLog, StringComparison.Ordinal)

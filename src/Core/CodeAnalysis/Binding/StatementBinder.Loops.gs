@@ -202,7 +202,9 @@ internal partial class StatementBinder {
                 if annotated.ClrType!!.IsArray && annotated.ClrType!!.GetArrayRank() == 1 {
                     iterationKind = ForRangeKind.Indexed
                     keyType = TypeSymbol.Int32
-                    valueType = annotated.GetTypeArgumentSymbolForClrType(
+                    valueType = ExpressionBinder.GetArraySliceElementType(annotated) ??
+                        annotated
+                        .GetTypeArgumentSymbolForClrType(
                         Invariant.Required(
                             annotated.ClrType!!.GetElementType(),
                             "a single-dimensional CLR array has an element type",
@@ -329,7 +331,9 @@ internal partial class StatementBinder {
                 if imp.ClrType!!.IsArray && imp.ClrType!!.GetArrayRank() == 1 {
                     iterationKind = ForRangeKind.Indexed
                     keyType = TypeSymbol.Int32
-                    valueType = TypeSymbol.FromClrTypeWithoutNullability(
+                    valueType = ExpressionBinder.GetArraySliceElementType(imp) ??
+                        TypeSymbol
+                        .FromClrTypeWithoutNullability(
                         Invariant.Required(
                             imp.ClrType!!.GetElementType(),
                             "a single-dimensional CLR array has an element type",

@@ -2278,13 +2278,7 @@ internal class MemberLookup {
                     methodTypeArguments,
                     preserveReferenceTupleIdentity
                 )
-                let contextObject = ResolveErasedObjectInContext(openDefinition ?? openClr)
-                let elementClr = ProjectSymbolicArgToErasedClr(mappedElement, contextObject) ?? contextObject
-                return ImportedTypeSymbol.GetConstructed(
-                    elementClr.MakeArrayType(1),
-                    openDefinition: nil,
-                    ImmutableArray.Create(mappedElement)
-                )
+                return ConstructRankOneNonSzArray(mappedElement, openDefinition ?? openClr)
             }
             // Issue #794: an open generic type's instance member can return an
             // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
@@ -5212,6 +5206,16 @@ internal class MemberLookup {
                 }
             }
             return TypeSymbol.GetWrappedTypes(type).Any(ContainsReferenceTuple)
+        }
+
+        internal func ConstructRankOneNonSzArray(mappedElement TypeSymbol, contextClr Type) TypeSymbol {
+            let contextObject = ResolveErasedObjectInContext(contextClr)
+            let elementClr = ProjectSymbolicArgToErasedClr(mappedElement, contextObject) ?? contextObject
+            return ImportedTypeSymbol.GetConstructed(
+                elementClr.MakeArrayType(1),
+                openDefinition: nil,
+                ImmutableArray.Create(mappedElement)
+            )
         }
 
         private func ContainsRankOneNonSzArray(type TypeSymbol) bool {

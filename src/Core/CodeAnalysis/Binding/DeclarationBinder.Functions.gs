@@ -3557,6 +3557,15 @@ internal partial class DeclarationBinder {
             type TypeSymbol,
             @NotNullWhen(true) out elementType TypeSymbol?
         ) bool {
+            if type is NullabilityAnnotatedTypeSymbol annotated &&
+                annotated.ClrType is {IsArray: true, IsSZArray: false} annotatedArrayClr &&
+                annotatedArrayClr.GetArrayRank() == 1 && annotatedArrayClr.GetElementType() is {} annotatedClrElement {
+                elementType = ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                    annotatedClrElement,
+                    annotated.GetTypeArgumentSymbolForClrType(annotatedClrElement)
+                )
+                return true
+            }
             if type is ImportedTypeSymbol imported &&
                 imported.ClrType is {IsArray: true, IsSZArray: false} arrayClr &&
                 arrayClr.GetArrayRank() == 1 {
