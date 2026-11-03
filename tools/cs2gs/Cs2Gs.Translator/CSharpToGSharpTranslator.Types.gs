@@ -2721,16 +2721,20 @@ partial class CSharpToGSharpTranslator {
                     .Values
                     .Select((lift LiftedRecursiveLocalFunction) -> lift.Name!!)
             )
-            occupied.UnionWith(
-                arm!!
-                    .DescendantTokens()
-                    .Where(
-                    (token Microsoft.CodeAnalysis.SyntaxToken) -> token.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken
-                    )
-                )
-                    .Select((token Microsoft.CodeAnalysis.SyntaxToken) -> this.nameAllocator.GetName(token.ValueText))
-            )
+            occupied.UnionWith(this.predeclaredOutLocalNames.Values)
+            let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? recursive?.SyntaxTree.GetRoot()
+            if body != nil {
+                occupied.UnionWith(this.CollectOccupiedSynthesizedLocalNames(body))
+            }
+            for token in arm!!.DescendantTokens() {
+                if !token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) {
+                    continue
+                }
+                occupied.Add(this.nameAllocator.GetName(token.ValueText))
+                if token.Parent != nil {
+                    occupied.Add(this.EmittedName(token.Parent, token)!!)
+                }
+            }
             let owner INamedTypeSymbol? = this
                 .state
                 .CurrentEmittedAggregate ??
@@ -2745,6 +2749,13 @@ partial class CSharpToGSharpTranslator {
                 occupied.Contains
             )
             usedDesignators!!.Add(designator)
+            if body != nil &&
+                this
+                .state
+                .SynthesizedLocalOccupiedNamesByBody
+                .TryGetValue(body, out var updatedOccupied) {
+                updatedOccupied.Add(designator)
+            }
             return designator
         }
 
@@ -3536,11 +3547,14 @@ partial class CSharpToGSharpTranslator {
                     addedNullableBindings.Add(symbol)
                 }
             }
+            let outerOutDeclarations List[GStatement]? = this.state.FunctionArgumentOutDeclarations
+            this.state.FunctionArgumentOutDeclarations = prologue
             try {
                 let result GExpression? = this.TranslateConditionWithHoist(lambdaBody, prologue)
                 effectiveType = this.GetManagedReferenceArrayProjectedArgumentType(lambdaBody)
                 return result
             } finally {
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
                 for symbol in addedNullableBindings {
                     this.state.NullableForEachBindings.Remove(symbol)
                 }

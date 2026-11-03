@@ -52,6 +52,7 @@ namespace Demo
 }`)
         // The out parameter itself is tainted (assigned an `as`-cast)...
         Assert.Contains("out picked string?", printed)
+        Assert.Contains("if this.TryPick(value, out var picked)", printed)
         // ...and the receiving out-var local now inherits that taint, which the
         // fixpoint carries onward through the argument edge into `Consume`'s
         // parameter — the whole chain agrees on `string?` and the read needs no
@@ -59,6 +60,997 @@ namespace Demo
         // `Consume` kept `string`, and gsc rejected the `T? -> T` argument.)
         Assert.Contains("func Consume(exact string?)", printed)
         Assert.Contains("Consume(picked)", printed)
+    }
+
+    @Fact
+    func Oblivious_TaintedValueAssignedIntoInlineOutDeclaration_PredeclaresNullableLocal() {
+        // Issue #4598: `out var x` / `out T x` takes its G# type from the callee's
+        // `out` parameter. When the callee's parameter stays non-null (`Dictionary<int, Node>`
+        // or an unpromoted source `out Node`) while the local itself is tainted by a
+        // nullable write, emit `var x Node?` ahead of the statement and pass `out x`
+        // so the write binds without a runtime `!!` that would throw on null.
+        let printed = TranslateOblivious(`
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class Node
+    {
+        public int Start => 7;
+    }
+
+    public static class C
+    {
+        private static Node Unwrap(Node node) => node;
+
+        private static bool TryGetFixed(int key, out Node value)
+        {
+            value = new Node();
+            return key > 0;
+        }
+
+        public static int RunHit(Node a, Node maybe)
+        {
+            if (maybe == null) { maybe = a; }
+            var cache = new Dictionary<int, Node>();
+            if (!cache.TryGetValue(1, out Node value))
+            {
+                value = Unwrap(maybe);
+                cache.Add(1, value);
+            }
+
+            return value.Start;
+        }
+
+        private static string Describe(Node node) => node == null ? "null" : "node:" + node.Start;
+
+        public static string RunNullStore(Node maybe)
+        {
+            if (maybe == null) { }
+            var cache = new Dictionary<int, Node>();
+            if (!cache.TryGetValue(1, out var inferred))
+            {
+                inferred = Unwrap(maybe);
+            }
+
+            if (!TryGetFixed(0, out Node fromSource))
+            {
+                fromSource = Unwrap(maybe);
+            }
+
+            return Describe(inferred) + ":" + Describe(fromSource);
+        }
+
+        public static string MainEntry() =>
+            RunHit(new Node(), null) + ":" + RunNullStore(null) + ":" + RunNullStore(new Node());
+    }
+}`)
+        Assert.Contains("var value Node?", printed)
+        Assert.Contains("if !cache.TryGetValue(1, out value)", printed)
+        Assert.Contains("value = Unwrap(maybe)", printed)
+        Assert.Contains("cache.Add(1, value!!)", printed)
+        Assert.Contains("return value!!.Start", printed)
+        Assert.Contains("var inferred Node?", printed)
+        Assert.Contains("if !cache.TryGetValue(1, out inferred)", printed)
+        Assert.Contains("var fromSource Node?", printed)
+        Assert.Contains("if !TryGetFixed(0, out fromSource)", printed)
+        Assert.DoesNotContain("Unwrap(maybe)!!", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "7:null:null:node:7:node:7"
+        )
+    }
+
+    @Fact
+    func Oblivious_PromotedOutDeclarationsInSiblingLoopsAndSwitchGuards_DisambiguateNames() {
+        let printed = TranslateOblivious(`
+namespace Demo
+{
+    public static class C
+    {
+        private static int step;
+
+        private static bool Next(out string value)
+        {
+            step++;
+            value = "v" + step;
+            return step <= 1;
+        }
+
+        public static string RunLoops()
+        {
+            step = 0;
+            string acc = "";
+            while (Next(out string value))
+            {
+                acc += value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            step = 0;
+            while (Next(out string value))
+            {
+                acc += ":" + value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            step = 0;
+            for (int i = 0; Next(out string value) && i < 1; i++)
+            {
+                acc += ":" + value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            step = 0;
+            for (int i = 0; Next(out string value) && i < 1; i++)
+            {
+                acc += ":" + value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            return acc;
+        }
+
+        public static string RunSwitch(int selector)
+        {
+            step = 0;
+            switch (selector)
+            {
+                case 1 when Next(out string value):
+                    string first = value;
+                    value = null;
+                    return first + ":" + (value ?? "nil");
+                case 2 when Next(out string value):
+                    string second = value;
+                    value = null;
+                    return second + ":" + (value ?? "nil");
+                default:
+                    return "none";
+            }
+        }
+
+        public static string RunSwitchExpr(int selector)
+        {
+            step = 0;
+            return selector switch
+            {
+                1 when Next(out string value) => value + ":" + ((value = null) ?? "nil"),
+                2 when Next(out string value) => value + ":" + ((value = null) ?? "nil"),
+                _ => "none",
+            };
+        }
+
+        public static string MainEntry() =>
+            RunLoops() + "|" + RunSwitch(1) + "|" + RunSwitch(2) + "|" + RunSwitchExpr(1) + "|" + RunSwitchExpr(2);
+    }
+}`)
+        Assert.Contains("var value string?", printed)
+        Assert.Contains("var value_2 string?", printed)
+        Assert.Contains("Next(out value)", printed)
+        Assert.Contains("Next(out value_2)", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "v1nil:v1nil:v1nil:v1nil|v1:nil|v1:nil|v1:nil|v1:nil"
+        )
+    }
+
+    @Fact
+    func Oblivious_PatternAndDeconstructionArrayLocals_KeepUnbridgedDeconstructionElementStore() {
+        let printed = TranslateOblivious(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+
+    public static class C
+    {
+        private static Entry Empty() => new Entry(null, 0);
+
+        public static string ViaPattern()
+        {
+            var items = new Node[1];
+            items[0] = null;
+            if (items is var arr)
+            {
+                if (arr == null) { return "missing"; }
+                int i;
+                (arr[0], i) = Empty();
+                object stored = arr[0];
+                return (stored == null) + ":" + i;
+            }
+
+            return "none";
+        }
+
+        public static string ViaDeconstruction()
+        {
+            var items = new Node[1];
+            items[0] = null;
+            var pair = (items, 1);
+            var (arr, _) = pair;
+            if (arr == null) { return "missing"; }
+            int i;
+            (arr[0], i) = Empty();
+            object stored = arr[0];
+            return (stored == null) + ":" + i;
+        }
+
+        public static string MainEntry() => ViaPattern() + "|" + ViaDeconstruction();
+    }
+}`)
+        Assert.DoesNotContain("arrValue!!", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "True:0|True:0"
+        )
+    }
+
+    @Fact
+    func Oblivious_QueryClausePromotedOutLocal_AndSynthesizedTempDisambiguation() {
+        let printed = TranslateOblivious(`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Demo
+{
+    public class Item
+    {
+        public int Code { get; set; }
+    }
+
+    public static class C
+    {
+        private static int step;
+
+        private static bool Next(out string item)
+        {
+            step++;
+            item = "s" + step;
+            return step <= 1;
+        }
+
+        private static bool TryLookup(int key, out string value)
+        {
+            value = "k" + key;
+            return key <= 2;
+        }
+
+        public static string RunQuery()
+        {
+            var keys = new[] { 1, 2, 3 };
+            var readers = (
+                from k in keys
+                select (TryLookup(k, out string value)
+                    ? new Func<string>(() => value ?? "nil")
+                    : new Func<string>(() => (value = null) ?? "nil"))
+            ).ToArray();
+            return string.Join(":", readers.Select(r => r()));
+        }
+
+        public static IEnumerable<int> YieldAfterLoops(bool flag)
+        {
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            yield return flag ? 1 : 2;
+        }
+
+        public static IEnumerable<int> YieldBeforeLoops(bool flag)
+        {
+            yield return flag ? 10 : 20;
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+        }
+
+        public static string PatternDesignatorAfterRenamedOut(object boxed)
+        {
+            step = 0;
+            while (Next(out string item))
+            {
+                item = null;
+            }
+
+            step = 0;
+            switch (boxed)
+            {
+                case Item { Code: 7 } when Next(out string item):
+                    string seen = item;
+                    item = null;
+                    return seen + ":" + (item ?? "nil");
+                default:
+                    return "none";
+            }
+        }
+
+        public static string TwoCapturedPromotedOutLocals()
+        {
+            if (!TryLookup(1, out string first))
+            {
+                first = null;
+            }
+
+            if (!TryLookup(9, out string second))
+            {
+                second = null;
+            }
+
+            Func<string> combine = () => (first ?? "nil") + ":" + (second ?? "nil");
+            return combine();
+        }
+
+        private static bool NextThree(out string value)
+        {
+            step++;
+            value = step.ToString();
+            return step <= 2;
+        }
+
+        public static string EscapingClosureInLoopCondition()
+        {
+            step = 0;
+            var readers = new List<Func<string>>();
+            while (NextThree(out string value))
+            {
+                readers.Add(() => value ?? "nil");
+                value = null;
+            }
+
+            step = 0;
+            var forReaders = new List<Func<string>>();
+            for (int i = 0; NextThree(out string value); i++)
+            {
+                forReaders.Add(() => value ?? "nil");
+                value = null;
+            }
+
+            return string.Join(":", readers.Select(r => r())) + "/" + string.Join(":", forReaders.Select(r => r()));
+        }
+
+        public static string MainEntry() =>
+            RunQuery() + "|" +
+            string.Join(",", YieldAfterLoops(true)) + "|" +
+            string.Join(",", YieldBeforeLoops(true)) + "|" +
+            PatternDesignatorAfterRenamedOut(new Item { Code = 7 }) + "|" +
+            TwoCapturedPromotedOutLocals() + "|" +
+            EscapingClosureInLoopCondition();
+    }
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "k1:k2:nil|1|10|s1:nil|k1:nil|nil:nil/nil:nil"
+        )
+    }
+
+    @Fact
+    func Oblivious_DoWhileContinueAndHoistedPatternNullability_PreserveRuntimeSemantics() {
+        let printed = TranslateOblivious(`
+using System;
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public sealed class ScopeTracker : IDisposable
+    {
+        private readonly List<string> log;
+        public ScopeTracker(List<string> log)
+        {
+            this.log = log;
+            this.log.Add("enter");
+        }
+
+        public void Dispose() => this.log.Add("dispose");
+    }
+
+    public static class C
+    {
+        private static int step;
+        private static int filterCalls;
+
+        private static bool Next(out string value)
+        {
+            step++;
+            value = "v" + step;
+            return step <= 1;
+        }
+
+        private static bool ThrowOnCond(out string value)
+        {
+            value = "boom";
+            throw new InvalidOperationException("cond");
+        }
+
+        private static bool LogCond(List<string> log, out string value)
+        {
+            step++;
+            value = "v" + step;
+            log.Add("cond:" + step);
+            return step <= 1;
+        }
+
+        private static bool FalseFilter()
+        {
+            filterCalls++;
+            return false;
+        }
+
+        private static string RequireNonNull(string s) => s.ToUpperInvariant();
+
+        public static string DoContinueTryCatchDoesNotCatchConditionException()
+        {
+            int bodyCaught = 0;
+            try
+            {
+                do
+                {
+                    try
+                    {
+                        continue;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        bodyCaught++;
+                    }
+                } while (ThrowOnCond(out string value) && (value = null) == null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message + ":" + bodyCaught;
+            }
+
+            return "missed";
+        }
+
+        public static string DoContinueUsingDisposesBeforeCondition()
+        {
+            step = 0;
+            var log = new List<string>();
+            do
+            {
+                using (new ScopeTracker(log))
+                {
+                    if (step == 0)
+                    {
+                        continue;
+                    }
+                }
+            } while (LogCond(log, out string value) && (value = null) == null);
+
+            return string.Join(">", log);
+        }
+
+        public static string DoContinuePreservesCatchFilter()
+        {
+            step = 0;
+            filterCalls = 0;
+            try
+            {
+                do
+                {
+                    if (step == 1)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        throw new InvalidOperationException("filtered");
+                    }
+                    catch (InvalidOperationException) when (FalseFilter())
+                    {
+                        return "swallowed";
+                    }
+                } while (Next(out string value) && (value = null) == null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message + ":" + filterCalls;
+            }
+
+            return "missed";
+        }
+
+        public static string DoContinueInsideSwitchExitsLoop()
+        {
+            step = 1;
+            int afterSwitch = 0;
+            do
+            {
+                switch (step)
+                {
+                    case 1:
+                        continue;
+                }
+
+                afterSwitch++;
+            } while (Next(out string value) && (value = null) == null);
+
+            return step + ":" + afterSwitch;
+        }
+
+        public static string HoistedPatternChecksPromotedNullability()
+        {
+            step = 0;
+            while (Next(out string x) && (x = null) == null && x is string y)
+            {
+                return "entered:" + RequireNonNull(y);
+            }
+
+            step = 0;
+            string matched = "none";
+            while (Next(out string x) && x is string y)
+            {
+                x = null;
+                y = RequireNonNull(y);
+                matched = RequireNonNull(y) + ":" + (x ?? "nil");
+            }
+
+            return "skipped/" + matched;
+        }
+
+        public struct Token
+        {
+            public int Code;
+            public Token(object ignored) => this.Code = -999;
+        }
+
+        public sealed class Box
+        {
+            private int reads;
+            public string Name { get; set; }
+            public object Value { get; set; }
+            public int ReadCount => this.reads;
+            public string ComputedName => "n" + (++this.reads);
+            public Box NullChild => default(Box);
+        }
+
+        public static string NestedPropertyPatternInHoistedLoop(Box box)
+        {
+            step = 0;
+            while (Next(out string x) && box is { Name: string name })
+            {
+                x = null;
+                return RequireNonNull(name) + ":" + (x ?? "nil");
+            }
+
+            return "no-match";
+        }
+
+        public static string BoxedValuePropertyPatternInHoistedLoop(Box box)
+        {
+            step = 0;
+            while (Next(out string x) && box is { Value: int n })
+            {
+                x = null;
+                return n + ":" + (x ?? "nil");
+            }
+
+            step = 0;
+            while (Next(out string x) && box is { Value: Token t })
+            {
+                x = null;
+                return "tok" + t.Code + ":" + (x ?? "nil");
+            }
+
+            return "no-int";
+        }
+
+        public static string ReassignedSecondaryWholeValueBinder(object o)
+        {
+            step = 0;
+            while (Next(out string x) && o is string first and var second)
+            {
+                x = null;
+                second = "changed";
+                return RequireNonNull(first) + ":" + second + ":" + (x ?? "nil");
+            }
+
+            return "no-match";
+        }
+
+        public static string NegatedAndDoubleNegatedPatternInHoistedLoop()
+        {
+            step = 0;
+            object nonString = 42;
+            string notMatched = "missed";
+            while (Next(out string x) && nonString is not string unused)
+            {
+                x = null;
+                notMatched = "body:" + (x ?? "nil");
+            }
+
+            step = 0;
+            object strObj = "assigned";
+            string doubleNeg = "missed";
+            while (Next(out string x) && !(strObj is not string assigned))
+            {
+                x = null;
+                doubleNeg = RequireNonNull(assigned) + ":" + (x ?? "nil");
+            }
+
+            return notMatched + "/" + doubleNeg;
+        }
+
+        public static string ComputedPropertyPatternEvaluatedOnce()
+        {
+            step = 0;
+            var box = new Box();
+            while (Next(out string x) && box is { ComputedName: string name })
+            {
+                x = null;
+                return RequireNonNull(name) + ":" + box.ReadCount;
+            }
+
+            return "none";
+        }
+
+        public static string ComputedPropertyVarPatternEvaluatedOnce()
+        {
+            step = 0;
+            var box = new Box();
+            while (Next(out string x) && box is { ComputedName: var name })
+            {
+                x = null;
+                return RequireNonNull(name) + ":" + box.ReadCount;
+            }
+
+            return "none";
+        }
+
+        public static string NullComputedPropertyVarPatternMatches(Box box)
+        {
+            string ifResult = "missed";
+            if (box is { NullChild: var c })
+            {
+                c = new Box { Name = "replaced" };
+                ifResult = c.Name;
+            }
+
+            step = 0;
+            string whileResult = "missed";
+            while (Next(out string x) && box is { NullChild: var loopChild })
+            {
+                x = null;
+                loopChild = new Box { Name = "loop" };
+                whileResult = loopChild.Name;
+            }
+
+            return ifResult + ":" + whileResult;
+        }
+
+        public static string DoAndForContinueInsideLock()
+        {
+            object gate = new object();
+            step = 0;
+            int doRuns = 0;
+            do
+            {
+                doRuns++;
+                lock (gate)
+                {
+                    continue;
+                }
+            } while (Next(out string x) && (x = null) == null);
+
+            step = 0;
+            int forIncs = 0;
+            for (; Next(out string x); forIncs++)
+            {
+                x = null;
+                lock (gate)
+                {
+                    continue;
+                }
+            }
+
+            return doRuns + ":" + step + "/" + forIncs;
+        }
+
+        private static int index;
+
+        public static string ForBodyLocalShadowsStaticIncrementorTarget()
+        {
+            step = 0;
+            index = 0;
+            for (; Next(out string value); index++)
+            {
+                int index = 40;
+                index++;
+                value = (value = null) ?? index.ToString();
+            }
+
+            return index.ToString();
+        }
+
+        private static void ThrowIncrementor() => throw new InvalidOperationException("inc");
+
+        public static string ForContinueTryCatchDoesNotCatchIncrementorException()
+        {
+            step = 0;
+            try
+            {
+                for (; Next(out string value); ThrowIncrementor())
+                {
+                    value = null;
+                    try
+                    {
+                        continue;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return "caught";
+                    }
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message;
+            }
+
+            return "missed";
+        }
+
+        public static string ForContinueUsingDisposesBeforeIncrementor()
+        {
+            step = 0;
+            var log = new List<string>();
+            for (; Next(out string value); _ = LogCond(log, out string inc) && (inc = null) == null)
+            {
+                value = null;
+                using (new ScopeTracker(log))
+                {
+                    if (step == 1)
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            return string.Join(">", log);
+        }
+
+        public static bool GenericTypeParameterPatternInHoistedLoop<T>(T value)
+        {
+            step = 0;
+            while (Next(out string x) && value is T y)
+            {
+                x = null;
+                return y != null;
+            }
+
+            return false;
+        }
+
+        public sealed class CountingBuffer
+        {
+            private int reads;
+            public int Length => 1;
+            public int ReadCount => this.reads;
+            public string this[int index] => "e" + (++this.reads) + "@" + index;
+        }
+
+        public static string PromotedTopLevelVarPatternInHoistedLoop()
+        {
+            step = 0;
+            while (Next(out string x) && "seed" is var value)
+            {
+                string first = value;
+                x = null;
+                value = null;
+                return first + ":" + (value ?? "nil") + ":" + (x ?? "nil");
+            }
+
+            return "none";
+        }
+
+        public static string CountingIndexerListPatternInHoistedLoop()
+        {
+            step = 0;
+            var buffer = new CountingBuffer();
+            while (Next(out string x) && buffer is [string first])
+            {
+                x = null;
+                return RequireNonNull(first) + ":" + buffer.ReadCount;
+            }
+
+            return "none";
+        }
+
+        public static string NullableArrayListPatternInHoistedLoop(string[] values)
+        {
+            if (values == null)
+            {
+                values = null;
+            }
+
+            step = 0;
+            while (Next(out string x) && values is [var first])
+            {
+                x = null;
+                return RequireNonNull(first) + ":" + (x ?? "nil");
+            }
+
+            return "no-list";
+        }
+
+        public static string NonLoopFallbackVarCaptureMemberDereference()
+        {
+            var box = new Box();
+            if (box is { ComputedName: var text, ReadCount: var code })
+            {
+                code++;
+                return text.Length + ":" + code + ":" + box.ReadCount;
+            }
+
+            return "none";
+        }
+
+        public static string UnbracedDoIfPatternGuardWithContinue(object o)
+        {
+            step = 0;
+            int total = 0;
+            do
+                if (o is int n && n > 0)
+                {
+                    n++;
+                    total += n;
+                    continue;
+                }
+                else
+                {
+                    break;
+                }
+            while (Next(out string x) && (x = null) == null);
+
+            return total + ":" + step;
+        }
+
+        private static bool StaticAgain() => step < 1;
+
+        public static string DoBodyLocalFunctionDoesNotShadowConditionTarget()
+        {
+            step = 0;
+            int runs = 0;
+            do
+            {
+                runs++;
+                bool StaticAgain() => runs < 10;
+                _ = StaticAgain();
+            } while (Next(out string x) && StaticAgain() && (x = null) == null);
+
+            return runs + ":" + step;
+        }
+
+        public static string WholeListDesignationInHoistedLoop(int[] items)
+        {
+            step = 0;
+            while (Next(out string x) && items is [1] matched)
+            {
+                x = null;
+                return matched[0] + ":" + (x ?? "nil");
+            }
+
+            return "no-match";
+        }
+
+        public static string CapturedPromotedOutVarDoesNotCollideWithLambdaPromotedOutVar()
+        {
+            step = 0;
+            if (Next(out string @func))
+            {
+                Func<string> f = () =>
+                {
+                    step = 0;
+                    if (Next(out string func_))
+                    {
+                        func_ = null;
+                    }
+
+                    return (@func ?? "outer-nil") + ":" + (func_ ?? "inner-nil");
+                };
+                string first = f();
+                @func = null;
+                string second = f();
+                return first + "/" + second;
+            }
+
+            return "missed";
+        }
+
+        public static string MainEntry() =>
+            DoContinueTryCatchDoesNotCatchConditionException() + "|" +
+            DoContinueUsingDisposesBeforeCondition() + "|" +
+            DoContinuePreservesCatchFilter() + "|" +
+            DoContinueInsideSwitchExitsLoop() + "|" +
+            HoistedPatternChecksPromotedNullability() + "|" +
+            NestedPropertyPatternInHoistedLoop(new Box { Name = "ok" }) + ":" +
+            NestedPropertyPatternInHoistedLoop(new Box { Name = null }) + "|" +
+            ForContinueTryCatchDoesNotCatchIncrementorException() + "|" +
+            ForContinueUsingDisposesBeforeIncrementor() + "|" +
+            GenericTypeParameterPatternInHoistedLoop<string>(null) + ":" +
+            GenericTypeParameterPatternInHoistedLoop<string>("hi") + "|" +
+            BoxedValuePropertyPatternInHoistedLoop(new Box { Value = 42 }) + ":" +
+            BoxedValuePropertyPatternInHoistedLoop(new Box { Value = new Token { Code = 7 } }) + ":" +
+            BoxedValuePropertyPatternInHoistedLoop(new Box { Value = "nope" }) + "|" +
+            ReassignedSecondaryWholeValueBinder("orig") + "|" +
+            NegatedAndDoubleNegatedPatternInHoistedLoop() + "|" +
+            ComputedPropertyPatternEvaluatedOnce() + ":" +
+            ComputedPropertyVarPatternEvaluatedOnce() + ":" +
+            NullComputedPropertyVarPatternMatches(new Box()) + "|" +
+            DoAndForContinueInsideLock() + "|" +
+            ForBodyLocalShadowsStaticIncrementorTarget() + "|" +
+            PromotedTopLevelVarPatternInHoistedLoop() + "|" +
+            CountingIndexerListPatternInHoistedLoop() + "|" +
+            NullableArrayListPatternInHoistedLoop(null) + ":" +
+            NullableArrayListPatternInHoistedLoop(new[] { "item" }) + "|" +
+            NonLoopFallbackVarCaptureMemberDereference() + "|" +
+            UnbracedDoIfPatternGuardWithContinue(5) + "|" +
+            DoBodyLocalFunctionDoesNotShadowConditionTarget() + "|" +
+            WholeListDesignationInHoistedLoop(new[] { 1 }) + "|" +
+            CapturedPromotedOutVarDoesNotCollideWithLambdaPromotedOutVar();
+    }
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|body:nil/ASSIGNED:nil|N1:1:N1:1:replaced:loop|2:2/1|1|seed:nil:nil|E1@0:1|no-list:ITEM:nil|2:2:1|12:2|1:1|1:nil|v1:inner-nil/outer-nil:inner-nil"
+        )
+    }
+
+    @Fact
+    func Oblivious_ConstructorInitializerPromotedOutVar_ReportsUnsupported() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", `
+namespace Demo
+{
+    public class B
+    {
+        public B(out string value) => value = "ok";
+    }
+
+    public class D : B
+    {
+        public D() : base(out string x)
+        {
+            x = null;
+        }
+    }
+}`)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(document, context)
+        Assert.Contains(
+            context.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message!!.Contains(
+                "constructor-initializer"
+            )
+        )
     }
 
     @Fact

@@ -3802,6 +3802,7 @@ internal class ConversionClassifier {
                 if ownsDataInitialization || initializedFields.Contains(field) {
                     continue
                 }
+                binderCtx.EnsureStructFieldInitializerBound?.Invoke(plan!!.Construction.UserType!!, field)
                 if TryGetStructuralProjectionFieldInitializer(
                     plan!!.Construction.UserType!!,
                     field,

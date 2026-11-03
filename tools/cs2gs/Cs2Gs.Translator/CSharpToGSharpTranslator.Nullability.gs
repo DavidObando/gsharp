@@ -751,6 +751,16 @@ partial class CSharpToGSharpTranslator {
                 (!acceptsNil || this.state.EmittedLocalTypeClauses.Contains(local)) {
                 return acceptsNil
             }
+            if this
+                .state
+                .PatternBindings
+                .TryGetValue(local, out var boundReplacement) &&
+                this
+                .state
+                .StoredPatternCaptures
+                .Contains(boundReplacement) {
+                return true
+            }
             if !this.ShouldPromoteToNullableReference(local) &&
                 local
                 .DeclaringSyntaxReferences

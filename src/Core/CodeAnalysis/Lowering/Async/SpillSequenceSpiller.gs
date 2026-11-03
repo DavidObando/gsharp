@@ -1547,6 +1547,24 @@ shared class SpillSequenceSpiller {
         }
 
         private func SpillFieldAssignment(assign BoundFieldAssignmentExpression) BoundSpillSequenceExpression {
+            if assign.ReceiverExpression != nil {
+                return SpillTwoOperand(
+                    assign,
+                    assign.ReceiverExpression,
+                    assign.Value,
+                    func (recv BoundExpression, val BoundExpression) BoundExpression {
+                        return BoundFieldAssignmentExpression.WithExpressionReceiver(
+                            nil,
+                            recv,
+                            BoundNodeForm.DeclaringType(assign),
+                            assign.Field,
+                            val,
+                            assign.ResultType
+                        )
+                    },
+                    preserveReceiverStorage: true
+                )
+            }
             // Receiver is a VariableSymbol — already a stable local read, no spilling needed.
             // Only the RHS Value can contain an await.
             if !HasAwait(assign.Value) {
