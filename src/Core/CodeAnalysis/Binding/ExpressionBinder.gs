@@ -3402,6 +3402,10 @@ internal partial class ExpressionBinder {
             var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
             if candidate.IsGeneric {
                 substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                OverloadResolver.SeedFixedOwnerTypeParameters(
+                    candidateOwner ?? candidate.StaticOwnerType ?? candidate.ReceiverType,
+                    substitution
+                )
                 if parameterOffset == 1 {
                     let receiverParameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[0].Type) ??
                         candidate

@@ -966,6 +966,7 @@ internal partial class ExpressionBinder {
             return false
         }
         let definitions = [segments.Count]TypeSymbol
+        let inheritedDeclaringContainers = [segments.Count]StructSymbol?
         definitions[0] = headDef!!
         for var i = 1; i < segments.Count; i++ {
             let containerDef = (definitions[i - 1] as StructSymbol)?.Definition ?? definitions[i - 1]
@@ -985,7 +986,7 @@ internal partial class ExpressionBinder {
                 out var inheritedNested,
                 out var declaringContainer
             ) {
-                definitions[i - 1] = declaringContainer!!
+                inheritedDeclaringContainers[i - 1] = declaringContainer
                 definitions[i] = inheritedNested!!
             } else {
                 return false
@@ -999,33 +1000,83 @@ internal partial class ExpressionBinder {
         // CollectConstructedEnclosingArguments).
         var enclosingBuilder ImmutableArray[TypeSymbol].Builder? = ImmutableArray.CreateBuilder[TypeSymbol]()
         for var i = 0; i < segments.Count - 1; i++ {
-            let ownParams = switch definitions[i] {
-                case s is StructSymbol: (s.Definition ?? s).TypeParameters
-                case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
-                default: ImmutableArray[TypeParameterSymbol].Empty
-            }
-            if ownParams.IsDefaultOrEmpty {
-                continue
-            }
-            let constructionArgs = if definitions[i] is StructSymbol constructedStruct &&
-                !constructedStruct
-                .TypeArguments
-                .IsDefaultOrEmpty {
-                constructedStruct.TypeArguments
-            } else {
-                segments[i].Args
-            }
-            if constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length {
-                enclosingBuilder = nil
-                break
-            }
             if definitions[i] is StructSymbol nestedConstruction &&
                 !nestedConstruction
                 .EnclosingTypeArguments
                 .IsDefaultOrEmpty {
+                enclosingBuilder!!.Clear()
                 enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
             }
-            enclosingBuilder!!.AddRange(constructionArgs)
+            let ownParams = switch definitions[i] {
+                case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
+                case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
+                default: ImmutableArray[TypeParameterSymbol].Empty
+            }
+            var constructionArgs = default(ImmutableArray[TypeSymbol])
+            if !ownParams.IsDefaultOrEmpty {
+                constructionArgs = if definitions[i] is StructSymbol constructedStruct &&
+                    !constructedStruct
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    constructedStruct.TypeArguments
+                } else {
+                    segments[i].Args
+                }
+                if constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length {
+                    enclosingBuilder = nil
+                    break
+                }
+            }
+            if inheritedDeclaringContainers[i] is {} declaredOwner && definitions[i] is StructSymbol containerStruct {
+                let def = containerStruct.Definition ?? containerStruct
+                let precedingEnclosingArgs = if enclosingBuilder!!.Count > 0 {
+                    enclosingBuilder!!.ToImmutable()
+                } else {
+                    default(ImmutableArray[TypeSymbol])
+                }
+                let resolvedContainer = if !precedingEnclosingArgs.IsDefaultOrEmpty &&
+                    !constructionArgs
+                    .IsDefaultOrEmpty {
+                    StructSymbol.ConstructNestedGeneric(
+                        def,
+                        precedingEnclosingArgs,
+                        constructionArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )!!
+                } else if !precedingEnclosingArgs.IsDefaultOrEmpty {
+                    StructSymbol.ConstructNested(
+                        def,
+                        precedingEnclosingArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )!!
+                } else if !constructionArgs.IsDefaultOrEmpty {
+                    StructSymbol.Construct(def, constructionArgs, $scope.References!!.MapClrTypeToReferences)!!
+                } else {
+                    containerStruct
+                }
+                let projectedOwner = TypeMemberModel.ResolveStaticMemberOwner(resolvedContainer, declaredOwner)
+                enclosingBuilder!!.Clear()
+                if !projectedOwner.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    enclosingBuilder!!.AddRange(projectedOwner.EnclosingTypeArguments)
+                }
+                let projectedOwnParams = (projectedOwner.Definition ?? projectedOwner).DeclaredTypeParameters
+                if !projectedOwnParams.IsDefaultOrEmpty {
+                    if projectedOwner
+                        .TypeArguments
+                        .IsDefaultOrEmpty ||
+                        projectedOwner
+                        .TypeArguments
+                        .Length != projectedOwnParams.Length {
+                        enclosingBuilder = nil
+                        break
+                    }
+                    enclosingBuilder!!.AddRange(projectedOwner.TypeArguments)
+                }
+                continue
+            }
+            if !constructionArgs.IsDefaultOrEmpty {
+                enclosingBuilder!!.AddRange(constructionArgs)
+            }
         }
         let enclosingArgs = if enclosingBuilder != nil && enclosingBuilder.Count > 0 {
             enclosingBuilder.ToImmutable()
@@ -1905,7 +1956,8 @@ internal partial class ExpressionBinder {
             return HasStaticMember(importedClassSymbol.ClassType, headName, isCall)
         }
         if userStructSymbol != nil {
-            return HasUserTypeStaticMember(userStructSymbol, headName, isCall)
+            return HasUserTypeStaticMember(userStructSymbol, headName, isCall) ||
+                IsNestedTypeOf(headName, userStructSymbol)
         }
         if interfaceSymbol != nil {
             return HasUserTypeStaticMember(interfaceSymbol, headName, isCall)
@@ -3771,15 +3823,28 @@ internal partial class ExpressionBinder {
             // counterpart of the imported-generic fix in issue #1216 and exercises
             // the binding receiver added in issue #1323.
             var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
-            if ownerDefinition != nil && !object.ReferenceEquals(ownerDefinition, ownerType) &&
+            if effectiveStructOwner != nil && !effectiveStructOwner.EnclosingTypeArguments.IsDefaultOrEmpty {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(effectiveStructOwner)
+                let enclosingCount = Math.Min(
+                    enclosingParams.Length,
+                    effectiveStructOwner.EnclosingTypeArguments.Length
+                )
+                if enclosingCount > 0 {
+                    substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                    for var i = 0; i < enclosingCount; i++ {
+                        substitution[enclosingParams[i]] = effectiveStructOwner.EnclosingTypeArguments[i]
+                    }
+                }
+            }
+            if ownerDefinition != nil && !object.ReferenceEquals(ownerDefinition, effectiveOwnerType) &&
                 !ownerTypeArguments.IsDefaultOrEmpty &&
                 !ownerDefTypeParameters
                 .IsDefaultOrEmpty {
-                substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                substitution ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
                 let defParams = ownerDefTypeParameters
                 let count = Math.Min(defParams.Length, ownerTypeArguments.Length)
                 for var i = 0; i < count; i++ {
-                    substitution[defParams[i]] = ownerTypeArguments[i]
+                    substitution!![defParams[i]] = ownerTypeArguments[i]
                 }
             }
             // Issue #312 / ADR-0020: resolve a generic static method's own type
@@ -3787,6 +3852,7 @@ internal partial class ExpressionBinder {
             // left-to-right inference from argument types.
             if method!!.IsGeneric {
                 substitution ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
+                OverloadResolver.SeedFixedOwnerTypeParameters(effectiveOwnerType, substitution!!)
                 if ce.TypeArgumentList is {} typeArgumentList {
                     let explicitArgs = typeArgumentList.Arguments
                     if explicitArgs.Count != method!!.TypeParameters.Length {
@@ -4231,6 +4297,10 @@ internal partial class ExpressionBinder {
                     identifier = call.Identifier.ValueText
                     return true
                 }
+                case generic is GenericNameExpressionSyntax {
+                    identifier = generic.Identifier.ValueText
+                    return true
+                }
                 case accessor is AccessorExpressionSyntax {
                     return TryGetHeadIdentifier(accessor.LeftPart, out identifier)
                 }
@@ -4359,6 +4429,16 @@ internal partial class ExpressionBinder {
                 }
                 case ne is NameExpressionSyntax when !ne.IdentifierToken.IsMissing {
                     headName = ne.IdentifierToken.ValueText
+                    isCall = false
+                    return !string.IsNullOrEmpty(headName)
+                }
+                case generic is GenericNameExpressionSyntax when !generic.Identifier.IsMissing {
+                    headName = generic.Identifier.ValueText
+                    isCall = false
+                    return !string.IsNullOrEmpty(headName)
+                }
+                case structLiteral is StructLiteralExpressionSyntax when !structLiteral.TypeIdentifier.IsMissing {
+                    headName = structLiteral.TypeIdentifier.ValueText
                     isCall = false
                     return !string.IsNullOrEmpty(headName)
                 }

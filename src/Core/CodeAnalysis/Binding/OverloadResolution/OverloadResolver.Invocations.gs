@@ -1665,6 +1665,7 @@ internal partial class OverloadResolver {
             if substitution == nil {
                 substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
             }
+            SeedFixedOwnerTypeParameters(receiver.Type ?? method.ReceiverType, substitution)
             if ce.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != method.TypeParameters.Length {

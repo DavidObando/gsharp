@@ -572,7 +572,7 @@ partial class CSharpToGSharpTranslator {
                 this
                     .state
                     .PatternBindings[patternSymbol] = InvocationExpression(
-                    IdentifierExpression(namedTarget.Name),
+                    BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
                     []IdentifierExpression{local},
                     namedTarget.TypeArguments
                 )
@@ -619,7 +619,7 @@ partial class CSharpToGSharpTranslator {
             let narrowed GExpression = if targetType is NamedTypeReference namedTarget {
                 cast[GExpression](
                     InvocationExpression(
-                        IdentifierExpression(namedTarget.Name),
+                        BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
                         []GExpression{spill!!},
                         namedTarget.TypeArguments
                     )
