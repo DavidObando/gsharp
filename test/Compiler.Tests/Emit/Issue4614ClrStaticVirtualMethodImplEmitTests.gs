@@ -117,6 +117,48 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
         expectedLines
     )
 
+    /// Issue #4620: static members inherited from a G# base class bind to
+    /// static-virtual interface slots through a synthesized private static
+    /// bridge on the derived class.
+    /// @param name The case name.
+    /// @param source The G# source.
+    /// @param expectedLines The expected stdout lines.
+    @Theory
+    @MemberData("InheritedFromGSharpBaseCases")
+    func InheritedStaticMember_FromGSharpBaseClass_BindsThroughBridge(
+        name string,
+        source string,
+        expectedLines[]string
+    ) -> CompileVerifyAndRun(name, source, expectedLines)
+
+    /// Issue #4618: a missing or mismatched implementation of an imported
+    /// interface's static abstract member is diagnosed at compile time.
+    /// @param name The case name.
+    /// @param source The G# source.
+    /// @param expectedDiagnosticId The expected diagnostic ID.
+    /// @param expectedFragment A substring expected in the diagnostic message.
+    @Theory
+    @MemberData("MissingOrMismatchedClrStaticCases")
+    func MissingOrMismatchedClrStaticSlot_ReportsDiagnostic(
+        name string,
+        source string,
+        expectedDiagnosticId string,
+        expectedFragment string
+    ) {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4618_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let appPath = Path.Combine(tempDir, name + ".dll")
+            let log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(File.Exists(appPath), (`'` + "$name" + `' must not emit an assembly. Log:
+` + "$log"))
+            Assert.Contains("error " + expectedDiagnosticId + ":", log, StringComparison.Ordinal)
+            Assert.Contains(expectedFragment, log, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const RunTimeout int32 = 60_000
 
@@ -146,6 +188,30 @@ public interface IM2<T> { static abstract int M<U>(T x, U y); }
 public interface IInst<T> { int N<U>(T x, U y); }
 public interface IMA<T> { static abstract int M<U>(U[] us, T x); }
 public interface IArr<T> { int A(T[] xs); int B<U>(U[] us, T x); }
+public interface IDefaultedByDerived : IS { static int IS.Z() => 100; }
+public interface ILeft : IS { static int IS.Z() => 10; }
+public interface IRight : IS { static int IS.Z() => 20; }
+public interface IDefaultedGeneric<T> : IH<T> { static int IH<T>.H(T x) => 200; }
+public interface IGenOverload { static abstract int Pick<T, U>(T x); static abstract int Pick<T, U>(U x); }
+public interface IDefaultedFirstOverload : IGenOverload { static int IGenOverload.Pick<T, U>(T x) => 300; }
+public class MultiConstraint<T, U> where T : System.IComparable<T>, System.IComparable<U> { public static int Touch(T? x) => 0; }
+public interface IAsync<T> { static abstract System.Threading.Tasks.Task<T> Load(T x); }
+public interface IValueAsync<T> { static abstract System.Threading.Tasks.ValueTask<T> Load(T x); }
+public interface IAsyncTask { static abstract System.Threading.Tasks.Task Run(); }
+public interface IOp { static abstract int operator +(IOp a, int b); }
+public unsafe interface IFnPtrOverload<T> {
+    static abstract int Call(delegate*<int, int> p, T x);
+    static abstract int Call(delegate* unmanaged[Cdecl]<int, int> p, T x);
+    static abstract int Call(delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int> p, T x);
+}
+public unsafe interface IFnPtrOverloadDefaultedAll<T> : IFnPtrOverload<T> {
+    static int IFnPtrOverload<T>.Call(delegate*<int, int> p, T x) => 50;
+    static int IFnPtrOverload<T>.Call(delegate* unmanaged[Cdecl]<int, int> p, T x) => 51;
+    static int IFnPtrOverload<T>.Call(delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int> p, T x) => 52;
+}
+public unsafe interface IFnPtrOverloadDefaultedManagedOnly<T> : IFnPtrOverload<T> {
+    static int IFnPtrOverload<T>.Call(delegate*<int, int> p, T x) => 50;
+}
 
 public static class Probe
 {
@@ -159,6 +225,9 @@ public static class Probe
     public static int N<T, U>(IInst<T> i, T x, U y) => i.N(x, y);
     public static int A<T>(IArr<T> i, T[] xs) => i.A(xs);
     public static int B<T, U>(IArr<T> i, U[] us, T x) => i.B(us, x);
+    public static T Load<T, TImpl>(T x) where TImpl : IAsync<T> => TImpl.Load(x).GetAwaiter().GetResult();
+    public static unsafe int CallFnPtrDefault<T, TImpl>(T x) where TImpl : IFnPtrOverload<T> =>
+        TImpl.Call((delegate*<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl]<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int>)null, x);
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -474,6 +543,474 @@ struct VN : ISV2 {
 }
 
 Console.WriteLine(Probe.V[VN]())`, []string{"100"}}
+            // A derived CLR interface that supplies an explicit default for an
+            // abstract base slot (`static int IS.Z() => 100;`) leaves the slot
+            // defaulted for implementers of the derived interface.
+            yield[]object{"defaulted-in-derived-clr-interface", `package P
+import System
+import Clib
+
+struct SDefault : IDefaultedByDerived {
+}
+
+Console.WriteLine(Probe.Z[SDefault]())`, []string{"100"}}
+            yield[]object{"defaulted-in-symbolic-derived-clr-interface", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape { }
+struct SDefaultSym : IDefaultedGeneric[Shape] {
+}
+
+let iface = typeof(SDefaultSym).GetInterfaces().Where((i Type) -> i.Name == "IH` + "`" + `1").First()
+Console.WriteLine(typeof(SDefaultSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))`), []string{
+                    "200"
+                }}
+            yield[]object{"defaulted-function-pointer-overloads-in-derived-clr-interface", `package P
+import System
+import Clib
+
+struct SFnPtr : IFnPtrOverloadDefaultedAll[int32] {
+}
+
+Console.WriteLine(Probe.CallFnPtrDefault[int32, SFnPtr](0))`, []string{"153"}}
+        }
+
+        /// Issue #4620: static methods, properties and events inherited from a
+        /// G# base class (including generic base classes and multi-hop chains)
+        /// bind to static-virtual interface slots via synthesized private static
+        /// bridges on the implementing derived class.
+        /// @returns Case name, G# source, expected stdout lines.
+        func InheritedFromGSharpBaseCases() sequence[[]object] {
+            yield[]object{"inherited-static-method-from-gs-base", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        func Z() int32 { return 21 }
+    }
+}
+class D : B, IS {
+}
+class D2 : B, IS2 {
+}
+
+Console.WriteLine(Probe.Z[D]())
+Console.WriteLine(Probe.Z[D2]())`, []string{"21", "21"}}
+            yield[]object{"inherited-from-generic-gs-base-and-symbolic-interface", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape {
+    prop N int32 { get { return 11 } }
+}
+open class BGen[T] {
+    shared {
+        func H(x T) int32 { return 33 }
+        func Count[U](u U) int32 { return 44 }
+    }
+}
+class DGen : BGen[Shape], IH2[Shape], IGen {
+}
+
+let iface = typeof(DGen).GetInterfaces().Where((i Type) -> i.Name == "IH` + "`" + `1").First()
+Console.WriteLine(typeof(DGen).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))
+Console.WriteLine(Probe.Count[DGen]())`), []string{"33", "44"}}
+            yield[]object{"inherited-static-property-and-event-from-gs-base", `package P
+import System
+import Clib
+
+open class BProp {
+    shared {
+        var store int32 = 9
+        prop P int32 { get { return 19 } }
+        prop Q int32 {
+            get { return store }
+            set { store = value * 3 }
+        }
+        var hooked int32 = 0
+        event Changed Action? {
+            add { hooked = hooked + 10 }
+            remove { }
+        }
+    }
+}
+class DProp : BProp, IP2, IPS, IEv2 {
+}
+
+Console.WriteLine(Probe.P[DProp]())
+Console.WriteLine(Probe.SetThenGet[DProp](7))
+Probe.Hook[DProp](() -> {})
+Console.WriteLine(BProp.hooked)`, []string{"19", "21", "10"}}
+            yield[]object{"derived-and-mid-level-static-member-precedence", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        func Z() int32 { return 21 }
+    }
+}
+class DOverride : B, IS {
+    shared {
+        func Z() int32 { return 99 }
+    }
+}
+open class Mid : B {
+    shared {
+        func Z() int32 { return 55 }
+    }
+}
+class Leaf : Mid, IS2 {
+}
+
+Console.WriteLine(Probe.Z[DOverride]())
+Console.WriteLine(Probe.Z[Leaf]())`, []string{"99", "55"}}
+            yield[]object{"inherited-static-member-for-gsharp-declared-interface", `package P
+import System
+import Clib
+
+interface IGs {
+    shared {
+        func Z() int32;
+        prop P int32 { get }
+    }
+}
+open class BGs {
+    shared {
+        func Z() int32 { return 71 }
+        prop P int32 { get { return 72 } }
+    }
+}
+class DGs : BGs, IGs {
+}
+
+Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[0].Invoke(nil, []object?{}))
+Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[1].Invoke(nil, []object?{}))`, []string{
+                    "71",
+                    "72"
+                }}
+            yield[]object{"inherited-async-static-method-from-generic-gs-base", (`package P
+import System
+import System.Linq
+import System.Threading.Tasks
+import Clib
+
+class Shape {
+    var Tag int32
+}
+open class BAsync[T] {
+    shared {
+        async func Load(x T) T { return x }
+    }
+}
+class DAsync : BAsync[int32], IAsync[int32] {
+}
+class DAsyncSym : BAsync[Shape], IAsync[Shape] {
+}
+
+Console.WriteLine(Probe.Load[int32, DAsync](77))
+let iface = typeof(DAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IAsync` + "`" + `1").First()
+let task = cast[Task[Shape]](typeof(DAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 88}})!!)
+Console.WriteLine(task.GetAwaiter().GetResult().Tag)`), []string{"77", "88"}}
+            yield[]object{"inherited-valuetask-async-static-method-from-generic-gs-base", (`package P
+import System
+import System.Linq
+import System.Threading.Tasks
+import Clib
+
+class Shape {
+    var Tag int32
+}
+open class BValueAsync[T] {
+    shared {
+        async func Load(x T) ValueTask[T] { return x }
+    }
+}
+class DValueAsyncSym : BValueAsync[Shape], IValueAsync[Shape] {
+}
+
+let iface = typeof(DValueAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IValueAsync` + "`" + `1").First()
+let vt = cast[ValueTask[Shape]](typeof(DValueAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 95}})!!)
+Console.WriteLine(vt.GetAwaiter().GetResult().Tag)`), []string{"95"}}
+            yield[]object{"private-static-on-gs-base-with-unrelated-derived-instance-method", `package P
+import System
+import Clib
+
+interface IGsPriv {
+    shared {
+        func Z() int32;
+    }
+}
+open class BGsPriv : IGsPriv {
+    shared {
+        private func Z() int32 { return 73 }
+    }
+}
+class DGsPriv : BGsPriv, IGsPriv {
+    func Z() int32 { return 999 }
+}
+
+Console.WriteLine(typeof(DGsPriv).GetInterfaceMap(typeof(IGsPriv)).TargetMethods[0].Invoke(nil, []object?{}))`, []string{
+                    "73"
+                }}
+            yield[]object{"direct-and-inherited-static-abstract-operator", `package P
+import System
+import Clib
+
+struct SOp : IOp {
+    shared {
+        func op_Addition(a IOp, b int32) int32 { return b + 7 }
+    }
+}
+
+open class BOp {
+    shared {
+        func op_Addition(a IOp, b int32) int32 { return b + 17 }
+    }
+}
+
+class DOp : BOp, IOp {
+}
+
+Console.WriteLine(typeof(SOp).GetInterfaceMap(typeof(IOp)).TargetMethods[0].Invoke(nil, []object?{SOp{}, 10}))
+Console.WriteLine(typeof(DOp).GetInterfaceMap(typeof(IOp)).TargetMethods[0].Invoke(nil, []object?{DOp(), 10}))`, []string{
+                    "17",
+                    "27"
+                }}
+            yield[]object{"private-static-on-gs-base-that-already-implements-interface", `package P
+import System
+import Clib
+
+open class BPriv : IS {
+    shared {
+        private func Z() int32 { return 31 }
+    }
+}
+class DPriv : BPriv, IS {
+}
+class DPriv2 : BPriv, IS2 {
+}
+
+Console.WriteLine(Probe.Z[DPriv]())
+Console.WriteLine(Probe.Z[DPriv2]())`, []string{"31", "31"}}
+            yield[]object{"generic-static-method-with-renamed-type-parameter-in-slice", `package P
+import System
+import Clib
+
+interface IGsGenSlice {
+    shared {
+        func M[T](xs []T) int32;
+    }
+}
+open class BGsGenSlice {
+    shared {
+        func M[U](xs []U) int32 { return xs.Length }
+    }
+}
+class DGsGenSlice : BGsGenSlice, IGsGenSlice {
+}
+
+let m = typeof(DGsGenSlice).GetInterfaceMap(typeof(IGsGenSlice)).TargetMethods[0].MakeGenericMethod(typeof(string))
+Console.WriteLine(m.Invoke(nil, []object?{[]string{"a", "b", "c"}}))`, []string{"3"}}
+        }
+
+        /// Issue #4618: missing or mismatched implementations of imported
+        /// static-abstract members are diagnosed at compile time.
+        /// @returns Case name, G# source, expected diagnostic ID, expected message fragment.
+        func MissingOrMismatchedClrStaticCases() sequence[[]object] {
+            yield[]object{"missing-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS {
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"missing-inherited-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS2 {
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"mismatched-return-type-on-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS {
+    shared {
+        func Z() int64 { return 1 }
+    }
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"instance-method-instead-of-static-abstract-method", `package P
+import System
+import Clib
+
+struct SM : IS {
+    func Z() int32 { return 1 }
+}
+Console.WriteLine(Probe.Z[SM]())`, "GS0332", "'Clib.IS.Z'"}
+            yield[]object{"private-base-static-method-does-not-satisfy-slot", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        private func Z() int32 { return 21 }
+    }
+}
+class D : B, IS {
+}
+Console.WriteLine(Probe.Z[D]())`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"missing-symbolic-generic-static-abstract-method", `package P
+import System
+import Clib
+
+class Shape { }
+struct SM : IH2[Shape] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IH[Shape].H(T)'"}
+            yield[]object{"missing-static-abstract-property", `package P
+import System
+import Clib
+
+struct SM : IP2 {
+}
+Console.WriteLine(Probe.P[SM]())`, "GS0397", "'Clib.IP.P' (missing static property)"}
+            yield[]object{"getter-only-for-get-set-static-abstract-property", `package P
+import System
+import Clib
+
+struct SM : IPS {
+    shared {
+        prop Q int32 {
+            get { return 1 }
+        }
+    }
+}
+Console.WriteLine(Probe.SetThenGet[SM](1))`, "GS0397", "'Clib.IPS.Q' (setter)"}
+            yield[]object{"private-base-setter-for-get-set-static-abstract-property", `package P
+import System
+import Clib
+
+open class B {
+    shared {
+        prop Q int32 {
+            get { return 1 }
+            private set { }
+        }
+    }
+}
+class D : B, IPS {
+}
+Console.WriteLine(Probe.SetThenGet[D](1))`, "GS0397", "'Clib.IPS.Q' (setter)"}
+            yield[]object{"missing-static-abstract-event", `package P
+import System
+import Clib
+
+struct SM : IEv2 {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IEv.Changed'"}
+            yield[]object{"mismatched-ref-kind-on-gsharp-interface-static-method", `package P
+import System
+import Clib
+
+interface IGsRef {
+    shared {
+        func Z(x int32) int32;
+    }
+}
+open class BRef {
+    shared {
+        func Z(ref x int32) int32 { return x }
+    }
+}
+class DRef : BRef, IGsRef {
+}
+Console.WriteLine("x")`, "GS0331", "'IGsRef.Z'"}
+            yield[]object{"mismatched-return-ref-kind-on-gsharp-interface-static-property", `package P
+import System
+import Clib
+
+interface IGsPropRef {
+    shared {
+        prop P int32 { get }
+    }
+}
+open class BPropRef {
+    shared {
+        var slot int32 = 5
+        prop P ref int32 { get { return ref slot } }
+    }
+}
+class DPropRef : BPropRef, IGsPropRef {
+}
+Console.WriteLine("x")`, "GS0397", "'IGsPropRef.P' (missing static property)"}
+            yield[]object{"symbolic-derived-default-does-not-satisfy-distinct-instantiation", `package P
+import System
+import Clib
+
+class Shape { }
+class Other { }
+struct S : IDefaultedGeneric[Shape], IH[Other] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IH[Other].H(T)'"}
+            yield[]object{"multi-parameter-derived-default-leaves-second-parameter-abstract", `package P
+import System
+import Clib
+
+struct S : IDefaultedFirstOverload {
+}
+let _ = MultiConstraint[int32, int32].Touch(0)
+Console.WriteLine("x")`, "GS0331", "'Clib.IGenOverload.Pick(U)'"}
+            yield[]object{"missing-static-abstract-operator", `package P
+import System
+import Clib
+
+struct SM : IOp {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IOp.op_Addition(Clib.IOp, int32)'"}
+            yield[]object{"conflicting-sibling-derived-interface-defaults", `package P
+import System
+import Clib
+
+struct SDiamond : ILeft, IRight {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"task-async-does-not-satisfy-valuetask-symbolic-slot", `package P
+import System
+import Clib
+
+class Shape { }
+open class BTaskAsync[T] {
+    shared {
+        async func Load(x T) T { return x }
+    }
+}
+class DWrongAsync : BTaskAsync[Shape], IValueAsync[Shape] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IValueAsync[Shape].Load(T)'"}
+            yield[]object{"async-void-does-not-satisfy-task-slot", `package P
+import System
+import Clib
+
+struct SAsyncVoid : IAsyncTask {
+    shared {
+        async func Run() void { }
+    }
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IAsyncTask.Run"}
+            yield[]object{"partial-function-pointer-default-leaves-cdecl-overload-abstract", `package P
+import System
+import Clib
+
+struct SFnPtrMissing : IFnPtrOverloadDefaultedManagedOnly[int32] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IFnPtrOverload[int32].Call"}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {
@@ -511,9 +1048,8 @@ Console.WriteLine(Probe.V[VN]())`, []string{"100"}}
                 assemblyName,
                 []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
-                    NullableContextOptions.Enable
-                )
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true)
+                    .WithNullableContextOptions(NullableContextOptions.Enable)
             )
             let libPath = Path.Combine(tempDir, assemblyName + ".dll")
             let result = compilation.Emit(libPath)
