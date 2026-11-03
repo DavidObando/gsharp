@@ -1301,14 +1301,14 @@ partial class CSharpToGSharpTranslator {
             return MemberAccessExpression(target, emittedMemberName, isArrow)
         }
 
-        // Issue #4287: a generic method whose RESULT is its own type parameter,
-        // called with a C# `ref x!` / `out x!` / `in x!` argument whose declared
-        // type is `T?`. C# infers the type argument from the suppressed
-        // (non-null) view, so `Volatile.Read(ref cache!)` is non-null there. A
-        // by-ref argument cannot carry a G# `!!`, so cs2gs emits `&cache` and gsc
-        // infers the argument from the declared `Dictionary?`: the call result
-        // is `T?` in G#. Dereferencing it now reports GS0159, so the receiver
-        // needs the `!!` that re-states the C# author's own suppression.
+        // Issue #4287, #5582: a generic call whose RESULT is its own method type parameter `T`, without
+        // explicit type arguments, is `T?` in G# although C# types it non-null when an argument passes `T?`
+        // storage with no `!!` (`PassesArgumentStorageUnasserted`: a `ref`/`out`/`in` argument, or an
+        // implicit argument at a source-declared `in` parameter) to a parameter that cs2gs emits as a bare
+        // `T`. The storage is `T?` when cs2gs widens it (an `[AllowNull]` field), or when the argument drops
+        // the author's `!` on a declared `T?` value (`ref cache!`, `ref (cache!)`): C# infers `T` from the
+        // suppressed (non-null) view, gsc from the emitted `T?` storage. A parameter that cs2gs emits as `T?`
+        // (`ref T? location`, `[AllowNull] ref T location`) absorbs the `?`, so it does not count.
         /// Translates a member- or element-access [`recv`](paramref) receiver,
         /// wrapping it in G#'s postfix non-null assertion (`recv!!`) when the
         /// receiver is <em>declared</em> nullable (a `T?` reference type or
@@ -1329,10 +1329,13 @@ partial class CSharpToGSharpTranslator {
         /// `.` or `[`).
         /// @returns The translated receiver, wrapped in
         /// (cref:NonNullAssertionExpression) when flow-proven non-null.
-        private func GenericResultInfersNilableThroughDroppedByRefSuppression(
+        private func GenericResultInfersNilableThroughByRefArgument(
             recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
             if Unparenthesize(recv) is not InvocationExpressionSyntax invocation ||
+                invocation.Expression is GenericNameSyntax or
+                (MemberAccessExpressionSyntax and {Name: GenericNameSyntax}) or
+                (MemberBindingExpressionSyntax and {Name: GenericNameSyntax}) ||
                 this
                 .context
                 .GetSymbolInfo(invocation)
@@ -1344,40 +1347,48 @@ partial class CSharpToGSharpTranslator {
                 returnParameter.TypeParameterKind != TypeParameterKind.Method {
                 return false
             }
-            // Plain comparisons rather than property patterns over Roslyn enums:
-            // cs2gs translates its own source (issue #4167).
             for argument in invocation.ArgumentList.Arguments {
-                if argument
-                    .RefKindKeyword
-                    .RawKind == 0 ||
-                    argument.Expression is not PostfixUnaryExpressionSyntax suppressed ||
-                    !suppressed.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) {
+                if !this.PassesArgumentStorageUnasserted(argument) {
                     continue
                 }
-                // Only the argument that SUPPLIES the returned type parameter
-                // matters: in `Pick<T, U>(ref T value, U result)` a suppressed
-                // `ref x!` fixes T, not the returned U (Copilot review). Map the
-                // argument (named or positional) to its parameter on the
-                // original definition and require that parameter's type to BE
-                // the returned type parameter.
+                // Only the argument that SUPPLIES the returned type parameter matters: in
+                // `Pick<T, U>(ref T value, U result)` a suppressed `ref x!` fixes T, not the returned U.
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
-                if parameter == nil ||
-                    parameter.Ordinal >= method
-                    .OriginalDefinition
-                    .Parameters
-                    .Length ||
-                    !SymbolEqualityComparer
-                    .Default
-                    .Equals(method.OriginalDefinition.Parameters[parameter.Ordinal].Type, returnParameter) {
+                if parameter == nil || parameter.Ordinal >= method.OriginalDefinition.Parameters.Length {
                     continue
                 }
-                let declared ITypeSymbol? = this.GetDeclaredValueType(suppressed.Operand)
-                if declared != nil &&
-                    declared.IsReferenceType &&
-                    declared.NullableAnnotation == Microsoft
+                let declaredParameter = method.OriginalDefinition.Parameters[parameter.Ordinal]
+                if declaredParameter.Type is not ITypeParameterSymbol parameterType ||
+                    parameterType.NullableAnnotation == Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
-                    .Annotated {
+                    .Annotated ||
+                    !SymbolEqualityComparer
+                    .Default
+                    .Equals(parameterType, returnParameter) || this.IsTranslatorWidenedDeclaration(declaredParameter) {
+                    continue
+                }
+                var storage Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(argument.Expression)
+                if storage is PostfixUnaryExpressionSyntax suppressed && suppressed.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                ) {
+                    let declared ITypeSymbol? = this.GetDeclaredValueType(suppressed.Operand)
+                    if declared != nil &&
+                        declared.IsReferenceType &&
+                        declared.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return true
+                    }
+                    storage = Unparenthesize(suppressed.Operand)
+                }
+                if storage is {} target &&
+                    this
+                    .context
+                    .GetSymbolInfo(target)
+                    .Symbol is {} symbol &&
+                    this.IsTranslatorWidenedDeclaration(symbol) {
                     return true
                 }
             }
@@ -2127,9 +2138,7 @@ partial class CSharpToGSharpTranslator {
             let iteratorForeachReceiverRequiresAssertion = this.IteratorForeachReceiverRequiresAssertion(recv)
             let nullableForEachBindingRequiresAssertion = this.IsNullableForEachBindingUse(recv)
             let importedGenericTupleElementRequiresAssertion = this.ImportedGenericTupleElementRequiresAssertion(recv)
-            let byRefSuppressionDroppedRequiresAssertion = this.GenericResultInfersNilableThroughDroppedByRefSuppression(
-                recv
-            )
+            let byRefSuppressionDroppedRequiresAssertion = this.GenericResultInfersNilableThroughByRefArgument(recv)
             let managedArrayGenericResultRequiresAssertion = this.ManagedReferenceArrayWidenedExpressionMayBeNull(recv)
             let composedReceiverMayBeNull = this.ComposedReceiverMayBeNull(recv)
             if !iteratorForeachReceiverRequiresAssertion &&
@@ -2439,6 +2448,19 @@ partial class CSharpToGSharpTranslator {
             }
             if this.state.EmittedLocalGSharpNullability.TryGetValue(local, out var recorded) {
                 return recorded
+            }
+            // Issue #5582: a `var` capture has the G# type of its input. The record keeps a chain linear.
+            if this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
+                let captureIsNullable = !narrowedByTypeTest &&
+                    (
+                    if input != nil {
+                        this.IsGSharpNullableAnalyzerExpression(input)
+                    } else {
+                        this.IsGSharpNullableAnalyzerApiMember(member)
+                    }
+                )
+                this.state.EmittedLocalGSharpNullability[local] = captureIsNullable
+                return captureIsNullable
             }
             return RoslynAnalyzerApiMap.IsGSharpNullableCapableType(
                 RoslynTypeMetadataName(local.Type as INamedTypeSymbol)
@@ -2887,10 +2909,82 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             if !this.IsPureForwardingPromotedTarget(targetSymbol) && !this.IsActivePatternBinding(value) &&
-                !this.LambdaResultFeedsNullableObservedInvocation(value) && this.ReceiverNeedsNullForgiveness(value) {
+                !this.LambdaResultFeedsNullableObservedInvocation(value) && !this.IsNilableOnlyInEmittedGSharp(value) &&
+                this
+                .ReceiverNeedsNullForgiveness(value) {
                 return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
             }
             return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol)
+        }
+
+        // Issue #5582: whether `value` is `T?` only in the emitted G#: C# proves it non-null, but G# gives it
+        // the type of a value that it types `T?`. Such a value is a `var` capture of a maybe-nil input, a
+        // dropped by-ref suppression (`EmittedValueIsNilableBeyondItsCSharpType`), a composed value with such
+        // an operand (a conditional, a switch expression, `??`), or a `var` local that one initializes. It takes
+        // the target-aware bridge, so a slot that accepts nil stores the nil as C# does and a non-null slot is
+        // asserted.
+        private func IsNilableOnlyInEmittedGSharp(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
+            var value = value
+            while value is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                value = parenthesized.Expression
+            }
+            if value == nil {
+                return false
+            }
+            // The answer is invariant per node. Recording it keeps nested calls and chains linear.
+            if this.state.NilableOnlyInEmittedGSharpNodes.TryGetValue(value, out var decided) {
+                return decided
+            }
+            this.state.NilableOnlyInEmittedGSharpNodes[value] = false
+            let answer = this.ComputeNilableOnlyInEmittedGSharp(value)
+            this.state.NilableOnlyInEmittedGSharpNodes[value] = answer
+            return answer
+        }
+
+        private func ComputeNilableOnlyInEmittedGSharp(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            if this.VarCaptureIsNonNull(value) == false || this.EmittedValueIsNilableBeyondItsCSharpType(value) {
+                return true
+            }
+            switch value {
+                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
+                    return this.IsNilableOnlyInEmittedGSharp(conditional.WhenTrue) || this.IsNilableOnlyInEmittedGSharp(
+                        conditional.WhenFalse
+                    )
+                }
+                case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
+                    for arm in switchExpression.Arms {
+                        if this.IsNilableOnlyInEmittedGSharp(arm.Expression) {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                ) {
+                    return this.IsNilableOnlyInEmittedGSharp(coalesce.Right)
+                }
+            }
+            if this.context.GetSymbolInfo(value).Symbol is not ILocalSymbol local {
+                return false
+            }
+            if this.state.NilableOnlyInEmittedGSharpLocals.TryGetValue(local, out var decided) {
+                return decided
+            }
+            // A local's answer is invariant. Recording it keeps a chain of locals linear.
+            this.state.NilableOnlyInEmittedGSharpLocals[local] = false
+            let answer = local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{
+                Initializer: {Value: {} initializer},
+                Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax{Type: {IsVar: true}}
+            } &&
+                this.IsNilableOnlyInEmittedGSharp(initializer)
+            this.state.NilableOnlyInEmittedGSharpLocals[local] = answer
+            return answer
         }
 
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
@@ -2898,11 +2992,41 @@ partial class CSharpToGSharpTranslator {
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 expression = parenthesized.Expression
             }
-            return this
-                .context
-                .GetSymbolInfo(expression)
-                .Symbol is {} symbol &&
-                (this.state.PatternBindings.ContainsKey(symbol) || this.state.NativePatternVariables.Contains(symbol))
+            let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
+            if symbol == nil ||
+                !(
+                this.state.PatternBindings.ContainsKey(symbol) || this.state.NativePatternVariables.Contains(symbol)
+            ) {
+                return false
+            }
+            return this.VarCaptureIsNonNull(expression) ?? true
+        }
+
+        /// Issue #5582: the decision of (cref:TryGetVarCaptureStaticNonNull) for a read of a `var` capture.
+        /// @returns `null` when [`expression`](paramref) does not read a `var` capture that the decision names.
+        /// A binding that a lowering replaces with another expression (`x!!`, `(x as T)!!`) also gives `null`:
+        /// that expression has its own type.
+        private func VarCaptureIsNonNull(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool? {
+            var expression = expression
+            while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                expression = parenthesized.Expression
+            }
+            let capture = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol
+            if capture == nil ||
+                (
+                this
+                    .state
+                    .PatternBindings
+                    .TryGetValue(capture, out var replacement) &&
+                    !(replacement is IdentifierExpression)
+            ) {
+                return nil
+            }
+            return if this.TryGetVarCaptureStaticNonNull(capture, out var inputIsNonNull) {
+                inputIsNonNull
+            } else {
+                default(bool?)
+            }
         }
 
         private func ForgiveNullableReferenceValue(
@@ -3488,6 +3612,11 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
+            // Issue #5582: the emitted value is `T?` although C# types it non-null. Asked here, so that each
+            // operand of a composed value (`flag ? a : b`, `a ?? b`) is decided by its emitted type too.
+            if expression != nil && this.EmittedValueIsNilableBeyondItsCSharpType(expression) {
+                return false
+            }
             // Issue #4356: a Roslyn member that is non-null in C# — even a
             // SyntaxToken struct — but `T?` on the G# analyzer API it is
             // retargeted onto is never statically non-null in the output, nor
@@ -3500,9 +3629,15 @@ partial class CSharpToGSharpTranslator {
             if this.PatternLocalUsesNullableStorage(expression) {
                 return false
             }
-            if this.IsActivePatternBinding(expression) || this.IsGSharpFlowNarrowedLocal(expression) ||
-                this.IsGuardCapturedFieldRead(expression) {
+            // Issue #5582: decide a `var` capture once. The pattern-binding shortcut asks the same decision.
+            let captureIsNonNull = this.VarCaptureIsNonNull(expression)
+            if captureIsNonNull == true ||
+                (captureIsNonNull == nil && this.IsActivePatternBinding(expression)) ||
+                this.IsGSharpFlowNarrowedLocal(expression) || this.IsGuardCapturedFieldRead(expression) {
                 return true
+            }
+            if captureIsNonNull == false {
+                return false
             }
             var unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = expression
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -3692,6 +3827,11 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol when method.MethodKind != MethodKind.Constructor: method.ReturnType
                 default: this.context.GetTypeInfo(expression).Type
             }
+            return this.DeclaredValueIsStaticallyNonNull(symbol, type)
+        }
+
+        // Whether a value of `symbol`, of C# type `type`, is non-null in the emitted G#.
+        private func DeclaredValueIsStaticallyNonNull(symbol ISymbol?, type ITypeSymbol?) bool {
             if type != nil && type.IsValueType == true {
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             }
@@ -3741,6 +3881,269 @@ partial class CSharpToGSharpTranslator {
             }
             isNonNull = this.GSharpExpressionIsStaticallyNonNull(initializer)
             return true
+        }
+
+        /// Issue #5582: decides a `var` pattern capture as an inferred local. C# types the capture `T?`, but
+        /// G# gives it the G# type of the value that the pattern matches. Thus the capture is non-null when
+        /// that input is non-null.
+        /// @remarks This is the one decision for `x is var c`, a switch arm `var c =>`, a `case var c:` label,
+        /// a property subpattern `{ P: var c }` at any depth and a conjunction. See
+        /// (cref:TryGetVarCaptureInput) for the input.
+        /// @returns `false` when cs2gs cannot name the input. The caller then uses its other rules.
+        private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
+            isNonNull = false
+            if this.state.VarCaptureInputNonNull.TryGetValue(local, out var decided) {
+                isNonNull = decided
+                return true
+            }
+            if this.state.VarCaptureUndecided.Contains(local) || !this.TryGetVarCaptureInput(
+                local,
+                out var input,
+                out var member,
+                out var narrowedByTypeTest
+            ) {
+                return false
+            }
+            // The scrutinee mentions a value that is `T?` only in G#. Unless the capture reads that value
+            // itself, or a member whose declared type does not follow the scrutinee's type arguments, the
+            // emitted type of the capture is not known here: each form keeps its previous translation.
+            if !narrowedByTypeTest && local.Type.IsReferenceType && this.PatternScrutinee(local) is {} scrutinee &&
+                this
+                .MentionsValueNilableOnlyInEmittedGSharp(scrutinee) {
+                if input != nil && this.IsNilableOnlyInEmittedGSharp(input) {
+                    this.state.VarCaptureInputNonNull[local] = false
+                    return true
+                }
+                if input != nil || this.MemberTypeFollowsItsReceiver(member) {
+                    this.state.VarCaptureUndecided.Add(local)
+                    return false
+                }
+            }
+            if narrowedByTypeTest {
+                isNonNull = true
+            } else if input != nil {
+                isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
+            } else {
+                // The analyzer map can retarget a non-null Roslyn member onto a `T?` G# member (issue #4356).
+                isNonNull = !this.IsGSharpNullableAnalyzerApiMember(member) && this.DeclaredValueIsStaticallyNonNull(
+                    member,
+                    (member as IFieldSymbol)?.Type ?? (member as IPropertySymbol)?.Type
+                )
+            }
+            this.state.VarCaptureInputNonNull[local] = isNonNull
+            return true
+        }
+
+        /// Issue #5582: whether the emitted G# value of [`expression`](paramref) can be nil although its C#
+        /// type is non-null. A generic result that infers `T?` through a by-ref argument
+        /// (`Volatile.Read(ref cache!)`, issue #4287, or of widened storage), a widened managed-reference array element and an imported
+        /// generic tuple element are such values.
+        /// The receiver bridge asserts each of them. (cref:GSharpExpressionIsStaticallyNonNull) asks it for each
+        /// operand, so a `var` capture of such a value, or of a composed value with such an operand, is `T?`.
+        private func EmittedValueIsNilableBeyondItsCSharpType(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool -> this.GenericResultInfersNilableThroughByRefArgument(expression) ||
+            this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
+            this.ImportedGenericTupleElementRequiresAssertion(expression)
+
+        // Issue #5582: whether `expression` mentions anywhere (an operand, an argument, a lambda body at any
+        // depth, the initializer of a local that it reads, or the scrutinee of a pattern variable that it reads)
+        // a value that is `T?` only in G#.
+        private func MentionsValueNilableOnlyInEmittedGSharp(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            for candidate in expression.DescendantNodesAndSelf()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]() {
+                if this.IsNilableOnlyInEmittedGSharp(candidate) {
+                    return true
+                }
+                if candidate is IdentifierNameSyntax &&
+                    this
+                    .context
+                    .GetSymbolInfo(candidate)
+                    .Symbol is ILocalSymbol local &&
+                    this.LocalInitializerMentionsValueNilableOnlyInEmittedGSharp(local) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func LocalInitializerMentionsValueNilableOnlyInEmittedGSharp(local ILocalSymbol) bool {
+            if this.state.LocalsMentioningNilableOnlyValues.TryGetValue(local, out var decided) {
+                return decided
+            }
+            this.state.LocalsMentioningNilableOnlyValues[local] = false
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let source Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                initializer
+            } else if declaration is SingleVariableDesignationSyntax {
+                // A pattern variable holds a value of its pattern's scrutinee.
+                this.PatternScrutinee(local)
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            let answer = source != nil && this.MentionsValueNilableOnlyInEmittedGSharp(source)
+            this.state.LocalsMentioningNilableOnlyValues[local] = answer
+            return answer
+        }
+
+        // A field, property or indexer whose declared type mentions a type parameter of its containing type, or
+        // a reduced extension whose `this` parameter mentions a method type parameter.
+        private func MemberTypeFollowsItsReceiver(member ISymbol?) bool -> switch member {
+            case field is IFieldSymbol: this.TypeMentionsAnyTypeParameter(field.OriginalDefinition.Type)
+            case property is IPropertySymbol: this.TypeMentionsAnyTypeParameter(property.OriginalDefinition.Type)
+            case IMethodSymbol{ReducedFrom: {} reduced}: reduced
+                .Parameters
+                .Length > 0 &&
+                this.TypeMentionsAnyTypeParameter(reduced.OriginalDefinition.Parameters[0].Type)
+            default: false
+        }
+
+        private func TypeMentionsAnyTypeParameter(type ITypeSymbol?) bool -> switch type {
+            case ITypeParameterSymbol: true
+            case array is IArrayTypeSymbol: this.TypeMentionsAnyTypeParameter(array.ElementType)
+            case named is INamedTypeSymbol: named.TypeArguments.Any(
+                (argument ITypeSymbol) -> this.TypeMentionsAnyTypeParameter(argument)
+            )
+            default: false
+        }
+
+        // The expression that the pattern declaring `local` matches: of `x is …`, of a switch arm or of a
+        // `case` label.
+        private func PatternScrutinee(local ILocalSymbol) Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? {
+            let designation = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if designation == nil {
+                return nil
+            }
+            for ancestor in designation.Ancestors() {
+                switch ancestor {
+                    case isPattern is IsPatternExpressionSyntax {
+                        return isPattern.Expression
+                    }
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax{
+                        Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression
+                    } {
+                        return switchExpression.GoverningExpression
+                    }
+                    case CasePatternSwitchLabelSyntax{
+                        Parent: {Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement}
+                    } {
+                        return switchStatement.Expression
+                    }
+                }
+            }
+            return nil
+        }
+
+        /// Issue #5582: finds the value that a `var` pattern capture holds in the emitted G#.
+        /// @param local The capture.
+        /// @param input The scrutinee of `x is var c`, of a switch arm or of a `case` label.
+        /// @param member The field or property that a property subpattern `{ P: var c }` reads.
+        /// @param narrowedByTypeTest Whether a type test before the capture in a conjunction narrows it, as in
+        /// `Node and var c`. gsc does not narrow it after `not nil` or a property pattern.
+        /// @returns `false` when the capture has no input that cs2gs can name, for example in a positional
+        /// subpattern (issue #4576) or a list pattern.
+        private func TryGetVarCaptureInput(
+            local ILocalSymbol,
+            out input Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            out member ISymbol?,
+            out narrowedByTypeTest bool
+        ) bool {
+            input = nil
+            member = nil
+            narrowedByTypeTest = false
+            let designation = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if !(
+                designation is SingleVariableDesignationSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax
+                }
+            ) {
+                return false
+            }
+            var pattern Microsoft.CodeAnalysis.SyntaxNode = designation.Parent!!
+            while true {
+                if pattern.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
+                    pattern = parenthesized
+                    continue
+                }
+                if pattern.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BinaryPatternSyntax conjunction &&
+                    conjunction
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AndPattern) {
+                    if conjunction.Right == pattern && this.PatternTestsType(conjunction.Left) {
+                        narrowedByTypeTest = true
+                        return true
+                    }
+                    pattern = conjunction
+                    continue
+                }
+                break
+            }
+            input = switch pattern.Parent {
+                case isPattern is IsPatternExpressionSyntax: isPattern.Expression
+                case Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression
+                }: switchExpression.GoverningExpression
+                case CasePatternSwitchLabelSyntax{
+                    Parent: {Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement}
+                }: switchStatement.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if input != nil {
+                return true
+            }
+            let memberPath Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax? = if pattern.Parent is SubpatternSyntax{
+                Parent: PropertyPatternClauseSyntax
+            } subpattern {
+                subpattern.ExpressionColon?.Expression
+            } else {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if memberPath == nil {
+                return false
+            }
+            member = this.context.GetSymbolInfo(memberPath).Symbol
+            return member is IFieldSymbol || member is IPropertySymbol
+        }
+
+        // Whether `pattern` matches only a value of a tested type, which G# then gives to a later `var` capture.
+        private func PatternTestsType(
+            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax
+        ) bool -> switch pattern {
+            case parenthesized is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedPatternSyntax: this.PatternTestsType(parenthesized.Pattern)
+            case conjunction is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryPatternSyntax when conjunction.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.AndPattern
+            ): this.PatternTestsType(conjunction.Left) || this.PatternTestsType(conjunction.Right)
+            case Microsoft.CodeAnalysis.CSharp.Syntax.TypePatternSyntax, DeclarationPatternSyntax: true
+            case recursive is RecursivePatternSyntax: recursive.Type != nil
+            case constant is Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax: this.IsTypeReferencePattern(
+                constant.Expression
+            )
+            default: false
         }
 
         private func ForEachBindingInfersNonNullElement(local ILocalSymbol) bool {
