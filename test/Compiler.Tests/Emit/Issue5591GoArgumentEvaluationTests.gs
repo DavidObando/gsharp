@@ -90,7 +90,11 @@ stable: count=41
     @Fact
     func CalleeReceiverAndArguments_AreEvaluatedOnceInSourceOrder() {
         let source = `package Issue5591Operands
+import System.Runtime.CompilerServices
 ` + Prelude + `
+struct Counter {
+    var n int32
+}
 interface ISink {
     func Put(tag string, v int32);
 }
@@ -142,6 +146,7 @@ class Spawner : Base {
         ch <- 7
         var local = 41
         let bump = func() { local = 99 }
+        let box = StrongBox[int32](0)
         scope {
             go target.Report("method", count)
             go sink.Put("interface", count)
@@ -158,10 +163,19 @@ class Spawner : Base {
             go ConsumeSpan({
                 let _ = Next("j")
                 let s = "abcd".AsSpan()
+                box.Value = s.Length
+                let m = box.Value
+                Log.Add("box-in-block " + m.ToString())
                 let n = s.Length
                 let len = n
                 s.Slice(0, len)
             }, Next("k"))
+            go ConsumeSpan({
+                var c = Counter{}
+                let s = "abc".AsSpan()
+                c.n = s.Length
+                s
+            }, Next("l"))
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -186,6 +200,7 @@ Blocked((release ManualResetEventSlim) -> Spawner().Run(release))
 `
         AssertRuns(source, "CalleeReceiverAndArguments", `async 41
 base base 41
+box-in-block 4
 boxed local 41
 callee first 41
 explicit 41
@@ -194,9 +209,10 @@ interface A 41
 method first 41
 named a=5 b=4
 named-in a=7 b=6
+named-span len=3 extra=12
 named-span len=3 extra=8
 named-span len=4 extra=11
-order abcdefghijk|
+order abcdefghijkl|
 positional 123
 span-block 9
 suspending 7
@@ -272,6 +288,12 @@ class CondStaticB {
         init {
             InitLog.order += "condB-cctor;"
         }
+    }
+}
+
+func RunDefault[T IDisposable]() {
+    scope {
+        go default(T).Dispose()
     }
 }
 
@@ -386,6 +408,7 @@ class Spawner {
 }
 
 RestrictPool()
+RunDefault[Counter]()
 Blocked((release ManualResetEventSlim) -> Spawner().Run(release))
 let constrainedStructs = []Counter{Counter{}}
 let constrainedStructHolder = GenericHolder[Counter](Counter{})

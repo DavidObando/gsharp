@@ -1243,7 +1243,13 @@ internal partial class StatementBinder {
             return CaptureGoOperand(receiver, prefix, retainedVariables)
         }
         let rebuilt = CaptureGoReceiverCore(receiver, prefix, retainedVariables)
-        if ReadsUncapturableVariable(rebuilt, retainedVariables) {
+        if ReadsUncapturableVariable(rebuilt, retainedVariables) ||
+            !GSharp
+            .Core
+            .CodeAnalysis
+            .Lowering
+            .SideEffectSpiller
+            .IsInPlaceStorageWriteReceiver(rebuilt) {
             return rebuilt
         }
         if NeedsLocationProbe(rebuilt) {
@@ -1545,16 +1551,60 @@ internal partial class StatementBinder {
         retainedVariables HashSet[VariableSymbol],
         captureTail Func[BoundExpression, BoundExpression]
     ) BoundExpression {
+        let count = block.Statements.Length
+        let isRetained = [count]bool
+        let isShared = IsSharedArgumentBlock(block)
+        while true {
+            var changed = false
+            var hasRetainedMutation = false
+            let referencedByRetained = HashSet[VariableSymbol]()
+            for var i = 0; i < count; i++ {
+                let statement = block.Statements[i]
+                if !isRetained[i] &&
+                    (
+                    hasRetainedMutation ||
+                        (
+                        statement is BoundVariableDeclaration declaration &&
+                            ClosureCaptureLegalityChecker.RejectsCapture(declaration.Variable)
+                    ) ||
+                        ReadsUncapturableVariable(statement, retainedVariables)
+                ) {
+                    isRetained[i] = true
+                    changed = true
+                }
+                if isRetained[i] {
+                    let mutated = GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
+                    hasRetainedMutation |= !isShared || mutated
+                    for variable in GoCapturedVariableCollector.CollectCapturedVariables(statement) {
+                        referencedByRetained.Add(variable)
+                    }
+                }
+            }
+            if hasRetainedMutation || ReadsUncapturableVariable(block.Expression, retainedVariables) {
+                for variable in GoCapturedVariableCollector.CollectCapturedVariables(block.Expression) {
+                    referencedByRetained.Add(variable)
+                }
+            }
+            for var i = 0; i < count; i++ {
+                if !isRetained[i] &&
+                    block.Statements[i] is BoundVariableDeclaration declaration &&
+                    referencedByRetained.Contains(declaration.Variable) {
+                    isRetained[i] = true
+                    changed = true
+                }
+            }
+            if !changed {
+                break
+            }
+        }
         let retained = ImmutableArray.CreateBuilder[BoundStatement]()
-        for statement in block.Statements {
-            if (
-                statement is BoundVariableDeclaration declaration && ClosureCaptureLegalityChecker.RejectsCapture(
-                    declaration.Variable
-                )
-            ) ||
-                ReadsUncapturableVariable(statement, retainedVariables) {
+        var retainTail = false
+        for var i = 0; i < count; i++ {
+            let statement = block.Statements[i]
+            if isRetained[i] {
                 retained.Add(statement)
-                GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
+                let mutated = GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
+                retainTail |= !isShared || mutated
                 continue
             }
             if statement is BoundVariableDeclaration hoistedDeclaration {
@@ -1562,7 +1612,7 @@ internal partial class StatementBinder {
             }
             prefix.Add(statement)
         }
-        let tail = if ReadsUncapturableVariable(block.Expression, retainedVariables) {
+        let tail = if retainTail || ReadsUncapturableVariable(block.Expression, retainedVariables) {
             block.Expression
         } else {
             captureTail(block.Expression)
