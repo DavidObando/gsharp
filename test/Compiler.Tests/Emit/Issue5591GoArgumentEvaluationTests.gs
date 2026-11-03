@@ -180,51 +180,145 @@ suspending 7
     }
 
     /// A value-type receiver is storage: the containers that locate it (the
-    /// object holding the field, the array and its index) are evaluated on the
-    /// spawner, and the call still mutates that storage rather than a copy.
+    /// object holding the field or CLR field, the tuple element chain, the
+    /// array and its index) are evaluated and validated on the spawner before
+    /// the call's arguments, and the call still mutates that storage rather
+    /// than a copy.
     @Fact
     func ValueTypeReceiver_LocationIsEvaluatedOnTheSpawner() {
         let source = `package Issue5591Receivers
+import System.Runtime.CompilerServices
 ` + Prelude + `
 struct Counter {
     var n int32
     func Bump() { n++ }
+    func Add(delta int32) { n += delta }
 }
 class Holder {
     var counter Counter
+    var pair (Counter, int32) = (Counter{}, 0)
 }
 
 class Spawner {
     var counter Counter
     var holder Holder = Holder()
+    var box StrongBox[Counter] = StrongBox[Counter](Counter{})
     var items []Counter = []Counter{Counter{}, Counter{}}
+    var pairs [](Counter, int32) = [](Counter, int32){(Counter{}, 0), (Counter{}, 0)}
     var index int32 = 1
+    var probed string = ""
+
+    func Step(tag string) int32 {
+        probed += tag
+        return 1
+    }
 
     func Run(release ManualResetEventSlim) {
         let originalHolder = holder
+        let originalBox = box
         let originalItems = items
+        let originalPairs = pairs
+        var nilHolder Holder? = nil
+        var nilBox StrongBox[Counter]? = nil
+        try {
+            go items[99].Add(Step("bad-index"))
+        } catch (ex IndexOutOfRangeException) {
+            probed += "index-threw;"
+        }
+        try {
+            go nilHolder!!.counter.Add(Step("nil-holder"))
+        } catch (ex NullReferenceException) {
+            probed += "holder-threw;"
+        }
+        try {
+            go nilBox!!.Value.Add(Step("nil-box"))
+        } catch (ex NullReferenceException) {
+            probed += "box-threw;"
+        }
         scope {
             go counter.Bump()
             go holder.counter.Bump()
+            go holder.pair.Item1.Bump()
+            go box.Value.Bump()
             go items[index].Bump()
+            go pairs[index].Item1.Bump()
             holder = Holder()
+            box = StrongBox[Counter](Counter{})
             items = []Counter{Counter{}, Counter{}}
+            pairs = [](Counter, int32){(Counter{}, 0), (Counter{}, 0)}
             index = 0
             release.Set()
         }
+        Log.Add("box original=" + originalBox.Value.n.ToString() + " replacement=" + box.Value.n.ToString())
         Log.Add("field " + counter.n.ToString())
         Log.Add("holder original=" + originalHolder.counter.n.ToString() + " replacement=" + holder.counter.n.ToString())
         Log.Add("items original=" + originalItems[0].n.ToString() + originalItems[1].n.ToString() + " replacement=" + items[0].n.ToString() + items[1].n.ToString())
+        Log.Add("pairs original=" + originalPairs[0].Item1.n.ToString() + originalPairs[1].Item1.n.ToString() + " replacement=" + pairs[0].Item1.n.ToString() + pairs[1].Item1.n.ToString())
+        Log.Add("probed " + probed)
+        Log.Add("tuple original=" + originalHolder.pair.Item1.n.ToString() + " replacement=" + holder.pair.Item1.n.ToString())
     }
 }
 
 RestrictPool()
 Blocked((release ManualResetEventSlim) -> Spawner().Run(release))
 `
-        AssertRuns(source, "ValueTypeReceiver", `field 1
+        AssertRuns(source, "ValueTypeReceiver", `box original=1 replacement=0
+field 1
 holder original=1 replacement=0
 items original=01 replacement=00
+pairs original=01 replacement=00
+probed index-threw;holder-threw;box-threw;
+tuple original=1 replacement=0
 `)
+    }
+
+    /// A ref-returning receiver cannot safely escape into the goroutine
+    /// closure (GS9011), and an explicit `await` nested under an implicit
+    /// suspending completion inside a `go` argument still reports GS0576.
+    @Fact
+    func InvalidGoOperands_ReportDiagnostics() {
+        let refReceiverSource = `package Issue5591RefReceiver
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+class Holder {
+    var counter Counter
+    prop Slot ref Counter { get { return ref counter } }
+}
+func At(items []Counter, index int32) ref Counter {
+    return ref items[index]
+}
+let items = []Counter{Counter{}}
+let holder = Holder()
+scope {
+    go At(items, 0).Bump()
+    go holder.Slot.Bump()
+}
+`
+        let (refExit, refOutput) = TryCompile(refReceiverSource, "InvalidRefReceiver")
+        Assert.NotEqual(0, refExit)
+        Assert.Contains("GS9011", refOutput, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", refOutput, StringComparison.Ordinal)
+
+        let nestedAwaitSource = `package Issue5591NestedAwait
+import System.Threading.Tasks
+suspend func Identity(value int32) int32 {
+    return value
+}
+func Consume(value int32) {
+}
+async func Run() Task {
+    scope {
+        go Consume(Identity(await Task.FromResult(1)))
+    }
+}
+await Run()
+`
+        let (awaitExit, awaitOutput) = TryCompile(nestedAwaitSource, "InvalidNestedAwait")
+        Assert.NotEqual(0, awaitExit)
+        Assert.Contains("GS0576", awaitOutput, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", awaitOutput, StringComparison.Ordinal)
     }
 
     /// `async let` still evaluates its initializer in the child, but the
@@ -308,6 +402,18 @@ func RestrictPool() {
         }
 
         private func Compile(source string, name string) string {
+            let (exitCode, output, assemblyPath) = RunGsc(source, name)
+            Assert.True(exitCode == 0, ("$name" + `: gsc failed:
+` + "$output"))
+            return assemblyPath
+        }
+
+        private func TryCompile(source string, name string)(ExitCode int32, Output string) {
+            let (exitCode, output, _) = RunGsc(source, name)
+            return (exitCode, output)
+        }
+
+        private func RunGsc(source string, name string)(ExitCode int32, Output string, AssemblyPath string) {
             let directory = Path.Combine(AppContext.BaseDirectory, "Issue5591GoArgumentEvaluationTests", name)
             Directory.CreateDirectory(directory)
             let sourcePath = Path.Combine(directory, "test.gs")
@@ -328,10 +434,7 @@ func RestrictPool() {
                 Console.SetOut(previousOut)
                 Console.SetError(previousErr)
             }
-            Assert.True(exitCode == 0, ("$name" + `: gsc failed:
-` + "$stdout" + `
-` + "$stderr"))
-            return assemblyPath
+            return (exitCode, stdout.ToString() + "\n" + stderr.ToString(), assemblyPath)
         }
 
         private func RunBounded(assemblyPath string, name string) string {

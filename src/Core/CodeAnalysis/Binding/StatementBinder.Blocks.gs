@@ -1220,9 +1220,12 @@ internal partial class StatementBinder {
     // A value-type receiver is a storage location, not a value: the method runs
     // against (and may mutate) that storage, as the same call does outside `go`.
     // Evaluate the location's operands — the object that holds the field, the
-    // array and its indices — on the spawner and leave only the field or element
-    // step to the child. Static storage needs no evaluation, and a variable is
-    // its own location: the work item captures it as it captures any variable.
+    // array and its indices — on the spawner, probe the reconstructed location
+    // before evaluating the call's arguments, and leave only the field, tuple-
+    // element or array-element step to the child. Static storage needs no
+    // evaluation, and a variable is its own location: the work item captures it
+    // as it captures any variable. An opaque ref-returning receiver is captured
+    // as a `ref` alias so capture legality rejects the escape instead of copying.
     // A receiver that is a value rather than storage (a call or property
     // result) is copied.
     private func CaptureGoReceiver(
@@ -1232,18 +1235,74 @@ internal partial class StatementBinder {
         if !MayBeValueType(receiver.Type) {
             return CaptureGoOperand(receiver, prefix)
         }
+        let rebuilt = CaptureGoReceiverCore(receiver, prefix)
+        if NeedsLocationProbe(rebuilt) && !ReadsUncapturableVariable(rebuilt) {
+            prefix.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, rebuilt)))
+        }
+        return rebuilt
+    }
+
+    private func CaptureGoReceiverCore(
+        receiver BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        if !MayBeValueType(receiver.Type) {
+            return CaptureGoOperand(receiver, prefix)
+        }
+        if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsOpaqueStorageReceiver(receiver) {
+            let local = LocalVariableSymbol(
+                "$$go$$ref$$${binderCtx.GoArgumentCounter++}",
+                isReadOnly: false,
+                receiver.Type ?? TypeSymbol.Error,
+                receiver.Syntax
+            )
+            $scope.TryDeclareVariable(local)
+            return GSharp
+                .Core
+                .CodeAnalysis
+                .Lowering
+                .SideEffectSpiller
+                .CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, prefix, local)
+        }
         switch receiver {
+            case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                return CaptureGoReceiverCore(address.Operand, prefix)
+            }
+            case tuple is BoundTupleElementAccessExpression {
+                return BoundTupleElementAccessExpression(
+                    tuple.Syntax,
+                    CaptureGoReceiverCore(tuple.Receiver, prefix),
+                    tuple.TupleType,
+                    tuple.Index
+                )
+            }
             case field is BoundFieldAccessExpression {
                 if field.Receiver is not{} instance {
                     return receiver
                 }
                 return BoundFieldAccessExpression(
                     field.Syntax,
-                    CaptureGoReceiver(instance, prefix),
+                    CaptureGoReceiverCore(instance, prefix),
                     field.StructType,
                     field.Field,
                     field.SubstitutedType,
                     field.NarrowedType
+                )
+            }
+            case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo {
+                if clrField.Receiver is not{} instance {
+                    return receiver
+                }
+                return BoundClrPropertyAccessExpression(
+                    clrField.Syntax,
+                    CaptureGoReceiverCore(instance, prefix),
+                    clrField.Member,
+                    clrField.Type,
+                    clrField.StaticContainerType,
+                    clrField.ConstrainedReceiverTypeParameter,
+                    clrField.ConstrainedInterfaceType,
+                    clrField.IsAddressableStaticField,
+                    clrField.IsReadOnlySubmissionGlobal
                 )
             }
             case element is BoundIndexExpression when element.IsArrayBackedElementAccess {
@@ -1261,6 +1320,15 @@ internal partial class StatementBinder {
                 return CaptureGoOperand(receiver, prefix)
             }
         }
+    }
+
+    private func NeedsLocationProbe(receiver BoundExpression?) bool -> switch receiver {
+        case BoundIndexExpression{IsArrayBackedElementAccess: true}: true
+        case BoundFieldAccessExpression{Receiver: {} owner}: !MayBeValueType(owner.Type) || NeedsLocationProbe(owner)
+        case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: {} owner}: !MayBeValueType(owner.Type) ||
+            NeedsLocationProbe(owner)
+        case BoundTupleElementAccessExpression{Receiver: var owner}: NeedsLocationProbe(owner)
+        default: false
     }
 
     private func CaptureGoOperand(
@@ -1302,7 +1370,15 @@ internal partial class StatementBinder {
     }
 
     private func MayBeValueType(type TypeSymbol?) bool -> type != nil &&
-        (type.IsValueType || type is TypeParameterSymbol{HasReferenceTypeConstraint: false})
+        (
+        GSharp
+            .Core
+            .CodeAnalysis
+            .Emit
+            .ReflectionMetadataEmitter
+            .IsValueTypeSymbol(type) ||
+            type is TypeParameterSymbol{HasReferenceTypeConstraint: false, ClassConstraint: nil}
+    )
 
     private func BindGoStatement(syntax GoStatementSyntax) BoundStatement {
         // Issue #3304: the spawned call's result is discarded (ADR-0022), so
@@ -1351,7 +1427,7 @@ internal partial class StatementBinder {
         // An explicit `await` nested in the operand is rejected after
         // inference (GS0576, SuspendingCallRewriter). Leave that operand as
         // written so the rejection and its location do not change.
-        if GSharp.Core.CodeAnalysis.Lowering.Async.AsyncBoundTreeQueries.FindFirstAwaitSyntax(expression) == nil {
+        if !GSharp.Core.CodeAnalysis.Lowering.Async.AsyncBoundTreeQueries.HasExplicitAwait(expression) {
             expression = CaptureGoOperands(expression, prefix)
         }
         // Copilot review of PR #4273 / issue #4271: a `go` statement's operand

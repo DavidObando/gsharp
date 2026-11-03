@@ -817,7 +817,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
-        private func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> switch expression {
+        internal func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> switch expression {
             case block is BoundBlockExpression: IsOpaqueStorageReceiver(block.Expression)
             case dereference is BoundDereferenceExpression: IsOpaqueStorageReceiver(dereference.Operand)
             case {} expression: RefCapabilities.IsRefReturningAccess(expression)

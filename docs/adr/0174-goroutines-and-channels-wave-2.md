@@ -3385,14 +3385,18 @@ implementation had to refine it.
     did this (ADR-0030) and shares the same call rebuild. Constants, `this`,
     and function literals stay in place because their values cannot change.
     A value-type receiver is storage, not a value: the object that holds the
-    field, or the array and its indices, is evaluated on the spawner, and the
-    call still mutates that storage, as Go's pointer receivers do. Three
+    field or CLR field, the tuple-element chain, or the array and its indices,
+    is evaluated and probed on the spawner before the call's arguments, and
+    the call still mutates that storage, as Go's pointer receivers do; an
+    opaque ref-returning receiver is captured as a `ref` alias so capture
+    legality rejects the escape (`GS9011`) instead of copying. Three
     operand kinds keep the old in-child evaluation: a by-reference argument,
     a byref-like value, and an operand that reads a variable no closure may
     capture (the statement is rejected by capture legality in that case). An
-    explicit `await` in an argument is still GS0576. `async let` (D15) still
-    evaluates its initializer in the child; its locals from `?.` and type
-    patterns now belong to the child.
+    explicit `await` in an argument (including under an implicit suspending
+    completion) is still GS0576. `async let` (D15) still evaluates its
+    initializer in the child; its locals from `?.` and type patterns now
+    belong to the child.
 
 ## Addendum A — The ten patterns, three ways
 
