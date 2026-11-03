@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import System
 import System.Collections.Generic
 import System.Diagnostics
@@ -72,6 +73,44 @@ open class Issue5170GlobalCallNarrowingTests {
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
+    }
+
+    @Fact
+    func ImportedConversionOperatorInVariableInitializer_InvalidatesGlobalNarrowing_ReportsNullableReceiver() {
+        using let fixture = CSharpFixture(`using System;
+namespace ImportedConversionContract;
+public struct ImportedPayload
+{
+    public static Action? OnConvert;
+    public int Raw;
+    public static implicit operator ImportedPayload(int value)
+    {
+        OnConvert?.Invoke();
+        return new ImportedPayload { Raw = value };
+    }
+}`)
+        let source = `
+import System
+import ImportedConversionContract
+
+var text string? = "safe"
+func Run(value int32) int32 {
+    ImportedPayload.OnConvert = func() { text = nil }
+    if text == nil { return 0 }
+    let payload ImportedPayload = value
+    return text.Length + payload.Raw
+}
+Console.WriteLine(Run(1))
+`
+        let appPath = Path.Combine(fixture.DirectoryPath, "imported-conversion-initializer.dll")
+        let (exit, log) = Compile(fixture.DirectoryPath, source, appPath, fixture.AssemblyPath)
+        Assert.NotEqual(0, exit)
+        Assert.False(File.Exists(appPath), "imported-conversion-initializer must not emit an assembly. Log:\n$log")
+        Assert.Contains(
+            ExpectedDiagnostic(Path.Combine(fixture.DirectoryPath, "imported-conversion-initializer.gs"), source),
+            log,
+            StringComparison.Ordinal
+        )
     }
 
     shared {
@@ -396,12 +435,18 @@ Console.WriteLine(Run())
 `, []string{"3"}}
         }
 
-        private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
+        private func Compile(dir string, source string, outPath string, extraReference string? = nil)(
+            Exit int32,
+            Log string
+        ) {
             let srcPath = Path.Combine(dir, Path.GetFileNameWithoutExtension(outPath) + ".gs")
             File.WriteAllText(srcPath, source)
             let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0"}
             for reference in TrustedPlatformAssemblies() {
                 args.Add("/reference:" + reference)
+            }
+            if extraReference != nil {
+                args.Add("/reference:" + extraReference)
             }
             args.Add(srcPath)
             using let compileOut = StringWriter()
