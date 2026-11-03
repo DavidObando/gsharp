@@ -294,4 +294,57 @@ Run()`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal(5, result.Value)
     }
+
+    @Fact
+    func GenericClassAndStructEncloser_CaptureFreeGroupAndMethodGroupConversion_CompilesAndRuns() {
+        // Issue #4655: a capture-free non-generic local-function group inside
+        // a member of a generic class or struct was mistakenly routed into a
+        // `<lambda_host_*>` display class by ClosureEmitter (which only checked
+        // `literal.Function.IsGeneric` instead of `LocalDeclaration != nil`),
+        // skipping `<Program>` MethodDef planning and failing with GS9998.
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 1 : 0
+    }
+    func EchoViaDelegate(value T) T {
+        let First = func (x T, depth int32) T { return depth == 0 ? x : Second(x, depth - 1) }
+        let Second = func (x T, depth int32) T { return First(x, depth) }
+        let Pass = func (x T) T { return First(x, 1) }
+        let fn (T) -> T = Pass
+        return fn(value)
+    }
+}
+struct SBox[T] {
+    func Run(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 10 : 20
+    }
+}
+let s = SBox[int32]{}
+Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, result.Value)
+    }
+
+    @Theory
+    @InlineData("let callback () -> int32 = Holder[int32].Secret\nreturn callback()", "GS0586")
+    @InlineData("let nested = func() int32 { return 42 }\nreturn nested()", "GS0586")
+    func GenericOwnerDependencies_InNonGenericGroup_FailBeforeEmission(body string, diagnostic string) {
+        let result = EmittedOracle.Evaluate((`class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run() int32 {
+            let first = func(x int32) int32 { return second(x) }
+            let second = func(x int32) int32 { if x < 0 { return first(x) }; ` + "$body" + ` }
+            return first(1)
+        }
+    }
+}
+Holder[string].Run()`))
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == diagnostic)
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
 }

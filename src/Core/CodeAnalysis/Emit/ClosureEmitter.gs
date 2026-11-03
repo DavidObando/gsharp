@@ -295,6 +295,9 @@ internal class ClosureEmitter {
                     .IsGeneric ||
                     literal
                     .Function
+                    .LocalDeclaration != nil ||
+                    literal
+                    .Function
                     .LexicalEnclosingType is not{} zeroCaptureEnclosing ||
                     !((zeroCaptureEnclosing is StructSymbol || zeroCaptureEnclosing is InterfaceSymbol)) {
                     continue

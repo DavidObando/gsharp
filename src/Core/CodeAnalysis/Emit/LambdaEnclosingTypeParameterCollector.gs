@@ -118,6 +118,11 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
                     this.sink
                 )
                 this.CheckTypeArguments(methodGroup.MethodTypeArguments)
+                if this.getPromotedExtras != nil {
+                    for extra in this.getPromotedExtras(methodGroupFunction) {
+                        this.sink.Add(extra)
+                    }
+                }
             }
             case functionPointer is BoundFunctionPointerFromMethodExpression {
                 TypeSymbol.CollectReferencedTypeParameters(functionPointer.Method.StaticOwnerType, this.sink)

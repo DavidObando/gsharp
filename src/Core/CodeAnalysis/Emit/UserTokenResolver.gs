@@ -339,7 +339,9 @@ internal class UserTokenResolver {
         // The bound node was recorded before any enclosing-type-parameter
         // promotion, so its arity always matches the OWN (pre-promotion) list.
         var ownArgs[]TypeSymbol
-        if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount {
+        if ownCount == 0 {
+            ownArgs = Array.Empty[TypeSymbol]()
+        } else if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount {
             ownArgs = call.MethodTypeArguments.ToArray()
         } else {
             ownArgs = [ownCount]TypeSymbol
@@ -369,7 +371,30 @@ internal class UserTokenResolver {
     internal func BuildMethodSpecForGenericMethodGroup(
         openMethod EntityHandle,
         methodGroup BoundMethodGroupExpression
-    ) EntityHandle -> this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray())
+    ) EntityHandle {
+        let function = Invariant.Required(
+            methodGroup.Function,
+            "a generic method group has a resolved function",
+            expression: "methodGroup.Function"
+        )
+        let extras = this.GetPromotedExtras(function)
+        if extras.IsDefaultOrEmpty {
+            return this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray())
+        }
+        let ownCount = if methodGroup.MethodTypeArguments.IsDefault {
+            0
+        } else {
+            methodGroup.MethodTypeArguments.Length
+        }
+        let args = [ownCount + extras.Length]TypeSymbol
+        for var i = 0; i < ownCount; i++ {
+            args[i] = methodGroup.MethodTypeArguments[i]
+        }
+        for var i = 0; i < extras.Length; i++ {
+            args[ownCount + i] = extras[i]
+        }
+        return this.BuildMethodSpec(openMethod, args)
+    }
 
     /// Issue #3226: builds a MethodSpec for a generic G# user function call
     /// whose instantiation was LIFTED at the call site — an unconstrained

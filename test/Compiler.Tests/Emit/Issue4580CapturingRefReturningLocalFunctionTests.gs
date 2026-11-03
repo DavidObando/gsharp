@@ -178,6 +178,64 @@ Console.WriteLine(h.RunCapturing([]int32{1}))`
         Assert.Equal("31" + Environment.NewLine + "32" + Environment.NewLine, CompileVerifyAndRun(Source))
     }
 
+    @Fact
+    func GenericClassAndStructEncloser_CaptureFreeLocalFunctionGroupAndRefReturn_VerifyAndRun() {
+        // Issue #4655: capture-free direct-call local functions (a non-generic
+        // mutual-recursion group or a single ref-returning `let` local) inside
+        // a member of a generic class or struct must emit top-level MethodDefs
+        // (promoted over any referenced enclosing type parameters) rather than
+        // `<lambda_host_*>` display classes that direct calls never consult.
+        const Source = `package Issue4655
+
+class Box[T] {
+    func RunGroup(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 1 : 0
+    }
+    func RunRef(data []int32) int32 {
+        let At = func (xs []int32, index int32) ref int32 { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = 35
+        return data[0]
+    }
+    func RunGenericRefAndDelegate(data []T, replacement T) T {
+        let At = func (xs []T, index int32) ref T { return ref xs[index] }
+        let First = func (x T, depth int32) T { return depth == 0 ? x : Second(x, depth - 1) }
+        let Second = func (x T, depth int32) T { return First(x, depth) }
+        let Pass = func (x T) T { return First(x, 1) }
+        let fn (T) -> T = Pass
+        var ref a = At(data, 0)
+        a = fn(replacement)
+        return data[0]
+    }
+}
+
+struct SBox[T] {
+    func RunGroup(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 1 : 0
+    }
+    func RunRef(data []int32) int32 {
+        let At = func (xs []int32, index int32) ref int32 { return ref xs[index] }
+        var ref a = At(data, 0)
+        a = 35
+        return data[0]
+    }
+}
+
+let b = Box[string]()
+var sb = SBox[string]{}
+Console.WriteLine(b.RunGroup(4))
+Console.WriteLine(b.RunRef([]int32{1}))
+Console.WriteLine(b.RunGenericRefAndDelegate([]string{"old"}, "new"))
+Console.WriteLine(sb.RunGroup(4))
+Console.WriteLine(sb.RunRef([]int32{1}))`
+        let expected = string.Join(Environment.NewLine, "1", "35", "new", "1", "35") + Environment.NewLine
+        Assert.Equal(expected, CompileVerifyAndRun(Source))
+    }
+
     shared {
         private func CompileVerifyAndRun(source string) string {
             let directory = Path.Combine(

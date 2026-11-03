@@ -3914,7 +3914,12 @@ internal class LambdaBinder {
                         CheckType(cast[TypeSymbol?](property.StructType) ?? property.InterfaceType)
                         RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility)
                     }
-                    case literal is BoundFunctionLiteralExpression when !literal.Function.IsGeneric {
+                    case literal is BoundFunctionLiteralExpression when literal
+                        .Function
+                        .LocalDeclaration == nil &&
+                        !literal
+                        .Function
+                        .IsGeneric {
                         RequiresLexicalOwner |= literal.Function.LexicalEnclosingType != nil
                     }
                 }
@@ -4471,7 +4476,10 @@ internal class LambdaBinder {
             enclosingTypeParameters ImmutableArray[TypeParameterSymbol],
             out requiresLexicalOwner bool
         ) TypeParameterSymbol? {
-            let walker = EnclosingTypeParameterReferenceWalker(enclosingTypeParameters, function.IsGeneric)
+            let walker = EnclosingTypeParameterReferenceWalker(
+                enclosingTypeParameters,
+                function.LocalDeclaration != nil || function.IsGeneric
+            )
             for parameter in function.Parameters {
                 walker.CheckType(parameter.Type)
             }
