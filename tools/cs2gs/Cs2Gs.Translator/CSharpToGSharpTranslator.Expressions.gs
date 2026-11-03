@@ -3240,8 +3240,8 @@ partial class CSharpToGSharpTranslator {
         /// Issue #5627: whether the emitted G# value of [`value`](paramref) is `T?` although C# types it non-null:
         /// a value that (cref:EmittedValueIsNilableBeyondItsCSharpType) names, such as `Volatile.Read(ref cache!)`,
         /// or a conditional, switch expression or `??` that yields one. Each bridge into a non-null slot asks it: an
-        /// argument, a return, an assignment or initializer and a dereferenced receiver. The bridge then re-states
-        /// the author's dropped suppression as `!!`.
+        /// argument or indexer key, a return, an assignment or initializer and a dereferenced receiver. The bridge
+        /// then re-states the author's dropped suppression as `!!`.
         /// @remarks Unlike (cref:IsNilableOnlyInEmittedGSharp), it does not count a `var` capture that is not
         /// known to be non-null: in an oblivious compilation that capture is not `T?` in G#.
         private func YieldsValueNilableBeyondItsCSharpType(
@@ -7170,10 +7170,12 @@ partial class CSharpToGSharpTranslator {
             if this.TryRebuildPromotedTupleIndexKey(argument, translated, out var rebuiltKey) {
                 return rebuiltKey
             }
-            // A key whose arms are already asserted (issue #5516) is non-null as a whole.
-            if !this.IndexArgumentTargetsNonNullableReference(argument) || !this.IndexArgumentValueNeedsNullForgiveness(
-                argument.Expression
-            ) ||
+            // A key whose arms are already asserted (issue #5516) is non-null as a whole. Issue #5627: a key that is
+            // `T?` only in G# needs the assertion at a declared indexer parameter too.
+            let emittedNilableKey = this.SlotTypeIsDeclared(this.GetArgumentParameter(argument), argument.Expression) &&
+                this.YieldsValueNilableBeyondItsCSharpType(argument.Expression)
+            if !this.IndexArgumentTargetsNonNullableReference(argument) ||
+                (!emittedNilableKey && !this.IndexArgumentValueNeedsNullForgiveness(argument.Expression)) ||
                 this.GSharpExpressionIsStaticallyNonNull(argument.Expression, translated) {
                 return translated
             }

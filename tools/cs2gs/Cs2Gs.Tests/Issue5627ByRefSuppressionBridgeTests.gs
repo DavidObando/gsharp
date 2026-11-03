@@ -338,6 +338,40 @@ namespace Demo
         RunsAs(printed, "True 1 1 1 1 1 1 True")
     }
 
+    /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer
+    /// parameter, and passes a null cache through as C# does at a nullable one and at one typed by a type
+    /// parameter that G# infers for the receiver.
+    @Fact
+    func AnIndexerKey_FollowsItsParameter() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public class Sink
+    {
+        public int this[Dictionary<string, int> d] => d.Count;
+        public int this[Dictionary<string, int>? d, int k] => d == null ? -1 : d.Count + k;
+    }
+    public class Table<T> { public int this[T key] => 1; }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        static int NonNull() => new Sink()[Volatile.Read(ref full!)];
+        static int Nullable() => new Sink()[Volatile.Read(ref cache!), 0];
+        static Table<T> Make<T>(T seed) => new Table<T>();
+        static int Generic() { var t = Make(Volatile.Read(ref cache!)); return t[Volatile.Read(ref cache!)]; }
+        public static string Run() => NonNull() + " " + Nullable() + " " + Generic();
+    }
+}`)
+        Assert.Contains("Sink()[Volatile.Read(&full)!!]", printed)
+        Assert.Contains("Sink()[Volatile.Read(&cache), 0]", printed)
+        Assert.Contains("return t[Volatile.Read(&cache)]", printed)
+        RunsAs(printed, "1 -1 1")
+    }
+
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference
     /// throws `NullReferenceException`. G# throws it at the `!!` that re-states the author's suppression, as
     /// at a member-access receiver since issue #4287, so a program that dereferences the value prints what C#
