@@ -560,12 +560,19 @@ partial class SemanticModel {
                     declaredBySyntax.TryAdd(packageDeclaration, package_)
                 }
             }
+            let treePackageName = Binder.PackageNameOfTree(
+                tree,
+                compilation.Submission?.DefaultPackageName ?? "Default"
+            )
             for typeAlias in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
-                if !typeAlias.Identifier.IsMissing && globalScope.TypeAliases.TryGetValue(
-                    typeAlias.Identifier.ValueText,
-                    out var aliasedType
-                ) {
-                    declaredBySyntax.TryAdd(typeAlias, aliasedType)
+                if !typeAlias.Identifier.IsMissing {
+                    let aliasName = typeAlias.Identifier.ValueText
+                    let qualifiedKey = treePackageName + "#" + aliasName
+                    if globalScope.TypeAliases.TryGetValue(qualifiedKey, out var qualifiedTarget) {
+                        declaredBySyntax.TryAdd(typeAlias, qualifiedTarget)
+                    } else if globalScope.TypeAliases.TryGetValue(aliasName, out var aliasedType) {
+                        declaredBySyntax.TryAdd(typeAlias, aliasedType)
+                    }
                 }
             }
             SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)

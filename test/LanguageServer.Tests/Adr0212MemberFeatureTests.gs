@@ -158,6 +158,18 @@ class Box {}
         )
         Assert.NotNull(packageHover)
         Assert.Contains("Type-only package doc.", packageHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let fooSource = "package Foo\ntype Coord = int32\n"
+        let bazSource = "package Baz\ntype Coord = int64\n"
+        let project = ProjectState("/test/aliases.gsproj")
+        project.UpdateFile("/test/foo.gs", fooSource)
+        project.UpdateFile("/test/baz.gs", bazSource)
+        let projectCompilation = project.GetCompilation()
+        Assert.True(project.TryGetSyntaxTree("/test/foo.gs", out var fooTree))
+        Assert.True(project.TryGetSyntaxTree("/test/baz.gs", out var bazTree))
+        let fooToken = SemanticLookup.FindTokenAt(fooTree, fooSource.IndexOf("Coord", StringComparison.Ordinal))
+        let bazToken = SemanticLookup.FindTokenAt(bazTree, bazSource.IndexOf("Coord", StringComparison.Ordinal))
+        Assert.Same(TypeSymbol.Int32, SemanticLookup.ResolveSymbol(projectCompilation, fooToken))
+        Assert.Same(TypeSymbol.Int64, SemanticLookup.ResolveSymbol(projectCompilation, bazToken))
     }
 
     shared {
