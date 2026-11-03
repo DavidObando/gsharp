@@ -4116,6 +4116,11 @@ internal partial class DeclarationBinder {
         }
         for symbol in pendingFieldInitializerStructs {
             EnsureStructClosureFieldInitializersBound(symbol)
+            for candidate in symbol.Fields {
+                if pendingZeroValueInstanceFieldMap.Remove(candidate, out var bindZero) {
+                    bindZero()
+                }
+            }
         }
         pendingZeroValueInstanceFieldMap.Clear()
     }

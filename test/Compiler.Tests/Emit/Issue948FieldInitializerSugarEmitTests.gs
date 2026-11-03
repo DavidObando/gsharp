@@ -253,6 +253,11 @@ struct ExplicitCollectionChild {
     var Items []bool = []bool{IsMissingBoolItems(ExplicitCollectionOwner{}.Value)}
 }
 
+class ClassZeroOwner {
+    var Items []int32
+    var Child ZeroChildB
+}
+
 class CheckedCaller {
     var Value UncheckedPayload = checked(UncheckedPayload{})
 }
@@ -300,6 +305,11 @@ func Main() {
     )
     Console.WriteLine("zero-missing=" + ZeroChildB{}.Missing.ToString())
     Console.WriteLine("explicit-collection-missing=" + ExplicitCollectionChild{}.Items[0].ToString())
+    let classZero = ClassZeroOwner()
+    Console.WriteLine(
+        "class-zero=" + Object.ReferenceEquals(classZero.Items, nil).ToString() + "," +
+            Object.ReferenceEquals(classZero.Child.Items, nil).ToString()
+    )
     Console.WriteLine("unchecked-payload=" + CheckedCaller().Value.Count.ToString())
 }`
         let output = CompileAndRun(source)
@@ -319,6 +329,7 @@ func Main() {
                 "peers=17,19,19,17",
                 "zero-missing=False",
                 "explicit-collection-missing=False",
+                "class-zero=False,False",
                 "unchecked-payload=-2147483648",
                 ""
             }
