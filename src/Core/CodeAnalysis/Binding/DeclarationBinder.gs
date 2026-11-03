@@ -89,6 +89,11 @@ internal partial class DeclarationBinder {
         () -> void
     ](ReferenceEqualityComparer.Instance)
 
+    private let pendingZeroValueInstanceFieldMap Dictionary[FieldSymbol, () -> void] = Dictionary[
+        FieldSymbol,
+        () -> void
+    ](ReferenceEqualityComparer.Instance)
+
     private let pendingStaticFieldInitializerBindings List[() -> void] = List[() -> void]()
 
     private let deferredInitializerDiagnostics List[Diagnostic] = List[Diagnostic]()

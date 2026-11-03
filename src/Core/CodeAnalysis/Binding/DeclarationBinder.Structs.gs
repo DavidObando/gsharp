@@ -3478,7 +3478,7 @@ internal partial class DeclarationBinder {
             for (fieldSym, fieldSyntaxNode) in fieldInitZeroValueInstanceFields {
                 let capturedField = fieldSym
                 let capturedSyntax = fieldSyntaxNode
-                pendingInstanceFieldInitializerMap[capturedField] = () -> RunInStructInitializerContext(
+                pendingZeroValueInstanceFieldMap[capturedField] = () -> RunInStructInitializerContext(
                     structSymbol,
                     structDeclaration,
                     fieldInitScope,
@@ -3547,6 +3547,7 @@ internal partial class DeclarationBinder {
             this.binderCtx.CurrentTypeParameters = nil
         }
         try {
+            using let _ = binderCtx.PushCheckedContext(false)
             using let _ = PushStaticMemberScope(structSymbol)
             action()
         } finally {
@@ -4086,6 +4087,7 @@ internal partial class DeclarationBinder {
             EnsureStructFieldInitializerBound(symbol, field: nil)
         }
         pendingFieldInitializerStructs.Clear()
+        pendingZeroValueInstanceFieldMap.Clear()
         pendingInstanceFieldInitializerMap.Clear()
         for bindStatic in pendingStaticFieldInitializerBindings {
             bindStatic()
@@ -4116,10 +4118,18 @@ internal partial class DeclarationBinder {
         let definition = structSymbol.Definition ?? structSymbol
         if field != nil {
             let definitionField = structSymbol.GetDefinitionField(field) ?? field
+            if pendingZeroValueInstanceFieldMap.Remove(definitionField, out var bindZero) {
+                bindZero()
+            }
             if pendingInstanceFieldInitializerMap.Remove(definitionField, out var bindField) {
                 bindField()
             }
             return
+        }
+        for candidate in definition.Fields {
+            if pendingZeroValueInstanceFieldMap.Remove(candidate, out var bindZero) {
+                bindZero()
+            }
         }
         for candidate in definition.Fields {
             if pendingInstanceFieldInitializerMap.Remove(candidate, out var bindCandidate) {
@@ -4140,7 +4150,14 @@ internal partial class DeclarationBinder {
         for field in definition.Fields {
             EnsureStructClosureFieldInitializersBound(field.Type, visitedSet)
         }
-        EnsureStructFieldInitializerBound(definition, field: nil)
+        for candidate in definition.Fields {
+            if pendingZeroValueInstanceFieldMap.Remove(candidate, out var bindZero) {
+                bindZero()
+            } else if MagicCollectionZeroValue.MightNeedZeroValue(candidate.Type) &&
+                pendingInstanceFieldInitializerMap.Remove(candidate, out var bindMagic) {
+                bindMagic()
+            }
+        }
     }
 
     /// Issue #3896: the compilation-wide const fixpoint. Every const initializer

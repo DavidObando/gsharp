@@ -228,6 +228,31 @@ struct PeerB {
     var Scale int32 = 19
 }
 
+struct ZeroOwnerA {
+    var Value ZeroChildB
+}
+
+func IsMissingItems(child ZeroChildB) bool {
+    return Object.ReferenceEquals(child.Items, nil)
+}
+
+struct ZeroChildB {
+    var Items []int32
+    var Missing bool = IsMissingItems(ZeroOwnerA{}.Value)
+}
+
+class CheckedCaller {
+    var Value UncheckedPayload = checked(UncheckedPayload{})
+}
+
+func One() int32 {
+    return 1
+}
+
+struct UncheckedPayload {
+    var Count int32 = 2147483647 + One()
+}
+
 func FormatReport(label string, report Report) string {
     return label + ": samples-nil=" + Object.ReferenceEquals(report.Samples, nil).ToString() +
         ", available=" + report.Available.ToString() + ", top=" + report.Top.ToString()
@@ -261,6 +286,8 @@ func Main() {
         "peers=" + peerA.Tag.ToString() + "," + peerA.Peers[0].Scale.ToString() + "," +
             peerB.Scale.ToString() + "," + peerB.Peers[0].Tag.ToString()
     )
+    Console.WriteLine("zero-missing=" + ZeroChildB{}.Missing.ToString())
+    Console.WriteLine("unchecked-payload=" + CheckedCaller().Value.Count.ToString())
 }`
         let output = CompileAndRun(source)
         let expected = string.Join(
@@ -277,6 +304,8 @@ func Main() {
                 "snapshot=7",
                 "mutual=11,11,13",
                 "peers=17,19,19,17",
+                "zero-missing=False",
+                "unchecked-payload=-2147483648",
                 ""
             }
         )
