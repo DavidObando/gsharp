@@ -1658,6 +1658,9 @@ partial class CSharpToGSharpTranslator {
                         .context
                         .GetDeclaredSymbol(varSingle) is {} varBound {
                         this.state.PatternBindings[varBound] = receiver!!
+                        if varBound is ILocalSymbol varLocal {
+                            this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
+                        }
                         this.RegisterProjectedPatternBinding(varBound, receiverType)
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no
@@ -1809,26 +1812,26 @@ partial class CSharpToGSharpTranslator {
                     elementReceiver,
                     element,
                     elementType,
-                    isNestedPatternMember: isNestedPatternMember
+                    isNestedPatternMember: isNestedPatternMember ||
+                        (PatternIntroducesBinding(element) && element is not VarPatternSyntax)
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }
             // Issue #4356: a list pattern never matches nil, and a NESTED member
-            // tested with one (`{ P: [1] }`, `P` an `int[]?`) arrives here bound
-            // to a `let` local that is `T?` in G#. Guard it first: the guard both
-            // makes the pattern fall through on nil, as C# does, and smart-casts
-            // the local for the `.Length` / index reads.
-            if isNestedPatternMember &&
+            // tested with one (`{ P: [1] }`, `P` an `int[]?`) or a hoisted
+            // nullable scrutinee arrives here bound to a `let` local that is
+            // `T?` in G#. Guard it first: the guard both makes the pattern fall
+            // through on nil, as C# does, and smart-casts the local for the
+            // `.Length` / index reads.
+            if this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
                 (
-                this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
-                    (
+                isNestedPatternMember &&
                     receiverType != nil &&
-                        receiverType.IsReferenceType == true &&
-                        receiverType.NullableAnnotation == Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated
-                )
+                    receiverType.IsReferenceType == true &&
+                    receiverType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
             ) {
                 test = BinaryExpression(BinaryExpression(guardedReceiver, "!=", LiteralExpression.Null()), "&&", test)
             }

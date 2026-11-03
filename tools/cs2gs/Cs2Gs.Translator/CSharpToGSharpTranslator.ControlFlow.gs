@@ -312,7 +312,25 @@ partial class CSharpToGSharpTranslator {
             } else {
                 binding
             }
-            into.Add(LocalDeclarationStatement(hoistBinding, hoistName, type: nil, initializer: receiver))
+            var hoistType GTypeReference? = nil
+            if !separateMainBinder && mainBinder != nil && this.InferredLocalDeclarationIsNullable(mainBinder) {
+                hoistType = MakeNullable(
+                    this.PromoteIfUsedAsNullable(
+                        this.typeMapper.MapExplicitType(mainBinder.Type, this.context, clause.GetLocation()),
+                        mainBinder
+                    )
+                )
+                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                if hoistType != nil {
+                    this.state.EmittedLocalTypeClauses.Add(mainBinder)
+                    if hoistType.IsNullable {
+                        this.state.HoistedNullableGuardLocals.Add(mainBinder)
+                    }
+                }
+                this.state.EmittedLocalStorageAcceptsNil[mainBinder] = hoistType != nil && hoistType.IsNullable
+                this.RecordEmittedLocalNullability(mainBinder, hoistType, nil, nil)
+            }
+            into.Add(LocalDeclarationStatement(hoistBinding, hoistName, type: hoistType, initializer: receiver))
             let idExpr = IdentifierExpression(hoistName)
             if scrutineeIsNullable {
                 this.state.GSharpNullablePatternReceivers.Add(idExpr)
@@ -339,13 +357,33 @@ partial class CSharpToGSharpTranslator {
             if separateMainBinder && mainBinder != nil {
                 this.state.PatternBindings.Remove(mainBinder)
                 let binderName = this.EmittedName(mainBinder, mainBinder.Name)
-                let binderType = this.PromoteIfUsedAsNullable(
+                var binderType = this.PromoteIfUsedAsNullable(
                     this.typeMapper.MapExplicitType(mainBinder.Type, this.context, clause.GetLocation()),
                     mainBinder
                 )
+                if binderType != nil &&
+                    !binderType.IsNullable &&
+                    mainBinder
+                    .Type
+                    .IsReferenceType &&
+                    mainBinder
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax()
+                    ?.Parent is VarPatternSyntax &&
+                    (
+                    this.InferredLocalDeclarationIsNullable(mainBinder) ||
+                        scrutineeIsNullable ||
+                        !this.TryGetVarCaptureStaticNonNull(mainBinder, out var mainVarIsNonNull) || !mainVarIsNonNull
+                ) {
+                    binderType = MakeNullable(binderType)
+                }
                 this.state.LocalHoldsPromotedValueAnswers.Clear()
                 if binderType != nil {
                     this.state.EmittedLocalTypeClauses.Add(mainBinder)
+                    if binderType.IsNullable {
+                        this.state.HoistedNullableGuardLocals.Add(mainBinder)
+                    }
                 }
                 this.state.EmittedLocalStorageAcceptsNil[mainBinder] = binderType != nil && binderType.IsNullable
                 this.RecordEmittedLocalNullability(mainBinder, binderType, nil, nil)
@@ -398,11 +436,12 @@ partial class CSharpToGSharpTranslator {
                     ?.GetSyntax()
                     ?.Parent is VarPatternSyntax &&
                     (
-                    this.state.StoredPatternCaptures.Contains(projectedInit) || !this.TryGetVarCaptureStaticNonNull(
-                        nestedBinder,
-                        out var varIsNonNull
-                    ) ||
-                        !varIsNonNull
+                    this.InferredLocalDeclarationIsNullable(nestedBinder) ||
+                        this
+                        .state
+                        .StoredPatternCaptures
+                        .Contains(projectedInit) ||
+                        !this.TryGetVarCaptureStaticNonNull(nestedBinder, out var varIsNonNull) || !varIsNonNull
                 ) {
                     nestedType = MakeNullable(nestedType)
                 }
@@ -493,6 +532,13 @@ partial class CSharpToGSharpTranslator {
                         into,
                         negated
                     )
+                    return
+                }
+                case VarPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated &&
+                    mainBinder != nil &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(this.context.GetDeclaredSymbol(single), mainBinder) {
                     return
                 }
                 case declaration is DeclarationPatternSyntax when !negated && this.IsBindOnlyMainBinder(

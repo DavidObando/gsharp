@@ -847,6 +847,70 @@ namespace Demo
             return false;
         }
 
+        public sealed class CountingBuffer
+        {
+            private int reads;
+            public int Length => 1;
+            public int ReadCount => this.reads;
+            public string this[int index] => "e" + (++this.reads) + "@" + index;
+        }
+
+        public static string PromotedTopLevelVarPatternInHoistedLoop()
+        {
+            step = 0;
+            while (Next(out string x) && "seed" is var value)
+            {
+                string first = value;
+                x = null;
+                value = null;
+                return first + ":" + (value ?? "nil") + ":" + (x ?? "nil");
+            }
+
+            return "none";
+        }
+
+        public static string CountingIndexerListPatternInHoistedLoop()
+        {
+            step = 0;
+            var buffer = new CountingBuffer();
+            while (Next(out string x) && buffer is [string first])
+            {
+                x = null;
+                return RequireNonNull(first) + ":" + buffer.ReadCount;
+            }
+
+            return "none";
+        }
+
+        public static string NullableArrayListPatternInHoistedLoop(string[] values)
+        {
+            if (values == null)
+            {
+                values = null;
+            }
+
+            step = 0;
+            while (Next(out string x) && values is [var first])
+            {
+                x = null;
+                return RequireNonNull(first) + ":" + (x ?? "nil");
+            }
+
+            return "no-list";
+        }
+
+        public static string NonLoopFallbackVarCaptureMemberDereference()
+        {
+            var box = new Box();
+            if (box is { ComputedName: var text, ReadCount: var code })
+            {
+                code++;
+                return text.Length + ":" + code + ":" + box.ReadCount;
+            }
+
+            return "none";
+        }
+
         public static string MainEntry() =>
             DoContinueTryCatchDoesNotCatchConditionException() + "|" +
             DoContinueUsingDisposesBeforeCondition() + "|" +
@@ -868,13 +932,48 @@ namespace Demo
             ComputedPropertyVarPatternEvaluatedOnce() + ":" +
             NullComputedPropertyVarPatternMatches(new Box()) + "|" +
             DoAndForContinueInsideLock() + "|" +
-            ForBodyLocalShadowsStaticIncrementorTarget();
+            ForBodyLocalShadowsStaticIncrementorTarget() + "|" +
+            PromotedTopLevelVarPatternInHoistedLoop() + "|" +
+            CountingIndexerListPatternInHoistedLoop() + "|" +
+            NullableArrayListPatternInHoistedLoop(null) + ":" +
+            NullableArrayListPatternInHoistedLoop(new[] { "item" }) + "|" +
+            NonLoopFallbackVarCaptureMemberDereference();
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|body:nil/ASSIGNED:nil|N1:1:N1:1:replaced:loop|2:2/1|1"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|body:nil/ASSIGNED:nil|N1:1:N1:1:replaced:loop|2:2/1|1|seed:nil:nil|E1@0:1|no-list:ITEM:nil|2:2:1"
+        )
+    }
+
+    @Fact
+    func Oblivious_ConstructorInitializerPromotedOutVar_ReportsUnsupported() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", `
+namespace Demo
+{
+    public class B
+    {
+        public B(out string value) => value = "ok";
+    }
+
+    public class D : B
+    {
+        public D() : base(out string x)
+        {
+            x = null;
+        }
+    }
+}`)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(document, context)
+        Assert.Contains(
+            context.Diagnostics,
+            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported && d.Message!!.Contains(
+                "constructor-initializer"
+            )
         )
     }
 

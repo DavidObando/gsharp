@@ -3838,9 +3838,23 @@ partial class CSharpToGSharpTranslator {
         private func TranslateOutVarDesignation(single SingleVariableDesignationSyntax) GExpression {
             let name = this.EmittedName(single, single.Identifier)!!
             if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
-                (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue) is {} declarations &&
                 this
                 .OutDeclarationRequiresNullablePredeclaration(single, local) {
+                let ctorInit = single.Ancestors().OfType[ConstructorInitializerSyntax]().FirstOrDefault()
+                let escapesCtorInit = ctorInit?.Parent is ConstructorDeclarationSyntax ctor &&
+                    (
+                    this.ScopeReferencesLocal(ctor.Body, local) || this.ScopeReferencesLocal(ctor.ExpressionBody, local)
+                )
+                if (
+                    this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue
+                ) is not{} declarations ||
+                    escapesCtorInit {
+                    this.context.ReportUnsupported(
+                        single,
+                        "a constructor-initializer 'out' variable requiring nullable pre-declaration has no enclosing declaration seam in G# (issue #4598)."
+                    )
+                    return OutArgumentExpression("out var", name)
+                }
                 if !(
                     single.Parent is DeclarationExpressionSyntax{
                         Parent: ArgumentSyntax{
@@ -3869,6 +3883,21 @@ partial class CSharpToGSharpTranslator {
                 return OutArgumentExpression("out", name)
             }
             return OutArgumentExpression("out var", name)
+        }
+
+        private func ScopeReferencesLocal(scope_ SyntaxNode?, local ILocalSymbol) bool {
+            if scope_ == nil {
+                return false
+            }
+            for identifier in scope_.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                if identifier.Identifier.ValueText == local.Name && SymbolEqualityComparer.Default.Equals(
+                    this.context.GetSymbolInfo(identifier).Symbol,
+                    local
+                ) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func OutDeclarationRequiresPredeclaration(
