@@ -36,6 +36,10 @@ partial class CSharpToGSharpTranslator {
                             this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
                             local
                         )
+                        this.state.LocalHoldsPromotedValueAnswers.Clear()
+                        if type != nil {
+                            this.state.EmittedLocalTypeClauses.Add(local)
+                        }
                         this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
                         this.RecordEmittedLocalNullability(local, type, nil, nil)
                         (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(

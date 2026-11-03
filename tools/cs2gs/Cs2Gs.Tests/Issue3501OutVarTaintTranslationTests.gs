@@ -143,6 +143,156 @@ namespace Demo
     }
 
     @Fact
+    func Oblivious_PromotedOutDeclarationsInSiblingLoopsAndSwitchGuards_DisambiguateNames() {
+        let printed = TranslateOblivious(`
+namespace Demo
+{
+    public static class C
+    {
+        private static int step;
+
+        private static bool Next(out string value)
+        {
+            step++;
+            value = "v" + step;
+            return step <= 1;
+        }
+
+        public static string RunLoops()
+        {
+            step = 0;
+            string acc = "";
+            while (Next(out string value))
+            {
+                acc += value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            step = 0;
+            while (Next(out string value))
+            {
+                acc += ":" + value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            step = 0;
+            for (int i = 0; Next(out string value) && i < 1; i++)
+            {
+                acc += ":" + value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            step = 0;
+            for (int i = 0; Next(out string value) && i < 1; i++)
+            {
+                acc += ":" + value;
+                value = null;
+                acc += value ?? "nil";
+            }
+
+            return acc;
+        }
+
+        public static string RunSwitch(int selector)
+        {
+            step = 0;
+            switch (selector)
+            {
+                case 1 when Next(out string value):
+                    string first = value;
+                    value = null;
+                    return first + ":" + (value ?? "nil");
+                case 2 when Next(out string value):
+                    string second = value;
+                    value = null;
+                    return second + ":" + (value ?? "nil");
+                default:
+                    return "none";
+            }
+        }
+
+        public static string RunSwitchExpr(int selector)
+        {
+            step = 0;
+            return selector switch
+            {
+                1 when Next(out string value) => value + ":" + ((value = null) ?? "nil"),
+                2 when Next(out string value) => value + ":" + ((value = null) ?? "nil"),
+                _ => "none",
+            };
+        }
+
+        public static string MainEntry() =>
+            RunLoops() + "|" + RunSwitch(1) + "|" + RunSwitch(2) + "|" + RunSwitchExpr(1) + "|" + RunSwitchExpr(2);
+    }
+}`)
+        Assert.Contains("var value string?", printed)
+        Assert.Contains("var value_2 string?", printed)
+        Assert.Contains("Next(out value)", printed)
+        Assert.Contains("Next(out value_2)", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "v1nil:v1nil:v1nil:v1nil|v1:nil|v1:nil|v1:nil|v1:nil"
+        )
+    }
+
+    @Fact
+    func Oblivious_PatternAndDeconstructionArrayLocals_KeepUnbridgedDeconstructionElementStore() {
+        let printed = TranslateOblivious(`
+namespace Demo
+{
+    public class Node { }
+    public record Entry(Node Item, int Id);
+
+    public static class C
+    {
+        private static Entry Empty() => new Entry(null, 0);
+
+        public static string ViaPattern()
+        {
+            var items = new Node[1];
+            items[0] = null;
+            if (items is var arr)
+            {
+                if (arr == null) { return "missing"; }
+                int i;
+                (arr[0], i) = Empty();
+                object stored = arr[0];
+                return (stored == null) + ":" + i;
+            }
+
+            return "none";
+        }
+
+        public static string ViaDeconstruction()
+        {
+            var items = new Node[1];
+            items[0] = null;
+            var pair = (items, 1);
+            var (arr, _) = pair;
+            if (arr == null) { return "missing"; }
+            int i;
+            (arr[0], i) = Empty();
+            object stored = arr[0];
+            return (stored == null) + ":" + i;
+        }
+
+        public static string MainEntry() => ViaPattern() + "|" + ViaDeconstruction();
+    }
+}`)
+        Assert.DoesNotContain("arrValue!!", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "True:0|True:0"
+        )
+    }
+
+    @Fact
     func Oblivious_NonNullOutVar_StaysBare() {
         // The out parameter is always assigned a non-null value, so neither the
         // parameter nor the receiving local is promoted and no `!!` appears.

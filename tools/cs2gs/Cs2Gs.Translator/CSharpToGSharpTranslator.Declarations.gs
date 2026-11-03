@@ -406,6 +406,14 @@ partial class CSharpToGSharpTranslator {
             if symbol is IDiscardSymbol {
                 return fallbackName
             }
+            if symbol is ILocalSymbol local &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is SingleVariableDesignationSyntax single &&
+                this.OutDeclarationRequiresPredeclaration(single, local) {
+                return this.GetPredeclaredOutLocalName(single, local, context)
+            }
             return this.nameAllocator.GetName(symbol, context)
         }
 

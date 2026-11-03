@@ -24,6 +24,13 @@ partial class CSharpToGSharpTranslator {
             string,
             (Source ExpressionSyntax?, Path IReadOnlyList[int32])
         ] = Dictionary[string, (Source ExpressionSyntax, Path IReadOnlyList[int32])]()
+        private let predeclaredOutLocalNames Dictionary[ILocalSymbol, string] = Dictionary[ILocalSymbol, string](
+            SymbolEqualityComparer.Default
+        )
+        private let claimedPredeclaredOutNamesByBody Dictionary[SyntaxNode, HashSet[string]] = Dictionary[
+            SyntaxNode,
+            HashSet[string]
+        ]()
         private enum DelegateArgumentBehavior {
             NotObserved,
             InvokedDuringCall,
@@ -3619,10 +3626,7 @@ partial class CSharpToGSharpTranslator {
                     Type: {IsVar: false}
                 } ||
                     this.InferredLocalDeclarationIsNullable(local)
-                case single is SingleVariableDesignationSyntax: this.OutDeclarationRequiresNullablePredeclaration(
-                    single,
-                    local
-                )
+                case single is SingleVariableDesignationSyntax: this.OutDeclarationRequiresPredeclaration(single, local)
                 case forEach is ForEachStatementSyntax: this.ForEachHasTypeClause(forEach)
                 default: false
             }
@@ -3846,13 +3850,39 @@ partial class CSharpToGSharpTranslator {
                         this.typeMapper.MapExplicitType(local.Type, this.context, single.GetLocation()),
                         local
                     )
+                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    if type != nil {
+                        this.state.EmittedLocalTypeClauses.Add(local)
+                    }
                     this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
                     this.RecordEmittedLocalNullability(local, type, nil, nil)
-                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                    if !declarations.Any(
+                        (statement GStatement) -> statement is LocalDeclarationStatement existing &&
+                            existing.Name == name
+                    ) {
+                        declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                    }
                 }
                 return OutArgumentExpression("out", name)
             }
             return OutArgumentExpression("out var", name)
+        }
+
+        private func OutDeclarationRequiresPredeclaration(
+            single SingleVariableDesignationSyntax,
+            local ILocalSymbol
+        ) bool {
+            if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
+                argument
+                .RefKindKeyword
+                .IsKind(SyntaxKind.OutKeyword) {
+                if argument.Parent is ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation} &&
+                    this.RequiresFunctionArgumentSpillSeam(invocation) {
+                    return true
+                }
+                return this.OutDeclarationRequiresNullablePredeclaration(single, local)
+            }
+            return false
         }
 
         // Issue #4598: G# types `out var x` from the callee's `out` parameter.
@@ -3863,27 +3893,115 @@ partial class CSharpToGSharpTranslator {
             single SingleVariableDesignationSyntax,
             local ILocalSymbol
         ) bool {
-            if !this.ShouldPromoteToNullableReference(local) {
-                return false
-            }
             if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
                 argument
                 .RefKindKeyword
-                .IsKind(SyntaxKind.OutKeyword) &&
-                this
-                .context
-                .SemanticModel
-                .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
-                parameter
-                .OriginalDefinition
-                .DeclaringSyntaxReferences
-                .Any(
-                (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
-            ) &&
-                this.ShouldPromoteToNullableReference(parameter.OriginalDefinition) {
-                return false
+                .IsKind(SyntaxKind.OutKeyword) && this.ShouldPromoteToNullableReference(local) {
+                return !(
+                    this
+                        .context
+                        .SemanticModel
+                        .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                        parameter
+                        .OriginalDefinition
+                        .DeclaringSyntaxReferences
+                        .Any(
+                        (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
+                    ) &&
+                        this.ShouldPromoteToNullableReference(parameter.OriginalDefinition)
+                )
             }
-            return true
+            return false
+        }
+
+        private func GetPredeclaredOutLocalName(
+            single SingleVariableDesignationSyntax,
+            local ILocalSymbol,
+            context GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext
+        ) string {
+            if this.predeclaredOutLocalNames.TryGetValue(local, out var existing) {
+                return existing
+            }
+            let body SyntaxNode = single.Ancestors().FirstOrDefault(
+                (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                    node is AccessorDeclarationSyntax ||
+                    node is LocalFunctionStatementSyntax ||
+                    node is AnonymousFunctionExpressionSyntax
+            ) ??
+                single
+                .SyntaxTree
+                .GetRoot()
+            if !this.claimedPredeclaredOutNamesByBody.TryGetValue(body, out var claimed) {
+                claimed = HashSet[string](StringComparer.Ordinal)
+                this.claimedPredeclaredOutNamesByBody.Add(body, claimed)
+            }
+            let stem = this.nameAllocator.GetName(local, context)!!
+            var candidate = stem
+            for var suffix = 2; claimed.Contains(candidate) || this.BodyHasConflictingLocalName(
+                body,
+                local,
+                candidate,
+                isOriginalStem: candidate == stem
+            );
+                suffix++ {
+                candidate = "${stem}_$suffix"
+            }
+            claimed.Add(candidate)
+            this.predeclaredOutLocalNames.Add(local, candidate)
+            return candidate
+        }
+
+        private func BodyHasConflictingLocalName(
+            body SyntaxNode,
+            local ILocalSymbol,
+            candidate string,
+            isOriginalStem bool
+        ) bool {
+            using let modelScope = this.context.UseSemanticModelFor(body.SyntaxTree)
+            for token in body.DescendantTokens() {
+                if !token.IsKind(SyntaxKind.IdentifierToken) {
+                    continue
+                }
+                if !isOriginalStem &&
+                    (token.ValueText == candidate || this.nameAllocator.GetName(token.ValueText) == candidate) {
+                    return true
+                }
+                if token.Parent == nil {
+                    continue
+                }
+                let symbol ISymbol? = this.context.GetDeclaredSymbol(token.Parent) ??
+                    this
+                    .context
+                    .GetSymbolInfo(token.Parent)
+                    .Symbol
+                if symbol == nil || SymbolEqualityComparer.Default.Equals(symbol, local) {
+                    continue
+                }
+                let isLocalScopeSymbol = symbol is ILocalSymbol ||
+                    symbol is IParameterSymbol ||
+                    symbol is IRangeVariableSymbol ||
+                    symbol is ILabelSymbol ||
+                    (symbol is IMethodSymbol method && method.MethodKind == MethodKind.LocalFunction)
+                let isUnqualifiedMemberReference = !isLocalScopeSymbol &&
+                    token.Parent is SimpleNameSyntax simple &&
+                    (simple.Parent is not MemberAccessExpressionSyntax access || access.Name != simple) &&
+                    !(simple.Parent is MemberBindingExpressionSyntax)
+                if !isLocalScopeSymbol && !isUnqualifiedMemberReference {
+                    continue
+                }
+                if symbol is ILocalSymbol otherLocal &&
+                    otherLocal
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is SingleVariableDesignationSyntax otherSingle &&
+                    this.OutDeclarationRequiresPredeclaration(otherSingle, otherLocal) {
+                    continue
+                }
+                if this.nameAllocator.GetName(symbol) == candidate {
+                    return true
+                }
+            }
+            return false
         }
 
         // Reports whether the element-access target indexes by `int32`: a C# array,
