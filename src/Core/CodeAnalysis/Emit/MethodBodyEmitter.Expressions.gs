@@ -1123,8 +1123,13 @@ internal partial class MethodBodyEmitter {
                 "Function '${node.Method.Name}' has no emitted MethodDef for '&${node.Method.Name}' (ldftn)."
             )
         }
+        let token EntityHandle = if !this.outer.userTokens.GetPromotedExtras(node.Method).IsDefaultOrEmpty {
+            this.outer.userTokens.ResolveLambdaFunctionFtnToken(node.Method)
+        } else {
+            EntityHandle(methodHandle)
+        }
         this.il.OpCode(ILOpCode.Ldftn)
-        this.il.Token(methodHandle)
+        this.il.Token(token)
     }
 
     private func EmitFunctionPointerInvocation(node BoundFunctionPointerInvocationExpression) {

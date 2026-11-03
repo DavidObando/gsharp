@@ -44,6 +44,10 @@ internal class InterfaceImplEmitter {
         StructSymbol,
         List[ImportedAccessorBridge]
     ]()
+    private let inheritedStaticBridges Dictionary[StructSymbol, List[InheritedStaticBridge]] = Dictionary[
+        StructSymbol,
+        List[InheritedStaticBridge]
+    ]()
 
     init(outer ReflectionMetadataEmitter) {
         this.outer = outer ?? throw ArgumentNullException("outer")
@@ -1019,6 +1023,592 @@ internal class InterfaceImplEmitter {
             .EmitMethodNullability(emittedHandle, bridgeRows.Nullability, bridgeRows.ReturnRow, bridgeRows.Rows)
     }
 
+    /// Issue #4620: plans private static forwarding bridges on
+    /// [`structSymbol`](paramref) for static-virtual interface slots (methods,
+    /// property accessors and event accessors) whose matching implementation
+    /// is inherited from a G# base class (`declaringType != structSymbol`).
+    /// ECMA-335 requires `MethodImpl.Body` to be a `MethodDef` declared on the
+    /// implementing type itself, so each inherited static member gets one
+    /// synthesized static forwarder on [`structSymbol`](paramref).
+    internal func PlanInheritedStaticVirtualBridges(structSymbol StructSymbol, firstMethodRow int32) int32 {
+        if !structSymbol.IsClass ||
+            structSymbol.BaseClass == nil ||
+            (
+            !HasStaticMethodsInHierarchy(structSymbol.BaseClass) &&
+                !HasStaticPropertiesInHierarchy(structSymbol.BaseClass) &&
+                !HasStaticEventsInHierarchy(structSymbol.BaseClass)
+        ) {
+            return 0
+        }
+        var nextMethodRow = firstMethodRow
+        let EnsureList = func () List[InheritedStaticBridge] {
+            if !this.inheritedStaticBridges.TryGetValue(structSymbol, out var list) {
+                list = List[InheritedStaticBridge]()
+                this.inheritedStaticBridges[structSymbol] = list
+            }
+            return list
+        }
+        let PlanMethodBridge = func (declaringType StructSymbol, method FunctionSymbol) {
+            let bridges = EnsureList()
+            for existing in bridges {
+                if object.ReferenceEquals(existing.Method, method) {
+                    return
+                }
+            }
+            let handle = MetadataTokens.MethodDefinitionHandle(nextMethodRow)
+            nextMethodRow++
+            bridges.Add(
+                InheritedStaticBridge(
+                    DeclaringType: declaringType,
+                    Method: method,
+                    Property: nil,
+                    Event: nil,
+                    Flag: false,
+                    Handle: handle,
+                    Name: "<>StaticBridge$$${bridges.Count}_${method.Name}"
+                )
+            )
+        }
+        let PlanPropertyBridge = func (declaringType StructSymbol, property PropertySymbol, isSetter bool) {
+            let bridges = EnsureList()
+            for existing in bridges {
+                if object.ReferenceEquals(existing.Property, property) && existing.Flag == isSetter {
+                    return
+                }
+            }
+            let handle = MetadataTokens.MethodDefinitionHandle(nextMethodRow)
+            nextMethodRow++
+            let prefix = if isSetter {
+                "set_"
+            } else {
+                "get_"
+            }
+            bridges.Add(
+                InheritedStaticBridge(
+                    DeclaringType: declaringType,
+                    Method: nil,
+                    Property: property,
+                    Event: nil,
+                    Flag: isSetter,
+                    Handle: handle,
+                    Name: "<>StaticBridge$$${bridges.Count}_$prefix${property.Name}"
+                )
+            )
+        }
+        let PlanEventBridge = func (declaringType StructSymbol, ev EventSymbol, isAdd bool) {
+            let bridges = EnsureList()
+            for existing in bridges {
+                if object.ReferenceEquals(existing.Event, ev) && existing.Flag == isAdd {
+                    return
+                }
+            }
+            let handle = MetadataTokens.MethodDefinitionHandle(nextMethodRow)
+            nextMethodRow++
+            let prefix = if isAdd {
+                "add_"
+            } else {
+                "remove_"
+            }
+            bridges.Add(
+                InheritedStaticBridge(
+                    DeclaringType: declaringType,
+                    Method: nil,
+                    Property: nil,
+                    Event: ev,
+                    Flag: isAdd,
+                    Handle: handle,
+                    Name: "<>StaticBridge$$${bridges.Count}_$prefix${ev.Name}"
+                )
+            )
+        }
+        for iface in structSymbol.Interfaces {
+            if !iface.StaticMethods.IsDefaultOrEmpty {
+                for slot in iface.StaticMethods {
+                    if !TryFindUserStaticVirtualMethod(structSymbol, slot, out var impl, out var declaringType) {
+                        continue
+                    }
+                    if !object.ReferenceEquals(declaringType, structSymbol) {
+                        PlanMethodBridge(declaringType, impl)
+                    }
+                }
+            }
+            let defIface = iface.Definition ?? iface
+            if !defIface.Properties.IsDefaultOrEmpty {
+                for slotProp in defIface.Properties {
+                    if !slotProp.IsStatic {
+                        continue
+                    }
+                    if !TryFindUserStaticVirtualProperty(
+                        structSymbol,
+                        iface,
+                        slotProp,
+                        out var implProp,
+                        out var declaringType
+                    ) {
+                        continue
+                    }
+                    if !object.ReferenceEquals(declaringType, structSymbol) {
+                        if slotProp.HasGetter &&
+                            implProp.HasGetter &&
+                            implProp.GetterAccessibility == Accessibility.Public {
+                            PlanPropertyBridge(declaringType, implProp, isSetter: false)
+                        }
+                        if slotProp.HasSetter &&
+                            implProp.HasSetter &&
+                            implProp.SetterAccessibility == Accessibility.Public {
+                            PlanPropertyBridge(declaringType, implProp, isSetter: true)
+                        }
+                    }
+                }
+            }
+        }
+        if !structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty {
+            for (symbolicIface, concreteIface) in DeclarationBinder.EnumerateClrInterfaceClosure(structSymbol) {
+                var openIface Type? = nil
+                var symbolicArgs = default(ImmutableArray[TypeSymbol])
+                if symbolicIface != nil && !MemberLookup.TryGetSymbolicClrGenericInterface(
+                    symbolicIface,
+                    out openIface,
+                    out symbolicArgs
+                ) {
+                    continue
+                }
+                let slotOwner Type? = if symbolicIface != nil {
+                    symbolicIface.ClrType
+                } else {
+                    concreteIface
+                }
+                if slotOwner == nil {
+                    continue
+                }
+                for slot in ClrTypeUtilities.SafeGetMethods(
+                    slotOwner,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+                ) {
+                    if !slot.IsVirtual || DeclarationBinder.IsClrStaticPropertyOrEventAccessor(slotOwner, slot) {
+                        continue
+                    }
+                    if !DeclarationBinder.TryFindClrStaticVirtualMethodImplementation(
+                        structSymbol,
+                        slot,
+                        openIface,
+                        symbolicArgs,
+                        out var impl,
+                        out _,
+                        out var declaringType,
+                        out _
+                    ) {
+                        continue
+                    }
+                    if !object.ReferenceEquals(declaringType, structSymbol) {
+                        PlanMethodBridge(declaringType, impl)
+                    }
+                }
+                let slotOwnerSymbol = symbolicIface ?? TypeSymbol.FromClrTypeWithoutNullability(
+                    slotOwner,
+                    NullabilityFreeReason.TypeStructure
+                )
+                for slotEvent in ClrTypeUtilities.SafeGetEvents(
+                    slotOwner,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+                ) {
+                    let slotAdd = slotEvent.AddMethod is {IsVirtual: true}
+                    let slotRemove = slotEvent.RemoveMethod is {IsVirtual: true}
+                    if !slotAdd && !slotRemove {
+                        continue
+                    }
+                    if !DeclarationBinder.TryFindClrStaticVirtualEventImplementation(
+                        structSymbol,
+                        slotOwnerSymbol,
+                        slotEvent,
+                        out var implEvent,
+                        out var declaringType
+                    ) {
+                        continue
+                    }
+                    if !object.ReferenceEquals(declaringType, structSymbol) {
+                        if slotAdd {
+                            PlanEventBridge(declaringType, implEvent, isAdd: true)
+                        }
+                        if slotRemove {
+                            PlanEventBridge(declaringType, implEvent, isAdd: false)
+                        }
+                    }
+                }
+                for slotProperty in ClrTypeUtilities.SafeGetProperties(
+                    slotOwner,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+                ) {
+                    let slotGetter = slotProperty.GetMethod is {IsVirtual: true}
+                    let slotSetter = slotProperty.SetMethod is {IsVirtual: true}
+                    if !slotGetter && !slotSetter {
+                        continue
+                    }
+                    if !DeclarationBinder.TryFindClrStaticVirtualPropertyImplementation(
+                        structSymbol,
+                        slotOwnerSymbol,
+                        slotProperty,
+                        out var implProp,
+                        out var declaringType
+                    ) {
+                        continue
+                    }
+                    if !object.ReferenceEquals(declaringType, structSymbol) {
+                        if slotGetter && implProp.HasGetter && implProp.GetterAccessibility == Accessibility.Public {
+                            PlanPropertyBridge(declaringType, implProp, isSetter: false)
+                        }
+                        if slotSetter && implProp.HasSetter && implProp.SetterAccessibility == Accessibility.Public {
+                            PlanPropertyBridge(declaringType, implProp, isSetter: true)
+                        }
+                    }
+                }
+            }
+        }
+        return nextMethodRow - firstMethodRow
+    }
+
+    internal func EmitInheritedStaticVirtualBridges(structSymbol StructSymbol) {
+        if !this.inheritedStaticBridges.TryGetValue(structSymbol, out var bridges) {
+            return
+        }
+        for bridge in bridges {
+            if bridge.Method != nil {
+                this.EmitInheritedStaticMethodBridge(bridge)
+            } else if bridge.Property != nil {
+                this.EmitInheritedStaticPropertyBridge(bridge)
+            } else if bridge.Event != nil {
+                this.EmitInheritedStaticEventBridge(bridge)
+            }
+        }
+    }
+
+    private func EmitInheritedStaticMethodBridge(bridge InheritedStaticBridge) {
+        let defMethod = Invariant.Required(bridge.Method, "a static method bridge has a method")
+        let effectiveMethod = DeclarationBinder.SubstituteStaticMethodForOwner(bridge.DeclaringType, defMethod)
+        var bodyOffset = -1
+        if !this.emitCtx.MetadataOnly {
+            var target = this.outer.userTokens.ResolveUserStaticMethodToken(bridge.DeclaringType, defMethod)
+            if !defMethod.TypeParameters.IsDefaultOrEmpty {
+                let specSig = BlobBuilder()
+                let argsEnc = BlobEncoder(specSig).MethodSpecificationSignature(defMethod.TypeParameters.Length)
+                for tp in defMethod.TypeParameters {
+                    this.outer.signatures.EncodeTypeSymbol(argsEnc.AddArgument(), tp)
+                }
+                target = this
+                    .emitCtx
+                    .MetadataRows
+                    .AddMethodSpecification(target, this.emitCtx.Metadata.GetOrAddBlob(specSig))
+            }
+            let il = InstructionEncoder(BlobBuilder())
+            for var i = 0; i < effectiveMethod.EmittedParameters.Length; i++ {
+                il.LoadArgument(i)
+            }
+            il.OpCode(ILOpCode.Call)
+            il.Token(target)
+            il.OpCode(ILOpCode.Ret)
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il))
+        }
+        let signature = this.outer.userTokens.EncodeOpenMethodSignature(effectiveMethod)
+        var returnTypeForMetadata = effectiveMethod.Type
+        if defMethod.IsAsyncOrSuspending && defMethod.StateMachineType != nil {
+            for plan in this.outer.stateMachines.AsyncStateMachinePlans {
+                if plan.KickoffMethod == defMethod {
+                    returnTypeForMetadata = if this.outer.GetAsyncReturnTypeSymbol(plan) is {} asyncReturnType {
+                        bridge.DeclaringType.SubstituteMemberType(asyncReturnType) ?? asyncReturnType
+                    } else {
+                        TypeSymbol.Void
+                    }
+                    break
+                }
+            }
+        }
+        let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
+            this.emitCtx,
+            returnTypeForMetadata,
+            effectiveMethod.ReturnRefKind,
+            effectiveMethod.EmittedParameters
+        )
+        for var i = 0; i < bridgeRows.Rows.Length; i++ {
+            if bridgeRows.Parameters[i].RefKind == RefKind.In {
+                this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(bridgeRows.Rows[i])
+            }
+        }
+        var methodAttrs = MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static
+        if defMethod.IsSpecialName {
+            methodAttrs |= MethodAttributes.SpecialName
+        }
+        let emittedHandle = this
+            .emitCtx
+            .Metadata
+            .AddMethodDefinition(
+            methodAttrs,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString(bridge.Name),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            bodyOffset,
+            bridgeRows.First
+        )
+        if emittedHandle != bridge.Handle {
+            throw InvalidOperationException("Inherited static bridge MethodDef row was not emitted in planned order.")
+        }
+        if !defMethod.TypeParameters.IsDefaultOrEmpty {
+            let gpRowStart = this.emitCtx.PendingGenericParameters.Count
+            TypeDefEmitter.EmitGenericParamRows(this.emitCtx, emittedHandle, defMethod.TypeParameters)
+            let pendingRows = this.emitCtx.PendingGenericParameters
+            for var gi = gpRowStart; gi < pendingRows.Count; gi++ {
+                let gpRow = pendingRows[gi]
+                if gpRow.InterfaceConstraintType != nil {
+                    let substitutedConstraint = bridge.DeclaringType.SubstituteMemberType(
+                        gpRow.InterfaceConstraintType
+                    ) ??
+                        gpRow.InterfaceConstraintType
+                    pendingRows[gi] = gpRow with{
+                        InterfaceConstraintType = substitutedConstraint,
+                        PreResolvedConstraintHandle = this.outer.memberRefs.GetElementTypeToken(substitutedConstraint)
+                    }
+                }
+            }
+        }
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(emittedHandle, bridgeRows.Nullability, bridgeRows.ReturnRow, bridgeRows.Rows)
+    }
+
+    private func EmitInheritedStaticPropertyBridge(bridge InheritedStaticBridge) {
+        let prop = Invariant.Required(bridge.Property, "a static property bridge has a property")
+        let isSetter = bridge.Flag
+        let parameterCount = prop
+            .Parameters
+            .Length +
+            (
+            if isSetter {
+                1
+            } else {
+                0
+            }
+        )
+        var bodyOffset = -1
+        if !this.emitCtx.MetadataOnly {
+            let target = this
+                .outer
+                .userTokens
+                .ResolveUserPropertyAccessorToken(bridge.DeclaringType, prop, wantSetter: isSetter)
+            let il = InstructionEncoder(BlobBuilder())
+            for var i = 0; i < parameterCount; i++ {
+                il.LoadArgument(i)
+            }
+            il.OpCode(ILOpCode.Call)
+            il.Token(target)
+            il.OpCode(ILOpCode.Ret)
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il))
+        }
+        let signature = this.outer.userTokens.EncodeOpenPropertyAccessorSignature(prop, wantSetter: isSetter)
+        let bridgeParameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameterCount)
+        for parameter in prop.Parameters {
+            bridgeParameters.Add(parameter)
+        }
+        if isSetter {
+            bridgeParameters.Add(ParameterSymbol("value", prop.Type))
+        }
+        let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
+            this.emitCtx,
+            if isSetter {
+                TypeSymbol.Void
+            } else {
+                prop.Type
+            },
+            if isSetter {
+                RefKind.None
+            } else {
+                prop.ReturnRefKind
+            },
+            bridgeParameters.MoveToImmutable()
+        )
+        for var i = 0; i < bridgeRows.Rows.Length; i++ {
+            if bridgeRows.Parameters[i].RefKind == RefKind.In {
+                this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(bridgeRows.Rows[i])
+            }
+        }
+        let emittedHandle = this
+            .emitCtx
+            .Metadata
+            .AddMethodDefinition(
+            MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.SpecialName,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString(bridge.Name),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            bodyOffset,
+            bridgeRows.First
+        )
+        if emittedHandle != bridge.Handle {
+            throw InvalidOperationException("Inherited static bridge MethodDef row was not emitted in planned order.")
+        }
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(emittedHandle, bridgeRows.Nullability, bridgeRows.ReturnRow, bridgeRows.Rows)
+    }
+
+    private func EmitInheritedStaticEventBridge(bridge InheritedStaticBridge) {
+        let ev = Invariant.Required(bridge.Event, "a static event bridge has an event")
+        let isAdd = bridge.Flag
+        let accessors = this.cache.EventAccessorHandles[ev]
+        let accessorHandle = if isAdd {
+            accessors.Add
+        } else {
+            accessors.Remove
+        }
+        let accessorSymbol FunctionSymbol? = if isAdd {
+            ev.AddMethodSymbol
+        } else {
+            ev.RemoveMethodSymbol
+        }
+        var bodyOffset = -1
+        if !this.emitCtx.MetadataOnly {
+            let target = if ReflectionMetadataEmitter.IsUserGenericTypeReference(bridge.DeclaringType) &&
+                accessorSymbol != nil {
+                this.outer.userTokens.ResolveUserStaticMethodToken(bridge.DeclaringType, accessorSymbol, accessorHandle)
+            } else {
+                EntityHandle(accessorHandle)
+            }
+            let il = InstructionEncoder(BlobBuilder())
+            il.LoadArgument(0)
+            il.OpCode(ILOpCode.Call)
+            il.Token(target)
+            il.OpCode(ILOpCode.Ret)
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il))
+        }
+        let eventType = Invariant.Required(
+            bridge.DeclaringType.SubstituteMemberType(ev.Type),
+            "an inherited static event's handler type substitutes into its bridge"
+        )
+        let signature = BlobBuilder()
+        BlobEncoder(signature).MethodSignature(isInstanceMethod: false).Parameters(
+            1,
+            (returnType ReturnTypeEncoder) -> returnType.Void(),
+            (parameters ParametersEncoder) -> this
+                .outer
+                .signatures
+                .EncodeTypeSymbol(parameters.AddParameter().Type(), eventType)
+        )
+        let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
+            this.emitCtx,
+            TypeSymbol.Void,
+            RefKind.None,
+            ImmutableArray.Create(ParameterSymbol("value", eventType))
+        )
+        let emittedHandle = this
+            .emitCtx
+            .Metadata
+            .AddMethodDefinition(
+            MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.SpecialName,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString(bridge.Name),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            bodyOffset,
+            bridgeRows.First
+        )
+        if emittedHandle != bridge.Handle {
+            throw InvalidOperationException("Inherited static bridge MethodDef row was not emitted in planned order.")
+        }
+        this
+            .outer
+            .customAttrEncoder
+            .EmitMethodNullability(emittedHandle, bridgeRows.Nullability, bridgeRows.ReturnRow, bridgeRows.Rows)
+    }
+
+    private func TryGetStaticMethodBody(
+        implementingType StructSymbol,
+        declaringType StructSymbol,
+        method FunctionSymbol,
+        out body EntityHandle
+    ) bool {
+        if object.ReferenceEquals(implementingType, declaringType) {
+            if this.cache.MethodHandles.TryGetValue(method, out var defHandle) {
+                body = defHandle
+                return true
+            }
+            body = default(EntityHandle)
+            return false
+        }
+        if this.inheritedStaticBridges.TryGetValue(implementingType, out var bridges) {
+            for bridge in bridges {
+                if object.ReferenceEquals(bridge.Method, method) {
+                    body = bridge.Handle
+                    return true
+                }
+            }
+        }
+        body = default(EntityHandle)
+        return false
+    }
+
+    private func TryGetStaticPropertyAccessorBody(
+        implementingType StructSymbol,
+        declaringType StructSymbol,
+        property PropertySymbol,
+        isSetter bool,
+        out body EntityHandle
+    ) bool {
+        if object.ReferenceEquals(implementingType, declaringType) {
+            if this.cache.PropertyAccessorHandles.TryGetValue(property, out var implAccessors) {
+                let handle = if isSetter {
+                    implAccessors.Setter
+                } else {
+                    implAccessors.Getter
+                }
+                if handle != nil {
+                    body = handle
+                    return true
+                }
+            }
+            body = default(EntityHandle)
+            return false
+        }
+        if this.inheritedStaticBridges.TryGetValue(implementingType, out var bridges) {
+            for bridge in bridges {
+                if object.ReferenceEquals(bridge.Property, property) && bridge.Flag == isSetter {
+                    body = bridge.Handle
+                    return true
+                }
+            }
+        }
+        body = default(EntityHandle)
+        return false
+    }
+
+    private func TryGetStaticEventAccessorBody(
+        implementingType StructSymbol,
+        declaringType StructSymbol,
+        ev EventSymbol,
+        isAdd bool,
+        out body EntityHandle
+    ) bool {
+        if object.ReferenceEquals(implementingType, declaringType) {
+            if this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors) {
+                body = if isAdd {
+                    implAccessors.Add
+                } else {
+                    implAccessors.Remove
+                }
+                return true
+            }
+            body = default(EntityHandle)
+            return false
+        }
+        if this.inheritedStaticBridges.TryGetValue(implementingType, out var bridges) {
+            for bridge in bridges {
+                if object.ReferenceEquals(bridge.Event, ev) && bridge.Flag == isAdd {
+                    body = bridge.Handle
+                    return true
+                }
+            }
+        }
+        body = default(EntityHandle)
+        return false
+    }
+
     /// ADR-0089 / issue #755: emit MethodImpl rows binding each declared
     /// static-virtual interface slot to the implementer's matching static
     /// method on [`structSymbol`](paramref). Best-effort match — if
@@ -1029,9 +1619,7 @@ internal class InterfaceImplEmitter {
             structSymbol
             .Interfaces
             .IsDefaultOrEmpty ||
-            structSymbol
-            .StaticMethods
-            .IsDefaultOrEmpty {
+            !HasStaticMethodsInHierarchy(structSymbol) {
             return
         }
         if !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef) {
@@ -1060,38 +1648,10 @@ internal class InterfaceImplEmitter {
                 } else {
                     slotDefHandle
                 }
-                // ADR-0149 follow-up (issue #2370): an explicit-interface-
-                // clause static method (`func (IFoo) M(...)` inside a
-                // `shared { }` block) is linked by the binder via
-                // `ExplicitInterfaceMember` (DeclarationBinder's
-                // `TryResolveExplicitInterfaceStaticImplementation`) against
-                // this exact constructed-instance `slot`, regardless of its
-                // own declared name — prefer that link over the name-based
-                // `StaticVirtualSignatureEquals` scan below, mirroring
-                // `EmitExplicitInterfaceMethodImpls`'s instance-method
-                // precedent.
-                var implMatch FunctionSymbol? = nil
-                if !structSymbol.StaticMethods.IsDefaultOrEmpty {
-                    for explicitCandidate in structSymbol.StaticMethods {
-                        if object.ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slot) {
-                            implMatch = explicitCandidate
-                            break
-                        }
-                    }
-                }
-                if implMatch == nil {
-                    for candidate in structSymbol.GetStaticMethods(slot.Name) {
-                        if MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate) &&
-                            StaticVirtualSignatureEquals(slot, candidate) {
-                            implMatch = candidate
-                            break
-                        }
-                    }
-                }
-                if implMatch == nil {
+                if !TryFindUserStaticVirtualMethod(structSymbol, slot, out var implMatch, out var declaringType) {
                     continue
                 }
-                if !this.cache.MethodHandles.TryGetValue(implMatch, out var implHandle) {
+                if !this.TryGetStaticMethodBody(structSymbol, declaringType, implMatch, out var implHandle) {
                     continue
                 }
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotHandle)
@@ -1099,10 +1659,11 @@ internal class InterfaceImplEmitter {
         }
     }
 
-    /// Issue #4614: emit `MethodImpl` rows binding the static-virtual
+    /// Issue #4614 / #4620: emit `MethodImpl` rows binding the static-virtual
     /// (static abstract or defaulted static virtual) slots of the imported
-    /// CLR interfaces [`structSymbol`](paramref) implements to its own
-    /// matching static methods.
+    /// CLR interfaces [`structSymbol`](paramref) implements to its matching
+    /// static methods (own or inherited from a G# base class via a
+    /// synthesized static bridge).
     /// @remarks The CLR never binds a static-virtual slot by name: without a
     /// `MethodImpl` a direct implementer (`struct SD : IS`) failed
     /// to load, and a type re-listing such an interface over an imported base
@@ -1111,9 +1672,10 @@ internal class InterfaceImplEmitter {
     /// member of the same name and signature implicitly, as csc does, with
     /// one deliberate difference: csc requires that member to be public,
     /// while this pass (like (cref:EmitStaticVirtualMethodImpls) for
-    /// G#-declared interfaces) applies no accessibility check, so an own-type
-    /// member of any accessibility implements the slot. That is G#'s existing
-    /// policy, not an omission. The interfaces
+    /// G#-declared interfaces) applies no accessibility check to own-type
+    /// members, so an own-type member of any accessibility implements the
+    /// slot (an inherited member on a G# base class must be public). That is
+    /// G#'s existing policy, not an omission. The interfaces
     /// come from (cref:ClrInterfaceClosure), the same set the type's
     /// `InterfaceImpl` rows are emitted from, so slots inherited through
     /// a base interface are covered and every declaration resolves against a
@@ -1127,15 +1689,9 @@ internal class InterfaceImplEmitter {
             .ImplementedClrInterfaces
             .IsDefaultOrEmpty ||
             (
-            structSymbol
-                .StaticMethods
-                .IsDefaultOrEmpty &&
-                structSymbol
-                .StaticProperties
-                .IsDefaultOrEmpty &&
-                structSymbol
-                .StaticEvents
-                .IsDefaultOrEmpty
+            !HasStaticMethodsInHierarchy(structSymbol) &&
+                !HasStaticPropertiesInHierarchy(structSymbol) &&
+                !HasStaticEventsInHierarchy(structSymbol)
         ) ||
             !this
             .cache
@@ -1166,16 +1722,22 @@ internal class InterfaceImplEmitter {
                 slotOwner,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
             ) {
-                if !slot.IsVirtual || slot.IsSpecialName {
+                if !slot.IsVirtual || DeclarationBinder.IsClrStaticPropertyOrEventAccessor(slotOwner, slot) {
                     continue
                 }
-                let implementation FunctionSymbol? = FindClrStaticVirtualImplementation(
+                if !DeclarationBinder.TryFindClrStaticVirtualMethodImplementation(
                     structSymbol,
                     slot,
                     openIface,
-                    symbolicArgs
-                )
-                if implementation == nil || !this.cache.MethodHandles.TryGetValue(implementation, out var implHandle) {
+                    symbolicArgs,
+                    out var implementation,
+                    out _,
+                    out var declaringType,
+                    out _
+                ) {
+                    continue
+                }
+                if !this.TryGetStaticMethodBody(structSymbol, declaringType, implementation, out var implHandle) {
                     continue
                 }
                 let declaration = this.outer.memberRefs.GetMethodEntityHandle(slot, symbolicIface)
@@ -1196,7 +1758,7 @@ internal class InterfaceImplEmitter {
             )
             // Static-virtual property slots bind through their accessors, to
             // the implementer's static property of the same name and type.
-            if structSymbol.StaticProperties.IsDefaultOrEmpty {
+            if !HasStaticPropertiesInHierarchy(structSymbol) {
                 continue
             }
             for slotProperty in ClrTypeUtilities.SafeGetProperties(
@@ -1216,27 +1778,28 @@ internal class InterfaceImplEmitter {
                 if slotGetter == nil && slotSetter == nil {
                     continue
                 }
-                var implementation PropertySymbol? = nil
-                for candidate in structSymbol.StaticProperties {
-                    // Accessors bind independently below (as csc and the
-                    // G#-declared-interface path do), so a get-only property
-                    // overrides just the getter of a defaulted get/set slot.
-                    if candidate.Name == slotProperty.Name && MemberLookup.IsImplicitInterfaceImplementationCandidate(
-                        candidate
-                    ) &&
-                        MemberLookup.PropertyMatchesClrInterfaceSignature(candidate, slotOwnerSymbol, slotProperty) {
-                        implementation = candidate
-                        break
-                    }
-                }
-                if implementation == nil ||
-                    !this
-                    .cache
-                    .PropertyAccessorHandles
-                    .TryGetValue(implementation, out var implAccessors) {
+                if !DeclarationBinder.TryFindClrStaticVirtualPropertyImplementation(
+                    structSymbol,
+                    slotOwnerSymbol,
+                    slotProperty,
+                    out var implementation,
+                    out var declaringType
+                ) {
                     continue
                 }
-                if slotGetter != nil && implAccessors.Getter is {} implGetter {
+                if slotGetter != nil &&
+                    (
+                    object.ReferenceEquals(declaringType, structSymbol) ||
+                        implementation.GetterAccessibility == Accessibility.Public
+                ) &&
+                    this
+                    .TryGetStaticPropertyAccessorBody(
+                    structSymbol,
+                    declaringType,
+                    implementation,
+                    isSetter: false,
+                    out var implGetter
+                ) {
                     this
                         .emitCtx
                         .Metadata
@@ -1246,7 +1809,19 @@ internal class InterfaceImplEmitter {
                         this.outer.memberRefs.GetMethodEntityHandle(slotGetter, symbolicIface)
                     )
                 }
-                if slotSetter != nil && implAccessors.Setter is {} implSetter {
+                if slotSetter != nil &&
+                    (
+                    object.ReferenceEquals(declaringType, structSymbol) ||
+                        implementation.SetterAccessibility == Accessibility.Public
+                ) &&
+                    this
+                    .TryGetStaticPropertyAccessorBody(
+                    structSymbol,
+                    declaringType,
+                    implementation,
+                    isSetter: true,
+                    out var implSetter
+                ) {
                     this
                         .emitCtx
                         .Metadata
@@ -1260,9 +1835,9 @@ internal class InterfaceImplEmitter {
         }
     }
 
-    /// Issue #4614: binds the static-virtual event slots of one imported
+    /// Issue #4614 / #4620: binds the static-virtual event slots of one imported
     /// interface (`static abstract event Action Changed;`) to the
-    /// implementer's own static event of the same name and handler type,
+    /// implementer's static event of the same name and handler type,
     /// accessor by accessor.
     /// @param structSymbol The implementing G# type.
     /// @param implTypeDef Its TypeDef.
@@ -1276,7 +1851,7 @@ internal class InterfaceImplEmitter {
         slotOwnerSymbol TypeSymbol,
         symbolicIface TypeSymbol?
     ) {
-        if structSymbol.StaticEvents.IsDefaultOrEmpty {
+        if !HasStaticEventsInHierarchy(structSymbol) {
             return
         }
         for slotEvent in ClrTypeUtilities.SafeGetEvents(
@@ -1296,41 +1871,44 @@ internal class InterfaceImplEmitter {
             if slotAdd == nil && slotRemove == nil {
                 continue
             }
-            let slotType = MemberLookup.GetClrEventHandlerTypeSymbol(slotOwnerSymbol, slotEvent)
-            var implementation EventSymbol? = nil
-            for candidate in structSymbol.StaticEvents {
-                if candidate.Name == slotEvent.Name && MemberLookup.IsImplicitInterfaceImplementationCandidate(
-                    candidate
-                ) &&
-                    DeclarationBinder.ConformanceSignaturesEquivalent(slotType, candidate.Type) {
-                    implementation = candidate
-                    break
-                }
-            }
-            if implementation == nil ||
-                !this
-                .cache
-                .EventAccessorHandles
-                .TryGetValue(implementation, out var implAccessors) {
+            if !DeclarationBinder.TryFindClrStaticVirtualEventImplementation(
+                structSymbol,
+                slotOwnerSymbol,
+                slotEvent,
+                out var implementation,
+                out var declaringType
+            ) {
                 continue
             }
-            if slotAdd != nil {
+            if slotAdd != nil && this.TryGetStaticEventAccessorBody(
+                structSymbol,
+                declaringType,
+                implementation,
+                isAdd: true,
+                out var addBody
+            ) {
                 this
                     .emitCtx
                     .Metadata
                     .AddMethodImplementation(
                     implTypeDef,
-                    implAccessors.Add,
+                    addBody,
                     this.outer.memberRefs.GetMethodEntityHandle(slotAdd, symbolicIface)
                 )
             }
-            if slotRemove != nil {
+            if slotRemove != nil && this.TryGetStaticEventAccessorBody(
+                structSymbol,
+                declaringType,
+                implementation,
+                isAdd: false,
+                out var removeBody
+            ) {
                 this
                     .emitCtx
                     .Metadata
                     .AddMethodImplementation(
                     implTypeDef,
-                    implAccessors.Remove,
+                    removeBody,
                     this.outer.memberRefs.GetMethodEntityHandle(slotRemove, symbolicIface)
                 )
             }
@@ -1350,9 +1928,7 @@ internal class InterfaceImplEmitter {
             structSymbol
             .Interfaces
             .IsDefaultOrEmpty ||
-            structSymbol
-            .StaticProperties
-            .IsDefaultOrEmpty {
+            !HasStaticPropertiesInHierarchy(structSymbol) {
             return
         }
         if !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef) {
@@ -1377,66 +1953,56 @@ internal class InterfaceImplEmitter {
                 if !this.cache.PropertyAccessorHandles.TryGetValue(slotProp, out var slotAccessors) {
                     continue
                 }
-                // ADR-0149 follow-up (issue #2370): an explicit-interface-
-                // clause static property (`prop (IFoo) P T` inside a
-                // `shared { }` block) is linked by the binder via
-                // `ExplicitInterfaceMember` against this exact `slotProp`
-                // (both resolved from the OPEN interface definition's
-                // `Properties` table — see `VerifyStaticVirtualInterfaceProperty
-                // Implementations`'s `staticPropDefIface` fix) — prefer that
-                // link over the name-based scan below.
-                var implProp PropertySymbol? = nil
-                for explicitCandidate in structSymbol.StaticProperties {
-                    if object.ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp) &&
-                        DeclarationBinder
-                        .ConformanceSignaturesEquivalent(
-                        Invariant.Required(
-                            explicitCandidate.ExplicitInterfaceClauseTarget,
-                            "an explicit property implementation has a target",
-                            expression: "explicitCandidate.ExplicitInterfaceClauseTarget"
-                        ),
-                        iface
-                    ) {
-                        implProp = explicitCandidate
-                        break
-                    }
-                }
-                if implProp == nil {
-                    let typeParameterMap = DeclarationBinder.BuildInterfaceTypeParameterMap(iface)
-                    for candidate in structSymbol.StaticProperties {
-                        if candidate.Name == slotProp.Name && MemberLookup.IsImplicitInterfaceImplementationCandidate(
-                            candidate
-                        ) &&
-                            DeclarationBinder
-                            .IsInterfacePropertyTypeCompatible(
-                            candidate.Type,
-                            slotProp.Type,
-                            slotProp.HasSetter,
-                            typeParameterMap
-                        ) {
-                            implProp = candidate
-                            break
-                        }
-                    }
-                }
-                if implProp == nil || !this.cache.PropertyAccessorHandles.TryGetValue(implProp, out var implAccessors) {
+                if !TryFindUserStaticVirtualProperty(
+                    structSymbol,
+                    iface,
+                    slotProp,
+                    out var implProp,
+                    out var declaringType
+                ) {
                     continue
                 }
-                if slotProp.HasGetter && (slotAccessors.Getter != nil) && (implAccessors.Getter != nil) {
+                if slotProp.HasGetter &&
+                    (slotAccessors.Getter != nil) &&
+                    (
+                    object.ReferenceEquals(declaringType, structSymbol) ||
+                        implProp.GetterAccessibility == Accessibility.Public
+                ) &&
+                    this
+                    .TryGetStaticPropertyAccessorBody(
+                    structSymbol,
+                    declaringType,
+                    implProp,
+                    isSetter: false,
+                    out var getterBody
+                ) {
                     let getterDecl = if isGenericIface && slotProp.GetterSymbol != nil {
                         this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.GetterSymbol!!)
                     } else {
                         slotAccessors.Getter!!
                     }
-                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Getter!!, getterDecl)
+                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, getterBody, getterDecl)
                 }
-                if slotProp.HasSetter && (slotAccessors.Setter != nil) && (implAccessors.Setter != nil) {
+                if slotProp.HasSetter &&
+                    (slotAccessors.Setter != nil) &&
+                    (
+                    object.ReferenceEquals(declaringType, structSymbol) ||
+                        implProp.SetterAccessibility == Accessibility.Public
+                ) &&
+                    this
+                    .TryGetStaticPropertyAccessorBody(
+                    structSymbol,
+                    declaringType,
+                    implProp,
+                    isSetter: true,
+                    out var setterBody
+                ) {
                     let setterDecl = if isGenericIface && slotProp.SetterSymbol != nil {
                         this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.SetterSymbol!!)
                     } else {
                         slotAccessors.Setter!!
                     }
-                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter!!, setterDecl)
+                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, setterBody, setterDecl)
                 }
             }
         }
@@ -1457,6 +2023,16 @@ internal class InterfaceImplEmitter {
         Handle MethodDefinitionHandle,
         Name string
     ) : IEquatable[ImportedAccessorBridge] { }
+
+    private data class InheritedStaticBridge(
+        DeclaringType StructSymbol,
+        Method FunctionSymbol?,
+        Property PropertySymbol?,
+        Event EventSymbol?,
+        Flag bool,
+        Handle MethodDefinitionHandle,
+        Name string
+    ) : IEquatable[InheritedStaticBridge] { }
 
     shared {
         private func DeclaresProperty(definition StructSymbol, property PropertySymbol) bool {
@@ -1567,50 +2143,109 @@ internal class InterfaceImplEmitter {
             return false
         }
 
-        /// Issue #4614: the static method declared on [`structSymbol`](paramref)
-        /// that implements the static-virtual CLR [`slot`](paramref): same
-        /// name, and the same signature (with a symbolic interface's generic
-        /// parameters substituted by [`symbolicArgs`](paramref)).
-        /// @param structSymbol The implementing G# type.
-        /// @param slot The slot, on the (possibly erased) closed interface.
-        /// @param openIface The open definition of a symbolic interface, or `null`.
-        /// @param symbolicArgs The symbolic interface's type arguments.
-        /// @returns The implementing method, or `null`.
-        private func FindClrStaticVirtualImplementation(
+        private func HasStaticMethodsInHierarchy(type StructSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            for current in type.GetHierarchy() {
+                if !current.StaticMethods.IsDefaultOrEmpty {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func HasStaticPropertiesInHierarchy(type StructSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            for current in type.GetHierarchy() {
+                if !current.StaticProperties.IsDefaultOrEmpty {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func HasStaticEventsInHierarchy(type StructSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            for current in type.GetHierarchy() {
+                if !current.StaticEvents.IsDefaultOrEmpty {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func TryFindUserStaticVirtualMethod(
             structSymbol StructSymbol,
-            slot MethodInfo,
-            openIface Type?,
-            symbolicArgs ImmutableArray[TypeSymbol]
-        ) FunctionSymbol? {
-            var openSlot MethodInfo? = nil
-            if openIface != nil {
-                for candidateSlot in ClrTypeUtilities.SafeGetMethods(
-                    openIface,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
-                ) {
-                    if candidateSlot.MetadataToken == slot.MetadataToken {
-                        openSlot = candidateSlot
-                        break
+            slot FunctionSymbol,
+            @NotNullWhen(true) out implementation FunctionSymbol?,
+            @NotNullWhen(true) out declaringType StructSymbol?
+        ) bool {
+            if !structSymbol.StaticMethods.IsDefaultOrEmpty {
+                for explicitCandidate in structSymbol.StaticMethods {
+                    if object.ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slot) {
+                        implementation = explicitCandidate
+                        declaringType = structSymbol
+                        return true
                     }
                 }
-                if openSlot == nil {
-                    return nil
+            }
+            for current in structSymbol.GetHierarchy() {
+                for candidate in current.GetStaticMethods(slot.Name) {
+                    if MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate) &&
+                        (
+                        object.ReferenceEquals(current, structSymbol) || candidate.Accessibility == Accessibility.Public
+                    ) &&
+                        DeclarationBinder
+                        .StaticVirtualSignaturesMatch(
+                        slot,
+                        DeclarationBinder.SubstituteStaticMethodForOwner(current, candidate)
+                    ) {
+                        implementation = candidate
+                        declaringType = current
+                        return true
+                    }
                 }
             }
-            for candidate in structSymbol.GetStaticMethods(slot.Name) {
-                if !MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate) {
-                    continue
-                }
-                let matches = if openSlot != nil {
-                    MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(candidate, openSlot, symbolicArgs)
-                } else {
-                    MemberLookup.MethodMatchesClrSignature(candidate, slot)
-                }
-                if matches {
-                    return candidate
+            implementation = nil
+            declaringType = nil
+            return false
+        }
+
+        private func TryFindUserStaticVirtualProperty(
+            structSymbol StructSymbol,
+            iface InterfaceSymbol,
+            slotProp PropertySymbol,
+            @NotNullWhen(true) out implementation PropertySymbol?,
+            @NotNullWhen(true) out declaringType StructSymbol?
+        ) bool {
+            for explicitCandidate in structSymbol.StaticProperties {
+                if object.ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp) &&
+                    DeclarationBinder
+                    .ConformanceSignaturesEquivalent(
+                    Invariant.Required(
+                        explicitCandidate.ExplicitInterfaceClauseTarget,
+                        "an explicit property implementation has a target",
+                        expression: "explicitCandidate.ExplicitInterfaceClauseTarget"
+                    ),
+                    iface
+                ) {
+                    implementation = explicitCandidate
+                    declaringType = structSymbol
+                    return true
                 }
             }
-            return nil
+            return DeclarationBinder.TryFindImplicitStaticVirtualPropertyImplementation(
+                structSymbol,
+                iface,
+                slotProp,
+                out implementation,
+                out declaringType
+            )
         }
 
         /// Issue #1268: maps a (possibly substituted) static-virtual method slot
@@ -1669,35 +2304,6 @@ internal class InterfaceImplEmitter {
                 }
             }
             return slot
-        }
-
-        private func StaticVirtualSignatureEquals(a FunctionSymbol?, b FunctionSymbol?) bool {
-            // ADR-0186: a platform position at any depth (a static member
-            // declared in an ADR-0186 §9 oblivious scope) conforms as its
-            // underlying type, as the binder's StaticVirtualSignaturesMatch
-            // already decided.
-            let Same = func (x TypeSymbol?, y TypeSymbol?) bool {
-                return object.ReferenceEquals(x, y) ||
-                    x?.Name == y?.Name ||
-                    DeclarationBinder.ConformanceSignaturesEquivalent(x, y)
-            }
-            if a == nil || b == nil {
-                return false
-            }
-            if a.Parameters.Length != b.Parameters.Length {
-                return false
-            }
-            // FunctionSymbol.Type and parameter Type values are compiler symbols
-            // canonicalized for this emit pass, not reflection Type instances.
-            if !Same(a.Type, b.Type) {
-                return false
-            }
-            for var i = 0; i < a.Parameters.Length; i++ {
-                if !Same(a.Parameters[i].Type, b.Parameters[i].Type) {
-                    return false
-                }
-            }
-            return true
         }
     }
 }
