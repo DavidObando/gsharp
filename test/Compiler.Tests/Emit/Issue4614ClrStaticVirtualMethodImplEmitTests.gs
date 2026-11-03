@@ -189,11 +189,14 @@ public interface IInst<T> { int N<U>(T x, U y); }
 public interface IMA<T> { static abstract int M<U>(U[] us, T x); }
 public interface IArr<T> { int A(T[] xs); int B<U>(U[] us, T x); }
 public interface IDefaultedByDerived : IS { static int IS.Z() => 100; }
+public interface ILeft : IS { static int IS.Z() => 10; }
+public interface IRight : IS { static int IS.Z() => 20; }
 public interface IDefaultedGeneric<T> : IH<T> { static int IH<T>.H(T x) => 200; }
 public interface IGenOverload { static abstract int Pick<T, U>(T x); static abstract int Pick<T, U>(U x); }
 public interface IDefaultedFirstOverload : IGenOverload { static int IGenOverload.Pick<T, U>(T x) => 300; }
 public class MultiConstraint<T, U> where T : System.IComparable<T>, System.IComparable<U> { public static int Touch(T? x) => 0; }
 public interface IAsync<T> { static abstract System.Threading.Tasks.Task<T> Load(T x); }
+public interface IOp { static abstract int operator +(IOp a, int b); }
 
 public static class Probe
 {
@@ -534,6 +537,19 @@ struct SDefault : IDefaultedByDerived {
 }
 
 Console.WriteLine(Probe.Z[SDefault]())`, []string{"100"}}
+            yield[]object{"defaulted-in-symbolic-derived-clr-interface", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape { }
+struct SDefaultSym : IDefaultedGeneric[Shape] {
+}
+
+let iface = typeof(SDefaultSym).GetInterfaces().Where((i Type) -> i.Name == "IH` + "`" + `1").First()
+Console.WriteLine(typeof(SDefaultSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))`), []string{
+                    "200"
+                }}
         }
 
         /// Issue #4620: static methods, properties and events inherited from a
@@ -652,10 +668,15 @@ Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[1].Invo
                     "71",
                     "72"
                 }}
-            yield[]object{"inherited-async-static-method-from-generic-gs-base", `package P
+            yield[]object{"inherited-async-static-method-from-generic-gs-base", (`package P
 import System
+import System.Linq
+import System.Threading.Tasks
 import Clib
 
+class Shape {
+    var Tag int32
+}
 open class BAsync[T] {
     shared {
         async func Load(x T) T { return x }
@@ -663,8 +684,37 @@ open class BAsync[T] {
 }
 class DAsync : BAsync[int32], IAsync[int32] {
 }
+class DAsyncSym : BAsync[Shape], IAsync[Shape] {
+}
 
-Console.WriteLine(Probe.Load[int32, DAsync](77))`, []string{"77"}}
+Console.WriteLine(Probe.Load[int32, DAsync](77))
+let iface = typeof(DAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IAsync` + "`" + `1").First()
+let task = cast[Task[Shape]](typeof(DAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 88}})!!)
+Console.WriteLine(task.GetAwaiter().GetResult().Tag)`), []string{"77", "88"}}
+            yield[]object{"direct-and-inherited-static-abstract-operator", `package P
+import System
+import Clib
+
+struct SOp : IOp {
+    shared {
+        func op_Addition(a IOp, b int32) int32 { return b + 7 }
+    }
+}
+
+open class BOp {
+    shared {
+        func op_Addition(a IOp, b int32) int32 { return b + 17 }
+    }
+}
+
+class DOp : BOp, IOp {
+}
+
+Console.WriteLine(typeof(SOp).GetInterfaceMap(typeof(IOp)).TargetMethods[0].Invoke(nil, []object?{SOp{}, 10}))
+Console.WriteLine(typeof(DOp).GetInterfaceMap(typeof(IOp)).TargetMethods[0].Invoke(nil, []object?{DOp(), 10}))`, []string{
+                    "17",
+                    "27"
+                }}
             yield[]object{"private-static-on-gs-base-that-already-implements-interface", `package P
 import System
 import Clib
@@ -851,6 +901,20 @@ struct S : IDefaultedFirstOverload {
 }
 let _ = MultiConstraint[int32, int32].Touch(0)
 Console.WriteLine("x")`, "GS0331", "'Clib.IGenOverload.Pick(U)'"}
+            yield[]object{"missing-static-abstract-operator", `package P
+import System
+import Clib
+
+struct SM : IOp {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IOp.op_Addition(Clib.IOp, int32)'"}
+            yield[]object{"conflicting-sibling-derived-interface-defaults", `package P
+import System
+import Clib
+
+struct SDiamond : ILeft, IRight {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IS.Z'"}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {

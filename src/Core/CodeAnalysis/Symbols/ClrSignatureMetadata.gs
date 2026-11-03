@@ -69,7 +69,8 @@ internal shared class ClrSignatureMetadata {
         out isAbstract bool
     ) bool {
         isAbstract = false
-        if !ClrTypeUtilities.ImplementsInterfaceByName(derivedInterface, slotOwner) {
+        let candidates = derivedInterface.GetInterfaces()
+        if !candidates.Any(matchesSlotOwner) {
             return false
         }
         using let image = ReferenceResolver.OpenAssemblyImage(derivedInterface.Assembly)
@@ -89,7 +90,6 @@ internal shared class ClrSignatureMetadata {
             return false
         }
         let ifaceMatcher = SignatureMatcher(derivedInterface, nil)
-        let candidates = derivedInterface.GetInterfaces()
         let slotParams = slot.GetParameters()
         let slotGenericArity = if slot.IsGenericMethod {
             slot.GetGenericArguments().Length

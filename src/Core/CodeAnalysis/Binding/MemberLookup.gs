@@ -4663,17 +4663,18 @@ internal class MemberLookup {
                 return false
             }
             // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            var openReturnType = if openMethod.ReturnType.IsByRef {
+                openMethod.ReturnType.GetElementType()!!
+            } else {
+                openMethod.ReturnType
+            }
+            if candidate.IsAsync {
+                if AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(openMethod.ReturnType, out var awaitedReturnClr) {
+                    openReturnType = awaitedReturnClr
+                }
+            }
             if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod) ||
-                !ReturnTypeMatchesSubstituted(
-                candidate.Type,
-                if openMethod.ReturnType.IsByRef {
-                    openMethod.ReturnType.GetElementType()!!
-                } else {
-                    openMethod.ReturnType
-                },
-                symbolicArgs,
-                methodTypeArgs
-            ) {
+                !ReturnTypeMatchesSubstituted(candidate.Type, openReturnType, symbolicArgs, methodTypeArgs) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {
@@ -4832,17 +4833,21 @@ internal class MemberLookup {
                 return false
             }
             // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            var slotReturnType = if slot.Method.ReturnType.IsByRef {
+                slot.Method.ReturnType.GetElementType()!!
+            } else {
+                slot.Method.ReturnType
+            }
+            if method.IsAsync {
+                if AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(
+                    slot.Method.ReturnType,
+                    out var awaitedSlotReturnClr
+                ) {
+                    slotReturnType = awaitedSlotReturnClr
+                }
+            }
             if method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method) ||
-                !ReturnTypeMatchesSubstituted(
-                method.Type,
-                if slot.Method.ReturnType.IsByRef {
-                    slot.Method.ReturnType.GetElementType()!!
-                } else {
-                    slot.Method.ReturnType
-                },
-                slot.SymbolicArgs,
-                methodTypeArgs
-            ) {
+                !ReturnTypeMatchesSubstituted(method.Type, slotReturnType, slot.SymbolicArgs, methodTypeArgs) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {

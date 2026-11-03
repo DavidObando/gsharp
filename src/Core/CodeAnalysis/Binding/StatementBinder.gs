@@ -440,7 +440,7 @@ internal partial class StatementBinder {
         // already handles a callee declared earlier; this converges the
         // rest. Applies equally to a non-generic group — the reconciler
         // itself does not distinguish generic from non-generic literals.
-        if groupLiterals != nil && groupLiterals.Count > 1 {
+        if groupLiterals != nil && groupLiterals.Count > 0 {
             reconcileGenericLocalFunctionGroupCaptures!!(groupLiterals)
             // The reconcile pass above can widen a member's CapturedVariables
             // after the initial per-member stamp above; re-stamp so a later

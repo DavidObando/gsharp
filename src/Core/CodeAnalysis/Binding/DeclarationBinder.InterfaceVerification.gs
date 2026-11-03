@@ -1347,7 +1347,7 @@ internal partial class DeclarationBinder {
                 slotOwner,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
             ) {
-                if !slot.IsVirtual || slot.IsSpecialName {
+                if !slot.IsVirtual || IsClrStaticPropertyOrEventAccessor(slotOwner, slot) {
                     continue
                 }
                 let openSlot = if openIface == nil {
@@ -2448,6 +2448,31 @@ internal partial class DeclarationBinder {
             return false
         }
 
+        internal func IsClrStaticPropertyOrEventAccessor(slotOwner Type, method MethodInfo) bool {
+            if !method.IsSpecialName {
+                return false
+            }
+            for prop in ClrTypeUtilities.SafeGetProperties(
+                slotOwner,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+            ) {
+                if SameClrSlot(prop.GetMethod, method) || SameClrSlot(prop.SetMethod, method) {
+                    return true
+                }
+            }
+            for ev in ClrTypeUtilities.SafeGetEvents(
+                slotOwner,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+            ) {
+                if SameClrSlot(ev.AddMethod, method) ||
+                    SameClrSlot(ev.RemoveMethod, method) ||
+                    SameClrSlot(ev.RaiseMethod, method) {
+                    return true
+                }
+            }
+            return false
+        }
+
         private func IsClrInterfaceSlotAbstractInClosure(
             closure IReadOnlyList[(Symbolic TypeSymbol?, Concrete Type?)],
             slotOwnerSymbol TypeSymbol,
@@ -2457,8 +2482,7 @@ internal partial class DeclarationBinder {
             if slot == nil {
                 return false
             }
-            var currentOwnerSymbol = slotOwnerSymbol
-            var isAbstract = slot.IsAbstract
+            let mostSpecific = List[(Owner TypeSymbol, IsAbstract bool)]{(slotOwnerSymbol, slot.IsAbstract)}
             for (symbolicIface, concreteIface) in closure {
                 let candidateOwner Type? = if symbolicIface != nil {
                     symbolicIface.ClrType
@@ -2504,14 +2528,27 @@ internal partial class DeclarationBinder {
                     matchesSlotOwner,
                     out var overrideIsAbstract
                 ) {
-                    if ExactInterfaceTypeMatches(currentOwnerSymbol, slotOwnerSymbol) ||
-                        ClrTypeImplementsInterface(candidateOwnerSymbol, currentOwnerSymbol) {
-                        currentOwnerSymbol = candidateOwnerSymbol
-                        isAbstract = overrideIsAbstract
+                    var shadowedByMoreSpecific = false
+                    for existing in mostSpecific {
+                        if ClrTypeImplementsInterface(existing.Owner, candidateOwnerSymbol) {
+                            shadowedByMoreSpecific = true
+                            break
+                        }
                     }
+                    if shadowedByMoreSpecific {
+                        continue
+                    }
+                    for var i = mostSpecific.Count - 1; i >= 0; i-- {
+                        let existing = mostSpecific[i]
+                        if ExactInterfaceTypeMatches(existing.Owner, slotOwnerSymbol) ||
+                            ClrTypeImplementsInterface(candidateOwnerSymbol, existing.Owner) {
+                            mostSpecific.RemoveAt(i)
+                        }
+                    }
+                    mostSpecific.Add((candidateOwnerSymbol, overrideIsAbstract))
                 }
             }
-            return isAbstract
+            return mostSpecific.Count != 1 || mostSpecific[0].IsAbstract
         }
 
         internal func EnumerateClrInterfaceClosure(structSymbol StructSymbol) sequence[

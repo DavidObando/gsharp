@@ -1293,6 +1293,9 @@ internal class ReflectionMetadataEmitter {
         // callee would miss the requirement entirely. Iterate to a fixed
         // point instead: keep re-running the promotion over every literal
         // until a full pass promotes nothing further.
+        if hostPackageGuess != nil {
+            this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess)
+        }
         var promotedAnyThisPass bool
         do {
             promotedAnyThisPass = false
@@ -1303,10 +1306,14 @@ internal class ReflectionMetadataEmitter {
                     promotedAnyThisPass = true
                 }
             }
+            if hostPackageGuess != nil && this.closures.ReconcileClosureTypeParameters(
+                this.userTokens.GetPromotedOrClosureExtras
+            ) {
+                promotedAnyThisPass = true
+            }
         } while promotedAnyThisPass
         this.RetargetIteratorPlans(lambdaLiterals)
         if hostPackageGuess != nil {
-            this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess)
             this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess)
             this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess)
             this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess)

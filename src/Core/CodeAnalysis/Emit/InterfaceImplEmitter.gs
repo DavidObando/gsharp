@@ -1185,7 +1185,7 @@ internal class InterfaceImplEmitter {
                     slotOwner,
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
                 ) {
-                    if !slot.IsVirtual || slot.IsSpecialName {
+                    if !slot.IsVirtual || DeclarationBinder.IsClrStaticPropertyOrEventAccessor(slotOwner, slot) {
                         continue
                     }
                     if !DeclarationBinder.TryFindClrStaticVirtualMethodImplementation(
@@ -1333,11 +1333,15 @@ internal class InterfaceImplEmitter {
                 this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(bridgeRows.Rows[i])
             }
         }
+        var methodAttrs = MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static
+        if defMethod.IsSpecialName {
+            methodAttrs |= MethodAttributes.SpecialName
+        }
         let emittedHandle = this
             .emitCtx
             .Metadata
             .AddMethodDefinition(
-            MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static,
+            methodAttrs,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
             this.emitCtx.Metadata.GetOrAddString(bridge.Name),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
@@ -1718,7 +1722,7 @@ internal class InterfaceImplEmitter {
                 slotOwner,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
             ) {
-                if !slot.IsVirtual || slot.IsSpecialName {
+                if !slot.IsVirtual || DeclarationBinder.IsClrStaticPropertyOrEventAccessor(slotOwner, slot) {
                     continue
                 }
                 if !DeclarationBinder.TryFindClrStaticVirtualMethodImplementation(
