@@ -4549,10 +4549,11 @@ partial class Binder {
             }
             try {
                 let closed = clrOpenType!!.MakeGenericType(clrArgs)
-                if hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(
-                    closed,
-                    out _
-                ) {
+                if hasSymbolicArg || clrOpenType!!.FullName?.StartsWith(
+                    "System.Tuple`",
+                    StringComparison.Ordinal
+                ) == true ||
+                    NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) {
                     // #313 / #671: keep the symbolic type arguments alongside
                     // the type-erased closed CLR shape so call-site inference,
                     // return-type substitution, and user-type emit can recover
@@ -5743,10 +5744,8 @@ partial class Binder {
         }
         try {
             let closed = nestedDef.MakeGenericType(clrArgs)
-            if hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(
-                closed,
-                out _
-            ) {
+            if hasSymbolicArg || nestedDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true ||
+                NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) {
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable())
             }
             return ResolveClrTypeClauseSymbol(closed)

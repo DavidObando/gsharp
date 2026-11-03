@@ -2151,7 +2151,8 @@ internal class MemberLookup {
             openDefinition Type?,
             typeArguments ImmutableArray[TypeSymbol],
             openMethodDefinition MethodInfo?,
-            methodTypeArguments ImmutableArray[TypeSymbol?]
+            methodTypeArguments ImmutableArray[TypeSymbol?],
+            preserveReferenceTupleIdentity bool = false
         ) TypeSymbol {
             if openClr == nil {
                 return TypeSymbol.Error
@@ -2164,7 +2165,8 @@ internal class MemberLookup {
                         openDefinition,
                         typeArguments,
                         openMethodDefinition,
-                        methodTypeArguments
+                        methodTypeArguments,
+                        preserveReferenceTupleIdentity
                     )
                 )
             }
@@ -2175,7 +2177,8 @@ internal class MemberLookup {
                         openDefinition,
                         typeArguments,
                         openMethodDefinition,
-                        methodTypeArguments
+                        methodTypeArguments,
+                        preserveReferenceTupleIdentity
                     )
                 )
             }
@@ -2256,9 +2259,43 @@ internal class MemberLookup {
                     openDefinition,
                     typeArguments,
                     openMethodDefinition,
-                    methodTypeArguments
+                    methodTypeArguments,
+                    preserveReferenceTupleIdentity
                 )
                 return RectangularArrayTypeSymbol.Get(mappedElement, currentOpenClr.GetArrayRank())
+            }
+            // Issue #4626: a rank-1 non-vector array (`T[*]`, `IsSZArray == false`)
+            // is a distinct CLR signature from a G# slice (`T[]`, `IsSZArray == true`).
+            // Preserve the rank-1 non-SZ array identity instead of projecting to
+            // `SliceTypeSymbol`.
+            if currentOpenClr.IsArray && !currentOpenClr.IsSZArray && currentOpenClr.GetArrayRank() == 1 {
+                let openElement = openClr.GetElementType()
+                let mappedElement = MapOpenClrTypeToSymbolic(
+                    openElement,
+                    openDefinition,
+                    typeArguments,
+                    openMethodDefinition,
+                    methodTypeArguments,
+                    preserveReferenceTupleIdentity
+                )
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || TypeSymbol.ContainsFixedLengthArray(
+                    mappedElement
+                ) ||
+                    (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedElement)) ||
+                    ContainsRankOneNonSzArray(mappedElement) ||
+                    ClrNullability
+                    .ContainsFunctionPointer(openClr) {
+                    let erasedArray = ResolveErasedObjectInContext(openDefinition ?? openClr).MakeArrayType(1)
+                    return ImportedTypeSymbol.GetConstructed(
+                        erasedArray,
+                        openDefinition: nil,
+                        ImmutableArray.Create(mappedElement)
+                    )
+                }
+                if mappedElement.ClrType is {ContainsGenericParameters: false} elementClr {
+                    return ImportedTypeSymbol.Get(elementClr.MakeArrayType(1))
+                }
+                return TypeSymbol.FromClrType(currentOpenClr)
             }
             // Issue #794: an open generic type's instance member can return an
             // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
@@ -2267,14 +2304,15 @@ internal class MemberLookup {
             // sees the symbolic projection rather than the erased `object[]`.
             // Issue #833 extends the recursion to method-level parameters so
             // `Enumerable.ToArray[T](IEnumerable[T]) → T[]` surfaces as `[]T`.
-            if currentOpenClr.IsArray && currentOpenClr.GetArrayRank() == 1 {
+            if currentOpenClr.IsSZArray {
                 let openElement = openClr.GetElementType()
                 let mappedElement = MapOpenClrTypeToSymbolic(
                     openElement,
                     openDefinition,
                     typeArguments,
                     openMethodDefinition,
-                    methodTypeArguments
+                    methodTypeArguments,
+                    preserveReferenceTupleIdentity
                 )
                 // Issue #1216: a method-level parameter may be substituted by a
                 // same-compilation user type (e.g. `GC.AllocateArray[Foo]` /
@@ -2283,9 +2321,10 @@ internal class MemberLookup {
                 // symbolic slice here the call's return would collapse to the
                 // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
                 // the generic-type branch below, which already honours #903.
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || ClrNullability.ContainsFunctionPointer(
-                    openClr
-                ) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedElement) ||
+                    (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedElement)) ||
+                    ContainsRankOneNonSzArray(mappedElement) ||
+                    ClrNullability.ContainsFunctionPointer(openClr) ||
                     (
                     openElement?.ContainsGenericParameters == true &&
                         mappedElement
@@ -2306,11 +2345,13 @@ internal class MemberLookup {
                     openDefinition,
                     typeArguments,
                     openMethodDefinition,
-                    methodTypeArguments
+                    methodTypeArguments,
+                    preserveReferenceTupleIdentity
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) || ClrNullability.ContainsFunctionPointer(
-                    openClr
-                ) ||
+                if TypeSymbol.RequiresSymbolicProjection(mappedPointee) ||
+                    (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedPointee)) ||
+                    ContainsRankOneNonSzArray(mappedPointee) ||
+                    ClrNullability.ContainsFunctionPointer(openClr) ||
                     (
                     openPointee?.ContainsGenericParameters == true &&
                         mappedPointee
@@ -2335,7 +2376,8 @@ internal class MemberLookup {
                     openDefinition,
                     typeArguments,
                     openMethodDefinition,
-                    methodTypeArguments
+                    methodTypeArguments,
+                    preserveReferenceTupleIdentity
                 )
                 return NullableLifting.WrapValueTypeNullable(mappedUnderlying)
             }
@@ -2351,7 +2393,8 @@ internal class MemberLookup {
                         openDefinition,
                         typeArguments,
                         openMethodDefinition,
-                        methodTypeArguments
+                        methodTypeArguments,
+                        preserveReferenceTupleIdentity
                     )
                     symbolic.Add(mapped)
                     // Issue #833 surfaced this projection for in-scope type
@@ -2378,12 +2421,18 @@ internal class MemberLookup {
                     // and on this branch until this line was added; the named-tuple
                     // sibling one line up already proved the path was live.
                     if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) ||
+                        (preserveReferenceTupleIdentity && ContainsReferenceTuple(mapped)) ||
+                        ContainsRankOneNonSzArray(mapped) ||
                         (a.ContainsGenericParameters && mapped.ClrType?.ContainsGenericParameters == false) {
                         anyParam = true
                     }
                 }
                 let openDef = currentOpenClr.GetGenericTypeDefinition()
-                if !anyParam {
+                let isPreservedReferenceTuple = preserveReferenceTupleIdentity && openDef.FullName?.StartsWith(
+                    "System.Tuple`",
+                    StringComparison.Ordinal
+                ) == true
+                if !anyParam && !isPreservedReferenceTuple {
                     return TypeSymbol.FromClrType(openClr)
                 }
                 // Construct the type-erased closed shape (`<object, object, …>`) so
@@ -4952,31 +5001,20 @@ internal class MemberLookup {
             slotOwner TypeSymbol,
             clrProperty PropertyInfo
         ) bool {
-            var slotType = GetClrPropertyTypeSymbol(slotOwner, clrProperty)
-            if slotType is ByRefTypeSymbol byRef {
-                slotType = byRef.PointeeType
-            }
-            if property.Name != clrProperty.Name || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(
-                clrProperty
-            ) ||
-                !DeclarationBinder.ConformanceSignaturesEquivalent(slotType, property.Type) {
-                return false
-            }
-            let clrParameters = clrProperty.GetIndexParameters()
-            if property.Parameters.Length != clrParameters.Length {
-                return false
-            }
-            for var i = 0; i < clrParameters.Length; i++ {
-                var slotParameterType = GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)
-                if slotParameterType is ByRefTypeSymbol slotParameterByRef {
-                    slotParameterType = slotParameterByRef.PointeeType
-                }
-                if property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i]) ||
-                    !DeclarationBinder.ConformanceSignaturesEquivalent(slotParameterType, property.Parameters[i].Type) {
-                    return false
+            if GetProjectionReceiverImportedType(slotOwner) is ImportedTypeSymbol imported &&
+                TryGetSymbolicDeclaringContext(
+                imported,
+                clrProperty.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments
+            ) &&
+                openDefinition != nil {
+                let openProperty PropertyInfo? = FindOpenIndexerDefinition(openDefinition, clrProperty)
+                if openProperty != nil {
+                    return PropertyMatchesSymbolicClrInterfaceSignature(property, openProperty, declaringTypeArguments)
                 }
             }
-            return true
+            return PropertyMatchesSymbolicClrInterfaceSignature(property, clrProperty, ImmutableArray[TypeSymbol].Empty)
         }
 
         /// Returns whether a method may satisfy an interface slot implicitly.
@@ -5154,15 +5192,43 @@ internal class MemberLookup {
             typeArguments ImmutableArray[TypeSymbol],
             openMethodDefinition MethodInfo?,
             methodTypeArguments ImmutableArray[TypeSymbol?],
-            reason NullabilityFreeReason
+            reason NullabilityFreeReason,
+            preserveReferenceTupleIdentity bool = false
         ) TypeSymbol {
             return MapOpenClrTypeToSymbolic(
                 openClr,
                 openDefinition,
                 typeArguments,
                 openMethodDefinition,
-                methodTypeArguments
+                methodTypeArguments,
+                preserveReferenceTupleIdentity
             )
+        }
+
+        private func ContainsReferenceTuple(type TypeSymbol) bool {
+            if type is ImportedTypeSymbol imported {
+                let openDef = imported.OpenDefinition ??
+                    (
+                    if imported.ClrType?.IsGenericType == true {
+                        imported.ClrType!!.GetGenericTypeDefinition()
+                    } else {
+                        default(Type?)
+                    }
+                )
+                if openDef?.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true {
+                    return true
+                }
+            }
+            return TypeSymbol.GetWrappedTypes(type).Any(ContainsReferenceTuple)
+        }
+
+        private func ContainsRankOneNonSzArray(type TypeSymbol) bool {
+            if type is ImportedTypeSymbol imported &&
+                imported.ClrType is {IsArray: true, IsSZArray: false} arrayClr &&
+                arrayClr.GetArrayRank() == 1 {
+                return true
+            }
+            return TypeSymbol.GetWrappedTypes(type).Any(ContainsRankOneNonSzArray)
         }
 
         @NullabilityFunnel
@@ -7695,7 +7761,8 @@ internal class MemberLookup {
                 symbolicArgs,
                 openMethodDefinition: nil,
                 methodTypeArgs,
-                NullabilityFreeReason.IdentityComparison
+                NullabilityFreeReason.IdentityComparison,
+                preserveReferenceTupleIdentity: true
             )
             if !candidate.IsAsync || AsyncIteratorDetection.IsAsyncIteratorReturnType(candidate.Type) {
                 return DeclarationBinder.ConformanceSignaturesEquivalent(projectedReturn, candidate.Type)
@@ -7750,7 +7817,8 @@ internal class MemberLookup {
                 symbolicArgs,
                 openMethodDefinition: nil,
                 methodTypeArgs,
-                NullabilityFreeReason.IdentityComparison
+                NullabilityFreeReason.IdentityComparison,
+                preserveReferenceTupleIdentity: true
             )
             return DeclarationBinder.ConformanceSignaturesEquivalent(projected, candidate)
         }

@@ -3322,6 +3322,7 @@ internal partial class DeclarationBinder {
             }
             if a is StructSymbol sa && b is StructSymbol sb {
                 return object.ReferenceEquals(sa.Definition, sb.Definition) &&
+                    EnclosingTypeArgumentsEquivalent(sa, sb, typeParamMap) &&
                     TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments, typeParamMap)
             }
             if a is InterfaceSymbol ia && b is InterfaceSymbol ib {
@@ -3358,6 +3359,36 @@ internal partial class DeclarationBinder {
                 let defB = dtb.Definition ?? dtb
                 return object.ReferenceEquals(defA, defB) &&
                     TypeArgumentsEquivalent(dta.TypeArguments, dtb.TypeArguments, typeParamMap)
+            }
+            if a is SliceTypeSymbol sla && b is SliceTypeSymbol slb {
+                return TypeSignaturesEquivalent(sla.ElementType, slb.ElementType, typeParamMap)
+            }
+            if a is ArrayTypeSymbol ara && b is ArrayTypeSymbol arb {
+                return ara.Length == arb.Length &&
+                    TypeSignaturesEquivalent(ara.ElementType, arb.ElementType, typeParamMap)
+            }
+            if conformanceMatchingDepth > 0 && (a is ArrayTypeSymbol || b is ArrayTypeSymbol) {
+                return false
+            }
+            if a is RectangularArrayTypeSymbol raa && b is RectangularArrayTypeSymbol rab {
+                return raa.Rank == rab.Rank && TypeSignaturesEquivalent(raa.ElementType, rab.ElementType, typeParamMap)
+            }
+            if conformanceMatchingDepth > 0 && (a is RectangularArrayTypeSymbol || b is RectangularArrayTypeSymbol) {
+                return false
+            }
+            if conformanceMatchingDepth > 0 {
+                let aIsNonSzRankOne = TryGetRankOneNonSzArrayElementType(a, out var aNonSzElement)
+                let bIsNonSzRankOne = TryGetRankOneNonSzArrayElementType(b, out var bNonSzElement)
+                if aIsNonSzRankOne || bIsNonSzRankOne {
+                    return aIsNonSzRankOne &&
+                        bIsNonSzRankOne &&
+                        TypeSignaturesEquivalent(aNonSzElement, bNonSzElement, typeParamMap)
+                }
+                let aIsSlice = TryGetSliceElementType(a, out var aSliceElement)
+                let bIsSlice = TryGetSliceElementType(b, out var bSliceElement)
+                if aIsSlice || bIsSlice {
+                    return aIsSlice && bIsSlice && TypeSignaturesEquivalent(aSliceElement, bSliceElement, typeParamMap)
+                }
             }
             if a is ImportedTypeSymbol pa && b is ImportedTypeSymbol pb {
                 // Constructed imported generics carrying symbolic arguments (e.g.
@@ -3397,29 +3428,6 @@ internal partial class DeclarationBinder {
                 }
                 return false
             }
-            if a is SliceTypeSymbol sla && b is SliceTypeSymbol slb {
-                return TypeSignaturesEquivalent(sla.ElementType, slb.ElementType, typeParamMap)
-            }
-            if a is ArrayTypeSymbol ara && b is ArrayTypeSymbol arb {
-                return ara.Length == arb.Length &&
-                    TypeSignaturesEquivalent(ara.ElementType, arb.ElementType, typeParamMap)
-            }
-            if conformanceMatchingDepth > 0 && (a is ArrayTypeSymbol || b is ArrayTypeSymbol) {
-                return false
-            }
-            if a is RectangularArrayTypeSymbol raa && b is RectangularArrayTypeSymbol rab {
-                return raa.Rank == rab.Rank && TypeSignaturesEquivalent(raa.ElementType, rab.ElementType, typeParamMap)
-            }
-            if conformanceMatchingDepth > 0 && (a is RectangularArrayTypeSymbol || b is RectangularArrayTypeSymbol) {
-                return false
-            }
-            if conformanceMatchingDepth > 0 {
-                let aIsSlice = TryGetSliceElementType(a, out var aSliceElement)
-                let bIsSlice = TryGetSliceElementType(b, out var bSliceElement)
-                if aIsSlice || bIsSlice {
-                    return aIsSlice && bIsSlice && TypeSignaturesEquivalent(aSliceElement, bSliceElement, typeParamMap)
-                }
-            }
             if a is NullableTypeSymbol na && b is NullableTypeSymbol nb {
                 return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType, typeParamMap)
             }
@@ -3452,6 +3460,59 @@ internal partial class DeclarationBinder {
             )
         }
 
+        private func EnclosingTypeArgumentsEquivalent(
+            a StructSymbol,
+            b StructSymbol,
+            typeParamMap IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]?
+        ) bool {
+            if a.EnclosingTypeArguments.IsDefaultOrEmpty && b.EnclosingTypeArguments.IsDefaultOrEmpty {
+                return true
+            }
+            let aEnclosing = if a.EnclosingTypeArguments.IsDefaultOrEmpty {
+                StructSymbol.CollectEnclosingTypeParameters(a).Cast[TypeSymbol]().ToImmutableArray()
+            } else {
+                a.EnclosingTypeArguments
+            }
+            let bEnclosing = if b.EnclosingTypeArguments.IsDefaultOrEmpty {
+                StructSymbol.CollectEnclosingTypeParameters(b).Cast[TypeSymbol]().ToImmutableArray()
+            } else {
+                b.EnclosingTypeArguments
+            }
+            return TypeArgumentsEquivalent(aEnclosing, bEnclosing, typeParamMap)
+        }
+
+        private func TryGetRankOneNonSzArrayElementType(
+            type TypeSymbol,
+            @NotNullWhen(true) out elementType TypeSymbol?
+        ) bool {
+            if type is ImportedTypeSymbol imported &&
+                imported.ClrType is {IsArray: true, IsSZArray: false} arrayClr &&
+                arrayClr.GetArrayRank() == 1 {
+                if !imported.TypeArguments.IsDefaultOrEmpty && imported.TypeArguments.Length == 1 {
+                    elementType = imported.TypeArguments[0]
+                    return true
+                }
+                let clrElement = arrayClr.GetElementType()
+                if clrElement != nil {
+                    elementType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                        clrElement,
+                        MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                            clrElement,
+                            openDefinition: nil,
+                            ImmutableArray[TypeSymbol].Empty,
+                            openMethodDefinition: nil,
+                            default(ImmutableArray[TypeSymbol?]),
+                            NullabilityFreeReason.TypeStructure,
+                            preserveReferenceTupleIdentity: true
+                        )
+                    )
+                    return true
+                }
+            }
+            elementType = nil
+            return false
+        }
+
         private func TryGetSliceElementType(type TypeSymbol, @NotNullWhen(true) out elementType TypeSymbol?) bool {
             switch type {
                 case slice is SliceTypeSymbol {
@@ -3459,11 +3520,28 @@ internal partial class DeclarationBinder {
                     return true
                 }
                 case imported is ImportedTypeSymbol when imported.ClrType?.IsSZArray == true {
-                    elementType = TypeSymbol.FromClrTypeWithoutNullability(
-                        imported.ClrType!!.GetElementType(),
-                        NullabilityFreeReason.TypeStructure
+                    if !imported.TypeArguments.IsDefaultOrEmpty && imported.TypeArguments.Length == 1 {
+                        elementType = imported.TypeArguments[0]
+                        return true
+                    }
+                    let clrElement = imported.ClrType!!.GetElementType()
+                    if clrElement == nil {
+                        elementType = nil
+                        return false
+                    }
+                    elementType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                        clrElement,
+                        MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                            clrElement,
+                            openDefinition: nil,
+                            ImmutableArray[TypeSymbol].Empty,
+                            openMethodDefinition: nil,
+                            default(ImmutableArray[TypeSymbol?]),
+                            NullabilityFreeReason.TypeStructure,
+                            preserveReferenceTupleIdentity: true
+                        )
                     )
-                    return elementType != nil
+                    return true
                 }
                 default {
                     elementType = nil
@@ -3532,7 +3610,18 @@ internal partial class DeclarationBinder {
                 let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArguments.Length)
                 for clrArgument in clrArguments {
                     builder.Add(
-                        TypeSymbol.FromClrTypeWithoutNullability(clrArgument, NullabilityFreeReason.TypeStructure)
+                        ByRefStorageMatching.PreserveNominalClrPointeeType(
+                            clrArgument,
+                            MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                                clrArgument,
+                                openDefinition: nil,
+                                ImmutableArray[TypeSymbol].Empty,
+                                openMethodDefinition: nil,
+                                default(ImmutableArray[TypeSymbol?]),
+                                NullabilityFreeReason.TypeStructure,
+                                preserveReferenceTupleIdentity: true
+                            )
+                        )
                     )
                 }
                 typeArguments = builder.MoveToImmutable()

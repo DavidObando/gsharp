@@ -10,9 +10,14 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
+import System.Reflection.PortableExecutable
 import System.Text
 import Xunit
 
@@ -146,6 +151,134 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
         source string,
         expectedLines[]string
     ) -> CompileVerifyAndRun(name, source, expectedLines)
+
+    /// Issue #4626: a non-vector rank-1 array (`T[*]`) in a CLR interface slot
+    /// does not match a G# slice (`[]Shape`) candidate in parameter, return, or
+    /// nested generic positions.
+    @Fact
+    func NonVectorRankOneArraySlot_DoesNotMatchSliceCandidate() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4626_nonsz_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "NonSzLib.dll")
+            let metadata = MetadataBuilder()
+            metadata.AddModule(
+                0,
+                metadata.GetOrAddString("NonSzLib.dll"),
+                metadata.GetOrAddGuid(Guid.NewGuid()),
+                GuidHandle(),
+                GuidHandle()
+            )
+            metadata.AddAssembly(
+                metadata.GetOrAddString("NonSzLib"),
+                Version(1, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                AssemblyHashAlgorithm.None
+            )
+            metadata.AddTypeDefinition(
+                cast[TypeAttributes](0),
+                StringHandle(),
+                metadata.GetOrAddString("<Module>"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let ifaceHandle = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Interface | TypeAttributes.Abstract,
+                metadata.GetOrAddString("NonSzLib"),
+                metadata.GetOrAddString("INonSz`1"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            metadata.AddGenericParameter(ifaceHandle, GenericParameterAttributes.None, metadata.GetOrAddString("T"), 0)
+            let encodeRankOneNonSzArray = (typeEncoder SignatureTypeEncoder) -> {
+                typeEncoder.Array(
+                    (element SignatureTypeEncoder) -> element.GenericTypeParameter(0),
+                    (shape ArrayShapeEncoder) -> shape.Shape(
+                        1,
+                        ImmutableArray[int32].Empty,
+                        ImmutableArray[int32].Empty
+                    )
+                )
+            }
+            let instanceSig = BlobBuilder()
+            BlobEncoder(instanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                1,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> encodeRankOneNonSzArray(pars.AddParameter().Type())
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("M"),
+                metadata.GetOrAddBlob(instanceSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let returnSig = BlobBuilder()
+            BlobEncoder(returnSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> encodeRankOneNonSzArray(ret.Type()),
+                (pars ParametersEncoder) -> { }
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("R"),
+                metadata.GetOrAddBlob(returnSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let staticSig = BlobBuilder()
+            BlobEncoder(staticSig).MethodSignature(isInstanceMethod: false).Parameters(
+                1,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> encodeRankOneNonSzArray(pars.AddParameter().Type())
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MS"),
+                metadata.GetOrAddBlob(staticSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let peBlob = BlobBuilder()
+            ManagedPEBuilder(
+                PEHeaderBuilder.CreateLibraryHeader(),
+                MetadataRootBuilder(metadata),
+                BlobBuilder()
+            ).Serialize(peBlob)
+            File.WriteAllBytes(libPath, peBlob.ToArray())
+
+            let appPath = Path.Combine(tempDir, "App.dll")
+            let log = Compile(tempDir, "App.gs", `package P
+import System
+import NonSzLib
+
+class Shape { }
+class BadNonSz : INonSz[Shape] {
+    func M(xs []Shape) int32 { return xs.Length }
+    func R() []Shape { return []Shape{} }
+    shared {
+        func MS(xs []Shape) int32 { return xs.Length }
+    }
+}
+Console.WriteLine("x")`, appPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(appPath),
+                "Non-vector rank-1 array mismatch must not emit an assembly. Log:\n" + log
+            )
+            Assert.Contains("error GS0187:", log, StringComparison.Ordinal)
+            Assert.Contains("INonSz[Shape].M", log, StringComparison.Ordinal)
+            Assert.Contains("INonSz[Shape].R", log, StringComparison.Ordinal)
+            Assert.Contains("error GS0331:", log, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
 
     /// Issue #4618: a missing or mismatched implementation of an imported
     /// interface's static abstract member is diagnosed at compile time.
@@ -287,6 +420,11 @@ public interface IMapAndSeq<T> {
 public interface IListConsumer<T> {
     int Consume(System.Collections.Generic.List<T> items);
 }
+public interface IRefTup<T> {
+    int M(System.Tuple<T, int> v);
+    int Concrete(System.Tuple<int, int> v);
+    static abstract System.Tuple<T, int> MakeS(T x);
+}
 
 public static class Probe
 {
@@ -324,6 +462,8 @@ public static class Probe
         var m = TImpl.MakeMap(key, val);
         return i.CountMap(m) * 100 + i.CountSeq(m.Keys);
     }
+    public static int CallRefTup<T, TImpl>(IRefTup<T> i, T x) where TImpl : IRefTup<T> =>
+        i.M(TImpl.MakeS(x)) + i.Concrete(System.Tuple.Create(3, 4));
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -1159,6 +1299,45 @@ class BadNominal : INominalDel[Shape] {
     func Apply(f (Shape) -> int32) int32 { return f(Shape()) }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.INominalDel[Shape].Apply"}
+            yield[]object{"value-tuple-does-not-satisfy-reference-tuple-instance-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadRefTup : IRefTup[Shape] {
+    func M(v (Shape, int32)) int32 { return 1 }
+    func Concrete(v Tuple[int32, int32]) int32 { return 1 }
+    shared {
+        func MakeS(x Shape) Tuple[Shape, int32] { return Tuple.Create(x, 1) }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IRefTup[Shape].M"}
+            yield[]object{"value-tuple-does-not-satisfy-concrete-reference-tuple-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadConcreteRefTup : IRefTup[Shape] {
+    func M(v Tuple[Shape, int32]) int32 { return 1 }
+    func Concrete(v (int32, int32)) int32 { return 1 }
+    shared {
+        func MakeS(x Shape) Tuple[Shape, int32] { return Tuple.Create(x, 1) }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IRefTup[Shape].Concrete"}
+            yield[]object{"value-tuple-does-not-satisfy-reference-tuple-static-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadStaticRefTup : IRefTup[Shape] {
+    func M(v Tuple[Shape, int32]) int32 { return 1 }
+    func Concrete(v Tuple[int32, int32]) int32 { return 1 }
+    shared {
+        func MakeS(x Shape) (Shape, int32) { return (x, 1) }
+    }
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IRefTup[Shape].MakeS"}
         }
 
         /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
@@ -1268,6 +1447,14 @@ class TupFieldImpl : ITupFieldProp[Shape] {
     var Current (Shape, int32) = (Shape{Tag: 50}, 3)
 }
 
+class RefTupImpl : IRefTup[Shape] {
+    func M(v Tuple[Shape, int32]) int32 -> v.Item1.Tag + v.Item2
+    func Concrete(v Tuple[int32, int32]) int32 -> v.Item1 + v.Item2
+    shared {
+        func MakeS(x Shape) Tuple[Shape, int32] -> Tuple[Shape, int32](x, 10)
+    }
+}
+
 let t1 = T1()
 Console.WriteLine(Probe.CallTupM[Shape](t1, (Shape{Tag: 20}, 1)))
 let made = Probe.CallTupMake[Shape](t1, Shape{Tag: 11})
@@ -1288,7 +1475,19 @@ let tp = TupPropImpl()
 let cur = Probe.CallTupPropCurrent[Shape](tp)
 Console.WriteLine(Probe.CallTupPropIndex[Shape](tp, cur))
 let tf = Probe.CallTupFieldPropCurrent[Shape](TupFieldImpl())
-Console.WriteLine(tf.Item1.Tag + tf.Item2)`), []string{"21", "33", "7:ok", "35", "109", "ab:15", "24", "42", "53"}}
+Console.WriteLine(tf.Item1.Tag + tf.Item2)
+Console.WriteLine(Probe.CallRefTup[Shape, RefTupImpl](RefTupImpl(), Shape{Tag: 60}))`), []string{
+                    "21",
+                    "33",
+                    "7:ok",
+                    "35",
+                    "109",
+                    "ab:15",
+                    "24",
+                    "42",
+                    "53",
+                    "77"
+                }}
             yield[]object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
 import System
 import System.Linq

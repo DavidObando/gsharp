@@ -2021,56 +2021,23 @@ internal class MemberDefEmitter {
                         }
                     ) {
                         let indexParameters = clrProp.GetIndexParameters()
-                        var slotPropertyType = MemberLookup.GetClrPropertyTypeSymbol(
+                        // Nullable reference annotations do not participate in CLR interface slots.
+                        if prop.IsIndexer != (indexParameters.Length > 0) ||
+                            (clrProp.GetMethod != nil && !prop.HasGetter) ||
+                            (clrProp.SetMethod != nil && !prop.HasSetter) ||
+                            !MemberLookup
+                            .PropertyMatchesClrInterfaceSignature(
+                            prop,
                             Invariant.Required(
                                 ifaceSym,
                                 "a CLR interface entry has a type symbol",
                                 expression: "ifaceSym"
                             ),
                             clrProp
-                        )
-                        if slotPropertyType is ByRefTypeSymbol slotPropertyByRef {
-                            slotPropertyType = slotPropertyByRef.PointeeType
-                        }
-                        // Nullable reference annotations do not participate in CLR interface slots.
-                        if clrProp.Name != prop.Name || prop.ReturnRefKind != RefCapabilities.GetReturnRefKind(
-                            clrProp
-                        ) ||
-                            prop.IsIndexer != (indexParameters.Length > 0) ||
-                            prop
-                            .Parameters
-                            .Length != indexParameters.Length ||
-                            (clrProp.GetMethod != nil && !prop.HasGetter) ||
-                            (clrProp.SetMethod != nil && !prop.HasSetter) ||
-                            !DeclarationBinder.ConformanceSignaturesEquivalent(slotPropertyType, prop.Type) {
+                        ) {
                             continue
                         }
-                        var parametersMatch = true
-                        for var i = 0; i < indexParameters.Length; i++ {
-                            var clrParameterType = MemberLookup.GetIndexerParameterTypeSymbol(
-                                Invariant.Required(
-                                    ifaceSym,
-                                    "a CLR interface entry has a type symbol",
-                                    expression: "ifaceSym"
-                                ),
-                                clrProp,
-                                i
-                            )
-                            if clrParameterType is ByRefTypeSymbol clrParameterByRef {
-                                clrParameterType = clrParameterByRef.PointeeType
-                            }
-                            if prop.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(indexParameters[i]) ||
-                                !DeclarationBinder.ConformanceSignaturesEquivalent(
-                                prop.Parameters[i].Type,
-                                clrParameterType
-                            ) {
-                                parametersMatch = false
-                                break
-                            }
-                        }
-                        if parametersMatch {
-                            return true
-                        }
+                        return true
                     }
                 }
             }

@@ -211,7 +211,7 @@ open partial class TypeSymbol : Symbol {
                     currentClrType.GetArrayRank()
                 )
             }
-            if currentClrType.IsArray && ClrNullability.ContainsFunctionPointer(clrType) {
+            if currentClrType.IsSZArray && ClrNullability.ContainsFunctionPointer(clrType) {
                 return SliceTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
             // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
