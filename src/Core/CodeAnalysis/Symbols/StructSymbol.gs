@@ -2849,6 +2849,11 @@ class StructSymbol : TypeSymbol {
             let builder = ImmutableArray.CreateBuilder[PropertySymbol](properties.Length)
             for p in properties {
                 let newType = SubstituteTypeForConstruction(p.Type, subst, mapClrType)
+                let newBackingOwner = if p.BackingFieldDeclaringType is {} backingOwner {
+                    SubstituteTypeForConstruction(backingOwner, subst, mapClrType) as StructSymbol ?? backingOwner
+                } else {
+                    default(StructSymbol?)
+                }
                 var newParams = p.Parameters
                 var paramsChanged = false
                 if !p.Parameters.IsDefaultOrEmpty {
@@ -2862,11 +2867,16 @@ class StructSymbol : TypeSymbol {
                         newParams = pb.MoveToImmutable()
                     }
                 }
-                if object.ReferenceEquals(newType, p.Type) && !paramsChanged {
+                if object.ReferenceEquals(newType, p.Type) && object.ReferenceEquals(
+                    newBackingOwner,
+                    p.BackingFieldDeclaringType
+                ) &&
+                    !paramsChanged {
                     builder.Add(p)
                     continue
                 }
                 let substituted = p.WithSignature(newType, newParams)
+                substituted.BackingFieldDeclaringType = newBackingOwner
                 builder.Add(substituted)
             }
             return builder.MoveToImmutable()

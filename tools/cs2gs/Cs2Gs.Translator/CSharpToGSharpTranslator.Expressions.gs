@@ -3154,9 +3154,10 @@ partial class CSharpToGSharpTranslator {
                     respectNullGuards: true
                 )
             )
+            // Issue #5602: the receiver and value rules ask `LocalHoldsPromotedValue` too.
             let emittedNullablePromotedLocal = !isFlowNarrowedLocal &&
                 valueSymbol is ILocalSymbol local &&
-                (this.ShouldPromoteToNullableReference(local) || this.LocalInitializerMakesStorageNullable(local))
+                (this.LocalHoldsPromotedValue(local) || this.LocalInitializerMakesStorageNullable(local))
             let emittedNullablePromotedStorage = !isFlowNarrowedLocal &&
                 (valueSymbol is IFieldSymbol || valueSymbol is IPropertySymbol || valueSymbol is IParameterSymbol) &&
                 this.ShouldPromoteToNullableReference(valueSymbol)
@@ -7540,17 +7541,8 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                     let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-                    if symbol is ILocalSymbol local && !this.ShouldPromoteToNullableReference(local) &&
-                        local
-                        .DeclaringSyntaxReferences
-                        .FirstOrDefault()
-                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
-                        return this.IsNullablePromotedValue(initializer)
-                    }
-                    // Issue #5561: a local that a deconstruction or an `out` argument declares holds
-                    // the widened declaration it receives.
-                    if symbol is ILocalSymbol deconstructedLocal {
-                        return this.IsTranslatorWidenedDeclaration(deconstructedLocal)
+                    if symbol is ILocalSymbol local {
+                        return this.LocalHoldsPromotedValue(local)
                     }
                     return (symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IParameterSymbol) &&
                         this.ShouldPromoteToNullableReference(symbol)
