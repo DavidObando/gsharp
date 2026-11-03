@@ -1294,13 +1294,23 @@ internal partial class StatementBinder {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return CaptureGoReceiverCore(address.Operand, prefix)
             }
+            case block is BoundBlockExpression when !ReadsUncapturableVariable(block) {
+                HoistArgumentBlockStatements(block.Statements, prefix)
+                return CaptureGoReceiverCore(block.Expression, prefix)
+            }
             case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
                 let address = cast[BoundConditionalAddressExpression](dereference.Operand)
                 let condition = CaptureGoOperand(address.Condition, prefix)
                 let trueStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                 let whenTrue = CaptureGoReceiverCore(address.WhenTrueOperand, trueStatements)
+                if TryGetStaticFieldRoot(whenTrue) is {} trueStaticRoot {
+                    trueStatements.Add(BoundExpressionStatement(nil, trueStaticRoot))
+                }
                 let falseStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                 let whenFalse = CaptureGoReceiverCore(address.WhenFalseOperand, falseStatements)
+                if TryGetStaticFieldRoot(whenFalse) is {} falseStaticRoot {
+                    falseStatements.Add(BoundExpressionStatement(nil, falseStaticRoot))
+                }
                 AppendConditionalReceiverBranch(condition, jumpIfTrue: false, trueStatements, prefix)
                 AppendConditionalReceiverBranch(condition, jumpIfTrue: true, falseStatements, prefix)
                 return BoundDereferenceExpression(

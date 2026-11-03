@@ -241,6 +241,22 @@ class StaticReadonlyStore {
         }
     }
 }
+class CondStaticA {
+    shared {
+        var counter Counter
+        init {
+            InitLog.order += "condA-cctor;"
+        }
+    }
+}
+class CondStaticB {
+    shared {
+        var counter Counter
+        init {
+            InitLog.order += "condB-cctor;"
+        }
+    }
+}
 
 func RunConstrained[T IDisposable](items []T, holder GenericHolder[T], replacement T, release ManualResetEventSlim) {
     var current T = items[0]
@@ -318,6 +334,7 @@ class Spawner {
             go holder.pair.Item1.Bump()
             go box.Value.Bump()
             go items[index].Bump()
+            go (*&items[^1]).Bump()
             go pairs[index].Item1.Bump()
             go genericStructs[0].Dispose()
             go genericStructHolder.item.Dispose()
@@ -325,6 +342,7 @@ class Spawner {
             go genericClassHolder.item.Dispose()
             go StaticStore.counter.Add(InitLog.Step("arg;"))
             go StaticReadonlyStore.readonlyCounter.Read(InitLog.Step("ro;"))
+            go (*&(choose ? CondStaticA.counter : CondStaticB.counter)).Add(InitLog.Step("cond-arg;"))
             choose = false
             holder = Holder()
             altHolder = Holder()
@@ -345,7 +363,7 @@ class Spawner {
         Log.Add("items original=" + originalItems[0].n.ToString() + originalItems[1].n.ToString() + " replacement=" + items[0].n.ToString() + items[1].n.ToString())
         Log.Add("pairs original=" + originalPairs[0].Item1.n.ToString() + originalPairs[1].Item1.n.ToString() + " replacement=" + pairs[0].Item1.n.ToString() + pairs[1].Item1.n.ToString())
         Log.Add("probed " + probed)
-        Log.Add("static " + InitLog.order + StaticStore.counter.n.ToString())
+        Log.Add("static " + InitLog.order + StaticStore.counter.n.ToString() + CondStaticA.counter.n.ToString())
         Log.Add("tuple original=" + originalHolder.pair.Item1.n.ToString() + " replacement=" + holder.pair.Item1.n.ToString())
     }
 }
@@ -369,10 +387,10 @@ field 1
 generic class original=2 replacement=0
 generic struct array=1 field=1
 holder original=2 replacement=0
-items original=01 replacement=00
+items original=02 replacement=00
 pairs original=01 replacement=00
 probed index-threw;holder-threw;box-threw;first;
-static cctor;arg;ro-cctor;ro;1
+static cctor;arg;ro-cctor;ro;condA-cctor;cond-arg;11
 static-ro 6
 tuple original=1 replacement=0
 constrained struct array=11 field=11
