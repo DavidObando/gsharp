@@ -6478,7 +6478,9 @@ partial class CSharpToGSharpTranslator {
             // failure to its next use. It is a target only when cs2gs itself
             // widens it (it then emits the `T?` clause).
             if target == nil && isBranchArm && !this.FlowsThroughUserDefinedConversion(current) {
-                if current!!.Parent is ArgumentSyntax argument && this.TryGetExpandedParamsElementTarget(
+                if this.FindEnclosingArgumentThroughReferenceCasts(current) is {} argument &&
+                    this
+                    .TryGetExpandedParamsElementTarget(
                     argument,
                     this.GetArgumentParameter(argument),
                     out var paramsElementType,
@@ -6590,9 +6592,12 @@ partial class CSharpToGSharpTranslator {
             let generic = IsMethodTypeParameter(declared) ||
                 (
                 this.IsExpandedParamsArgument(callSite, parameter) &&
-                    IsMethodTypeParameter(GetParamsElementType(parameter.OriginalDefinition))
+                    GetParamsElementType(parameter.OriginalDefinition) is ITypeParameterSymbol elementParameter &&
+                    elementParameter.TypeParameterKind == TypeParameterKind.Method &&
+                    !NullableTypeArgumentViolatesTranslatedConstraints(elementParameter) &&
+                    !OtherParameterFixesTypeParameterInvariantly(parameter, elementParameter)
             )
-            return generic && !CallHasExplicitTypeArguments(callSite)
+            return generic && !ValueFeedsExplicitTypeArguments(callSite)
         }
 
         private func IsExpandedParamsArgument(
@@ -6605,7 +6610,14 @@ partial class CSharpToGSharpTranslator {
             if callSite == nil {
                 return true
             }
-            var current Microsoft.CodeAnalysis.SyntaxNode? = callSite
+            return this.FindEnclosingArgumentThroughReferenceCasts(callSite) is {} argument &&
+                this.TryGetExpandedParamsElementTarget(argument, parameter, out _, out _)
+        }
+
+        private func FindEnclosingArgumentThroughReferenceCasts(
+            node Microsoft.CodeAnalysis.SyntaxNode?
+        ) ArgumentSyntax? {
+            var current Microsoft.CodeAnalysis.SyntaxNode? = node
             while (
                 current!!.Parent is Microsoft
                     .CodeAnalysis
@@ -6620,6 +6632,7 @@ partial class CSharpToGSharpTranslator {
                     PostfixUnaryExpressionSyntax and
                     {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
             ) ||
+                this.IsNullPreservingReferenceCast(current!!.Parent) ||
                 (
                 current!!.Parent is Microsoft
                     .CodeAnalysis
@@ -6648,13 +6661,24 @@ partial class CSharpToGSharpTranslator {
                     current!!.Parent
                 }
             }
-            return current!!.Parent is ArgumentSyntax argument && this.TryGetExpandedParamsElementTarget(
-                argument,
-                parameter,
-                out _,
-                out _
-            )
+            return current!!.Parent as ArgumentSyntax
         }
+
+        private func IsNullPreservingReferenceCast(
+            node Microsoft.CodeAnalysis.SyntaxNode?
+        ) bool -> node is CastExpressionSyntax cast &&
+            this
+            .context
+            .SemanticModel
+            .GetOperation(cast) is IConversionOperation{OperatorMethod: nil} conversion &&
+            conversion
+            .Type
+            ?.IsReferenceType == true &&
+            conversion
+            .Operand
+            .Type
+            ?.IsReferenceType == true &&
+            (conversion.Conversion.IsReference || conversion.Conversion.IsIdentity)
 
         private func FindNullForgivingTarget(value PostfixUnaryExpressionSyntax)(Type ITypeSymbol?, Symbol ISymbol?) {
             let ExplicitLocalTypeIsNullable = func (local ILocalSymbol) bool {

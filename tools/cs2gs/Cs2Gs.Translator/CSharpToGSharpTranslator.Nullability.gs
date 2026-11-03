@@ -1252,7 +1252,8 @@ partial class CSharpToGSharpTranslator {
                 declared
             }
             return inferred is ITypeParameterSymbol typeParameter &&
-                !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter)
+                !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter) &&
+                !OtherParameterFixesTypeParameterInvariantly(parameter, typeParameter)
         }
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
@@ -2080,6 +2081,54 @@ partial class CSharpToGSharpTranslator {
                     method
                     .ContainingType
                     .IsRecord
+            }
+
+            private func OtherParameterFixesTypeParameterInvariantly(
+                parameter IParameterSymbol,
+                typeParameter ITypeParameterSymbol
+            ) bool {
+                if parameter.OriginalDefinition.ContainingSymbol is not IMethodSymbol method {
+                    return false
+                }
+                for other in method.Parameters {
+                    if SymbolEqualityComparer.Default.Equals(other, parameter.OriginalDefinition) ||
+                        !MentionsTypeParameter(other.Type, typeParameter) {
+                        continue
+                    }
+                    if other.RefKind != RefKind.None || MentionsTypeParameterInvariantly(other.Type, typeParameter) {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            private func MentionsTypeParameterInvariantly(type ITypeSymbol?, typeParameter ITypeParameterSymbol) bool {
+                switch type {
+                    case named is INamedTypeSymbol when named.IsGenericType {
+                        if MentionsTypeParameter(named.ContainingType, typeParameter) {
+                            return true
+                        }
+                        for var i = 0; i < named.TypeArguments.Length; i++ {
+                            let argument = named.TypeArguments[i]
+                            if !MentionsTypeParameter(argument, typeParameter) {
+                                continue
+                            }
+                            if named
+                                .TypeParameters[i]
+                                .Variance == VarianceKind.None ||
+                                MentionsTypeParameterInvariantly(argument, typeParameter) {
+                                return true
+                            }
+                        }
+                        return false
+                    }
+                    case pointer is IPointerTypeSymbol {
+                        return MentionsTypeParameter(pointer.PointedAtType, typeParameter)
+                    }
+                    default {
+                        return false
+                    }
+                }
             }
 
             private func MentionsTypeParameterOnlyInvariantly(

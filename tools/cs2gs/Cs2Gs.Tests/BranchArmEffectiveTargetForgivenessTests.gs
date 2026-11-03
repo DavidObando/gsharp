@@ -149,6 +149,8 @@ namespace App
 
         public static void ObjectParamsConditional(Model.Arg a, Model.Arg b, bool flag) => ObjectParams(flag ? a.Objects : b.Objects, "tail");
 
+        public static void ObjectParamsCastConditional(Model.Arg argument, int i) => ObjectParams((object)(i >= 0 ? argument.Value : argument.Name), "tail");
+
         public static void ExtensionParams(this Model.Arg receiver, params string[] values) { }
 
         public static void ExtensionParamsSeed(Model.Arg receiver) => receiver.ExtensionParams("head", null);
@@ -286,12 +288,15 @@ namespace App
 
         public static string ObjectsJoined(Arg a, Arg b, bool flag) =>
             JoinObjects(flag ? a.Objects : b.Objects, "tail");
+
+        public static string CastObjectsJoined(Arg a, bool flag) =>
+            JoinObjects((object?)(flag ? a.Name : a.Value), "tail");
 #nullable restore
 
         public static string Run()
         {
             var a = new Arg("v");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true) + CastObjectsJoined(a, true);
         }
     }
 }`
@@ -299,7 +304,10 @@ namespace App
         Assert.DoesNotContain("a.Name!!", consumer)
         Assert.DoesNotContain("a.Objects!!", consumer)
         Assert.DoesNotContain("b.Objects!!", consumer)
-        Assert.Equal("[]<>nonenull{}N0:10:tail", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
+        Assert.Equal(
+            "[]<>nonenull{}N0:10:tail0:tail",
+            CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim()
+        )
     }
 
     /// Precision: an arm whose whole-expression target is a non-null
@@ -349,10 +357,20 @@ namespace App
 
         public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T ConstrainedSpanParams<T>(params System.ReadOnlySpan<T> values) where T : class => values[0];
+
+        public static T FixedByListParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
 
         public static int NormalFormGenericParams(Model.Arg a, Model.Arg b, bool flag) =>
             CountAll(flag ? a.Objects : b.Objects);
+
+        public static string ConstrainedSpanParamsCall(Model.Arg argument, int i) =>
+            ConstrainedSpanParams(i > 4 ? "a" : argument.Name, "tail");
+
+        public static string FixedByListParamsCall(System.Collections.Generic.List<string> list, Model.Arg argument, int i) =>
+            FixedByListParams(list, i > 5 ? "b" : argument.Name, "tail");
 
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
@@ -382,6 +400,8 @@ namespace App
         Assert.Contains("bag[if i > 2 { argument.Name!! } else { \"z\" }, \"tail\"]", printed)
         Assert.Contains("bag[0, if flag { a.Objects!! } else { b.Objects!! }]", printed)
         Assert.Contains("CountAll(if flag { a.Objects!! } else { b.Objects!! })", printed)
+        Assert.Contains("ConstrainedSpanParams(if i > 4 { \"a\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByListParams(list, if i > 5 { \"b\" } else { argument.Name!! }, \"tail\")", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -425,6 +445,14 @@ public static class C
     public static int CallDirect() => Count(Maybe());
 
     public static int CallConditional(bool flag) => Count(flag ? Maybe() : Fallback());
+
+    public static int UseSpan<T>(params System.ReadOnlySpan<T> xs) => xs.Length;
+
+    public static int CallExplicitSpanConditional(bool flag)
+    {
+        var p = default(string);
+        return UseSpan<string>(flag ? p : "a");
+    }
 #nullable restore
 }`
         let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
@@ -435,6 +463,7 @@ public static class C
         Assert.Contains("{ a!! } else { name ?? id }", printed)
         Assert.Contains("Count(Maybe()!!)", printed)
         Assert.Contains("Count(if flag { Maybe()!! } else { Fallback() })", printed)
+        Assert.Contains("UseSpan[string](if flag { p!! } else { \"a\" })", printed)
         let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
         Assert.True(result!!.Success, string.Join("\n", result!!.Errors) + `
 
