@@ -21,7 +21,8 @@ class BoundRelationalPattern : BoundPattern {
         // The emitter evaluates a value that is not a literal before the `HasValue` test, as the lifted operator does.
         if type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
             InputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, type)
-            if value.Type != nullable.UnderlyingType || value !is BoundLiteralExpression {
+            // A non-returning value (`never`) has nothing to store.
+            if value.Type != TypeSymbol.Never && (value.Type != nullable.UnderlyingType || value !is BoundLiteralExpression) {
                 ValueVariable = LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, value.Type)
             }
         }

@@ -633,6 +633,13 @@ internal partial class MethodBodyEmitter {
         loadValue() -> void,
         failLabel LabelHandle
     ) {
+        if rp.Value.Type == TypeSymbol.Never {
+            // The value does not return, so no comparison follows.
+            loadValue()
+            this.il.OpCode(ILOpCode.Pop)
+            this.EmitExpression(rp.Value)
+            return
+        }
         let nullableInput = cast[NullableTypeSymbol](rp.Type)
         let getHasValue = this.GetNullableHasValueRef(nullableInput)
         let getValue = this.GetNullableValueRef(nullableInput)

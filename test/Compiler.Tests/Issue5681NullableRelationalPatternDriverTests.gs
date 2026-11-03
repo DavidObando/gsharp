@@ -157,6 +157,21 @@ System.Console.Write(Bit(Above(1)) + Bit(Above(nil)) + Bit(Different(nil)) + Bit
     }
 
     @Fact
+    func NonReturningValue_ThrowsForPresentAndNilInputs() {
+        const source = `func Fail(n int32?) bool -> n is > (throw System.InvalidOperationException("boom"))
+func Probe(n int32?) string {
+    try {
+        return if Fail(n) { "t" } else { "f" }
+    } catch (e System.InvalidOperationException) {
+        return e.Message
+    }
+}
+System.Console.Write(Probe(1) + "|" + Probe(nil))
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "boom|boom", "5681")
+    }
+
+    @Fact
     func DecimalInput_CallsTheDecimalOperators() {
         const source = `func Bit(value bool) string -> if value { "1" } else { "0" }
 func Above(n decimal) bool -> n is > 1.5m
