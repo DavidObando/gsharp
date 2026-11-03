@@ -242,6 +242,20 @@ class Issue4750OpenOuter[T] {
         let openOwnerErrors = openOwnerInferenceDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
         Assert.Equal(3, openOwnerErrors.Count((d Diagnostic) -> d.Id == "GS0154"))
         Assert.Equal(3, openOwnerErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
+
+        let nullableSlotDiagnostics = GetDiagnostics(`package Issue4750BinderNullableSlotMismatch
+class Issue4750NullBox[T](Value T) { }
+class Issue4750NullOuter[T] {
+    class Inner(Value T) { }
+    class PlainInner { }
+}
+func BadBox(x Issue4750NullBox[string?]) Issue4750NullBox[string] -> x
+func BadNested(x Issue4750NullOuter[string?].Inner) Issue4750NullOuter[string].Inner -> x
+func BadPlainNested(x Issue4750NullOuter[string?].PlainInner) Issue4750NullOuter[string].PlainInner -> x`)
+        let nullableSlotErrors = nullableSlotDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(3, nullableSlotErrors.Length)
+        Assert.Equal(2, nullableSlotErrors.Count((d Diagnostic) -> d.Id == "GS0490"))
+        Assert.Equal(1, nullableSlotErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
     }
 
     @Fact
