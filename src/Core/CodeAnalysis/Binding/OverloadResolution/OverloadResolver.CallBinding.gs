@@ -137,7 +137,6 @@ internal partial class OverloadResolver {
             return true
         }
         var candidate FunctionSymbol? = nil
-        var parameterOffsetForUser = 0
         for possibleCandidate in userGroup.Candidates {
             let candidateOffset = if possibleCandidate.IsExtension && userGroup.Receiver != nil {
                 1
@@ -151,39 +150,30 @@ internal partial class OverloadResolver {
                 return false
             }
             candidate = possibleCandidate
-            parameterOffsetForUser = candidateOffset
         }
-        if candidate == nil || candidate.IsGeneric {
+        if candidate == nil {
             return false
         }
-        var candidateOwner StructSymbol? = if userGroup.StaticOwnerType != nil &&
+        let candidateOwner = if userGroup.StaticOwnerType != nil &&
             candidate.StaticOwnerType is StructSymbol declaredOwner {
             TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
         } else {
             default(StructSymbol?)
         }
-        if candidateOwner == nil &&
-            !candidate.IsExtension &&
-            userGroup
-            .Receiver
-            ?.Type is StructSymbol receiverStruct &&
-            candidate.ReceiverType is StructSymbol declaredReceiver {
-            candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver)
+        if !ExpressionBinder.TryCloseMethodGroupCandidate(
+            candidate,
+            userGroup.Receiver,
+            candidateOwner,
+            delegateArity,
+            out parameters,
+            out var closedReturn
+        ) {
+            return false
         }
-        parameters = [delegateArity]TypeSymbol
-        for var i = 0; i < parameters!!.Length; i++ {
-            parameters!![i] = candidateOwner?.SubstituteMemberType(
-                candidate.Parameters[i + parameterOffsetForUser].Type
-            ) ??
-                candidate
-                .Parameters[i + parameterOffsetForUser]
-                .Type
+        if candidate.IsAsyncOrSuspending && !candidate.IsAsyncVoid && !isAsyncIteratorReturnType(candidate.Type) {
+            closedReturn = wrapAsTask(closedReturn, candidate.AsyncReturnsValueTask)
         }
-        var observableReturn = candidate.Type ?? TypeSymbol.Void
-        if candidate.IsAsyncOrSuspending && !candidate.IsAsyncVoid && !isAsyncIteratorReturnType(observableReturn) {
-            observableReturn = wrapAsTask(observableReturn, candidate.AsyncReturnsValueTask)
-        }
-        returnType = candidateOwner?.SubstituteMemberType(observableReturn) ?? observableReturn
+        returnType = closedReturn
         return true
     }
 
@@ -3116,6 +3106,58 @@ internal partial class OverloadResolver {
         return true
     }
 
+    /// Issue #3760: resolves a user method group against a fully closed input
+    /// list, returning the single applicable candidate's return type (or
+    /// `null` when none or several apply).
+    private func ResolveUserMethodGroupReturn(group BoundMethodGroupExpression, closedInputs[]TypeSymbol) TypeSymbol? {
+        if group.Candidates.IsDefaultOrEmpty {
+            return nil
+        }
+        var selectedReturn TypeSymbol? = nil
+        for candidate in group.Candidates {
+            let candidateOwner = if group.StaticOwnerType != nil &&
+                candidate.StaticOwnerType is StructSymbol declaredOwner {
+                TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+            } else {
+                default(StructSymbol?)
+            }
+            if !ExpressionBinder.TryCloseMethodGroupCandidate(
+                candidate,
+                group.Receiver,
+                candidateOwner,
+                closedInputs,
+                out var closedParameters,
+                out var closedReturn,
+                out _
+            ) {
+                continue
+            }
+            if candidate.IsAsyncOrSuspending && !candidate.IsAsyncVoid && !isAsyncIteratorReturnType(candidate.Type) {
+                closedReturn = wrapAsTask(closedReturn, candidate.AsyncReturnsValueTask)
+            }
+            // The candidate must ACCEPT what the delegate provides — the same
+            // contravariant admissibility the CLR sibling applies (#3501 A5).
+            var applicable = true
+            for var i = 0; i < closedInputs.Length; i++ {
+                if closedParameters[i] != closedInputs[i] && !Conversion.Classify(closedInputs[i], closedParameters[i])
+                    .IsImplicit {
+                    applicable = false
+                    break
+                }
+            }
+            if !applicable || closedReturn == TypeSymbol.Void || closedReturn == TypeSymbol.Error {
+                continue
+            }
+            if selectedReturn != nil && selectedReturn != closedReturn {
+                // Two applicable candidates disagree on the return type: the
+                // group is ambiguous at this slot, so it must not bind.
+                return nil
+            }
+            selectedReturn = closedReturn
+        }
+        return selectedReturn
+    }
+
     shared {
         /// Issue #3760: whether at least one of [`typeParameters`](paramref)
         /// is still without a bound after the positional inference pass.
@@ -3129,61 +3171,6 @@ internal partial class OverloadResolver {
                 }
             }
             return false
-        }
-
-        /// Issue #3760: resolves a user method group against a fully closed input
-        /// list, returning the single applicable candidate's return type (or
-        /// `null` when none or several apply).
-        private func ResolveUserMethodGroupReturn(
-            group BoundMethodGroupExpression,
-            closedInputs[]TypeSymbol
-        ) TypeSymbol? {
-            if group.Candidates.IsDefaultOrEmpty {
-                return nil
-            }
-            var selectedReturn TypeSymbol? = nil
-            for candidate in group.Candidates {
-                let candidateOwner = if group.StaticOwnerType != nil &&
-                    candidate.StaticOwnerType is StructSymbol declaredOwner {
-                    TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
-                } else {
-                    default(StructSymbol?)
-                }
-                if !ExpressionBinder.TryCloseMethodGroupCandidate(
-                    candidate,
-                    group.Receiver,
-                    candidateOwner,
-                    closedInputs,
-                    out var closedParameters,
-                    out var closedReturn,
-                    out _
-                ) {
-                    continue
-                }
-                // The candidate must ACCEPT what the delegate provides — the same
-                // contravariant admissibility the CLR sibling applies (#3501 A5).
-                var applicable = true
-                for var i = 0; i < closedInputs.Length; i++ {
-                    if closedParameters[i] != closedInputs[i] && !Conversion.Classify(
-                        closedInputs[i],
-                        closedParameters[i]
-                    )
-                        .IsImplicit {
-                        applicable = false
-                        break
-                    }
-                }
-                if !applicable || closedReturn == TypeSymbol.Void || closedReturn == TypeSymbol.Error {
-                    continue
-                }
-                if selectedReturn != nil && selectedReturn != closedReturn {
-                    // Two applicable candidates disagree on the return type: the
-                    // group is ambiguous at this slot, so it must not bind.
-                    return nil
-                }
-                selectedReturn = closedReturn
-            }
-            return selectedReturn
         }
 
         private func HasSingleArgumentConstructorShape(classType StructSymbol) bool {

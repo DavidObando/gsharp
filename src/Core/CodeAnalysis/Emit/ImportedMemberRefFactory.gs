@@ -1729,10 +1729,14 @@ internal class ImportedMemberRefFactory {
     /// (`Comparer[TResult].Create(...)`) materialise the exact delegate the
     /// callee expects rather than the natural `Func`/`Action` shape or
     /// the type-erased `Comparison<object>`.
-    internal func GetConstructedDelegateCtorRef(symbolicDelegate ImportedTypeSymbol) EntityHandle {
+    internal func GetConstructedDelegateTypeSpec(symbolicDelegate ImportedTypeSymbol) EntityHandle {
         let parentBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicDelegate)
-        let parent = this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+        return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob))
+    }
+
+    internal func GetConstructedDelegateCtorRef(symbolicDelegate ImportedTypeSymbol) EntityHandle {
+        let parent = this.GetConstructedDelegateTypeSpec(symbolicDelegate)
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             2,

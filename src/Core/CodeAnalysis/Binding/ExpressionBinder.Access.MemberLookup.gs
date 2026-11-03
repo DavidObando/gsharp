@@ -1418,7 +1418,7 @@ internal partial class ExpressionBinder {
                     }
                     let functionType = FunctionTypeSymbol.Get(
                         parameterTypes.MoveToImmutable(),
-                        single.Type ?? TypeSymbol.Void
+                        this.MethodGroupObservableReturnType(single)
                     )
                     return BoundMethodGroupExpression(name, receiver, single, functionType)
                 }
