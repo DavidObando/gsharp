@@ -173,32 +173,116 @@ run()
     }
 
     @Fact
-    func OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998() {
-        // A `string` overload and an `Object` overload both accept a string
-        // argument (everything is assignable to Object) — genuinely
-        // ambiguous, no argument-type information can disambiguate. Must be
-        // rejected with a diagnostic rather than silently picking whichever
-        // came first in declaration order.
-        const Source = `package Issue1921Ambiguous
+    func Issue4749_OverloadedTypeAndObjectCtors_SelectsMoreSpecificOverload() {
+        const Source = `package Issue4749Specificity
 import System
 
-class TagAttribute : Attribute {
-    init(x string) {
+class MarkerAttribute : Attribute {
+    var Which string = ""
+    init(type Type) {
+        Which = "Type:" + type.Name
     }
-    init(x Object) {
+    init(value Object) {
+        Which = "Object:" + value.ToString()
     }
 }
 
+class TagAttribute : Attribute {
+    var Which string = ""
+    init(x Object) {
+        Which = "Object"
+    }
+    init(x string) {
+        Which = "String:" + x
+    }
+}
+
+@Marker(typeof(Owner))
 @Tag("hello")
+class Owner {
+}
+
+func run() {
+    var t Type = typeof(Owner)
+    var attrs = t.GetCustomAttributes(true)
+    for var i int32 = 0; i < attrs.Length; i += 1 {
+        if attrs[i].GetType().Name == "MarkerAttribute" {
+            var m MarkerAttribute = (attrs[i] as MarkerAttribute)!!
+            Console.WriteLine(m.Which)
+        }
+        if attrs[i].GetType().Name == "TagAttribute" {
+            var tag TagAttribute = (attrs[i] as TagAttribute)!!
+            Console.WriteLine(tag.Which)
+        }
+    }
+}
+
+run()
+`
+        let output = CompileAndRun(Source, "Issue4749_OverloadedTypeAndObjectCtors_SelectsMoreSpecificOverload")
+        Assert.Contains("Type:Owner", output)
+        Assert.Contains("String:hello", output)
+    }
+
+    @Fact
+    func OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998_AndExplicitConversionDisambiguates() {
+        const AmbiguousSource = `package Issue1921Ambiguous
+import System
+
+class TagAttribute : Attribute {
+    init(x string?) {
+    }
+    init(x Type?) {
+    }
+}
+
+@Tag(nil)
 class Widget {
 }
 `
         using let peStream = MemoryStream()
-        let tree = SyntaxTree.Parse(SourceText.From(Source))
+        let tree = SyntaxTree.Parse(SourceText.From(AmbiguousSource))
         let compilation = Compilation(tree)
         let result = compilation.Emit(peStream)
         Assert.False(result.Success)
-        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+        Assert.Contains("Add an explicit conversion", diagnostic.Message)
+
+        const DisambiguatedSource = `package Issue1921Disambiguated
+import System
+
+class TagAttribute : Attribute {
+    var Which string = ""
+    init(x string?) {
+        Which = "string"
+    }
+    init(x Type?) {
+        Which = "Type"
+    }
+}
+
+@Tag(cast[Type?](nil))
+class Widget {
+}
+
+func run() {
+    var t Type = typeof(Widget)
+    var attrs = t.GetCustomAttributes(true)
+    for var i int32 = 0; i < attrs.Length; i += 1 {
+        if attrs[i].GetType().Name == "TagAttribute" {
+            var a TagAttribute = (attrs[i] as TagAttribute)!!
+            Console.WriteLine("Disambiguated:" + a.Which)
+        }
+    }
+}
+
+run()
+`
+        let output = CompileAndRun(
+            DisambiguatedSource,
+            "OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998_AndExplicitConversionDisambiguates"
+        )
+        Assert.Contains("Disambiguated:Type", output)
     }
 
     shared {

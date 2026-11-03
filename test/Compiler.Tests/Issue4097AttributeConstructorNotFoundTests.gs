@@ -561,6 +561,170 @@ class Filled {
         }
     }
 
+    /// Issue #4749: overloaded attribute constructors must rank specific
+    /// parameter types (`Type`, `Type[]`, `Status`) ahead of `object[]` and
+    /// `object` regardless of constructor declaration order.
+    @Fact
+    func Issue4749_OverloadedAttributeConstructors_SelectMostSpecificOverload() {
+        const ImportedSource = `package P
+import System
+import HelperLib4097
+
+@OverloadedMarker(typeof(ImportedTypeOwner))
+class ImportedTypeOwner {
+}
+
+@OverloadedMarker([]Type{typeof(ImportedArrayOwner)})
+class ImportedArrayOwner {
+}
+
+@OverloadedMarker([]string{"a"})
+class ImportedCovariantArrayOwner {
+}
+
+Console.WriteLine("ok")
+`
+        const LocalSource = `package P
+import System
+
+enum Status {
+    Active,
+    Retired
+}
+
+class LocalMarkerAttribute : Attribute {
+    init(type Type) {
+    }
+
+    init(value object) {
+    }
+
+    init(types []Type) {
+    }
+
+    init(values []object) {
+    }
+}
+
+class ReversedLocalMarkerAttribute : Attribute {
+    init(value object) {
+    }
+
+    init(values []object) {
+    }
+
+    init(types []Type) {
+    }
+
+    init(type Type) {
+    }
+}
+
+class PrimaryObjectMarkerAttribute(Value object) : Attribute {
+    init(type Type) {
+    }
+}
+
+class EnumMarkerAttribute : Attribute {
+    init(value object) {
+    }
+
+    init(status Status) {
+    }
+
+    init(number int32) {
+    }
+}
+
+@LocalMarker(typeof(Owner))
+class Owner {
+}
+
+@ReversedLocalMarker(typeof(Owner))
+class ReversedOwner {
+}
+
+@PrimaryObjectMarker(typeof(Owner))
+class PrimaryOwner {
+}
+
+@LocalMarker([]Type{typeof(Owner)})
+class ArrayOwner {
+}
+
+@LocalMarker([]string{"a"})
+class CovariantArrayOwner {
+}
+
+@LocalMarker(cast[[]?Type](nil))
+class NullArrayOwner {
+}
+
+@EnumMarker(Status.Retired)
+class EnumOwner {
+}
+
+@EnumMarker(42)
+class IntOwner {
+}
+
+Console.WriteLine("ok")
+`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4749_spec_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let importedAppPath = Path.Combine(tempDir, "Imported.dll")
+            let importedLog = Compile(
+                tempDir,
+                "Imported.gs",
+                ImportedSource,
+                importedAppPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Empty(ErrorIds(importedLog))
+            Assert.True(File.Exists(importedAppPath), (`imported sample must compile. Log:
+` + "$importedLog"))
+            IlVerifier.Verify(importedAppPath, []string{libPath})
+            Assert.Equal("System.Type", SelectedConstructorParameterType(importedAppPath, libPath, "ImportedTypeOwner"))
+            Assert.Equal(
+                "System.Type[]",
+                SelectedConstructorParameterType(importedAppPath, libPath, "ImportedArrayOwner")
+            )
+            Assert.Equal(
+                "System.Object[]",
+                SelectedConstructorParameterType(importedAppPath, libPath, "ImportedCovariantArrayOwner")
+            )
+
+            let localAppPath = Path.Combine(tempDir, "Local.dll")
+            let localLog = Compile(
+                tempDir,
+                "Local.gs",
+                LocalSource,
+                localAppPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Empty(ErrorIds(localLog))
+            Assert.True(File.Exists(localAppPath), (`local sample must compile. Log:
+` + "$localLog"))
+            IlVerifier.Verify(localAppPath, []string{libPath})
+            Assert.Equal("System.Type", SelectedConstructorParameterType(localAppPath, libPath, "Owner"))
+            Assert.Equal("System.Type", SelectedConstructorParameterType(localAppPath, libPath, "ReversedOwner"))
+            Assert.Equal("System.Type", SelectedConstructorParameterType(localAppPath, libPath, "PrimaryOwner"))
+            Assert.Equal("System.Type[]", SelectedConstructorParameterType(localAppPath, libPath, "ArrayOwner"))
+            Assert.Equal(
+                "System.Object[]",
+                SelectedConstructorParameterType(localAppPath, libPath, "CovariantArrayOwner")
+            )
+            Assert.Equal("System.Type[]", SelectedConstructorParameterType(localAppPath, libPath, "NullArrayOwner"))
+            Assert.Equal("P.Status", SelectedConstructorParameterType(localAppPath, libPath, "EnumOwner"))
+            Assert.Equal("System.Int32", SelectedConstructorParameterType(localAppPath, libPath, "IntOwner"))
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         /// The diagnostic an unmatched attribute constructor reports.
         private const ExpectedId string = "GS0583"
@@ -664,6 +828,38 @@ public class OptionalsAttribute : Attribute
     public int Second { get; }
 
     public string Third { get; }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class OverloadedMarkerAttribute : Attribute
+{
+    public OverloadedMarkerAttribute(object value)
+    {
+        Value = value;
+    }
+
+    public OverloadedMarkerAttribute(object[] values)
+    {
+        Values = values;
+    }
+
+    public OverloadedMarkerAttribute(Type[] types)
+    {
+        Types = types;
+    }
+
+    public OverloadedMarkerAttribute(Type type)
+    {
+        Type = type;
+    }
+
+    public object Value { get; }
+
+    public object[] Values { get; }
+
+    public Type[] Types { get; }
+
+    public Type Type { get; }
 }`)
 
         private const Preamble string = `package P
@@ -788,6 +984,24 @@ class NoteAttribute(Text string) : Attribute {
                 }
             )
                 .ToArray()
+        }
+
+        private func SelectedConstructorParameterType(assemblyPath string, libPath string, typeName string) string {
+            let paths = List[string](TrustedPlatformAssemblies()){assemblyPath, libPath}
+            using let context = MetadataLoadContext(PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)))
+            let assembly = context.LoadFromAssemblyPath(assemblyPath)
+            let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
+            let attribute = target.GetCustomAttributesData().Single(
+                (candidate CustomAttributeData) -> candidate
+                    .AttributeType
+                    .Namespace == "P" ||
+                    candidate
+                    .AttributeType
+                    .Namespace
+                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+            )
+            let parameter = Assert.Single(attribute.Constructor.GetParameters())
+            return parameter.ParameterType.FullName ?? parameter.ParameterType.Name
         }
 
         private func ErrorIds(log string)[]string -> Regex
