@@ -1184,11 +1184,8 @@ partial class CSharpToGSharpTranslator {
                 switch member.Name.Identifier.Text {
                     case "Value" {
                         let nullableValue GExpression? = this.TranslateExpression(member.Expression)
-                        // Issue #5626: a local that gsc narrows is already the underlying value.
                         return if this.IsWithinExpressionTreeLambda(member.Expression) {
                             cast[GExpression](MemberAccessExpression(nullableValue, "Value"))
-                        } else if this.IsGSharpFlowNarrowedLocal(member.Expression) {
-                            nullableValue
                         } else {
                             EnsureNonNullAssertion(nullableValue)
                         }

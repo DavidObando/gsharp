@@ -15,17 +15,19 @@ import Xunit
 /// Issue #5626: gsc narrows a nullable local by the native form of a constant pattern (`x is "a"`), but not by
 /// the equality (`x == "a"`) that cs2gs lowered it to, while the translator still read the local as narrowed. The
 /// translated read failed with GS0158. Now one decision gives the form of a boolean `is` test and the narrowing
-/// that the translator assumes for it: the test keeps its native form where only that form narrows. The same
-/// model of gsc's native narrowing decides the case of a switch section and a switch arm, and `Nullable<T>.Value`
-/// reads a narrowed local without an assertion. Each row runs the C# and its translation and compares the output.
+/// that the translator assumes for it: a test of a nullable reference keeps its native form where only that form
+/// narrows. The same model of gsc's native narrowing decides the case of a switch section and a switch arm. Each
+/// row runs the C# and its translation and compares the output.
 /// @remarks Mutation witnesses (ADR-0154): on 1da01cc5d (before this fix) the `is` and combination rows do not
-/// compile (GS0158), the switch rows contain `!!`, and the nullable value row prints `0` for `long?` and `byte?`
-/// (#5676). With the native form refused (`RequiresNativePatternNarrowing` false), the `is`, combination and
-/// nullable value rows keep the lowered form. With the narrowing of the lowered form for every test, they contain
-/// `!!`. With a native model that flips a nested `not`, the `is not "a" and not "bb"` row and the `case not null`
-/// row do not compile (GS0158). Without the parentheses in `GSharpPrinter`, the `&&` row does not compile. With
-/// `IsGSharpSwitchNarrowedLocal` false, the switch rows contain `!!`. Without its closure check, the closure row
-/// does not compile (GS0158). With `.Value` always asserted, the `.Value` rows contain `!!`.
+/// compile (GS0158) and the switch rows contain `!!`. With the native form refused
+/// (`RequiresNativePatternNarrowing` false), the `is` and combination rows keep the lowered form. With the
+/// narrowing of the lowered form for every test, they contain `!!`. With a native model that flips a nested
+/// `not`, the `is not "a" and not "bb"` row and the `case not null` row do not compile (GS0158). Without the
+/// parentheses in `GSharpPrinter`, the `&&` row does not compile. With `IsGSharpSwitchNarrowedLocal` false, the
+/// switch rows contain `!!`. Without its closure check, the closure row does not compile (GS0158). With the native
+/// form for a nullable value, the `HasValue` row does not compile (GS0129). With `.Value` of a narrowed local
+/// unasserted, the `&&` row of `DateTime?` does not compile (GS0158). With `left ?? right` for `and`, the merge row
+/// does not compile (GS0159). Without the supertype rule, the `object` arm row does not compile (GS0158).
 open class Issue5626ConstantPatternNarrowingTests {
     /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
     @Fact
@@ -117,43 +119,62 @@ namespace Demo
         Assert.Contains("case not nil {\n                return current!!.Length\n", printed)
     }
 
-    /// Nullable value types and enum constants: the native test narrows `int32?`, `int64?`, `uint8?`, `char?`,
-    /// `decimal?` and `Color?` to the underlying value, so `.Value` reads the local without an assertion. A null
-    /// test narrows `.Value` too.
+    /// Control: a constant pattern on a nullable value (`int32?`, `char?`, `decimal?`, `Color?`) keeps its lowered
+    /// form. The native form would narrow the local to the underlying type, so `HasValue` (`!= nil`) would not bind
+    /// and `Pick(current)` would call `Pick(int32)` where C# calls `Pick(int?)`. A `.Value` read keeps its
+    /// assertion, also in the right operand of `&&`, where gsc does not narrow a nullable value.
     @Fact
-    func ANullableValueConstantPattern_NarrowsTheValueRead() {
+    func ANullableValueConstantPattern_KeepsTheLoweredForm() {
         let printed = AssertRunsLikeCSharp(`
 #nullable enable
+using System;
 namespace Demo
 {
     public enum Color { Red, Green }
     public static class P
     {
+        static string Pick(int? value) => "nullable";
+        static string Pick(int value) => "plain";
         static int Int(int? current) { if (current is 1) { return current.Value + 1; } return 0; }
-        static int Long(long? current) { if (current is 3) { return (int)current.Value; } return 0; }
-        static int Byte(byte? current) { if (current is 11) { return current.Value; } return 0; }
         static int Char(char? current) { if (current is 'q') { return current.Value; } return 0; }
         static int Decimal(decimal? current) { if (current is 2.5m) { return (int)(current.Value * 2); } return 0; }
         static int NotEnum(Color? current) { if (current is not Color.Green) { return 0; } return (int)current.Value; }
-        static int OrEnum(Color? current) { if (current is Color.Green or Color.Red) { return (int)current.Value + 1; } return 0; }
+        static int HasValue(int? current) { if (current is 1) { return current.HasValue ? 1 : 0; } return 0; }
+        static string Overload(int? current) { if (current is 1) { return Pick(current); } return "none"; }
+        static int AndAlso(DateTime? current) { if (current != null && current.Value.Day > 0) { return 1; } return 0; }
         static int CaseInt(int? current) { switch (current) { case 1: return current.Value + 1; default: return 0; } }
         static int ArmEnum(Color? current) => current switch { Color.Green => (int)current.Value + 5, _ => 0 };
-        static int NullTest(int? current) { if (current != null) { return current.Value + 1; } return 0; }
         public static string Run() =>
-            Int(1) + " " + Int(null) + " " + Long(3) + " " + Byte(11) + " " + Char('q') + " " + Decimal(2.5m) + " " +
-            NotEnum(Color.Green) + " " + NotEnum(null) + " " + OrEnum(Color.Red) + " " + OrEnum(null) + " " + CaseInt(1) + " " +
-            ArmEnum(Color.Green) + " " + ArmEnum(null) + " " + NullTest(4);
+            Int(1) + " " + Int(null) + " " + Char('q') + " " + Decimal(2.5m) + " " + NotEnum(Color.Green) + " " +
+            NotEnum(null) + " " + HasValue(1) + " " + Overload(1) + " " + AndAlso(new DateTime(2020, 1, 2)) + " " +
+            CaseInt(1) + " " + ArmEnum(Color.Green) + " " + ArmEnum(null);
     }
 }`)
-        Assert.Contains("if current is 1 {\n            return current + 1\n", printed)
+        Assert.Contains("if current == 1 {\n            return current!! + 1\n", printed)
         Assert.Contains(
-            "if current is not Color.Green {\n            return 0\n        }\n        return int32(current)\n",
+            "if current != Color.Green {\n            return 0\n        }\n        return int32(current!!)\n",
             printed
         )
-        Assert.Contains("case 1 {\n                return current + 1\n", printed)
-        Assert.Contains("case Color.Green: int32(current) + 5\n", printed)
-        Assert.Contains("if current != nil {\n            return current + 1\n", printed)
-        Assert.DoesNotContain("!!", printed)
+        Assert.Contains("if current != nil && current!!.Day > 0 {", printed)
+    }
+
+    /// Control: gsc narrows an `and` pattern to the type of its right side, and a type test of a proper supertype
+    /// (`object` for a `string?`) does not narrow. Such a switch arm keeps the assertion on the read.
+    @Fact
+    func ASwitchArmThatGscDoesNotNarrow_KeepsTheAssertion() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string Merge(object? current) => current switch { (1 and int) or 2 => current.ToString()!, _ => "none" };
+        static int Supertype(string? current) => current switch { object => current.Length, _ => 0 };
+        public static string Run() => Merge(1) + " " + Merge(2) + " " + Merge(null) + " " + Supertype("ab") + " " + Supertype(null);
+    }
+}`)
+        Assert.Contains("current!!.ToString()", printed)
+        Assert.Contains("current!!.Length", printed)
     }
 
     /// Control: a closure can clear a local when a call runs between the case and the read, and gsc does not narrow
