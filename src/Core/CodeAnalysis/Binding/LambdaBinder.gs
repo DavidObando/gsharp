@@ -812,7 +812,8 @@ internal class LambdaBinder {
                             offender.Name
                         )
                         literal.EnclosingTypeParameterDiagnosticReported = true
-                    } else if function.LexicalEnclosingType is {} owner &&
+                    } else if function.IsGeneric &&
+                        function.LexicalEnclosingType is {} owner &&
                         requiresLexicalOwner &&
                         !function
                         .HasNonGenericLexicalOwner {
@@ -832,8 +833,9 @@ internal class LambdaBinder {
                     // can re-evaluate the exclusion instead of silently
                     // reaching the emitter with an enclosing type parameter
                     // its capturing-closure host has no slot for.
-                    if offender != nil {
+                    if offender != nil || requiresLexicalOwner {
                         literal.EnclosingTypeParameterOffender = offender
+                        literal.RequiresLexicalOwner = requiresLexicalOwner
                         literal.EnclosingTypeParameterOffenderLocation = syntax.Identifier.Location
                     }
                     return BoundLocalFunctionDeclaration(syntax, literal)
@@ -878,29 +880,27 @@ internal class LambdaBinder {
     /// `let Name[T, ...] = func (...) ... { ... }` declarations, in
     /// source order, after each one's body has been bound.
     func ReconcileGenericLocalFunctionGroupCaptures(group IReadOnlyList[BoundFunctionLiteralExpression]) {
-        if group.Count < 2 {
-            // A single generic local function has no sibling to call, so the
-            // in-order pass inside CollectCapturedVariables already saw
-            // everything it ever will. (A local function nested inside that
-            // lone member still can't reach a sibling that doesn't exist.)
+        if group.Count == 0 {
             return
         }
         let literals = List[BoundFunctionLiteralExpression](group)
-        for member in group {
-            CollectNestedFunctionLiterals(member.Body, literals)
-        }
-        let maxPasses = Math.Max(8, literals.Count * literals.Count)
-        for var pass = 0; pass < maxPasses; pass++ {
-            var changed = false
-            for literal in literals {
-                let recomputed = CollectCapturedVariables(literal.Body, literal.Function)
-                if !HashSet[VariableSymbol](literal.CapturedVariables).SetEquals(recomputed) {
-                    literal.CapturedVariables = recomputed
-                    changed = true
-                }
+        if group.Count >= 2 {
+            for member in group {
+                CollectNestedFunctionLiterals(member.Body, literals)
             }
-            if !changed {
-                break
+            let maxPasses = Math.Max(8, literals.Count * literals.Count)
+            for var pass = 0; pass < maxPasses; pass++ {
+                var changed = false
+                for literal in literals {
+                    let recomputed = CollectCapturedVariables(literal.Body, literal.Function)
+                    if !HashSet[VariableSymbol](literal.CapturedVariables).SetEquals(recomputed) {
+                        literal.CapturedVariables = recomputed
+                        changed = true
+                    }
+                }
+                if !changed {
+                    break
+                }
             }
         }
         // Issue #4221/#4223 merge follow-up: a literal that referenced an
@@ -923,6 +923,29 @@ internal class LambdaBinder {
                     literal.EnclosingTypeParameterOffenderLocation,
                     literal.Function.Name,
                     offender.Name
+                )
+                literal.EnclosingTypeParameterDiagnosticReported = true
+            } else if !literal.EnclosingTypeParameterDiagnosticReported &&
+                !literal
+                .Function
+                .IsGeneric &&
+                literal
+                .Function
+                .LocalDeclaration != nil &&
+                literal
+                .CapturedVariables
+                .IsEmpty &&
+                literal.RequiresLexicalOwner &&
+                literal
+                .Function
+                .LexicalEnclosingType is {} owner &&
+                !literal
+                .Function
+                .HasNonGenericLexicalOwner {
+                Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(
+                    literal.EnclosingTypeParameterOffenderLocation,
+                    literal.Function.Name,
+                    owner
                 )
                 literal.EnclosingTypeParameterDiagnosticReported = true
             }
@@ -2049,7 +2072,10 @@ internal class LambdaBinder {
         )
         let needsValueTypeExtensionAdapter = function.IsExtension &&
             group.Receiver != nil &&
-            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type)
+            (
+            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type) ||
+                (group.Receiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
+        )
         if function.HiddenContextParameter == nil &&
             function.SuspendingKind != SuspendingKind.Inferred &&
             !needsValueTypeExtensionAdapter {
@@ -2079,7 +2105,42 @@ internal class LambdaBinder {
             )
         )
         if function.IsExtension && adapterReceiver != nil {
-            arguments.Add(adapterReceiver)
+            var receiverArgument BoundExpression = adapterReceiver
+            if !function.Parameters.IsDefaultOrEmpty {
+                var receiverParameterType = if group.StaticOwnerType != nil &&
+                    function.StaticOwnerType is StructSymbol declaredOwner {
+                    TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+                        ?.SubstituteMemberType(function.Parameters[0].Type) ?? function.Parameters[0].Type
+                } else {
+                    function.Parameters[0].Type
+                }
+                if function.IsGeneric &&
+                    !group
+                    .MethodTypeArguments
+                    .IsDefaultOrEmpty &&
+                    group
+                    .MethodTypeArguments
+                    .Length == function
+                    .TypeParameters
+                    .Length {
+                    let substitution = Dictionary[TypeParameterSymbol, TypeSymbol](function.TypeParameters.Length)
+                    for var i = 0; i < function.TypeParameters.Length; i++ {
+                        substitution[function.TypeParameters[i]] = group.MethodTypeArguments[i]
+                    }
+                    receiverParameterType = Binder.SubstituteType(receiverParameterType, substitution)
+                }
+                if function.Parameters[0].RefKind != RefKind.None {
+                    receiverArgument = BoundAddressOfExpression(
+                        nil,
+                        receiverArgument,
+                        unmanaged: false,
+                        isReadOnly: function.Parameters[0].RefKind == RefKind.In
+                    )
+                } else if !object.ReferenceEquals(receiverArgument.Type, receiverParameterType) {
+                    receiverArgument = BoundConversionExpression(nil, receiverParameterType, receiverArgument)
+                }
+            }
+            arguments.Add(receiverArgument)
         }
         for var i = 0; i < functionType.ParameterTypes.Length; i++ {
             let sourceParameterIndex = i +
@@ -2179,6 +2240,33 @@ internal class LambdaBinder {
                 )
             )
         }
+    }
+
+    private func IsKnownReferenceTypeParameter(typeParameter TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = typeParameter
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasReferenceTypeConstraint {
+                return true
+            }
+            if current.ClassConstraint is {} classConstraint &&
+                classConstraint != TypeSymbol.Object &&
+                classConstraint
+                .ClrType
+                ?.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
+                return true
+            }
+            let next = current.TypeParameterBound
+            if next == nil {
+                return false
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                return false
+            }
+            current = next
+        }
+        return false
     }
 
     /// For an async lambda's declared return type, computes the
@@ -3834,17 +3922,21 @@ internal class LambdaBinder {
             private set;
         }
 
+        private prop IsComplete bool -> Found != nil && (!checkOwners || RequiresLexicalOwner)
+
         func CheckType(type TypeSymbol?) {
-            if Found != nil || type == nil {
+            if IsComplete || type == nil {
                 return
             }
             if checkOwners {
-                let referenced = List[TypeParameterSymbol]()
-                TypeSymbol.CollectReferencedTypeParameters(type, referenced)
-                for parameter in enclosingTypeParameters {
-                    if referenced.Contains(parameter) {
-                        Found = parameter
-                        break
+                if Found == nil {
+                    let referenced = List[TypeParameterSymbol]()
+                    TypeSymbol.CollectReferencedTypeParameters(type, referenced)
+                    for parameter in enclosingTypeParameters {
+                        if referenced.Contains(parameter) {
+                            Found = parameter
+                            break
+                        }
                     }
                 }
                 RequiresLexicalOwner |= switch type {
@@ -3867,7 +3959,7 @@ internal class LambdaBinder {
         }
 
         override func VisitExpression(node BoundExpression?) {
-            if node == nil || Found != nil {
+            if node == nil || IsComplete {
                 return
             }
             CheckType(node.Type)
@@ -3914,7 +4006,12 @@ internal class LambdaBinder {
                         CheckType(cast[TypeSymbol?](property.StructType) ?? property.InterfaceType)
                         RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility)
                     }
-                    case literal is BoundFunctionLiteralExpression when !literal.Function.IsGeneric {
+                    case literal is BoundFunctionLiteralExpression when literal
+                        .Function
+                        .LocalDeclaration == nil ||
+                        !literal
+                        .CapturedVariables
+                        .IsEmpty {
                         RequiresLexicalOwner |= literal.Function.LexicalEnclosingType != nil
                     }
                 }
@@ -3951,7 +4048,7 @@ internal class LambdaBinder {
         }
 
         override func VisitPattern(node BoundPattern?) {
-            if node == nil || Found != nil {
+            if node == nil || IsComplete {
                 return
             }
             CheckType(node.Type)
@@ -3962,7 +4059,7 @@ internal class LambdaBinder {
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
-            if Found != nil {
+            if IsComplete {
                 return
             }
             CheckType(node.Variable.Type)
@@ -4471,7 +4568,10 @@ internal class LambdaBinder {
             enclosingTypeParameters ImmutableArray[TypeParameterSymbol],
             out requiresLexicalOwner bool
         ) TypeParameterSymbol? {
-            let walker = EnclosingTypeParameterReferenceWalker(enclosingTypeParameters, function.IsGeneric)
+            let walker = EnclosingTypeParameterReferenceWalker(
+                enclosingTypeParameters,
+                function.LocalDeclaration != nil || function.IsGeneric
+            )
             for parameter in function.Parameters {
                 walker.CheckType(parameter.Type)
             }

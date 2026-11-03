@@ -802,7 +802,14 @@ partial class CSharpToGSharpTranslator {
                 return nativeVariables
             }
             var receiver GExpression? = this.TranslateExpression(isPattern.Expression)
-            let receiverType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
+            let receiverType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
+                isPattern.Expression
+            ) ??
+                this.GetProjectedReceiverType(isPattern.Expression) ??
+                this
+                .context
+                .GetTypeInfo(isPattern.Expression)
+                .Type
             if this.UsesNativeBooleanPatternTest(isPattern) {
                 let bindings = List[(Symbol ISymbol, Replacement GExpression)]()
                 let guards = List[GExpression]()
@@ -2266,7 +2273,11 @@ partial class CSharpToGSharpTranslator {
                             this.EmittedName(subpatternMember, memberName)
                         )
                         this.RegisterPatternMemberSlot(subpatternMember, memberAccess)
-                        let memberType ITypeSymbol? = this.TryGetSubpatternMemberType(sub)
+                        let memberType ITypeSymbol? = this.GetProjectedPatternMemberType(
+                            receiverType,
+                            subpatternMember
+                        ) ??
+                            this.TryGetSubpatternMemberType(sub)
                         memberTest = this.TranslatePatternTest(
                             memberAccess,
                             sub.Pattern,
@@ -4141,17 +4152,9 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetOperation(collection) as ICollectionExpressionOperation
             if collection.Elements.Count == 0 && isConstructibleClassTarget {
-                return InvocationExpression(
-                    IdentifierExpression(targetRef!!.Name),
-                    List[GExpression](),
-                    if targetRef!!.TypeArguments.Count > 0 {
-                        targetRef!!.TypeArguments
-                    } else {
-                        default(IReadOnlyList[GTypeReference]?)
-                    }
-                )
+                return BuildConstruction(targetRef, List[GExpression]())
             }
-            let elementTypeSymbol ITypeSymbol? = GetCollectionTargetElementType(target)
+            let elementTypeSymbol ITypeSymbol? = this.GetProjectedCollectionTargetElementType(target)
             var elementType GTypeReference?
             if target is IArrayTypeSymbol targetArray && this.typeMapper.Map(
                 targetArray,
@@ -4467,7 +4470,9 @@ partial class CSharpToGSharpTranslator {
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
             let candidates = List[IMethodSymbol]()
-            for var type ITypeSymbol? = target; type != nil; type = type!!.BaseType {
+            for var type INamedTypeSymbol? = target as INamedTypeSymbol; type != nil; type = this.GetEffectiveBaseType(
+                type
+            ) {
                 for add in type.GetMembers("Add").OfType[IMethodSymbol]() {
                     if !add.IsStatic &&
                         add
@@ -4540,7 +4545,9 @@ partial class CSharpToGSharpTranslator {
                         item.Expression
                     )
                     case spread is SpreadElementSyntax: this.GetMappedArrayElementType(spread.Expression) ??
-                        GetEnumerableElementType(this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression))
+                        this.GetProjectedEnumerableElementType(
+                        this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression)
+                    )
                     default: default(ITypeSymbol?)
                 }
                 if projectedElement == nil {
@@ -4623,6 +4630,25 @@ partial class CSharpToGSharpTranslator {
         // slice lowering below). This also drops #1894's `Length`-arithmetic
         // and receiver-spill workarounds entirely — gsc's own `^n` bound
         // handles from-end offsets and the receiver is only ever embedded once.
+        private func GetProjectedCollectionTargetElementType(
+            target ITypeSymbol?
+        ) ITypeSymbol? -> if IsSpanParamsCollectionType(target) {
+            (cast[INamedTypeSymbol](target)).TypeArguments[0]
+        } else {
+            this.GetProjectedEnumerableElementType(target)
+        }
+
+        private func GetProjectedEnumerableElementType(type ITypeSymbol?, asynchronous bool = false) ITypeSymbol? {
+            if type is INamedTypeSymbol named {
+                for candidate in this.GetReceiverTypeHierarchy(named) {
+                    if IsEnumerableContract(candidate, asynchronous) {
+                        return candidate.TypeArguments[0]
+                    }
+                }
+            }
+            return GetEnumerableElementType(type, asynchronous)
+        }
+
         private func TranslateRangeSlice(receiver GExpression?, $range RangeExpressionSyntax) GExpression {
             let start GExpression? = if $range.LeftOperand != nil {
                 this.TranslateRangeBound($range.LeftOperand)

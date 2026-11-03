@@ -154,7 +154,8 @@ internal partial class MethodBodyEmitter {
                     "a constructed delegate has a CLR representation",
                     expression: "constructedDelegateTarget.ClrType"
                 ),
-                this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget)
+                this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget),
+                this.outer.memberRefs.GetConstructedDelegateTypeSpec(constructedDelegateTarget)
             )
             return
         }

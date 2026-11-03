@@ -175,7 +175,7 @@ partial class Binder {
                 returnType TypeSymbol
             ) -> if method.IsAsyncOrSuspending &&
                 !method.IsAsyncVoid &&
-                !IsAsyncIteratorReturnType(returnType) {
+                !IsAsyncIteratorReturnType(method.Type) {
                 Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
             } else {
                 returnType

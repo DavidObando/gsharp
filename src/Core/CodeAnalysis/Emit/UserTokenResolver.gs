@@ -213,10 +213,14 @@ internal class UserTokenResolver {
         for ownTp in ownTypeParameters {
             TypeSymbol.CollectReferencedTypeParameters(ownTp.ConstraintReferenceType, referenced)
         }
-        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedExtras)
+        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedOrClosureExtras)
         // Only an ENCLOSING type parameter gets cloned/promoted here — the
         // function's own declared type parameters (if any) already have a
         // valid MVar slot on this very method.
+        if !ownTypeParameters.IsDefaultOrEmpty {
+            referenced.RemoveAll((tp TypeParameterSymbol) -> ownTypeParameters.Contains(tp))
+        }
+        SynthesizedClosureReifier.ExpandWithConstraintDependencies(referenced)
         if !ownTypeParameters.IsDefaultOrEmpty {
             referenced.RemoveAll((tp TypeParameterSymbol) -> ownTypeParameters.Contains(tp))
         }
@@ -292,6 +296,13 @@ internal class UserTokenResolver {
         ImmutableArray[TypeParameterSymbol].Empty
     }
 
+    internal func GetPromotedOrClosureExtras(fn FunctionSymbol) ImmutableArray[TypeParameterSymbol] {
+        if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var extras) && !extras.IsDefaultOrEmpty {
+            return extras
+        }
+        return this.outer.closures.GetClosureReifiedTypeParameters(fn)
+    }
+
     /// Issue #2118: resolves the `ldftn` target token for a non-capturing
     /// lambda function. When the lambda was generic-promoted
     /// ((cref:TryPromoteNonCapturingGenericLambda)) the token is a
@@ -301,7 +312,16 @@ internal class UserTokenResolver {
     /// @param fn The lambda function whose function pointer is loaded.
     /// @returns The MethodDef or MethodSpec token for the `ldftn`.
     internal func ResolveLambdaFunctionFtnToken(fn FunctionSymbol) EntityHandle {
-        let methodHandle = this.cache.FunctionHandles[fn]
+        if !this
+            .cache
+            .FunctionHandles
+            .TryGetValue(fn, out var methodHandle) &&
+            !this
+            .cache
+            .MethodHandles
+            .TryGetValue(fn, out methodHandle) {
+            throw InvalidOperationException("Function '${fn.Name}' has no emitted MethodDef.")
+        }
         if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var typeArgs) && !typeArgs.IsDefaultOrEmpty {
             let args = [typeArgs.Length]TypeSymbol
             for var i = 0; i < typeArgs.Length; i++ {
@@ -339,7 +359,9 @@ internal class UserTokenResolver {
         // The bound node was recorded before any enclosing-type-parameter
         // promotion, so its arity always matches the OWN (pre-promotion) list.
         var ownArgs[]TypeSymbol
-        if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount {
+        if ownCount == 0 {
+            ownArgs = Array.Empty[TypeSymbol]()
+        } else if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount {
             ownArgs = call.MethodTypeArguments.ToArray()
         } else {
             ownArgs = [ownCount]TypeSymbol
@@ -369,7 +391,30 @@ internal class UserTokenResolver {
     internal func BuildMethodSpecForGenericMethodGroup(
         openMethod EntityHandle,
         methodGroup BoundMethodGroupExpression
-    ) EntityHandle -> this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray())
+    ) EntityHandle {
+        let function = Invariant.Required(
+            methodGroup.Function,
+            "a generic method group has a resolved function",
+            expression: "methodGroup.Function"
+        )
+        let extras = this.GetPromotedExtras(function)
+        if extras.IsDefaultOrEmpty {
+            return this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray())
+        }
+        let ownCount = if methodGroup.MethodTypeArguments.IsDefault {
+            0
+        } else {
+            methodGroup.MethodTypeArguments.Length
+        }
+        let args = [ownCount + extras.Length]TypeSymbol
+        for var i = 0; i < ownCount; i++ {
+            args[i] = methodGroup.MethodTypeArguments[i]
+        }
+        for var i = 0; i < extras.Length; i++ {
+            args[ownCount + i] = extras[i]
+        }
+        return this.BuildMethodSpec(openMethod, args)
+    }
 
     /// Issue #3226: builds a MethodSpec for a generic G# user function call
     /// whose instantiation was LIFTED at the call site — an unconstrained
@@ -980,8 +1025,18 @@ internal class UserTokenResolver {
     private func EncodeFunctionReturnSymbol(encoder ReturnTypeEncoder, fn FunctionSymbol) {
         if fn.IsAsyncOrSuspending && fn.StateMachineType != nil {
             for plan in this.outer.stateMachines.AsyncStateMachinePlans {
-                if plan.KickoffMethod == fn {
-                    this.outer.EncodeAsyncReturnType(encoder, plan)
+                if plan.KickoffMethod == fn ||
+                    (fn.Declaration != nil && object.ReferenceEquals(plan.KickoffMethod.Declaration, fn.Declaration)) {
+                    if this.outer.GetAsyncReturnTypeSymbol(plan) is not{} asyncReturnType {
+                        encoder.Void()
+                    } else {
+                        let effectiveReturnType = if fn.StaticOwnerType is StructSymbol owner {
+                            owner.SubstituteMemberType(asyncReturnType) ?? asyncReturnType
+                        } else {
+                            asyncReturnType
+                        }
+                        this.signatures.EncodeTypeSymbol(encoder.Type(), effectiveReturnType)
+                    }
                     return
                 }
             }
@@ -1443,7 +1498,7 @@ internal class UserTokenResolver {
     /// definition's property type is used so type parameters encode as
     /// `VAR(idx)`, and an init-only setter retains its
     /// `modreq(IsExternalInit)` return modifier.
-    private func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
+    internal func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
         let sigBlob = BlobBuilder()
         let indexParams = if property.Parameters.IsDefaultOrEmpty {
             ImmutableArray[ParameterSymbol].Empty
