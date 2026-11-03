@@ -822,8 +822,10 @@ internal class CustomAttributeEncoder {
                     if !IsBetterAttributeConstructorCandidate(
                         candidates[i].Conversions,
                         candidates[i].Form,
+                        candidates[i].ParamTypes.Length,
                         candidates[j].Conversions,
-                        candidates[j].Form
+                        candidates[j].Form,
+                        candidates[j].ParamTypes.Length
                     ) {
                         beatsAll = false
                         break
@@ -1933,8 +1935,10 @@ internal class CustomAttributeEncoder {
                     if !IsBetterAttributeConstructorCandidate(
                         candidates[i].Conversions,
                         candidates[i].Form,
+                        candidates[i].EffectiveArguments.Length,
                         candidates[j].Conversions,
-                        candidates[j].Form
+                        candidates[j].Form,
+                        candidates[j].EffectiveArguments.Length
                     ) {
                         beatsAll = false
                         break
@@ -2454,8 +2458,10 @@ internal class CustomAttributeEncoder {
         private func IsBetterAttributeConstructorCandidate(
             conversionsA[]AttributeArgumentConversionKind,
             formA AttributeConstructorArgumentForm,
+            parameterCountA int32,
             conversionsB[]AttributeArgumentConversionKind,
-            formB AttributeConstructorArgumentForm
+            formB AttributeConstructorArgumentForm,
+            parameterCountB int32
         ) bool {
             var hasStrictlyBetterConversion = false
             for var i = 0; i < conversionsA.Length; i++ {
@@ -2470,7 +2476,10 @@ internal class CustomAttributeEncoder {
             if hasStrictlyBetterConversion {
                 return true
             }
-            return int32(formA) < int32(formB)
+            if formA != formB {
+                return int32(formA) < int32(formB)
+            }
+            return formA == AttributeConstructorArgumentForm.ParamsExpanded && parameterCountA > parameterCountB
         }
 
         private func CompareAttributeArgumentConversions(

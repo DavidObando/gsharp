@@ -594,6 +594,14 @@ class ImportedExplicitObjectOwner {
 class ImportedBoxedNullTypeArrayOwner {
 }
 
+@Boxed([]object?{cast[[]?Type](nil), cast[Type?](nil)})
+class ImportedBoxedNestedNullElementsOwner {
+}
+
+@ExpandedTie(1)
+class ImportedExpandedTieOwner {
+}
+
 Console.WriteLine("ok")
 `
         const LocalSource = `package P
@@ -667,6 +675,14 @@ class LocalTypeArrayOrObjectArrayAttribute : Attribute {
 class LocalBoxedAttribute(Value object?) : Attribute {
 }
 
+class LocalExpandedTieAttribute : Attribute {
+    init(values ...object) {
+    }
+
+    init(first object, rest ...object) {
+    }
+}
+
 @LocalMarker(typeof(Owner))
 class Owner {
 }
@@ -701,6 +717,14 @@ class ExplicitObjectOwner {
 
 @LocalBoxed(cast[[]?Type](nil))
 class BoxedNullTypeArrayOwner {
+}
+
+@LocalBoxed([]object?{cast[[]?Type](nil), cast[Type?](nil)})
+class BoxedNestedNullElementsOwner {
+}
+
+@LocalExpandedTie(1)
+class ExpandedTieOwner {
 }
 
 @EnumMarker(Status.Retired)
@@ -750,6 +774,11 @@ Console.WriteLine("ok")
                 ("System.Object", "System.Type[]", true),
                 SelectedConstructorAndArgumentType(importedAppPath, libPath, "ImportedBoxedNullTypeArrayOwner")
             )
+            Assert.Equal(
+                []string{"System.Type[]", "System.Type"},
+                NestedBoxedArrayElementArgumentTypes(importedAppPath, libPath, "ImportedBoxedNestedNullElementsOwner")
+            )
+            Assert.Equal(2, SelectedConstructorParameterCount(importedAppPath, libPath, "ImportedExpandedTieOwner"))
 
             let localAppPath = Path.Combine(tempDir, "Local.dll")
             let localLog = Compile(
@@ -785,6 +814,11 @@ Console.WriteLine("ok")
                 ("System.Object", "System.Type[]", true),
                 SelectedConstructorAndArgumentType(localAppPath, libPath, "BoxedNullTypeArrayOwner")
             )
+            Assert.Equal(
+                []string{"System.Type[]", "System.Type"},
+                NestedBoxedArrayElementArgumentTypes(localAppPath, libPath, "BoxedNestedNullElementsOwner")
+            )
+            Assert.Equal(2, SelectedConstructorParameterCount(localAppPath, libPath, "ExpandedTieOwner"))
             Assert.Equal("P.Status", SelectedConstructorParameterType(localAppPath, libPath, "EnumOwner"))
             Assert.Equal("System.Int32", SelectedConstructorParameterType(localAppPath, libPath, "IntOwner"))
 
@@ -998,6 +1032,14 @@ public class IntArrayOrObjectArrayAttribute : Attribute
 public class BoxedAttribute : Attribute
 {
     public BoxedAttribute(object? value) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public class ExpandedTieAttribute : Attribute
+{
+    public ExpandedTieAttribute(params object[] values) { }
+
+    public ExpandedTieAttribute(object first, params object[] rest) { }
 }`)
 
         private const Preamble string = `package P
@@ -1167,6 +1209,51 @@ class NoteAttribute(Text string) : Attribute {
                 argument.ArgumentType.FullName ?? argument.ArgumentType.Name,
                 argument.Value == nil
             )
+        }
+
+        private func SelectedConstructorParameterCount(assemblyPath string, libPath string, typeName string) int32 {
+            let paths = List[string](TrustedPlatformAssemblies()){assemblyPath, libPath}
+            using let context = MetadataLoadContext(PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)))
+            let assembly = context.LoadFromAssemblyPath(assemblyPath)
+            let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
+            let attribute = target.GetCustomAttributesData().Single(
+                (candidate CustomAttributeData) -> candidate
+                    .AttributeType
+                    .Namespace == "P" ||
+                    candidate
+                    .AttributeType
+                    .Namespace
+                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+            )
+            return attribute.Constructor.GetParameters().Length
+        }
+
+        private func NestedBoxedArrayElementArgumentTypes(
+            assemblyPath string,
+            libPath string,
+            typeName string
+        )[]string {
+            let paths = List[string](TrustedPlatformAssemblies()){assemblyPath, libPath}
+            using let context = MetadataLoadContext(PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)))
+            let assembly = context.LoadFromAssemblyPath(assemblyPath)
+            let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
+            let attribute = target.GetCustomAttributesData().Single(
+                (candidate CustomAttributeData) -> candidate
+                    .AttributeType
+                    .Namespace == "P" ||
+                    candidate
+                    .AttributeType
+                    .Namespace
+                    ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+            )
+            let outer = Assert.Single(attribute.ConstructorArguments)
+            let elements = cast[IEnumerable[CustomAttributeTypedArgument]](outer.Value!!).ToArray()
+            Assert.NotEmpty(elements)
+            Assert.All(elements, (element CustomAttributeTypedArgument) -> Assert.Null(element.Value))
+            return elements.Select(
+                (element CustomAttributeTypedArgument) -> element.ArgumentType.FullName ?? element.ArgumentType.Name
+            )
+                .ToArray()
         }
 
         private func ErrorIds(log string)[]string -> Regex

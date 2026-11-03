@@ -197,8 +197,19 @@ class TagAttribute : Attribute {
     }
 }
 
+class ExpandedTieAttribute : Attribute {
+    var Which string = ""
+    init(values ...Object) {
+        Which = "ParamsOnly"
+    }
+    init(first Object, rest ...Object) {
+        Which = "FixedAndParams:" + first.ToString()
+    }
+}
+
 @Marker(typeof(Owner))
 @Tag("hello")
+@ExpandedTie(1)
 class Owner {
 }
 
@@ -218,6 +229,10 @@ func run() {
             var tag TagAttribute = (attrs[i] as TagAttribute)!!
             Console.WriteLine(tag.Which)
         }
+        if attrs[i].GetType().Name == "ExpandedTieAttribute" {
+            var exp ExpandedTieAttribute = (attrs[i] as ExpandedTieAttribute)!!
+            Console.WriteLine(exp.Which)
+        }
     }
     var explicitType Type = typeof(ExplicitObjectOwner)
     var explicitAttrs = explicitType.GetCustomAttributes(true)
@@ -234,6 +249,7 @@ run()
         let output = CompileAndRun(Source, "Issue4749_OverloadedTypeAndObjectCtors_SelectsMoreSpecificOverload")
         Assert.Contains("Type:Owner", output)
         Assert.Contains("String:hello", output)
+        Assert.Contains("FixedAndParams:1", output)
         Assert.Contains("Explicit:Object", output)
     }
 

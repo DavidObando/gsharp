@@ -1941,14 +1941,26 @@ internal partial class DeclarationBinder {
             !TypeSymbol.ContainsTypeParameter(type)
 
         private func ShouldPreserveBoxedAttributeElementType(value object?, type TypeSymbol) bool {
-            if IsEnumLikeType(type) {
+            let unwrapped = if type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(
+                nullable
+            ) {
+                nullable.UnderlyingType
+            } else if type is PlatformTypeSymbol platform {
+                platform.UnderlyingType
+            } else {
+                type
+            }
+            if IsEnumLikeType(unwrapped) {
                 return true
             }
-            let arrayElementType TypeSymbol? = GetOneDimensionalArrayElementType(type)
+            if value == nil && unwrapped?.ClrType is {} nullScalarClr && nullScalarClr.IsSameAs(typeof(Type)) {
+                return true
+            }
+            let arrayElementType TypeSymbol? = GetOneDimensionalArrayElementType(unwrapped)
             if arrayElementType == nil {
                 return false
             }
-            if IsEnumLikeType(arrayElementType) {
+            if value == nil || IsEnumLikeType(arrayElementType) {
                 return true
             }
             return value is Array array && array.GetType().GetElementType() is {} runtimeElementType &&
