@@ -1621,6 +1621,17 @@ open partial class TypeSymbol : Symbol {
                         CollectReferencedTypeParameters(fn.ReturnType, visitParameter, signaturePath)
                         return
                     }
+                    case fp is FunctionPointerTypeSymbol {
+                        for param in fp.ParameterTypes {
+                            CollectReferencedTypeParameters(param, visitParameter, signaturePath)
+                        }
+                        CollectReferencedTypeParameters(fp.ReturnType, visitParameter, signaturePath)
+                        return
+                    }
+                    case ptr is PointerTypeSymbol {
+                        CollectReferencedTypeParameters(ptr.PointeeType, visitParameter, signaturePath)
+                        return
+                    }
                     case tup is TupleTypeSymbol {
                         for elem in tup.ElementTypes {
                             CollectReferencedTypeParameters(elem, visitParameter, signaturePath)

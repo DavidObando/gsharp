@@ -298,6 +298,7 @@ internal class FunctionEmitter {
         isSynthesizedEntryPointStub bool = false,
         isInterfaceImplementation bool = false
     ) MethodDefinitionHandle {
+        using let _ = this.remaps.PushLambdaMethodRemap(function)
         // ADR-0086 / issue #727 + ADR-0092 / issue #758: P/Invoke functions
         // skip body emission. Classic @DllImport functions route through the
         // ImplMap / ModuleRef path; @LibraryImport functions route through
