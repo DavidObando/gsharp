@@ -374,10 +374,28 @@ internal sealed class RegionEffectScanner {
                 VisitChildren(node)
             }
             case SyntaxKind.RelationalPattern {
+                let relational = cast[RelationalPatternSyntax](node)
                 // The binder converts the operand to the subject's type, which a conversion operator can do (W4).
-                if Active() && cast[RelationalPatternSyntax](node).Expression !is LiteralExpressionSyntax {
+                if Active() && relational.Expression !is LiteralExpressionSyntax {
                     current.ContainsConversionCandidate = true
                     current.Conversions.Add(RegionConversion(nil, nil, false))
+                }
+                // Issue #5688: `== value` and `!= value` bind as the binary operation `subject op value`, so they are
+                // operator candidates as that expression is, with a literal value too. Equality with `nil` is a null
+                // test.
+                let operatorKind = relational.OperatorToken.Kind
+                if Active() &&
+                    (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken) &&
+                    !IsNilLiteral(relational.Expression) {
+                    current.ContainsOperatorCandidate = true
+                    RecordOperatorOperand(relational.Expression)
+                    let operands = List[RegionReceiverPath?]()
+                    let operatorForms = List[bool]()
+                    operands.Add(patternSubject)
+                    operatorForms.Add(false)
+                    operands.Add(BuildPath(relational.Expression))
+                    operatorForms.Add(IsOperatorForm(relational.Expression))
+                    current.Operators.Add(RegionOperator(operatorKind, operands, operatorForms))
                 }
                 VisitChildren(node)
             }

@@ -3330,6 +3330,8 @@ internal partial class ExpressionBinder {
                 case variable is BoundVariableExpression: variable.NarrowedType == nil
                 case field is BoundFieldAccessExpression: field.NarrowedType == nil
                 case property is BoundPropertyAccessExpression: property.NarrowedType == nil
+                // Issue #5688: the input of a relational pattern can be a narrowed read, and its type does not show it.
+                case BoundPatternOperandExpression: false
                 default: true
             }
         }

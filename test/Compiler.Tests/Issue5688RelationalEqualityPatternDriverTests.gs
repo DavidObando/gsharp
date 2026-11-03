@@ -252,6 +252,69 @@ System.Console.Write(pattern + patternTrace + "|" + expression + Trace.Events)
     }
 
     @Fact
+    func ImportedOperatorInALoop_RemovesAByReferenceFactAsTheExpressionDoes() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "LoopEquality.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`namespace LoopEquality {
+public struct Token {
+    public static System.Action? Hook;
+    public int Value;
+    public static bool operator ==(Token left, int right) { Hook?.Invoke(); return left.Value == right; }
+    public static bool operator !=(Token left, int right) { Hook?.Invoke(); return left.Value != right; }
+    public override bool Equals(object? other) => false;
+    public override int GetHashCode() => 0;
+}
+}`, "LoopEquality", reference)
+        let diagnostics = System.Collections.Generic.List[string]()
+        for test in[]string{"t is == 0", "t == 0"} {
+            let source = `import System
+import LoopEquality
+func Run(ref text string?, t Token) int32 {
+    if text == nil { return 0 }
+    var k = 0
+    while text.Length > 0 && k < 3 {
+        k++
+        if ` + test + ` { }
+    }
+    return k
+}
+var g string? = "ab"
+Token.Hook = func() { g = nil }
+Console.WriteLine(Run(ref g, Token()))
+`
+            let directory = Path.Combine(fixture.Directory, "case" + "${diagnostics.Count}")
+            Directory.CreateDirectory(directory)
+            let sourcePath = Path.Combine(directory, "Program.gs")
+            File.WriteAllText(sourcePath, source)
+            using let stdout = StringWriter()
+            let originalOut = Console.Out
+            var code int32
+            try {
+                Console.SetOut(stdout)
+                code = Program.Main(
+                    []string{
+                        "/target:exe",
+                        "/reference:" + reference,
+                        "/out:" + Path.Combine(directory, "Program.dll"),
+                        sourcePath
+                    }
+                )
+            } finally {
+                Console.SetOut(originalOut)
+            }
+            let errors = Array.FindAll(
+                stdout.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                (line string) -> line.Contains(": error GS")
+            )
+            Assert.NotEqual(0, code)
+            Assert.Single(errors)
+            diagnostics.Add(errors[0].Substring(errors[0].IndexOf("Program.gs(", StringComparison.Ordinal)))
+        }
+        Assert.Equal(diagnostics[1], diagnostics[0])
+        Assert.Contains("Program.gs(6,16,6,22): error GS0158:", diagnostics[0])
+    }
+
+    @Fact
     func UndefinedEquality_ReportsThePatternOrOperatorDiagnostic() {
         const source = `struct Plain {
     var Value int32
