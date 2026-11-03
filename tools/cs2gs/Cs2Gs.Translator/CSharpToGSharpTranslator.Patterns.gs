@@ -1649,17 +1649,8 @@ partial class CSharpToGSharpTranslator {
                     if varPattern.Designation is SingleVariableDesignationSyntax varSingle &&
                         this
                         .context
-                        .GetDeclaredSymbol(varSingle) is ILocalSymbol varBound {
-                        let varReplacement GExpression = if this
-                            .state
-                            .StoredPatternCaptures
-                            .Contains(receiver!!) &&
-                            this.TryGetVarCaptureStaticNonNull(varBound, out var isNonNull) && isNonNull {
-                            cast[GExpression](NonNullAssertionExpression(receiver))
-                        } else {
-                            receiver!!
-                        }
-                        this.state.PatternBindings[varBound] = varReplacement
+                        .GetDeclaredSymbol(varSingle) is {} varBound {
+                        this.state.PatternBindings[varBound] = receiver!!
                         this.RegisterProjectedPatternBinding(varBound, receiverType)
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no

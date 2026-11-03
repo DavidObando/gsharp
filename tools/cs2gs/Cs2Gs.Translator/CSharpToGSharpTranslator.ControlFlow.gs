@@ -392,12 +392,21 @@ partial class CSharpToGSharpTranslator {
                     .FirstOrDefault()
                     ?.GetSyntax()
                     ?.Parent is VarPatternSyntax &&
-                    (!this.TryGetVarCaptureStaticNonNull(nestedBinder, out var varIsNonNull) || !varIsNonNull) {
+                    (
+                    this.state.StoredPatternCaptures.Contains(projectedInit) || !this.TryGetVarCaptureStaticNonNull(
+                        nestedBinder,
+                        out var varIsNonNull
+                    ) ||
+                        !varIsNonNull
+                ) {
                     nestedType = MakeNullable(nestedType)
                 }
                 this.state.LocalHoldsPromotedValueAnswers.Clear()
                 if nestedType != nil {
                     this.state.EmittedLocalTypeClauses.Add(nestedBinder)
+                    if nestedType.IsNullable {
+                        this.state.HoistedNullableGuardLocals.Add(nestedBinder)
+                    }
                 }
                 this.state.EmittedLocalStorageAcceptsNil[nestedBinder] = nestedType != nil && nestedType.IsNullable
                 this.RecordEmittedLocalNullability(nestedBinder, nestedType, nil, nil)

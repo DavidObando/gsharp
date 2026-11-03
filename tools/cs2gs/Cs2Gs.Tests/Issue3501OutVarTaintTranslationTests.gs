@@ -621,6 +621,7 @@ namespace Demo
             public object Value { get; set; }
             public int ReadCount => this.reads;
             public string ComputedName => "n" + (++this.reads);
+            public Box NullChild => default(Box);
         }
 
         public static string NestedPropertyPatternInHoistedLoop(Box box)
@@ -671,6 +672,27 @@ namespace Demo
             }
 
             return "none";
+        }
+
+        public static string NullComputedPropertyVarPatternMatches(Box box)
+        {
+            string ifResult = "missed";
+            if (box is { NullChild: var c })
+            {
+                c = new Box { Name = "replaced" };
+                ifResult = c.Name;
+            }
+
+            step = 0;
+            string whileResult = "missed";
+            while (Next(out string x) && box is { NullChild: var loopChild })
+            {
+                x = null;
+                loopChild = new Box { Name = "loop" };
+                whileResult = loopChild.Name;
+            }
+
+            return ifResult + ":" + whileResult;
         }
 
         public static string DoAndForContinueInsideLock()
@@ -791,7 +813,8 @@ namespace Demo
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = 42 }) + ":" +
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = "nope" }) + "|" +
             ComputedPropertyPatternEvaluatedOnce() + ":" +
-            ComputedPropertyVarPatternEvaluatedOnce() + "|" +
+            ComputedPropertyVarPatternEvaluatedOnce() + ":" +
+            NullComputedPropertyVarPatternMatches(new Box()) + "|" +
             DoAndForContinueInsideLock() + "|" +
             ForBodyLocalShadowsStaticIncrementorTarget();
     }
@@ -799,7 +822,7 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:no-int|N1:1:N1:1|2:2/1|1"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:no-int|N1:1:N1:1:replaced:loop|2:2/1|1"
         )
     }
 
