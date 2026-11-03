@@ -9175,9 +9175,9 @@ partial class CSharpToGSharpTranslator {
 
             // The operands that a composed value yields: both arms of a conditional, each arm of a switch expression
             // and the right operand of `??`. `nil` for any other expression.
-            private func ComposedValueOperands(
-                value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-            ) List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? {
+            private func ComposedValueOperands(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) List[
+                Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            ]? {
                 let operands = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
                 switch value {
                     case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {

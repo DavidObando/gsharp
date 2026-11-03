@@ -45,10 +45,7 @@ namespace Demo
 }`)
         Assert.Contains("func Arg() int32 -> Take(Volatile.Read(&cache)!!)", printed)
         Assert.Contains("func Ret() Dictionary[string, int32] -> Volatile.Read(&cache)!!", printed)
-        Assert.Contains(
-            "(if flag { Volatile.Read(&cache) } else { Dictionary[string, int32]() })!!.Count",
-            printed
-        )
+        Assert.Contains("(if flag { Volatile.Read(&cache) } else { Dictionary[string, int32]() })!!.Count", printed)
         RunsAs(printed, "1 1 1 0")
     }
 
