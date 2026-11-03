@@ -1534,19 +1534,66 @@ internal partial class MethodBodyEmitter {
             } else {
                 method.DeclaringType
             }
-            return if source is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} &&
+            let sourceMatches = source is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} &&
                 declaring != nil &&
-                ClrTypeUtilities.AreSame(sourceOpen, declaring) &&
-                !(
-                target is ImportedTypeSymbol{OpenDefinition: {} targetOpen} && ClrTypeUtilities.AreSame(
-                    targetOpen,
-                    declaring
-                )
-            ) {
+                ClrTypeUtilities.AreSame(sourceOpen, declaring)
+            let targetMatches = target is ImportedTypeSymbol{OpenDefinition: {} targetOpen} &&
+                declaring != nil &&
+                ClrTypeUtilities.AreSame(targetOpen, declaring)
+            if sourceMatches && !targetMatches {
+                return source
+            }
+            if !sourceMatches {
+                return target
+            }
+            if method.DeclaringType is {IsGenericType: true, IsGenericTypeDefinition: false} closedDeclaring {
+                if ClrTypeUtilities.AreSame(source.ClrType, closedDeclaring) && !ClrTypeUtilities.AreSame(
+                    target.ClrType,
+                    closedDeclaring
+                ) {
+                    return source
+                }
+                if ClrTypeUtilities.AreSame(target.ClrType, closedDeclaring) && !ClrTypeUtilities.AreSame(
+                    source.ClrType,
+                    closedDeclaring
+                ) {
+                    return target
+                }
+            }
+            let importedSource = cast[ImportedTypeSymbol](source)
+            return if SymbolicOperatorMatchesOwner(method, importedSource, source, target) {
                 source
             } else {
                 target
             }
+        }
+
+        private func SymbolicOperatorMatchesOwner(
+            method MethodInfo,
+            owner ImportedTypeSymbol,
+            source TypeSymbol,
+            target TypeSymbol
+        ) bool {
+            if owner.OpenDefinition is not{} openDefinition || owner.TypeArguments.IsDefaultOrEmpty {
+                return false
+            }
+            if ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(openDefinition, method) is not{} openMethod {
+                return false
+            }
+            let parameters = openMethod.GetParameters()
+            if parameters.Length != 1 {
+                return false
+            }
+            let mappedParameter = UnwrapNullable(
+                MemberLookup.GetClrOpenParameterPointeeTypeSymbol(parameters[0], openDefinition, owner.TypeArguments)
+                    .StripToBareShape()
+            )
+            let mappedReturn = UnwrapNullable(
+                MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod, openDefinition, owner.TypeArguments)
+                    .StripToBareShape()
+            )
+            return ConversionClassifier.IsSameSymbolicType(mappedParameter, source) &&
+                ConversionClassifier.IsSameSymbolicType(mappedReturn, target)
         }
 
         private func UnwrapNullable(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable {

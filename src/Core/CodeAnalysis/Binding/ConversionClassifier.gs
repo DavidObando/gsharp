@@ -5996,7 +5996,7 @@ internal class ConversionClassifier {
             return false
         }
 
-        private func IsSameSymbolicType(mapped TypeSymbol?, expected TypeSymbol) bool {
+        internal func IsSameSymbolicType(mapped TypeSymbol?, expected TypeSymbol) bool {
             if mapped == nil || mapped == TypeSymbol.Error {
                 return false
             }

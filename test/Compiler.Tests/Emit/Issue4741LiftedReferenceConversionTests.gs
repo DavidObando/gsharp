@@ -446,6 +446,34 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         "119,119"
     )
     @InlineData(
+        "int32?",
+        "if GenericChainValueToken[List[LocalItem]]?(Probe.ReadValue[GenericChainValueToken[LocalItem]]()) == nil { default(int32?) } else { 5 }",
+        "int?",
+        "(GenericChainValueToken<System.Collections.Generic.List<int>>?)Probe.ReadValue<GenericChainValueToken<int>>() == null ? (int?)null : 5",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "if EvalTree[GenericChainValueToken[LocalItem], GenericChainValueToken[List[LocalItem]]?]((v GenericChainValueToken[LocalItem]) -> GenericChainValueToken[List[LocalItem]]?(v), Probe.ReadValue[GenericChainValueToken[LocalItem]]()) == nil { default(int32?) } else { 5 }",
+        "int?",
+        "EvalTree<GenericChainValueToken<int>, GenericChainValueToken<System.Collections.Generic.List<int>>?>(v => (GenericChainValueToken<System.Collections.Generic.List<int>>?)v, Probe.ReadValue<GenericChainValueToken<int>>()) == null ? (int?)null : 5",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[LocalOpaque](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[LocalImplicitOpaque](present)",
+        "int?",
+        "Probe.Read<OpaqueImplicitValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
         "int32",
         "Probe.AcceptSpan(Span[uint8]([]uint8{1, 2, 3})) + (if present { 0 } else { 0 }) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
         "int",
@@ -459,8 +487,19 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         csharpBody string,
         expectedOutput string
     ) {
-        RunValuePair((`import System.Linq.Expressions
+        RunValuePair((`import System.Collections.Generic
+import System.Linq.Expressions
 struct LocalItem {}
+struct LocalOpaque {}
+func operator explicit(value LocalOpaque) int32? {
+    Probe.Calls += 1
+    return nil
+}
+struct LocalImplicitOpaque {}
+func operator implicit(value LocalImplicitOpaque) int32? {
+    Probe.Calls += 1
+    return nil
+}
 func EvalTree[T, TResult](expr Expression[Func[T, TResult]], value T) TResult -> expr.Compile()(value)
 func OpenNullAware[T](value GenericNullAwareValueToken[T]?) int32 -> int32(value)
 func OpenOpaque[T](value GenericOpaqueValueToken[T]) int32? -> int32?(value)
@@ -811,6 +850,12 @@ public struct GenericNullAwareValueToken<T> {
 }
 public struct GenericOpaqueValueToken<T> {
     public static explicit operator int?(GenericOpaqueValueToken<T> value) { Probe.Calls++; return null; }
+}
+public struct GenericChainValueToken<T> {
+    public static explicit operator GenericChainValueToken<System.Collections.Generic.List<T>>?(GenericChainValueToken<T> value) {
+        Probe.Calls++;
+        return null;
+    }
 }
 public static class Probe {
     public static int Calls;
