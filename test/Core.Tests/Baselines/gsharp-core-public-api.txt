@@ -707,6 +707,7 @@ type enum GSharp.Core.CodeAnalysis.Binding.BoundNodeKind : Int32
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind MethodGroupExpression = 45
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind NotPattern = 89
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind NullConditionalAccessExpression = 41
+  field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind PatternOperandExpression = 104
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind PatternSwitchArm = 16
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind PatternSwitchStatement = 15
   field public const GSharp.Core.CodeAnalysis.Binding.BoundNodeKind PropertyAccessExpression = 39

@@ -33,13 +33,20 @@ open class Issue4721ParenthesizedNullCastTranslationTests {
         Assert.Null(result.Value)
     }
 
-    @Fact
-    func ParenthesizedDelegateNullCast_BindsAndPreservesUnparenthesizedOutput() {
-        let unparenthesized = Translate(NullCastSource("System.Action", "null"))
-        let parenthesized = Translate(NullCastSource("System.Action", "((null))"))
+    @Theory
+    @InlineData("System.Action")
+    @InlineData("System.Threading.ThreadStart")
+    @InlineData("System.Predicate<int>")
+    func ParenthesizedDelegateNullCast_BindsAndPreservesUnparenthesizedOutput(target string) {
+        let unparenthesized = Translate(NullCastSource(target, "null"))
+        let parenthesized = Translate(NullCastSource(target, "((null))"))
         TranslationTestValidation.AssertBinds(unparenthesized)
         TranslationTestValidation.AssertBinds(parenthesized)
         Assert.Equal(unparenthesized, parenthesized)
+        let result = EmittedOracle.Evaluate(parenthesized + Environment.NewLine + "Obj.Missing()")
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Null(result.Value)
     }
 
     @Fact
