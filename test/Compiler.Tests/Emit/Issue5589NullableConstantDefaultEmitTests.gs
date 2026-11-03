@@ -295,8 +295,10 @@ class Calls {
             let culture = CultureInfo.CurrentCulture
             CultureInfo.CurrentCulture = CultureInfo.InvariantCulture
             try {
-                loadContext.LoadFromAssemblyPath(dependency)
-                let assembly = loadContext.LoadFromAssemblyPath(entry)
+                using let dependencyStream = MemoryStream(File.ReadAllBytes(dependency))
+                loadContext.LoadFromStream(dependencyStream)
+                using let entryStream = MemoryStream(File.ReadAllBytes(entry))
+                let assembly = loadContext.LoadFromStream(entryStream)
                 return cast[string](
                     assembly.GetType(typeName, throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)!!
                 )
