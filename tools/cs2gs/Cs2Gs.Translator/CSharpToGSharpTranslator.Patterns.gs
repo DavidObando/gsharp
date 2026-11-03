@@ -1776,6 +1776,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 receiver
             }
+            this.BindPatternDesignation(listPattern.Designation, receiver)
             let lengthAccess = MemberAccessExpression(receiver, "Length")
             var test GExpression = if sliceIndex < 0 {
                 BinaryExpression(lengthAccess, "==", LiteralExpression.Int(elements.Count.ToString()))

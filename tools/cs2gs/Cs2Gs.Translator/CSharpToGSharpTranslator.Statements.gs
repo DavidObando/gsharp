@@ -3946,6 +3946,20 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func GetPredeclaredOutBodyScope(node SyntaxNode) SyntaxNode -> node.Ancestors().FirstOrDefault(
+            (ancestor SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
+                ancestor is AccessorDeclarationSyntax ||
+                ancestor is BasePropertyDeclarationSyntax ||
+                ancestor is LocalFunctionStatementSyntax ||
+                ancestor is AnonymousFunctionExpressionSyntax
+        ) ??
+            this
+            .state
+            .CurrentBodyScope ??
+            node
+            .SyntaxTree
+            .GetRoot()
+
         private func GetPredeclaredOutLocalName(
             single SingleVariableDesignationSyntax,
             local ILocalSymbol,
@@ -3954,19 +3968,7 @@ partial class CSharpToGSharpTranslator {
             if this.predeclaredOutLocalNames.TryGetValue(local, out var existing) {
                 return existing
             }
-            let body SyntaxNode = single.Ancestors().FirstOrDefault(
-                (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                    node is AccessorDeclarationSyntax ||
-                    node is BasePropertyDeclarationSyntax ||
-                    node is LocalFunctionStatementSyntax ||
-                    node is AnonymousFunctionExpressionSyntax
-            ) ??
-                this
-                .state
-                .CurrentBodyScope ??
-                single
-                .SyntaxTree
-                .GetRoot()
+            let body SyntaxNode = this.GetPredeclaredOutBodyScope(single)
             if !this.claimedPredeclaredOutNamesByBody.TryGetValue(body, out var claimed) {
                 claimed = HashSet[string](StringComparer.Ordinal)
                 this.claimedPredeclaredOutNamesByBody.Add(body, claimed)
@@ -4043,7 +4045,18 @@ partial class CSharpToGSharpTranslator {
                     .DeclaringSyntaxReferences
                     .FirstOrDefault()
                     ?.GetSyntax() is SingleVariableDesignationSyntax otherSingle &&
-                    this.OutDeclarationRequiresPredeclaration(otherSingle, otherLocal) {
+                    this
+                    .OutDeclarationRequiresPredeclaration(otherSingle, otherLocal) {
+                    if !object.ReferenceEquals(this.GetPredeclaredOutBodyScope(otherSingle), body) &&
+                        !body
+                        .Span
+                        .Contains(otherSingle.Span) && this.GetPredeclaredOutLocalName(
+                        otherSingle,
+                        otherLocal,
+                        GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.General
+                    ) == candidate {
+                        return true
+                    }
                     continue
                 }
                 if this.nameAllocator.GetName(symbol) == candidate {

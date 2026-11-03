@@ -911,6 +911,78 @@ namespace Demo
             return "none";
         }
 
+        public static string UnbracedDoIfPatternGuardWithContinue(object o)
+        {
+            step = 0;
+            int total = 0;
+            do
+                if (o is int n && n > 0)
+                {
+                    n++;
+                    total += n;
+                    continue;
+                }
+                else
+                {
+                    break;
+                }
+            while (Next(out string x) && (x = null) == null);
+
+            return total + ":" + step;
+        }
+
+        private static bool StaticAgain() => step < 1;
+
+        public static string DoBodyLocalFunctionDoesNotShadowConditionTarget()
+        {
+            step = 0;
+            int runs = 0;
+            do
+            {
+                runs++;
+                bool StaticAgain() => runs < 10;
+                _ = StaticAgain();
+            } while (Next(out string x) && StaticAgain() && (x = null) == null);
+
+            return runs + ":" + step;
+        }
+
+        public static string WholeListDesignationInHoistedLoop(int[] items)
+        {
+            step = 0;
+            while (Next(out string x) && items is [1] matched)
+            {
+                x = null;
+                return matched[0] + ":" + (x ?? "nil");
+            }
+
+            return "no-match";
+        }
+
+        public static string CapturedPromotedOutVarDoesNotCollideWithLambdaPromotedOutVar()
+        {
+            step = 0;
+            if (Next(out string @func))
+            {
+                Func<string> f = () =>
+                {
+                    step = 0;
+                    if (Next(out string func_))
+                    {
+                        func_ = null;
+                    }
+
+                    return (@func ?? "outer-nil") + ":" + (func_ ?? "inner-nil");
+                };
+                string first = f();
+                @func = null;
+                string second = f();
+                return first + "/" + second;
+            }
+
+            return "missed";
+        }
+
         public static string MainEntry() =>
             DoContinueTryCatchDoesNotCatchConditionException() + "|" +
             DoContinueUsingDisposesBeforeCondition() + "|" +
@@ -937,13 +1009,17 @@ namespace Demo
             CountingIndexerListPatternInHoistedLoop() + "|" +
             NullableArrayListPatternInHoistedLoop(null) + ":" +
             NullableArrayListPatternInHoistedLoop(new[] { "item" }) + "|" +
-            NonLoopFallbackVarCaptureMemberDereference();
+            NonLoopFallbackVarCaptureMemberDereference() + "|" +
+            UnbracedDoIfPatternGuardWithContinue(5) + "|" +
+            DoBodyLocalFunctionDoesNotShadowConditionTarget() + "|" +
+            WholeListDesignationInHoistedLoop(new[] { 1 }) + "|" +
+            CapturedPromotedOutVarDoesNotCollideWithLambdaPromotedOutVar();
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|body:nil/ASSIGNED:nil|N1:1:N1:1:replaced:loop|2:2/1|1|seed:nil:nil|E1@0:1|no-list:ITEM:nil|2:2:1"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|body:nil/ASSIGNED:nil|N1:1:N1:1:replaced:loop|2:2/1|1|seed:nil:nil|E1@0:1|no-list:ITEM:nil|2:2:1|12:2|1:1|1:nil|v1:inner-nil/outer-nil:inner-nil"
         )
     }
 

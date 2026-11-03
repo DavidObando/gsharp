@@ -100,7 +100,7 @@ partial class CSharpToGSharpTranslator {
                 // happened yet (issue #1723).
                 let hasOwnContinue = BodyContainsOwnLoopContinue(bodyStatement)
                 if hasOwnContinue {
-                    let continueLabel = this.SyntheticLabelName("doContinue", bodyStatement)
+                    let continueLabel = this.SyntheticLabelName("doContinue", condition)
                     originalBody = cast[BlockStatement](
                         this.RewriteOwnLoopContinue(
                             bodyStatement,
@@ -111,19 +111,9 @@ partial class CSharpToGSharpTranslator {
                     )
                     bodyStatements.Add(originalBody)
                     bodyStatements.Add(LabeledStatement(continueLabel, BlockStatement(hoisted!!)))
-                } else if originalBody.Statements.Any(
-                    (s GStatement) -> s is LocalDeclarationStatement{IsUsing: true}
-                ) ||
-                    (
-                    originalBody.Statements.Any((s GStatement) -> s is LocalDeclarationStatement) && hoisted!!.Any(
-                        (s GStatement) -> s is LocalDeclarationStatement
-                    )
-                ) {
+                } else {
                     bodyStatements.Add(originalBody)
                     bodyStatements.Add(BlockStatement(hoisted!!))
-                } else {
-                    bodyStatements.AddRange(originalBody.Statements)
-                    bodyStatements.AddRange(hoisted!!)
                 }
             } else {
                 bodyStatements.AddRange(hoisted!!)
@@ -644,6 +634,11 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 case RecursivePatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
+                    if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
+                        yield symbol
+                    }
+                }
+                case ListPatternSyntax{Designation: SingleVariableDesignationSyntax single} when !negated {
                     if this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol {
                         yield symbol
                     }
@@ -1766,7 +1761,7 @@ partial class CSharpToGSharpTranslator {
                 if incrementorStatements.Count > 0 &&
                     (
                     forHasPredeclaredOut || translatedBody!!.Statements.Any(
-                        (s GStatement) -> s is LocalDeclarationStatement
+                        (s GStatement) -> s is LocalDeclarationStatement || s is LocalFunctionStatement
                     )
                 ) {
                     bodyStatements.Add(translatedBody!!)
