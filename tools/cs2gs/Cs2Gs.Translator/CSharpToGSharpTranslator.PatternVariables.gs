@@ -362,16 +362,14 @@ partial class CSharpToGSharpTranslator {
                 this.GetGSharpPatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) == nil
         }
 
-        // gsc reads a simple name in a boolean `is` pattern as a type first (ADR-0162), and the emitted name can
-        // differ from the C# name or be a pattern keyword (`@not`). Only a literal or a member access keeps its
-        // meaning in the native form; another constant keeps the lowered equality.
+        // gsc reads a name in a boolean `is` pattern as a type first (ADR-0162): a simple or qualified name can
+        // resolve to a type (an inherited nested type), and the emitted name can differ from the C# name or be a
+        // pattern keyword (`@not`). Only a literal keeps its meaning in the native form; a named constant keeps the
+        // lowered equality.
         private func HasOnlyUnambiguousNativeConstants(pattern PatternSyntax) bool -> pattern
             .DescendantNodesAndSelf()
             .OfType[ConstantPatternSyntax]()
-            .All(
-            (constant ConstantPatternSyntax) -> constant.Expression is LiteralExpressionSyntax ||
-                constant.Expression is MemberAccessExpressionSyntax
-        )
+            .All((constant ConstantPatternSyntax) -> constant.Expression is LiteralExpressionSyntax)
 
         /// Whether gsc narrows the scrutinee of [`isPattern`](paramref) to non-null where the test is
         /// [`whenTrue`](paramref). The answer is for the form that (cref:TranslateIsPattern) emits.
@@ -450,8 +448,15 @@ partial class CSharpToGSharpTranslator {
                 let left ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Left, underlyingType, whenTrue)
                 let right ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Right, underlyingType, whenTrue)
                 let merge = conjunction == whenTrue
+                // gsc merges the nil guards of `&&` before its type tests, so a type test wins over a nil guard
+                // (MergeNarrowingFrames with the type-test frame as `b`); between two type tests the right one wins.
                 if merge {
-                    return right ?? left
+                    return if left == nil ||
+                        (right != nil && !SymbolEqualityComparer.Default.Equals(right, underlyingType)) {
+                        right
+                    } else {
+                        left
+                    }
                 }
                 return if left != nil && right != nil && SymbolEqualityComparer.Default.Equals(left, right) {
                     left
@@ -551,6 +556,18 @@ partial class CSharpToGSharpTranslator {
             underlyingType
         )
 
+        // Whether gsc can see a subclass of a class input: an imported class that is not sealed, or a translated class
+        // that cs2gs emits `open` (IsTypeEmittedOpen). A translated class is sealed when its openness is unknown.
+        private func IsEmittedOpenClass(type ITypeSymbol) bool {
+            if type is not INamedTypeSymbol named {
+                return false
+            }
+            if named.DeclaringSyntaxReferences.Length == 0 {
+                return !named.IsSealed
+            }
+            return this.subclassedBases != nil && this.IsTypeEmittedOpen(named)
+        }
+
         // The mirror of gsc's SmartCastStability.IsTypeTestNarrowing: a type test narrows its input to the tested
         // type when that type is the input type without `?`, or converts implicitly to the input type. It narrows to
         // an interface that the input does not implement when the input is a type parameter, an interface or a class
@@ -569,7 +586,7 @@ partial class CSharpToGSharpTranslator {
             }
             let openInput = underlyingType.TypeKind == TypeKind.TypeParameter ||
                 underlyingType.TypeKind == TypeKind.Interface ||
-                (underlyingType.TypeKind == TypeKind.Class && !underlyingType.IsSealed)
+                (underlyingType.TypeKind == TypeKind.Class && this.IsEmittedOpenClass(underlyingType))
             return if tested.TypeKind == TypeKind.Interface &&
                 openInput &&
                 !this
