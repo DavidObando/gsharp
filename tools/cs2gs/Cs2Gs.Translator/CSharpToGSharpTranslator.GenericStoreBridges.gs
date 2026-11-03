@@ -385,11 +385,7 @@ partial class CSharpToGSharpTranslator {
                         // element slot rather than dropped.
                         let directArgument = (
                             EnclosingInvocationArgument(value) is {} argument &&
-                                this
-                                .context
-                                .SemanticModel
-                                .GetOperation(argument) is IArgumentOperation operation &&
-                                operation.ArgumentKind == ArgumentKind.Explicit
+                                !this.TryGetExpandedParamsElementTarget(argument, parameter, out _, out _)
                         ) ||
                             (
                             knownSlotType != nil && SymbolEqualityComparer.Default.Equals(knownSlotType, parameter.Type)
@@ -682,9 +678,10 @@ partial class CSharpToGSharpTranslator {
             // A value nested in transparent containers (parentheses, a C# `!`, a
             // conditional or switch arm, a tuple element) counts as the enclosing
             // invocation argument, as the store bridges resolve it.
-            private func ValueFeedsExplicitTypeArguments(value ExpressionSyntax?) bool -> EnclosingInvocationArgument(
-                value
-            ) is {Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}} &&
+            private func ValueFeedsExplicitTypeArguments(value ExpressionSyntax?) bool -> value != nil &&
+                EnclosingInvocationArgument(value) is {
+                Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
+            } &&
                 HasExplicitTypeArguments(invocation.Expression)
 
             private func EnclosingInvocationArgument(

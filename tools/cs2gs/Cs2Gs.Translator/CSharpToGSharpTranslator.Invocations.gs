@@ -1232,17 +1232,41 @@ partial class CSharpToGSharpTranslator {
                 out var consumedSyntaxArguments
             )
             let callLocation = callSyntax!!.GetLocation()
-            let paramsCollectionType GTypeReference? = this.typeMapper.Map(
-                paramsCollectionArg.Parameter!!.Type,
-                this.context,
-                callLocation
+            let rawParamsElementType = (cast[INamedTypeSymbol](paramsCollectionArg.Parameter!!.Type)).TypeArguments[0]
+            let paramsArguments = arguments.Skip(consumedSyntaxArguments).ToList()
+            let widenPackedElement = rawParamsElementType.IsReferenceType &&
+                rawParamsElementType.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                paramsArguments
+                .Any(
+                (a ArgumentSyntax) -> this.SinkInfersTypeFromValue(paramsCollectionArg.Parameter, a.Expression) &&
+                    this.EmittedExpandedParamsElementMayBeNull(a.Expression)
             )
-            let paramsElementType = (cast[INamedTypeSymbol](paramsCollectionArg.Parameter!!.Type)).TypeArguments[0]
-            let elementType GTypeReference? = this.typeMapper.Map(paramsElementType, this.context, callLocation)
-            let paramsValues = arguments
-                .Skip(consumedSyntaxArguments)
-                .Select((a ArgumentSyntax) -> this.TranslateArgument(a)!!)
-                .ToList()
+            let paramsElementType = if widenPackedElement {
+                rawParamsElementType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+            } else {
+                rawParamsElementType
+            }
+            let WidenCollectionTypeArgument = func (typeRef GTypeReference?) GTypeReference? {
+                if widenPackedElement && typeRef is NamedTypeReference namedRef && namedRef.TypeArguments.Count == 1 {
+                    return NamedTypeReference(
+                        namedRef.Name,
+                        List[GTypeReference]{MakeNullable(namedRef.TypeArguments[0])!!},
+                        namedRef.ContainingType
+                    ){IsNullable = namedRef.IsNullable}
+                }
+                return typeRef
+            }
+            let paramsCollectionType GTypeReference? = WidenCollectionTypeArgument(
+                this.typeMapper.Map(paramsCollectionArg.Parameter!!.Type, this.context, callLocation)
+            )
+            var elementType GTypeReference? = this.typeMapper.Map(paramsElementType, this.context, callLocation)
+            if widenPackedElement {
+                elementType = MakeNullable(elementType)
+            }
+            let paramsValues = paramsArguments.Select((a ArgumentSyntax) -> this.TranslateArgument(a)!!).ToList()
             if spanObjectCreation {
                 translatedArguments.Add(
                     this.CoerceMaterializedArgument(
@@ -1264,14 +1288,16 @@ partial class CSharpToGSharpTranslator {
             let listType GTypeReference? = if exactListParameter {
                 paramsCollectionType
             } else {
-                this.typeMapper.Map(
-                    this
-                        .context
-                        .Compilation
-                        .GetTypeByMetadataName("System.Collections.Generic.List`1")
-                        ?.Construct(paramsElementType),
-                    this.context,
-                    callLocation
+                WidenCollectionTypeArgument(
+                    this.typeMapper.Map(
+                        this
+                            .context
+                            .Compilation
+                            .GetTypeByMetadataName("System.Collections.Generic.List`1")
+                            ?.Construct(paramsElementType),
+                        this.context,
+                        callLocation
+                    )
                 )
             }
             let construction = BuildConstruction(listType, List[GExpression]())
@@ -1288,12 +1314,16 @@ partial class CSharpToGSharpTranslator {
             translatedArguments.Add(
                 if exactListParameter {
                     collectionArgument
+                } else if widenPackedElement {
+                    cast[GExpression](
+                        ConversionExpression(paramsCollectionType, collectionArgument, isCheckedReferenceCast: true)
+                    )
                 } else {
                     this.CoerceMaterializedArgument(
                         collectionArgument,
                         paramsCollectionArg.Parameter!!.Type,
                         callLocation
-                    )
+                    )!!
                 }
             )
             return translatedArguments
@@ -1629,12 +1659,19 @@ partial class CSharpToGSharpTranslator {
             let operationParameter IParameterSymbol? = (
                 this.context.SemanticModel.GetOperation(argument) as IArgumentOperation
             )?.Parameter
-            if argument.Parent is not BaseArgumentListSyntax list ||
-                list.Parent == nil ||
-                this
-                .context
-                .GetSymbolInfo(list.Parent)
-                .Symbol is not IMethodSymbol method {
+            if argument.Parent is not BaseArgumentListSyntax list || list.Parent == nil {
+                return operationParameter
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(list.Parent).Symbol
+            if symbol is IPropertySymbol property {
+                return GetArgumentParameter(
+                    argument,
+                    property.Parameters,
+                    isReducedExtension: false,
+                    operationParameter
+                )
+            }
+            if symbol is not IMethodSymbol method {
                 return operationParameter
             }
             let parameter IParameterSymbol? = this.GetArgumentParameter(argument, method, operationParameter)
@@ -1669,9 +1706,21 @@ partial class CSharpToGSharpTranslator {
             argument ArgumentSyntax,
             method IMethodSymbol?,
             operationParameter IParameterSymbol?
+        ) IParameterSymbol? -> GetArgumentParameter(
+            argument,
+            method!!.Parameters,
+            method!!.MethodKind == MethodKind.ReducedExtension,
+            operationParameter
+        )
+
+        private func GetArgumentParameter(
+            argument ArgumentSyntax,
+            parameters ImmutableArray[IParameterSymbol],
+            isReducedExtension bool,
+            operationParameter IParameterSymbol?
         ) IParameterSymbol? {
-            if operationParameter != nil && method!!.MethodKind == MethodKind.ReducedExtension {
-                let reducedParameter IParameterSymbol? = method!!.Parameters.FirstOrDefault(
+            if operationParameter != nil && isReducedExtension {
+                let reducedParameter IParameterSymbol? = parameters.FirstOrDefault(
                     (parameter IParameterSymbol) -> parameter.Name == operationParameter.Name &&
                         parameter.RefKind == operationParameter.RefKind
                 )
@@ -1681,16 +1730,12 @@ partial class CSharpToGSharpTranslator {
             }
             if operationParameter != nil &&
                 operationParameter.Ordinal >= 0 &&
-                operationParameter.Ordinal < method!!
-                .Parameters
-                .Length &&
-                method!!
-                .Parameters[operationParameter.Ordinal]
-                .RefKind == operationParameter.RefKind {
-                return method!!.Parameters[operationParameter.Ordinal]
+                operationParameter.Ordinal < parameters.Length &&
+                parameters[operationParameter.Ordinal].RefKind == operationParameter.RefKind {
+                return parameters[operationParameter.Ordinal]
             }
             if argument.NameColon is {} nameColon {
-                return method!!.Parameters.FirstOrDefault(
+                return parameters.FirstOrDefault(
                     (parameter IParameterSymbol) -> parameter.Name == nameColon.Name.Identifier.ValueText
                 )
             }
@@ -1698,12 +1743,10 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             let index = list.Arguments.IndexOf(argument)
-            if index >= 0 && index < method!!.Parameters.Length {
-                return method!!.Parameters[index]
+            if index >= 0 && index < parameters.Length {
+                return parameters[index]
             }
-            return if index >= method!!.Parameters.Length && method!!.Parameters.LastOrDefault() is {
-                IsParams: true
-            } paramsParameter {
+            return if index >= parameters.Length && parameters.LastOrDefault() is {IsParams: true} paramsParameter {
                 paramsParameter
             } else {
                 default(IParameterSymbol?)
@@ -1976,12 +2019,30 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            let sourceType = this.context.GetTypeInfo(argument.Expression)
-            if SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter!!.Type) ||
-                SymbolEqualityComparer
-                .Default
-                .Equals(sourceType.ConvertedType, parameter!!.Type) {
-                return false
+            let callArguments = switch this.context.SemanticModel.GetOperation(argumentList.Parent!!) {
+                case invocation is IInvocationOperation: invocation.Arguments
+                case creation is IObjectCreationOperation: creation.Arguments
+                case propertyReference is IPropertyReferenceOperation: propertyReference.Arguments
+                default: default(ImmutableArray[IArgumentOperation])
+            }
+            if !callArguments.IsDefaultOrEmpty && callArguments.FirstOrDefault(
+                (candidate IArgumentOperation) -> candidate.Parameter?.Name == parameter!!.Name
+            ) is {} paramsArgument {
+                if paramsArgument.ArgumentKind is not(ArgumentKind.ParamArray or ArgumentKind.ParamCollection) {
+                    return false
+                }
+                elementType = candidateElementType
+                paramsParameter = parameter
+                return true
+            }
+            if argumentList.Arguments.Count == parameter!!.Ordinal + 1 {
+                let sourceType = this.context.GetTypeInfo(argument.Expression)
+                if SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter!!.Type) ||
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(sourceType.ConvertedType, parameter!!.Type) {
+                    return false
+                }
             }
             elementType = candidateElementType
             paramsParameter = parameter
