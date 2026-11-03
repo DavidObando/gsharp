@@ -6595,7 +6595,7 @@ partial class CSharpToGSharpTranslator {
                     GetParamsElementType(parameter.OriginalDefinition) is ITypeParameterSymbol elementParameter &&
                     elementParameter.TypeParameterKind == TypeParameterKind.Method &&
                     !NullableTypeArgumentViolatesTranslatedConstraints(elementParameter) &&
-                    !OtherParameterFixesTypeParameterInvariantly(parameter, elementParameter)
+                    !this.OtherArgumentFixesTypeParameterToNonNull(callSite, parameter, elementParameter)
             )
             return generic && !ValueFeedsExplicitTypeArguments(callSite)
         }

@@ -1253,7 +1253,139 @@ partial class CSharpToGSharpTranslator {
             }
             return inferred is ITypeParameterSymbol typeParameter &&
                 !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter) &&
-                !OtherParameterFixesTypeParameterInvariantly(parameter, typeParameter)
+                !this.OtherArgumentFixesTypeParameterToNonNull(value, parameter, typeParameter)
+        }
+
+        private func OtherArgumentFixesTypeParameterToNonNull(
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameter IParameterSymbol,
+            typeParameter ITypeParameterSymbol
+        ) bool {
+            let enclosingArgument ArgumentSyntax? = if callSite == nil {
+                default(ArgumentSyntax?)
+            } else {
+                this.FindEnclosingArgumentThroughReferenceCasts(callSite)
+            }
+            if enclosingArgument?.Parent is not BaseArgumentListSyntax argumentList || argumentList.Parent == nil {
+                return false
+            }
+            let callNode = argumentList.Parent!!
+            let receiverExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch callNode {
+                case InvocationExpressionSyntax{
+                    Expression: MemberAccessExpressionSyntax memberAccess
+                }: memberAccess.Expression
+                case InvocationExpressionSyntax{Expression: MemberBindingExpressionSyntax} bindingCall: bindingCall
+                    .Ancestors()
+                    .OfType[ConditionalAccessExpressionSyntax]()
+                    .FirstOrDefault()
+                    ?.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if receiverExpression != nil &&
+                this
+                .context
+                .GetSymbolInfo(callNode)
+                .Symbol is IMethodSymbol{ReducedFrom: {} reducedFrom} &&
+                reducedFrom
+                .OriginalDefinition
+                .Parameters
+                .FirstOrDefault() is {} receiverParameter {
+                let receiverType ITypeSymbol? = this.GetExpressionInferenceType(receiverExpression)
+                let initialVariance = if receiverParameter.RefKind is RefKind.Ref or RefKind.Out {
+                    VarianceKind.None
+                } else {
+                    VarianceKind.Out
+                }
+                if receiverType != nil &&
+                    ParameterArgumentPreventsNullableInference(
+                    receiverParameter.Type,
+                    receiverType,
+                    typeParameter,
+                    initialVariance
+                ) {
+                    return true
+                }
+            }
+            for otherArgument in argumentList.Arguments {
+                if otherArgument == enclosingArgument {
+                    continue
+                }
+                let otherParameter IParameterSymbol? = this.GetArgumentParameter(otherArgument)
+                if otherParameter == nil || otherParameter.Name == parameter.Name {
+                    continue
+                }
+                let argumentType ITypeSymbol? = this.GetExpressionInferenceType(otherArgument.Expression)
+                if argumentType == nil {
+                    continue
+                }
+                let initialVariance = if otherParameter.RefKind is RefKind.Ref or RefKind.Out {
+                    VarianceKind.None
+                } else {
+                    VarianceKind.Out
+                }
+                if ParameterArgumentPreventsNullableInference(
+                    otherParameter.OriginalDefinition.Type,
+                    argumentType,
+                    typeParameter,
+                    initialVariance
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func GetExpressionInferenceType(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) ITypeSymbol? {
+            var current = expression
+            while (
+                current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax or
+                    PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) {
+                current = switch current {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    case postfix is PostfixUnaryExpressionSyntax: postfix.Operand
+                    default: current
+                }
+            }
+            if current == nil || IsNullOrSuppressedNull(current) || current.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
+            ) {
+                return nil
+            }
+            let typeInfo = this.context.GetTypeInfo(current)
+            if typeInfo.Type != nil {
+                return typeInfo.Type
+            }
+            return if current is ParenthesizedLambdaExpressionSyntax lambda &&
+                lambda
+                .ParameterList
+                .Parameters
+                .All((p ParameterSyntax) -> p.Type != nil) {
+                typeInfo.ConvertedType
+            } else {
+                default(ITypeSymbol?)
+            }
         }
 
         private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
@@ -2083,52 +2215,97 @@ partial class CSharpToGSharpTranslator {
                     .IsRecord
             }
 
-            private func OtherParameterFixesTypeParameterInvariantly(
-                parameter IParameterSymbol,
-                typeParameter ITypeParameterSymbol
+            private func ParameterArgumentPreventsNullableInference(
+                declaredType ITypeSymbol?,
+                actualType ITypeSymbol?,
+                target ITypeParameterSymbol,
+                variance VarianceKind
             ) bool {
-                if parameter.OriginalDefinition.ContainingSymbol is not IMethodSymbol method {
+                if declaredType is ITypeParameterSymbol candidate {
+                    if candidate.TypeParameterKind != target.TypeParameterKind ||
+                        candidate.Ordinal != target.Ordinal ||
+                        candidate.Name != target.Name {
+                        return false
+                    }
+                    return (variance is VarianceKind.None or VarianceKind.In) &&
+                        actualType != nil &&
+                        actualType.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                }
+                if declaredType is IArrayTypeSymbol declaredArray {
+                    return ParameterArgumentPreventsNullableInference(
+                        declaredArray.ElementType,
+                        (actualType as IArrayTypeSymbol)?.ElementType,
+                        target,
+                        variance
+                    )
+                }
+                if declaredType is IPointerTypeSymbol declaredPointer {
+                    return ParameterArgumentPreventsNullableInference(
+                        declaredPointer.PointedAtType,
+                        (actualType as IPointerTypeSymbol)?.PointedAtType,
+                        target,
+                        VarianceKind.None
+                    )
+                }
+                if declaredType is not INamedTypeSymbol{IsGenericType: true} declaredNamed {
                     return false
                 }
-                for other in method.Parameters {
-                    if SymbolEqualityComparer.Default.Equals(other, parameter.OriginalDefinition) ||
-                        !MentionsTypeParameter(other.Type, typeParameter) {
-                        continue
+                let matchingActual INamedTypeSymbol? = switch actualType {
+                    case actualNamed is INamedTypeSymbol: ReceiverTypeHierarchy(actualNamed).FirstOrDefault(
+                        (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            declaredNamed.OriginalDefinition
+                        )
+                    )
+                    case actualArray is IArrayTypeSymbol: actualArray.AllInterfaces.FirstOrDefault(
+                        (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            declaredNamed.OriginalDefinition
+                        )
+                    )
+                    default: default(INamedTypeSymbol?)
+                }
+                for var i = 0; i < declaredNamed.TypeArguments.Length; i++ {
+                    let declaredArgument = declaredNamed.TypeArguments[i]
+                    let actualArgument ITypeSymbol? = if matchingActual != nil &&
+                        i < matchingActual
+                        .TypeArguments
+                        .Length {
+                        matchingActual.TypeArguments[i]
+                    } else {
+                        default(ITypeSymbol?)
                     }
-                    if other.RefKind != RefKind.None || MentionsTypeParameterInvariantly(other.Type, typeParameter) {
+                    let parameterVariance = if declaredNamed.IsTupleType {
+                        VarianceKind.Out
+                    } else {
+                        declaredNamed.TypeParameters[i].Variance
+                    }
+                    let composedVariance = if variance == VarianceKind.None || parameterVariance == VarianceKind.None {
+                        VarianceKind.None
+                    } else if variance == parameterVariance {
+                        VarianceKind.Out
+                    } else {
+                        VarianceKind.In
+                    }
+                    if ParameterArgumentPreventsNullableInference(
+                        declaredArgument,
+                        actualArgument,
+                        target,
+                        composedVariance
+                    ) {
                         return true
                     }
                 }
-                return false
-            }
-
-            private func MentionsTypeParameterInvariantly(type ITypeSymbol?, typeParameter ITypeParameterSymbol) bool {
-                switch type {
-                    case named is INamedTypeSymbol when named.IsGenericType {
-                        if MentionsTypeParameter(named.ContainingType, typeParameter) {
-                            return true
-                        }
-                        for var i = 0; i < named.TypeArguments.Length; i++ {
-                            let argument = named.TypeArguments[i]
-                            if !MentionsTypeParameter(argument, typeParameter) {
-                                continue
-                            }
-                            if named
-                                .TypeParameters[i]
-                                .Variance == VarianceKind.None ||
-                                MentionsTypeParameterInvariantly(argument, typeParameter) {
-                                return true
-                            }
-                        }
-                        return false
-                    }
-                    case pointer is IPointerTypeSymbol {
-                        return MentionsTypeParameter(pointer.PointedAtType, typeParameter)
-                    }
-                    default {
-                        return false
-                    }
-                }
+                return declaredNamed.ContainingType != nil &&
+                    ParameterArgumentPreventsNullableInference(
+                    declaredNamed.ContainingType,
+                    matchingActual?.ContainingType,
+                    target,
+                    VarianceKind.None
+                )
             }
 
             private func MentionsTypeParameterOnlyInvariantly(

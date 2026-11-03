@@ -203,6 +203,10 @@ namespace App
 
         public static string InferredSpanParamsSwitch(Model.Arg argument, int i) => SpanParamsId("head", i switch { 0 => argument.Value, _ => argument.Name });
 
+        public static T FixedByListOrNullParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string NullListAllowsInference(Model.Arg argument, int i) => FixedByListOrNullParams(null, i > 0 ? argument.Value : argument.Name, "tail");
+
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
 
@@ -361,6 +365,12 @@ namespace App
 
         public static T FixedByListParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T FixedByReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByActionParams<T>(System.Action<T> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByListArrayParams<T>(System.Collections.Generic.List<T>[] lists, params System.ReadOnlySpan<T> values) => values[0];
+
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
 
         public static int NormalFormGenericParams(Model.Arg a, Model.Arg b, bool flag) =>
@@ -371,6 +381,15 @@ namespace App
 
         public static string FixedByListParamsCall(System.Collections.Generic.List<string> list, Model.Arg argument, int i) =>
             FixedByListParams(list, i > 5 ? "b" : argument.Name, "tail");
+
+        public static string FixedByReceiverParamsCall(System.Collections.Generic.List<string> list, Model.Arg argument, int i) =>
+            list.FixedByReceiverParams(i > 6 ? "c" : argument.Name, "tail");
+
+        public static string FixedByActionParamsCall(System.Action<string> consume, Model.Arg argument, int i) =>
+            FixedByActionParams(consume, i > 7 ? "d" : argument.Name, "tail");
+
+        public static string FixedByListArrayParamsCall(System.Collections.Generic.List<string>[] lists, Model.Arg argument, int i) =>
+            FixedByListArrayParams(lists, i > 8 ? "e" : argument.Name, "tail");
 
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
@@ -402,6 +421,9 @@ namespace App
         Assert.Contains("CountAll(if flag { a.Objects!! } else { b.Objects!! })", printed)
         Assert.Contains("ConstrainedSpanParams(if i > 4 { \"a\" } else { argument.Name!! }, \"tail\")", printed)
         Assert.Contains("FixedByListParams(list, if i > 5 { \"b\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("list.FixedByReceiverParams(if i > 6 { \"c\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByActionParams(consume, if i > 7 { \"d\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByListArrayParams(lists, if i > 8 { \"e\" } else { argument.Name!! }, \"tail\")", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
