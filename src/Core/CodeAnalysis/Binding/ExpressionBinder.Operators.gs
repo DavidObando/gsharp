@@ -3648,25 +3648,26 @@ internal partial class ExpressionBinder {
                     return true
                 }
                 case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Identity}} identity {
-                    if IsIntegerLiteralOperand(identity.Operand) {
-                        return TryGetConstantIntegerValue(identity.Operand, out value)
-                    }
                     if ConstantExpressionEvaluator.TryEvaluate(identity, out var evaluatedIdentity) &&
                         IsIntegerLiteralValue(evaluatedIdentity) {
                         value = ToBigInteger(evaluatedIdentity)
                         return true
                     }
+                    if !identity.IsChecked && IsNonNegativeIntegerLiteralOperand(identity.Operand) {
+                        return TryGetConstantIntegerValue(identity.Operand, out value)
+                    }
                     return false
                 }
                 case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Negation}} negation {
-                    if IsIntegerLiteralOperand(negation.Operand) &&
-                        TryGetConstantIntegerValue(negation.Operand, out var inner) {
-                        value = -inner
-                        return true
-                    }
                     if ConstantExpressionEvaluator.TryEvaluate(negation, out var evaluatedNegation) &&
                         IsIntegerLiteralValue(evaluatedNegation) {
                         value = ToBigInteger(evaluatedNegation)
+                        return true
+                    }
+                    if !negation.IsChecked &&
+                        IsNonNegativeIntegerLiteralOperand(negation.Operand) &&
+                        TryGetConstantIntegerValue(negation.Operand, out var inner) {
+                        value = -inner
                         return true
                     }
                     return false
@@ -3677,10 +3678,11 @@ internal partial class ExpressionBinder {
             }
         }
 
-        private func IsIntegerLiteralOperand(expression BoundExpression) bool -> switch expression {
-            case lit is BoundLiteralExpression: IsIntegerLiteralValue(lit.Value)
+        private func IsNonNegativeIntegerLiteralOperand(expression BoundExpression) bool -> switch expression {
+            case lit is BoundLiteralExpression: IsIntegerLiteralValue(lit.Value) &&
+                ToBigInteger(lit.Value) >= BigInteger.Zero
             case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Identity}} identity:
-            IsIntegerLiteralOperand(identity.Operand)
+            IsNonNegativeIntegerLiteralOperand(identity.Operand)
             default: false
         }
 

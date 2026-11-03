@@ -5591,17 +5591,12 @@ internal class ConversionClassifier {
         ) bool {
             value = nil
             reason = nil
-            // Unwrap a conversion that the binder may have inserted around a literal.
-            var inner = bound
-            while inner is BoundConversionExpression bce {
-                inner = bce.Expression
-            }
-            var expressionType = inner.Type
-            if ExpressionBinder.IsIntegerType(inner.Type) &&
+            var expressionType = bound.Type
+            if ExpressionBinder.IsIntegerType(bound.Type) &&
                 (
-                ExpressionBinder.TryGetConstantIntegerValue(inner, out var integerValue) ||
+                ExpressionBinder.TryGetConstantIntegerValue(bound, out var integerValue) ||
                     (
-                    ConstantExpressionEvaluator.TryEvaluate(inner, out var evaluatedInt) &&
+                    ConstantExpressionEvaluator.TryEvaluate(bound, out var evaluatedInt) &&
                         ExpressionBinder.IsIntegerLiteralValue(evaluatedInt) &&
                         (integerValue = ExpressionBinder.ToBigInteger(evaluatedInt)) == integerValue
                 )
@@ -5619,9 +5614,9 @@ internal class ConversionClassifier {
                 reason = "integer constant '$integerValue' is outside the range of parameter type '${parameterType.Name}'."
                 value = nil
                 return false
-            } else if inner is BoundLiteralExpression lit {
+            } else if bound is BoundLiteralExpression lit {
                 value = lit.Value
-            } else if inner is BoundDefaultExpression def {
+            } else if bound is BoundDefaultExpression def {
                 // Issue #1182: a value-type `default(T)` (and the zero-value `T()`
                 // form, which the binder also lowers to a BoundDefaultExpression for
                 // value types with no surfaced parameterless constructor) is a valid
@@ -5631,12 +5626,6 @@ internal class ConversionClassifier {
             } else if ConstantExpressionEvaluator.TryEvaluate(bound, out var evaluated) {
                 value = evaluated
                 expressionType = bound.Type
-            } else if !object.ReferenceEquals(inner, bound) && ConstantExpressionEvaluator.TryEvaluate(
-                inner,
-                out var evaluatedInner
-            ) {
-                value = evaluatedInner
-                expressionType = inner.Type
             } else {
                 reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, nil, or a value-type default(T))."
                 return false

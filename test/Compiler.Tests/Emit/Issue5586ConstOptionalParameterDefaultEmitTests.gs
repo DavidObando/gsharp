@@ -57,6 +57,12 @@ public class Holder(Scale float64 = Size) {
 
 public delegate Callback[T](item T, count int32 = Tokens.SmallCount) int32;
 
+public interface IGenericContract[T] {
+    func Run(item T, count int32 = Tokens.SmallCount) int32 {
+        return count
+    }
+}
+
 public interface ITokenContract {
     shared {
         const Bonus float64 = 3.5
@@ -64,6 +70,7 @@ public interface ITokenContract {
         var DefaultHolder Holder = Holder()
         var BuiltScale float64 = ITokenContract.MakeScale()
         var Handler Callback[int32] = func(x int32, c int32) int32 { return x + c }
+        var GenericRef IGenericContract[int32] = GenericContractImpl()
 
         func MakeScale() float64 {
             return Bonus * 2
@@ -77,6 +84,9 @@ public interface ITokenContract {
     func Apply(v float64 = Bonus, baseSize float64 = Tokens.Size) float64 {
         return v + baseSize
     }
+}
+
+public class GenericContractImpl : IGenericContract[int32] {
 }
 
 public class TokenContractImpl : ITokenContract {
@@ -99,6 +109,7 @@ public class Tokens {
         public const Size float64 = 14
         public const DoubleSize float64 = Size * 2
         public const SmallCount int32 = 7
+        public const OverflowByte int32 = 257
         public const MinInt int32 = -2147483648
         public const Prefix string = "tok"
         public const MissingTag string? = nil
@@ -107,7 +118,8 @@ public class Tokens {
     }
 }
 
-public func UncheckedNegMin(value int64 = -Tokens.MinInt) int64 -> value
+public func UncheckedNegMin(value int64 = unchecked(-Tokens.MinInt)) int64 -> value
+public func ConvertedByte(b uint8 = uint8(Tokens.OverflowByte), i int32 = uint8(Tokens.OverflowByte)) string -> "${b}:${i}"
 public func Qualified(value float64 = Tokens.Size) float64 -> value
 public func Imported(value float64 = Size) float64 -> value
 `
@@ -118,12 +130,15 @@ import ConstantDefaults.Tokens
 func LocalQualified(value float64 = Tokens.Size) float64 -> value
 func LocalImported(value float64 = Size) float64 -> value
 func LocalArithmetic(value float64 = Tokens.DoubleSize + 2) float64 -> value
+func LocalUncheckedNegMin(value int64 = unchecked(-Tokens.MinInt)) int64 -> value
+func LocalConvertedByte(i int32 = uint8(Tokens.OverflowByte)) int32 -> i
 
 public func RunConsumer() string {
     let iface ITokenContract = TokenContractImpl()
     let widget = Widget()
     let cbResult = ITokenContract.Handler(10)
-    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${UncheckedNegMin()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}"
+    let gResult = ITokenContract.GenericRef.Run(0)
+    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${gResult}:${UncheckedNegMin()}:${ConvertedByte()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}:${LocalUncheckedNegMin()}:${LocalConvertedByte()}"
 }
 `
             let libraryPath = CompileAssembly(
@@ -162,7 +177,7 @@ public func RunConsumer() string {
                 )!!
                 let actual = Assert.IsType[string](runConsumer.Invoke(nil, nil))
                 Assert.Equal(
-                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:17.5:10:14:7:17:-2147483648:v:14:14:30",
+                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:17.5:10:14:7:17:7:-2147483648:1:1:v:14:14:30:-2147483648:1",
                     actual
                 )
             } finally {
@@ -208,10 +223,13 @@ func BadReadOnly(value float64 = ReadOnlySize) float64 -> value
 class Tokens {
     shared {
         const MinInt int32 = -2147483648
+        const OverflowByte int32 = 257
     }
 }
 
 func BadCheckedNeg(value int64 = checked(-Tokens.MinInt)) int64 -> value
+func BadCheckedConvInt(value int32 = checked(uint8(Tokens.OverflowByte))) int32 -> value
+func BadCheckedConvFloat(value float64 = checked(uint8(Tokens.OverflowByte))) float64 -> value
 
 interface ICollide {
     shared {
@@ -232,7 +250,8 @@ interface ICollide {
             assemblyName: "Issue5586.CheckedAndCollision"
         )
         Assert.False(result.Success)
-        Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0265")
+        let gs0265 = result.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == "GS0265").ToArray()
+        Assert.Equal(3, gs0265.Length)
         Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0102")
     }
 
