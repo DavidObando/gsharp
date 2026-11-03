@@ -57,7 +57,7 @@ gsc @app.rsp
 | `/refout:<file>` | Emit a metadata-only reference assembly to `<file>` in the same compiler invocation. |
 | `/assemblyname:<name>` | Override the emitted assembly name. |
 | `/version:<string>` | Set the informational version stamped on the output assembly. |
-| `/target:exe` | Emit an executable assembly. This is the default target. |
+| `/target:exe` | Emit an executable assembly. This is the default target. With `/out:`, a program without top-level statements or a `Main` function is error GS0634. |
 | `/target:library`, `/target:lib`, `/target:dll` | Emit a library assembly. No `.runtimeconfig.json` is written for library targets. |
 | `/targetframework:<tfm>` | Set the target framework moniker. Used for executable runtime config and target-framework reference identity. |
 | `/tfm:<tfm>` | Alias for `/targetframework:<tfm>`. |

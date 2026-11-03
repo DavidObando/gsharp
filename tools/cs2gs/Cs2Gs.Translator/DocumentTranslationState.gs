@@ -70,6 +70,9 @@ internal class DocumentTranslationState {
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        LocalHoldsPromotedValueAnswers = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
@@ -429,6 +432,23 @@ internal class DocumentTranslationState {
     // A deconstruction into the local stores its element as is when it does,
     // and bridges it when it does not.
     prop EmittedLocalStorageAcceptsNil Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5602: the answers of `LocalHoldsPromotedValue`. An answer depends only on the
+    // emitted-storage records and on the declarations, so a new record clears the answers.
+    prop LocalHoldsPromotedValueAnswers Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5602: the locals whose `LocalHoldsPromotedValue` question is being answered.
+    prop LocalHoldsPromotedValueInProgress HashSet[ILocalSymbol] {
+        get;
+    }
+
+    // Issue #5602: the locals whose declaration emitted a type clause. Their record in
+    // `EmittedLocalStorageAcceptsNil` is the clause's nullability, so it is exact both ways.
+    prop EmittedLocalTypeClauses HashSet[ILocalSymbol] {
         get;
     }
 

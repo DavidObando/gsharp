@@ -749,20 +749,34 @@ open class Program {
                 }
                 rethrow
             }
+            var mergedDiagnostics IEnumerable[Diagnostic] = result.Diagnostics
             // ADR-0169: run G# analyzers over the same compilation (BoundProgram
             // is cached, so this does not re-bind) and merge their diagnostics
             // into the post-hoc severity pass below.
-            var mergedDiagnostics IEnumerable[Diagnostic] = result.Diagnostics
             if args.GsAnalyzerPaths.Count > 0 {
                 mergedDiagnostics = mergedDiagnostics.Concat(GSharpAnalyzerHost.Run(compilation, args.GsAnalyzerPaths))
             }
             // Apply /gsdiag, /nowarn, /warnaserror filtering.
-            let effectiveDiagnostics = ApplySuppressPromote(mergedDiagnostics, args)
+            var effectiveDiagnostics = ApplySuppressPromote(mergedDiagnostics, args)
+            // Issue #5623: only the driver knows that the output is an executable. GS0634 is checked only when no
+            // other error stops the output, because only then does gsc write an executable without an entry point.
+            // A severity override changes only the display: the executable is never kept, as for other errors.
+            var missingEntryPoint = false
+            if args.Target == OutputTarget.Exe && result.Success && !effectiveDiagnostics.Any(
+                (d Diagnostic) -> d.IsError
+            ) {
+                let entryPointDiagnostics = compilation.GetMissingEntryPointDiagnostics()
+                missingEntryPoint = !entryPointDiagnostics.IsEmpty
+                effectiveDiagnostics = effectiveDiagnostics.Concat(ApplySuppressPromote(entryPointDiagnostics, args))
+                    .ToList()
+            }
             // Always print diagnostics (errors and warnings).
             if effectiveDiagnostics.Any() {
                 DiagnosticWriter.WriteDiagnostics(Console.Out, effectiveDiagnostics)
             }
-            let hasErrors = !result.Success || effectiveDiagnostics.Any((d Diagnostic) -> d.IsError)
+            let hasErrors = !result.Success || missingEntryPoint || effectiveDiagnostics.Any(
+                (d Diagnostic) -> d.IsError
+            )
             if hasErrors {
                 TryDelete(outputPath)
                 if !string.IsNullOrEmpty(refOutputPath) {
