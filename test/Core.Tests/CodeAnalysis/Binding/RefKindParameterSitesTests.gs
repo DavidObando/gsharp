@@ -661,8 +661,29 @@ class NullableInIdx {
     }
 }
 
+struct RefNullableInIdx {
+    var Hits int32
+    var Slots []string?
+    prop this[in k int32] ref string? {
+        get {
+            Hits = Hits + k
+            return ref Slots[0]
+        }
+    }
+}
+
 func MutateAndReturn(ref x int32, v string) string {
     x = 9
+    return v
+}
+
+func ReassignReceiverInArg(ref recv NullableInIdx, replacement NullableInIdx, k int32) int32 {
+    recv = replacement
+    return k
+}
+
+func ReassignReceiverInRhs(ref recv NullableInIdx, replacement NullableInIdx, v string) string {
+    recv = replacement
     return v
 }
 
@@ -673,10 +694,67 @@ let afterStmtKey = box.LastKey
 let afterStmtVal = box.Slot1 ?? ""
 var k1 = 0
 let exprVal = (box[k1] ??= "second")
-"${afterStmtKey}:${afterStmtVal}:${exprVal}:${box.Slot0 ?? ""}"
+
+let orig1 = NullableInIdx()
+let repl1 = NullableInIdx()
+var recv1 = orig1
+recv1[ReassignReceiverInArg(ref recv1, repl1, 0)] ??= "onOrig1"
+
+let orig2 = NullableInIdx()
+let repl2 = NullableInIdx()
+var recv2 = orig2
+var k2 = 0
+recv2[in k2] ??= ReassignReceiverInRhs(ref recv2, repl2, "onOrig2")
+
+var refIdx = RefNullableInIdx{Hits: 0, Slots: []string?{nil}}
+var rk = 1
+refIdx[in rk] ??= "fromRef"
+"${afterStmtKey}:${afterStmtVal}:${exprVal}:${box.Slot0 ?? ""}:${orig1.Slot0 ?? ""}:${repl1.Slot0 ?? ""}:${orig2.Slot0 ?? ""}:${repl2.Slot0 ?? ""}:${refIdx.Hits}:${refIdx.Slots[0] ?? ""}"
 `)
         Assert.Empty(coalesceResult.Diagnostics.Where((d Diagnostic) -> d.IsError))
-        Assert.Equal("9:first:second:second", coalesceResult.Value)
+        Assert.Equal("9:first:second:second:onOrig1::onOrig2::1:fromRef", coalesceResult.Value)
+
+        let coalesceBorrowAwait = Evaluate(`
+import System.Threading.Tasks
+
+class NullableInIdx {
+    var Slot string?
+    prop this[in k int32] string? {
+        get -> Slot
+        set { Slot = value }
+    }
+}
+
+func Alias(ref x int32) ref int32 -> ref x
+
+async func BadExpr(idx NullableInIdx) Task[string] {
+    var k = 1
+    let v = (idx[Alias(ref k)] ??= await Task.FromResult("x"))
+    return v ?? ""
+}
+0
+`)
+        Assert.Contains(coalesceBorrowAwait.Diagnostics, (d Diagnostic) -> d.Id == "GS0604")
+
+        let coalesceRefTargetAwait = Evaluate(`
+import System.Threading.Tasks
+
+struct RefNullableInIdx {
+    var Slots []string?
+    prop this[in k int32] ref string? {
+        get -> ref Slots[0]
+    }
+}
+
+async func BadRefTarget() Task[int32] {
+    var idx = RefNullableInIdx{Slots: []string?{nil}}
+    var k = 1
+    idx[in k] ??= await Task.FromResult("x")
+    return 0
+}
+0
+`)
+        Assert.Contains(coalesceRefTargetAwait.Diagnostics, (d Diagnostic) -> d.Id == "GS0604")
     }
 
     shared {

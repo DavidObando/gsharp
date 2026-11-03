@@ -121,6 +121,7 @@ internal partial class ExpressionBinder {
         if rhsLocal != nil {
             $scope.TryDeclareVariable(rhsLocal)
         }
+        let rhsHasAwait = AsyncBoundTreeQueries.HasAwait(boundRhs)
         let preStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         let (read, write) = TryBuildNullCoalescingReadWrite(
             syntax,
@@ -134,7 +135,8 @@ internal partial class ExpressionBinder {
                 BoundVariableExpression(syntax.Value, rhsLocal)
             },
             preStatements,
-            snapshotReceivers: false
+            snapshotReceivers: false,
+            rhsHasAwait: rhsHasAwait
         )
         if read == nil || write == nil {
             return BoundExpressionStatement(statement, BoundErrorExpression(nil))
@@ -253,6 +255,7 @@ internal partial class ExpressionBinder {
                 conversions.BindConversion(syntax.Value.Location, valueRead, rhsTargetType)
             }
         }
+        let rhsHasAwait = AsyncBoundTreeQueries.HasAwait(boundRhs)
         let (read, write) = TryBuildNullCoalescingReadWrite(
             syntax,
             syntax,
@@ -261,7 +264,8 @@ internal partial class ExpressionBinder {
             boundRead,
             storedValue,
             preStatements,
-            snapshotReceivers: true
+            snapshotReceivers: true,
+            rhsHasAwait: rhsHasAwait
         )
         if read == nil || write == nil {
             return BoundErrorExpression(nil)
@@ -338,7 +342,8 @@ internal partial class ExpressionBinder {
         boundRead BoundExpression,
         boundRhs BoundExpression,
         preStatements ImmutableArray[BoundStatement].Builder,
-        snapshotReceivers bool
+        snapshotReceivers bool,
+        rhsHasAwait bool = false
     )(Read BoundExpression?, Write BoundExpression?) {
         let memberReceiver = GetNullCoalescingReceiver(boundRead)
         if memberReceiver != nil && !ReceiverTypeIsReference(memberReceiver.Type) {
@@ -630,6 +635,19 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, clrIdx.Indexer.Name)
                         return (nil, nil)
                     }
+                    let hasSuspendedClrRhs = rhsHasAwait || AsyncBoundTreeQueries.HasAwait(boundRhs)
+                    var hasNonReconstructableClrArg = false
+                    for arg in clrIdx.Arguments {
+                        if (hasNonReconstructableClrArg && AsyncBoundTreeQueries.HasAwait(arg)) ||
+                            (hasSuspendedClrRhs && RequiresSuspensionFreeAddressCapture(arg)) {
+                            Diagnostics.ReportManagedReference(
+                                arg.Syntax?.Location ?? syntax.OperatorToken.Location,
+                                "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                            )
+                            return (nil, nil)
+                        }
+                        hasNonReconstructableClrArg |= RequiresSuspensionFreeAddressCapture(arg)
+                    }
                     let target = CaptureStorageReceiver(
                         captureAnchor,
                         clrIdx.Target,
@@ -725,21 +743,31 @@ internal partial class ExpressionBinder {
                             return (nil, nil)
                         }
                     }
-                    if AsyncBoundTreeQueries.HasAwait(boundRhs) {
-                        for arg in userIdx.Arguments {
-                            if RequiresSuspensionFreeAddressCapture(arg) {
-                                Diagnostics.ReportManagedReference(
-                                    arg.Syntax?.Location ?? syntax.OperatorToken.Location,
-                                    "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
-                                )
-                            }
+                    let hasSuspendedRhs = rhsHasAwait || AsyncBoundTreeQueries.HasAwait(boundRhs)
+                    var hasNonReconstructableArg = false
+                    for arg in userIdx.Arguments {
+                        if (hasNonReconstructableArg && AsyncBoundTreeQueries.HasAwait(arg)) ||
+                            (hasSuspendedRhs && RequiresSuspensionFreeAddressCapture(arg)) {
+                            Diagnostics.ReportManagedReference(
+                                arg.Syntax?.Location ?? syntax.OperatorToken.Location,
+                                "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow"
+                            )
+                            return (nil, nil)
                         }
+                        hasNonReconstructableArg |= RequiresSuspensionFreeAddressCapture(arg)
+                    }
+                    if userIndexer.SetterSymbol == nil && hasSuspendedRhs {
+                        Diagnostics.ReportManagedReference(
+                            syntax.OperatorToken.Location,
+                            "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target"
+                        )
+                        return (nil, nil)
                     }
                     let target = CaptureStorageReceiver(
                         captureAnchor,
                         userIdx.Receiver,
                         preStatements,
-                        forceCapture: SnapshotsReference(userIdx.Receiver)
+                        forceCapture: ReceiverTypeIsReference(userIdx.Receiver.Type)
                     )
                     if !ReceiverTypeIsReference(target.Type) {
                         preStatements.Add(
@@ -751,22 +779,34 @@ internal partial class ExpressionBinder {
                         argsBuilder.Add(CaptureUserIndexerArgument(arg, preStatements))
                     }
                     let args = argsBuilder.ToImmutable()
-                    let read = BoundUserInstanceCallExpression(readAnchor, target, userIdx.Method, args, userIdx.Type)
-                    let write BoundExpression = if userIndexer.SetterSymbol is {} setter {
-                        BoundUserInstanceCallExpression(
+                    let getterCall = BoundUserInstanceCallExpression(
+                        readAnchor,
+                        target,
+                        userIdx.Method,
+                        args,
+                        userIdx.Type
+                    )
+                    if userIndexer.SetterSymbol is {} setter {
+                        let write = BoundUserInstanceCallExpression(
                             writeAnchor,
                             target,
                             setter,
                             args.Add(boundRhs),
                             TypeSymbol.Void
                         )
-                    } else {
-                        BoundIndirectAssignmentExpression(
-                            writeAnchor,
-                            BoundAddressOfExpression(writeAnchor, read, unmanaged: false),
-                            boundRhs
-                        )
+                        return (getterCall, write)
                     }
+                    let reference = BoundAddressOfExpression(readAnchor, getterCall, unmanaged: false)
+                    let referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, preStatements)
+                    let read = BoundDereferenceExpression(
+                        readAnchor,
+                        BoundVariableExpression(readAnchor, referenceTemp)
+                    )
+                    let write = BoundIndirectAssignmentExpression(
+                        writeAnchor,
+                        BoundVariableExpression(writeAnchor, referenceTemp),
+                        boundRhs
+                    )
                     return (read, write)
                 }
             }
