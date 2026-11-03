@@ -91,6 +91,7 @@ internal shared class ByRefStorageMatching {
         let storageType = switch argument {
             case address is BoundAddressOfExpression: address.Operand?.Type
             case conditional is BoundConditionalAddressExpression: conditional.PointeeType
+            case BoundVariableExpression{Type: ByRefTypeSymbol byRef}: byRef.PointeeType
             default: default(TypeSymbol?)
         }
         return if storageType == TypeSymbol.Error {

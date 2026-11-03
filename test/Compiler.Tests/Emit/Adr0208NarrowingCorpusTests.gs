@@ -167,6 +167,12 @@ open class Adr0208NarrowingCorpusTests {
                 "cA_filter_write",
                 "cB_local_function_captures",
                 "cC_finally_restores_on_jump",
+                "d01_5461_closure_stored_in_an_external_function_value_in_a_for_loop_kills_its_alias",
+                "d02_5461_closure_stored_in_an_external_function_value_in_a_while_loop_kills_its_alias",
+                "d03_5461_closure_stored_in_an_external_function_value_in_a_bare_for_kills_its_alias",
+                "d04_5461_closure_stored_in_an_external_function_value_in_a_do_while_loop_kills_its_alias",
+                "d05_5461_function_value_that_the_loop_does_not_assign_stays_external",
+                "d06_5461_named_function_stored_in_a_function_value_in_a_loop_kills_its_alias",
                 "d1_enclosing_filter_before_finally",
                 "d1b_enclosing_filter_order",
                 "d2_shadowed_type_name",
@@ -686,6 +692,129 @@ func Main() { Console.WriteLine(Run(2)) }`, "GS0158@12:27", "reject", "", ""}
     return length
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "4", ""}
+            yield[]object{"d01_5461_closure_stored_in_an_external_function_value_in_a_for_loop_kills_its_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        if x != nil {
+            g()
+            total += x.Value
+        }
+        g = h
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0129@13:19 GS0158@13:24", "reject", "", "ADR-0213 section 13 (#5461)"}
+            yield[]object{"d02_5461_closure_stored_in_an_external_function_value_in_a_while_loop_kills_its_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    while i < 2 {
+        if x != nil {
+            g()
+            total += x.Value
+        }
+        g = h
+        i++
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0129@14:19 GS0158@14:24", "reject", "", "ADR-0213 section 13 (#5461)"}
+            yield[]object{"d03_5461_closure_stored_in_an_external_function_value_in_a_bare_for_kills_its_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    for {
+        if i == 2 { break }
+        if x != nil {
+            g()
+            total += x.Value
+        }
+        g = h
+        i++
+    }
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0129@15:19 GS0158@15:24", "reject", "", "ADR-0213 section 13 (#5461)"}
+            yield[]object{"d04_5461_closure_stored_in_an_external_function_value_in_a_do_while_loop_kills_its_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    do {
+        if x != nil {
+            g()
+            total += x.Value
+        }
+        g = h
+        i++
+    } while i < 2
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0129@14:19 GS0158@14:24", "reject", "", "ADR-0213 section 13 (#5461)"}
+            yield[]object{"d05_5461_function_value_that_the_loop_does_not_assign_stays_external", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        if x != nil {
+            g()
+            total += x.Value
+        }
+    }
+    h()
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "2", "ADR-0213 section 13 (#5461)"}
+            yield[]object{"d06_5461_named_function_stored_in_a_function_value_in_a_loop_kills_its_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Other() { }
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        if x != nil {
+            g()
+            total += x.Value
+        }
+        g = Other
+    }
+    h()
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0129@14:19 GS0158@14:24", "reject", "", "ADR-0213 section 13 (#5461)"}
             yield[]object{"d1b_enclosing_filter_order", `func Get() string? { return "a" }
 func Clear(ref s string?) bool {
     Console.WriteLine("filter")

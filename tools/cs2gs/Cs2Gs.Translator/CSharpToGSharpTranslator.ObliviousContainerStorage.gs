@@ -1909,9 +1909,40 @@ partial class CSharpToGSharpTranslator {
             // Constructions and calls with stated type arguments, which can spell a
             // nullable position that no storage records.
             let spelledSites = List[(Site ExpressionSyntax, Model SemanticModel)]()
+            let anonymousGroups = Dictionary[
+                string,
+                List[
+                    (Creation AnonymousObjectCreationExpressionSyntax, Properties[]IPropertySymbol, Model SemanticModel)
+                ]
+            ](System.StringComparer.Ordinal)
             for tree in compilation.SyntaxTrees {
                 let model = compilation.GetSemanticModel(tree)
                 for node in tree.GetRoot().DescendantNodes() {
+                    if node is AnonymousObjectCreationExpressionSyntax anonymousCreation && model.GetTypeInfo(
+                        anonymousCreation
+                    )
+                        .Type is INamedTypeSymbol anonymousType {
+                        let properties = anonymousType.GetMembers().OfType[IPropertySymbol]().ToArray()
+                        let shapeKey = string.Join(
+                            "|",
+                            properties.Select(
+                                (property IPropertySymbol) -> property.Name + ":" + property.Type.ToDisplayString(
+                                    SymbolDisplayFormat.FullyQualifiedFormat
+                                )
+                            )
+                        )
+                        if !anonymousGroups.TryGetValue(shapeKey, out var group) {
+                            group = List[
+                                (
+                                    Creation AnonymousObjectCreationExpressionSyntax,
+                                    Properties[]IPropertySymbol,
+                                    Model SemanticModel
+                                )
+                            ]()
+                            anonymousGroups.Add(shapeKey, group)
+                        }
+                        group.Add((anonymousCreation, properties, model))
+                    }
                     if node is AssignmentExpressionSyntax assignment {
                         if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                             let destination ISymbol? = model.GetSymbolInfo(assignment.Left).Symbol
@@ -1997,6 +2028,35 @@ partial class CSharpToGSharpTranslator {
                 }
                 if keep && CanCarryPositions(edge.Value) {
                     live.Add(edge)
+                }
+            }
+            for group in anonymousGroups.Values {
+                if group.Count < 2 {
+                    continue
+                }
+                let propertyCount = group[0].Properties.Length
+                for var index = 0; index < propertyCount; index++ {
+                    let annotated = HashSet[string](System.StringComparer.Ordinal)
+                    for item in group {
+                        if index < item.Properties.Length {
+                            CollectAnnotatedPositions(item.Properties[index].Type, "", annotated)
+                        }
+                    }
+                    if annotated.Count == 0 {
+                        continue
+                    }
+                    for item in group {
+                        if index < item.Properties.Length && index < item.Creation.Initializers.Count {
+                            this.AddAliasedSourcePositions(
+                                flow,
+                                item.Creation.Initializers[index].Expression,
+                                item.Model,
+                                item.Properties[index].Type,
+                                annotated,
+                                compilation
+                            )
+                        }
+                    }
                 }
             }
             // The positions only grow, and each storage has finitely many, so this
@@ -3772,6 +3832,24 @@ partial class CSharpToGSharpTranslator {
                 return type.IsReferenceType && type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None
             }
 
+            private func CollectAnnotatedPositions(declared ITypeSymbol?, prefix string, positions HashSet[string]) {
+                let arguments = PositionArguments(declared)
+                if arguments == nil {
+                    return
+                }
+                for var i = 0; i < arguments.Count; i++ {
+                    let position = JoinPosition(prefix, IndexPosition(i))
+                    if arguments[i].IsReferenceType &&
+                        arguments[i].NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        positions.Add(position)
+                    }
+                    CollectAnnotatedPositions(arguments[i], position, positions)
+                }
+            }
+
             // A return or expression body stores its value in the enclosing method
             // or property. A lambda has no declaration that cs2gs can widen. An `async`
             // method stores it in its task's result.
@@ -3848,10 +3926,10 @@ partial class CSharpToGSharpTranslator {
                 }
                 return source is INamedTypeSymbol sourceNamed &&
                     storage is INamedTypeSymbol storageNamed &&
-                    sourceNamed.IsGenericType &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(sourceNamed.OriginalDefinition, storageNamed.OriginalDefinition)
+                    FlatTypeArguments(sourceNamed).Count > 0 && SymbolEqualityComparer.Default.Equals(
+                    sourceNamed.OriginalDefinition,
+                    storageNamed.OriginalDefinition
+                )
             }
 
             private func HasNonNullNestedReferencePosition(type ITypeSymbol?) bool {
@@ -3870,7 +3948,7 @@ partial class CSharpToGSharpTranslator {
                 .NotAnnotated
 
             // Makes each recorded nested position nullable. The top level keeps its
-            // nullability. The type arguments of a containing type are not spelled.
+            // nullability.
             private func PromoteNestedPositions(
                 type GTypeReference?,
                 declared ITypeSymbol?,
@@ -3924,15 +4002,18 @@ partial class CSharpToGSharpTranslator {
                     declared is INamedTypeSymbol namedSymbol &&
                     named
                     .TypeArguments
-                    .Count > 0 &&
-                    named
-                    .TypeArguments
                     .Count == namedSymbol
                     .TypeArguments
-                    .Length {
+                    .Length &&
+                    (named.TypeArguments.Count > 0 || named.ContainingType != nil) {
+                    let containingType = if named.ContainingType != nil && namedSymbol.ContainingType != nil {
+                        PromoteNestedPositions(named.ContainingType, namedSymbol.ContainingType, positions, prefix)
+                    } else {
+                        named.ContainingType
+                    }
                     let offset = FlatTypeArguments(namedSymbol).Count - namedSymbol.TypeArguments.Length
                     let arguments = List[GTypeReference](named.TypeArguments.Count)
-                    var changed = false
+                    var changed = !object.ReferenceEquals(containingType, named.ContainingType)
                     for var i = 0; i < named.TypeArguments.Count; i++ {
                         let argument = PromoteNestedPosition(
                             named.TypeArguments[i],
@@ -3945,9 +4026,7 @@ partial class CSharpToGSharpTranslator {
                     }
                     return if changed {
                         cast[GTypeReference](
-                            NamedTypeReference(named.Name, arguments, named.ContainingType){
-                                IsNullable = named.IsNullable
-                            }
+                            NamedTypeReference(named.Name, arguments, containingType){IsNullable = named.IsNullable}
                         )
                     } else {
                         type

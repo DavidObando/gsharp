@@ -6636,12 +6636,23 @@ partial class CSharpToGSharpTranslator {
                         default(IReadOnlyList[GTypeReference]?)
                     }
                     return InvocationExpression(
-                        IdentifierExpression(ConstructionCalleeName(named.Name)),
+                        BuildNamedTypeCalleeExpression(named, ConstructionCalleeName(named.Name)),
                         arguments,
                         typeArguments
                     )
                 }
                 return InvocationExpression(IdentifierExpression(type!!.ToString()), arguments)
+            }
+
+            private func BuildNamedTypeCalleeExpression(
+                named NamedTypeReference,
+                calleeName string
+            ) GExpression -> if named.ContainingType != nil {
+                cast[GExpression](
+                    MemberAccessExpression(TypeExpression(named.ContainingType), calleeName, isArrow: false)
+                )
+            } else {
+                cast[GExpression](IdentifierExpression(calleeName))
             }
 
             /// Maps a constructed type's G# name to a callable construction callee.

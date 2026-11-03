@@ -661,6 +661,10 @@ class StructSymbol : TypeSymbol {
     /// non-generic types and for constructed instances.
     private var _typeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
 
+    private var _declaredTypeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
+
+    private var _hasReifiedTypeParameters bool
+
     prop TypeParameters ImmutableArray[TypeParameterSymbol] {
         get {
             return _typeParameters
@@ -668,6 +672,13 @@ class StructSymbol : TypeSymbol {
         private set {
             _typeParameters = value
         }
+    }
+
+    /// Gets the declared own type parameters of this type.
+    internal prop DeclaredTypeParameters ImmutableArray[TypeParameterSymbol] -> if _hasReifiedTypeParameters {
+        _declaredTypeParameters
+    } else {
+        _typeParameters
     }
 
     /// Gets the type arguments when this is a constructed instance of a generic definition (Phase 4.3 /
@@ -1458,6 +1469,19 @@ class StructSymbol : TypeSymbol {
     /// @param typeParameters The bound type parameters in declared order.
     func SetTypeParameters(typeParameters ImmutableArray[TypeParameterSymbol]) {
         TypeParameters = typeParameters
+        _declaredTypeParameters = typeParameters
+        _hasReifiedTypeParameters = false
+    }
+
+    /// Sets the reified type parameters for a nested type inside a generic enclosing type
+    /// and keeps (cref:DeclaredTypeParameters).
+    /// @param typeParameters The reified enclosing-plus-own type parameters.
+    internal func SetReifiedTypeParameters(typeParameters ImmutableArray[TypeParameterSymbol]) {
+        if !_hasReifiedTypeParameters {
+            _declaredTypeParameters = _typeParameters
+            _hasReifiedTypeParameters = true
+        }
+        TypeParameters = typeParameters
     }
 
     /// Issue #1477: records the ordered original enclosing type parameters that
@@ -1985,7 +2009,7 @@ class StructSymbol : TypeSymbol {
         let ownParams = if !nestedOwnTypeParameters.IsDefaultOrEmpty {
             nestedOwnTypeParameters
         } else {
-            def!!.TypeParameters
+            def!!.DeclaredTypeParameters
         }
         if !ownParams.IsDefaultOrEmpty && !TypeArguments.IsDefaultOrEmpty {
             let count = Math.Min(ownParams.Length, TypeArguments.Length)
@@ -2623,7 +2647,7 @@ class StructSymbol : TypeSymbol {
         }
 
         private func EnclosingTypeParametersOf(type TypeSymbol) ImmutableArray[TypeParameterSymbol] -> switch type {
-            case s is StructSymbol: (s.Definition ?? s).TypeParameters
+            case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
             case i is InterfaceSymbol: (i.Definition ?? i).TypeParameters
             default: ImmutableArray[TypeParameterSymbol].Empty
         }
@@ -2668,6 +2692,7 @@ class StructSymbol : TypeSymbol {
             constructed.Definition = definition
             constructed.TypeArguments = typeArguments
             constructed.mapClrType = mapClrType
+            constructed.SetContainingTypeCore(definition.ContainingType)
             // Issue #1341: Methods and the static-member tables below are
             // generically erased (ADR-0004) and shared with the definition by
             // identity (no per-construction substitution). They are NOT snapshotted

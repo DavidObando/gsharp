@@ -1734,35 +1734,7 @@ internal partial class DeclarationBinder {
                         )
                         continue
                     }
-                    let indexerParamBuilder = ImmutableArray.CreateBuilder[ParameterSymbol]()
-                    let seenIndexParamNames = HashSet[string]()
-                    for indexParamSyntax in propSyntax.Parameters {
-                        // ADR-0185: an indexer's parameters never come from
-                        // the destructured arrow-lambda path.
-                        let indexParamName = indexParamSyntax.Identifier!!.ValueText
-                        let indexParamType = if indexParamSyntax.Type is {} indexParamTypeSyntax {
-                            bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
-                        } else {
-                            TypeSymbol.Error
-                        }
-                        if !seenIndexParamNames.Add(indexParamName) {
-                            Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName)
-                        }
-                        let indexerParam = ParameterSymbol(
-                            indexParamName,
-                            indexParamType,
-                            declaringSyntax: indexParamSyntax.Identifier
-                        )
-                        // Issue #1913: indexer parameters can carry `@Attr`
-                        // annotations same as any other parameter list.
-                        BindAndAttachParameterAttributes(indexParamSyntax, indexerParam)
-                        // Issue #4350 (review): an indexer parameter may declare
-                        // a default (`this[row int32, column int32 = 0]`), which
-                        // was previously dropped silently.
-                        conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
-                        indexerParamBuilder.Add(indexerParam)
-                    }
-                    indexerParameters = indexerParamBuilder.ToImmutable()
+                    indexerParameters = BindIndexerParameters(propSyntax)
                 }
                 let propName = if isIndexer {
                     "Item"
@@ -1970,8 +1942,10 @@ internal partial class DeclarationBinder {
                 var overriddenProperty PropertySymbol? = nil
                 var pendingCovariantCheck = false
                 if isOverride {
+                    let baseTypeSubst = BuildBaseTypeArgumentSubstitution(structSymbol)
                     if structSymbol.BaseClass != nil &&
                         TryGetOverriddenPropertyCandidate(
+                        structSymbol,
                         structSymbol.BaseClass!!,
                         propName,
                         isIndexer,
@@ -1980,6 +1954,26 @@ internal partial class DeclarationBinder {
                     ) {
                         if !baseProp!!.IsVirtual && !baseProp!!.IsOverride {
                             Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName)
+                        } else if isIndexer != baseProp!!.IsIndexer ||
+                            (
+                            isIndexer &&
+                                !HaveSameIndexerParameterTypes(baseProp!!.Parameters, indexerParameters, baseTypeSubst)
+                        ) {
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName)
+                        } else if isIndexer &&
+                            !HaveSameIndexerSignature(baseProp!!.Parameters, indexerParameters, baseTypeSubst) {
+                            for var i = 0; i < indexerParameters.Length; i++ {
+                                if baseProp!!.Parameters[i].RefKind != indexerParameters[i].RefKind {
+                                    Diagnostics.ReportOverrideRefKindMismatch(
+                                        propSyntax.Identifier.Location,
+                                        propName,
+                                        indexerParameters[i].Name,
+                                        refKindToString(baseProp!!.Parameters[i].RefKind),
+                                        refKindToString(indexerParameters[i].RefKind)
+                                    )
+                                    break
+                                }
+                            }
                         } else if baseProp!!.ReturnRefKind != propReturnRefKind {
                             // Issue #3879: a source base property is selected by
                             // NAME here, so without this the ref-kind never

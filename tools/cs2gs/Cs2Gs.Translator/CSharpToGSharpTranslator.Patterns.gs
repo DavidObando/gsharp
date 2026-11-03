@@ -1057,7 +1057,7 @@ partial class CSharpToGSharpTranslator {
                 return if targetType is NamedTypeReference namedTarget {
                     cast[GExpression](
                         InvocationExpression(
-                            IdentifierExpression(namedTarget.Name),
+                            BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
                             []GExpression{receiver!!},
                             namedTarget.TypeArguments
                         )
