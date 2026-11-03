@@ -1328,7 +1328,9 @@ internal partial class ExpressionBinder {
             symbolicArgTypes: inheritedSymbolicArgs,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                 arguments,
-                nativeConversions: conversions
+                nativeConversions: conversions,
+                receiverType: receiver.Type,
+                explicitMethodTypeArguments: typeArgSymbols
             )
         )
         switch resolution.Outcome {
@@ -1897,7 +1899,9 @@ internal partial class ExpressionBinder {
                 symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                     arguments,
                     argumentOffset: 1,
-                    nativeConversions: conversions
+                    nativeConversions: conversions,
+                    receiverType: receiver.Type,
+                    explicitMethodTypeArguments: typeArgSymbols
                 )
             )
         }
@@ -3641,7 +3645,8 @@ internal partial class ExpressionBinder {
             symbolicArgTypes: symbolicArgTypes,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                 arguments,
-                nativeConversions: conversions
+                nativeConversions: conversions,
+                receiverType: constraintType
             )
         )
         if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {

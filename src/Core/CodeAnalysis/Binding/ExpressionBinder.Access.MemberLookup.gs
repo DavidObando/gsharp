@@ -4508,7 +4508,8 @@ internal partial class ExpressionBinder {
             symbolicArgTypes: symbolicArgTypes,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                 arguments,
-                nativeConversions: conversions
+                nativeConversions: conversions,
+                receiverType: constraintType
             )
         )
         if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {
