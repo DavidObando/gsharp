@@ -308,12 +308,18 @@ abstract class BoundTreeRewriter {
         return BoundThrowStatement(node.Syntax, expression, node.DiagnosticDescriptor)
     }
 
+    private var sharedReceiverTarget BoundExpression?
+    private var sharedReceiverReplacement BoundExpression?
+
     /// Rewrites an expression.
     /// @param node The expression to rewrite.
     /// @returns The rewritten expression.
     protected open func RewriteExpression(node BoundExpression) BoundExpression {
+        if sharedReceiverTarget != nil && object.ReferenceEquals(node, sharedReceiverTarget) {
+            return sharedReceiverReplacement!!
+        }
         switch node.Kind {
-            case BoundNodeKind.Utf8StringExpression {
+            case BoundNodeKind.Utf8StringExpression, BoundNodeKind.PatternOperandExpression {
                 return node
             }
             case BoundNodeKind.ErrorExpression {
@@ -881,6 +887,24 @@ abstract class BoundTreeRewriter {
             }
             case BoundNodeKind.RelationalPattern {
                 let relational = cast[BoundRelationalPattern](node)
+                // Issue #5688: the test contains the value of a `==` or `!=` pattern, so only the test is rewritten.
+                if relational.Test is {} test {
+                    let relTest = RewriteExpression(test)
+                    return if relTest == test {
+                        node
+                    } else {
+                        cast[BoundPattern](
+                            BoundRelationalPattern(
+                                node.Syntax,
+                                node.Type,
+                                relational.Op,
+                                relational.Value,
+                                relational.InputVariable!!,
+                                relTest
+                            )
+                        )
+                    }
+                }
                 let relValue = RewriteExpression(relational.Value)
                 return if relValue == relational.Value {
                     node
@@ -1707,6 +1731,30 @@ abstract class BoundTreeRewriter {
         }
     }
 
+    // Issue #5594: preserve reference identity when a compound assignment shares its receiver with the value read.
+    private func RewriteWithSharedReceiver(
+        value BoundExpression,
+        originalReceiver BoundExpression?,
+        rewrittenReceiver BoundExpression?
+    ) BoundExpression {
+        if originalReceiver == nil || rewrittenReceiver == nil || object.ReferenceEquals(
+            originalReceiver,
+            rewrittenReceiver
+        ) {
+            return RewriteExpression(value)
+        }
+        let previousTarget = sharedReceiverTarget
+        let previousReplacement = sharedReceiverReplacement
+        sharedReceiverTarget = originalReceiver
+        sharedReceiverReplacement = rewrittenReceiver
+        try {
+            return RewriteExpression(value)
+        } finally {
+            sharedReceiverTarget = previousTarget
+            sharedReceiverReplacement = previousReplacement
+        }
+    }
+
     /// Rewrites a CLR property/field write (static or instance).
     /// @param node The node to rewrite.
     /// @returns The rewritten node.
@@ -1718,7 +1766,7 @@ abstract class BoundTreeRewriter {
         } else {
             RewriteExpression(node.Receiver)
         }
-        let value = RewriteExpression(node.Value)
+        let value = RewriteWithSharedReceiver(node.Value, node.Receiver, receiver)
         if receiver == node.Receiver && value == node.Value {
             return node
         }
@@ -2086,9 +2134,9 @@ abstract class BoundTreeRewriter {
     /// @param node The node to rewrite.
     /// @returns The rewritten node.
     protected open func RewriteFieldAssignmentExpression(node BoundFieldAssignmentExpression) BoundExpression {
-        let value = RewriteExpression(node.Value)
         if node.ReceiverExpression != nil {
             let receiverExpr = RewriteExpression(node.ReceiverExpression)
+            let value = RewriteWithSharedReceiver(node.Value, node.ReceiverExpression, receiverExpr)
             if object.ReferenceEquals(value, node.Value) && object.ReferenceEquals(
                 receiverExpr,
                 node.ReceiverExpression
@@ -2108,6 +2156,7 @@ abstract class BoundTreeRewriter {
                 node.ResultType
             )
         }
+        let value = RewriteExpression(node.Value)
         if value == node.Value {
             return node
         }
@@ -2173,7 +2222,7 @@ abstract class BoundTreeRewriter {
         } else {
             default(BoundExpression?)
         }
-        let value = RewriteExpression(node.Value)
+        let value = RewriteWithSharedReceiver(node.Value, node.Receiver, receiver)
         // receiver is null for a STATIC property assignment -- the line above
 
         // produces null for exactly that shape, and the constructor's receiver

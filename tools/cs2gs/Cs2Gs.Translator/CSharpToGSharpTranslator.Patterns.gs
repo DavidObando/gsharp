@@ -732,6 +732,44 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        // Whether TranslateIsPattern emits the native boolean pattern test.
+        // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
+        // pattern subject exactly once. Use that form when C# introduces no
+        // pattern local and gsc cannot smart-cast the original scrutinee.
+        // An implicit property/field can translate to a bare identifier, but
+        // only bare locals and parameters are smart-castable (ADR-0069).
+        // Issue #3555: a property subpattern whose VALUE is itself a
+        // type-matching pattern with further subpatterns (`ContainingSymbol:
+        // IMethodSymbol { MethodKind: … }`) cannot be guard-lowered even
+        // over a smart-castable scrutinee — gsc narrows only the scrutinee
+        // local, never member CHAINS, so the lowered
+        // `x.Prop is T && x.Prop.M == …` fails GS0158 on the unnarrowed
+        // second read. Such shapes must take the native pattern form.
+        // Issue #4173 round 3: a CAE-mentioning pattern has no sound native
+        // G# pattern form (its faithful rewrite is a PREDICATE, not a type
+        // test) — TranslatePattern builds a native GPattern, so a
+        // CAE-mentioning pattern must be refused here too and fall through
+        // to the final legacy boolean lowering (TranslatePatternTest),
+        // where BuildTypeTestExpression's leaf hook handles it soundly.
+        // Issue #5626: gsc narrows the native form of a constant pattern (`x is "a"`), not its lowered
+        // equality (`x == "a"`). (cref:RequiresNativePatternNarrowing) decides when that difference matters.
+        // (cref:GSharpPatternPreservesNonNullNarrowing) asks this same predicate, so the narrowing that the
+        // translator assumes is the narrowing of the emitted test.
+        private func UsesNativeBooleanPatternTest(
+            isPattern IsPatternExpressionSyntax
+        ) bool -> !PatternIntroducesBinding(isPattern.Pattern) &&
+            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) &&
+            (
+            this.RequiresNativePatternNarrowing(isPattern) ||
+                (
+                !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.IsSmartCastableScrutinee(
+                    isPattern.Expression
+                )
+            ) ||
+                PatternRequiresNestedTypeNarrowing(isPattern.Pattern) ||
+                this.PatternTestsMembersOfNullableMember(isPattern.Pattern)
+        )
+
         private func TranslateIsPattern(isPattern IsPatternExpressionSyntax) GExpression? {
             // ADR-0169 analyzer mode: the C# base-call detection idiom has no
             // direct G# counterpart (#3536).
@@ -772,39 +810,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetTypeInfo(isPattern.Expression)
                 .Type
-            // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
-            // pattern subject exactly once. Use that form when C# introduces no
-            // pattern local and gsc cannot smart-cast the original scrutinee.
-            // An implicit property/field can translate to a bare identifier, but
-            // only bare locals and parameters are smart-castable (ADR-0069).
-            // Issue #3555: a property subpattern whose VALUE is itself a
-            // type-matching pattern with further subpatterns (`ContainingSymbol:
-            // IMethodSymbol { MethodKind: … }`) cannot be guard-lowered even
-            // over a smart-castable scrutinee — gsc narrows only the scrutinee
-            // local, never member CHAINS, so the lowered
-            // `x.Prop is T && x.Prop.M == …` fails GS0158 on the unnarrowed
-            // second read. Such shapes must take the native pattern form.
-            // Issue #4173 round 3: a CAE-mentioning pattern has no sound native
-            // G# pattern form (its faithful rewrite is a PREDICATE, not a type
-            // test) — TranslatePattern below builds a native GPattern, so a
-            // CAE-mentioning pattern must be refused here too and fall through
-            // to the final legacy boolean lowering (TranslatePatternTest),
-            // where BuildTypeTestExpression's leaf hook handles it soundly.
-            let requiresNativeDisjunctiveNarrowing = this.RequiresNativeDisjunctiveNarrowing(isPattern)
-            if !PatternIntroducesBinding(isPattern.Pattern) && !this.PatternMentionsConditionalAccessType(
-                isPattern.Pattern,
-                out _
-            ) &&
-                (
-                requiresNativeDisjunctiveNarrowing ||
-                    (
-                    !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.IsSmartCastableScrutinee(
-                        isPattern.Expression
-                    )
-                ) ||
-                    PatternRequiresNestedTypeNarrowing(isPattern.Pattern) ||
-                    this.PatternTestsMembersOfNullableMember(isPattern.Pattern)
-            ) {
+            if this.UsesNativeBooleanPatternTest(isPattern) {
                 let bindings = List[(Symbol ISymbol, Replacement GExpression)]()
                 let guards = List[GExpression]()
                 let outerBooleanPattern = this.state.TranslatingBooleanPattern
@@ -1184,7 +1190,8 @@ partial class CSharpToGSharpTranslator {
                 receiverType != nil &&
                 !receiverType.IsValueType &&
                 this.ContainsBareRecursivePattern(pattern)
-            return (nullableMember || guardedNonNullMember) && CountReads(pattern) > 1
+            let designatedUnstableMember = !stableMember && PatternIntroducesBinding(pattern)
+            return (nullableMember || guardedNonNullMember || designatedUnstableMember) && CountReads(pattern) > 1
         }
 
         private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
@@ -1561,9 +1568,10 @@ partial class CSharpToGSharpTranslator {
                     return BinaryExpression(receiver, "is", this.TranslateExpression(constant.Expression))
                 }
                 case constant is ConstantPatternSyntax {
-                    // `x is 0` / `x is "moov"` / `x is true`. G# `is` only tests a
-                    // type, so a constant pattern lowers to an equality test
-                    // (ADR-0115 §B). A numeric literal is retyped to the receiver's
+                    // `x is 0` / `x is "moov"` / `x is true` lowers to an equality
+                    // test (ADR-0115 §B). gsc does not narrow it, so a test whose
+                    // narrowing C# relies on keeps the native form instead
+                    // (RequiresNativePatternNarrowing, issue #5626). A numeric literal is retyped to the receiver's
                     // type so `uint8? is 11` → `b == (11 as uint8?)` (G# has no
                     // implicit numeric promotion: a bare `b == 11` is GS0129).
                     return BinaryExpression(
@@ -1620,7 +1628,8 @@ partial class CSharpToGSharpTranslator {
                             this.state.PatternBindings[boundSymbol] = this.BuildPatternNarrowingReplacement(
                                 receiver,
                                 receiverSyntax,
-                                declaration.Type
+                                declaration.Type,
+                                receiverType
                             )!!
                         }
                     }
@@ -1656,6 +1665,9 @@ partial class CSharpToGSharpTranslator {
                         .context
                         .GetDeclaredSymbol(varSingle) is {} varBound {
                         this.state.PatternBindings[varBound] = receiver!!
+                        if varBound is ILocalSymbol varLocal {
+                            this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
+                        }
                         this.RegisterProjectedPatternBinding(varBound, receiverType)
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no
@@ -1771,6 +1783,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 receiver
             }
+            this.BindPatternDesignation(listPattern.Designation, receiver)
             let lengthAccess = MemberAccessExpression(receiver, "Length")
             var test GExpression = if sliceIndex < 0 {
                 BinaryExpression(lengthAccess, "==", LiteralExpression.Int(elements.Count.ToString()))
@@ -1807,26 +1820,26 @@ partial class CSharpToGSharpTranslator {
                     elementReceiver,
                     element,
                     elementType,
-                    isNestedPatternMember: isNestedPatternMember
+                    isNestedPatternMember: isNestedPatternMember ||
+                        (PatternIntroducesBinding(element) && element is not VarPatternSyntax)
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }
             // Issue #4356: a list pattern never matches nil, and a NESTED member
-            // tested with one (`{ P: [1] }`, `P` an `int[]?`) arrives here bound
-            // to a `let` local that is `T?` in G#. Guard it first: the guard both
-            // makes the pattern fall through on nil, as C# does, and smart-casts
-            // the local for the `.Length` / index reads.
-            if isNestedPatternMember &&
+            // tested with one (`{ P: [1] }`, `P` an `int[]?`) or a hoisted
+            // nullable scrutinee arrives here bound to a `let` local that is
+            // `T?` in G#. Guard it first: the guard both makes the pattern fall
+            // through on nil, as C# does, and smart-casts the local for the
+            // `.Length` / index reads.
+            if this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
                 (
-                this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
-                    (
+                isNestedPatternMember &&
                     receiverType != nil &&
-                        receiverType.IsReferenceType == true &&
-                        receiverType.NullableAnnotation == Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated
-                )
+                    receiverType.IsReferenceType == true &&
+                    receiverType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
             ) {
                 test = BinaryExpression(BinaryExpression(guardedReceiver, "!=", LiteralExpression.Null()), "&&", test)
             }
@@ -2120,7 +2133,8 @@ partial class CSharpToGSharpTranslator {
                     this.state.PatternBindings[recBound] = this.BuildPatternNarrowingReplacement(
                         receiver,
                         receiverSyntax,
-                        recursive.Type
+                        recursive.Type,
+                        receiverType
                     )!!
                 }
             }
@@ -2954,7 +2968,8 @@ partial class CSharpToGSharpTranslator {
         private func BuildPatternNarrowingReplacement(
             receiver GExpression?,
             receiverSyntax ExpressionSyntax?,
-            narrowedTypeSyntax TypeSyntax?
+            narrowedTypeSyntax TypeSyntax?,
+            receiverType ITypeSymbol? = nil
         ) GExpression? {
             if narrowedTypeSyntax == nil &&
                 receiverSyntax != nil &&
@@ -2985,6 +3000,32 @@ partial class CSharpToGSharpTranslator {
             }
             let narrowedType ITypeSymbol? = this.context.GetTypeInfo(narrowedTypeSyntax).Type
             if narrowedType != nil && narrowedType.IsValueType {
+                let effectiveReceiverType ITypeSymbol? = receiverType ??
+                    (
+                    if receiverSyntax != nil {
+                        this.context.GetTypeInfo(receiverSyntax).Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                )
+                if effectiveReceiverType != nil &&
+                    (
+                    effectiveReceiverType
+                        .OriginalDefinition
+                        .SpecialType == SpecialType.System_Nullable_T ||
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(effectiveReceiverType, narrowedType)
+                ) {
+                    return NonNullAssertionExpression(receiver)
+                }
+                if this.MapTypeSyntax(narrowedTypeSyntax) is {} targetType {
+                    return ConversionExpression(
+                        targetType,
+                        NonNullAssertionExpression(receiver),
+                        isCheckedReferenceCast: true
+                    )
+                }
                 return NonNullAssertionExpression(receiver)
             }
             return NonNullAssertionExpression(
