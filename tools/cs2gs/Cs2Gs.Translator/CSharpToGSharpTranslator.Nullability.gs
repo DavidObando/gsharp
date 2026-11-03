@@ -1389,12 +1389,16 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return nil
             }
+            let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is IMethodSymbol callableMethod &&
+                (unwrapped is AnonymousFunctionExpressionSyntax || !(unwrapped is InvocationExpressionSyntax)) {
+                return this.ProjectCallableNullablePositions(unwrapped, callableMethod)
+            }
             var result ObliviousPositionSet? = nil
             if this.ObliviousValuePositions(unwrapped) is {} valuePositions {
                 result = ObliviousPositionSet()
                 result.UnionWith(valuePositions)
             }
-            let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
             if !suppressedTopLevel &&
                 symbol != nil &&
                 (this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol)) {
@@ -1411,6 +1415,94 @@ partial class CSharpToGSharpTranslator {
             if suppressedTopLevel && result != nil {
                 result.Nullable.Remove("")
                 result.Platform.Remove("")
+            }
+            return result
+        }
+
+        private func ProjectCallableNullablePositions(
+            unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            callableMethod IMethodSymbol
+        ) ObliviousPositionSet? {
+            if this
+                .context
+                .GetTypeInfo(unwrapped)
+                .ConvertedType is not INamedTypeSymbol{TypeKind: TypeKind.Delegate} named ||
+                named
+                .OriginalDefinition
+                .DelegateInvokeMethod is not{} invokeDefinition {
+                return nil
+            }
+            let definition = named.OriginalDefinition
+            if definition
+                .TypeParameters
+                .Length == 0 ||
+                callableMethod
+                .Parameters
+                .Length != invokeDefinition
+                .Parameters
+                .Length {
+                return nil
+            }
+            let bindings = TypeParameterMap()
+            let boundParameters = HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
+            for var i = 0; i < invokeDefinition.Parameters.Length; i++ {
+                let parameterSymbol = callableMethod.Parameters[i]
+                let parameterPositions = this.GetCallableSymbolNullablePositions(parameterSymbol)
+                MergeCallableSlotPositions(
+                    invokeDefinition.Parameters[i].Type,
+                    parameterSymbol.Type,
+                    parameterPositions,
+                    bindings,
+                    boundParameters
+                )
+            }
+            if !(unwrapped is AnonymousFunctionExpressionSyntax) && !invokeDefinition.ReturnsVoid {
+                let returnPositions = this.GetCallableSymbolNullablePositions(callableMethod)
+                MergeCallableSlotPositions(
+                    invokeDefinition.ReturnType,
+                    callableMethod.ReturnType,
+                    returnPositions,
+                    bindings,
+                    boundParameters
+                )
+            } else if unwrapped is AnonymousFunctionExpressionSyntax{ExpressionBody: {} body} &&
+                !invokeDefinition
+                .ReturnsVoid {
+                let bodyPositions = this.ObliviousValuePositions(body)
+                MergeCallableSlotPositions(
+                    invokeDefinition.ReturnType,
+                    callableMethod.ReturnType,
+                    bodyPositions,
+                    bindings,
+                    boundParameters
+                )
+            }
+            if bindings.Count == 0 {
+                return nil
+            }
+            let result = ObliviousPositionSet()
+            Substitute(definition, bindings, "", result)
+            return if result.IsEmpty {
+                nil
+            } else {
+                result
+            }
+        }
+
+        private func GetCallableSymbolNullablePositions(symbol ISymbol) ObliviousPositionSet? {
+            var result ObliviousPositionSet? = nil
+            if this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) {
+                result ??= ObliviousPositionSet()
+                result!!.Nullable.Add("")
+            }
+            let declared = this.ObliviousContainerPositions(symbol)
+            if declared != nil && declared.Count > 0 {
+                result ??= ObliviousPositionSet()
+                result!!.Nullable.UnionWith(declared)
+            }
+            if this.IsFrozenObliviousImportMember(symbol) {
+                result ??= ObliviousPositionSet()
+                CollectPlatformPositions(StorageType(UnreducedDefinition(symbol)), "", result!!.Platform)
             }
             return result
         }
@@ -1949,6 +2041,9 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 return !(targetSymbol is IParameterSymbol{Type: IArrayTypeSymbol array} paramsParameter) ||
+                    (paramsParameter.OriginalDefinition.Type as IArrayTypeSymbol)
+                    ?.ElementType
+                    .IsReferenceType != true ||
                     !SymbolEqualityComparer
                     .Default
                     .Equals(targetType, array.ElementType) || this.TargetContractIsFrozenInMetadata(paramsParameter) ||
@@ -2535,6 +2630,56 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 return false
+            }
+
+            private func MergeCallableSlotPositions(
+                slotPattern ITypeSymbol,
+                slotActual ITypeSymbol?,
+                slotPositions ObliviousPositionSet?,
+                bindings Dictionary[ITypeParameterSymbol, ObliviousPositionSet],
+                boundParameters HashSet[ITypeParameterSymbol]
+            ) {
+                let mentioned = HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
+                CollectMentionedTypeParameters(slotPattern, mentioned)
+                if mentioned.Count == 0 {
+                    return
+                }
+                let slotBindings = TypeParameterMap()
+                if slotPositions != nil {
+                    Unify(slotPattern, slotActual, slotPositions, slotBindings)
+                }
+                for typeParameter in mentioned {
+                    let incoming = if slotBindings.TryGetValue(typeParameter, out var found) {
+                        found
+                    } else {
+                        ObliviousPositionSet()
+                    }
+                    if boundParameters.Add(typeParameter) {
+                        let copy = ObliviousPositionSet()
+                        copy.UnionWith(incoming)
+                        bindings[typeParameter] = copy
+                    } else if bindings.TryGetValue(typeParameter, out var existing) {
+                        existing.Nullable.IntersectWith(incoming.Nullable)
+                        existing.Platform.IntersectWith(incoming.Platform)
+                    }
+                }
+            }
+
+            private func CollectMentionedTypeParameters(type ITypeSymbol?, result HashSet[ITypeParameterSymbol]) {
+                if type == nil {
+                    return
+                }
+                if type is ITypeParameterSymbol typeParameter {
+                    result.Add(typeParameter)
+                    return
+                }
+                let arguments = PositionArguments(type)
+                if arguments == nil {
+                    return
+                }
+                for argument in arguments {
+                    CollectMentionedTypeParameters(argument, result)
+                }
             }
 
             private func BindCallableTypeParameters(

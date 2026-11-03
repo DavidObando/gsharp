@@ -3271,14 +3271,23 @@ partial class CSharpToGSharpTranslator {
             let declaredSink = (targetSymbol != nil || fixedSink) &&
                 !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
-            if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
-                value,
-                respectDeclaredAnnotations: targetSymbol != nil,
-                respectDeclaredCallResults: declaredSink
+            let inferredExpandedParamsElement = inferredSink &&
+                targetSymbol is IParameterSymbol expandedParam &&
+                this.IsExpandedParamsArgument(value, expandedParam)
+            if !flowRequiresAssertion &&
+                (
+                inferredExpandedParamsElement ||
+                    (
+                    !this.NullableReferenceValueMayBeNull(
+                        value,
+                        respectDeclaredAnnotations: targetSymbol != nil,
+                        respectDeclaredCallResults: declaredSink
+                    ) &&
+                        !(includePromotedValue && this.IsObliviousCompilation() && strictUseMayBeNullable)
+                )
             ) &&
                 !directlyNullableResult &&
-                !generatedPromotedValue &&
-                !(includePromotedValue && this.IsObliviousCompilation() && strictUseMayBeNullable) {
+                !generatedPromotedValue {
                 return translated
             }
             let operand GExpression? = if value is Microsoft

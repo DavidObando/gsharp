@@ -251,6 +251,13 @@ namespace App
             return NestedInnerParams(inner, i > 0 ? argument.Value : argument.Name, "tail");
         }
 
+        public static T TakeFromGetterParams<T>(System.Func<T[]> get, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string[] GetPromotedArray() => ObLib.Node.Holes();
+
+        public static string PromotedMethodGroupReturnAllowsInference(Model.Arg argument, int i) =>
+            TakeFromGetterParams(GetPromotedArray, i > 0 ? argument.Value : argument.Name, "tail");
+
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
 
@@ -281,6 +288,8 @@ namespace App
 }`
         let printed = TranslateCrossProject(app)
         Assert.Contains("List[string?](lines)", printed)
+        Assert.Contains("ParamsId(if i > 0 { argument.Value } else { argument.Name })", printed)
+        Assert.Contains("SpanParamsId(if i > 0 { argument.Value } else { argument.Name }, \"tail\")", printed)
         Assert.DoesNotContain("argument.Name!!", printed)
         Assert.DoesNotContain("argument.Value!!", printed)
         // Issue #4452: the translated C# `!` into the widened `chosen` is erased
@@ -342,10 +351,15 @@ namespace App
             JoinObjects((object?)(flag ? a.Name : a.Value), "tail");
 #nullable restore
 
+        public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string InferredSpanParams(Arg a, int i) =>
+            SpanParamsId(i > 0 ? a.Value : a.Name, "tail") ?? "span-null";
+
         public static string Run()
         {
             var a = new Arg("v");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true) + CastObjectsJoined(a, true);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true) + CastObjectsJoined(a, true) + InferredSpanParams(a, 0);
         }
     }
 }`
@@ -353,8 +367,9 @@ namespace App
         Assert.DoesNotContain("a.Name!!", consumer)
         Assert.DoesNotContain("a.Objects!!", consumer)
         Assert.DoesNotContain("b.Objects!!", consumer)
+        Assert.DoesNotContain("a.Name })!!", consumer)
         Assert.Equal(
-            "[]<>nonenull{}N0:10:tail0:tail",
+            "[]<>nonenull{}N0:10:tail0:tailspan-null",
             CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim()
         )
     }
@@ -486,6 +501,13 @@ namespace App
         public static string FixedByReconciledMethodGroupParamsCall(Model.Arg argument, int i) =>
             FixedByPairConsumerParams(ConsumePair, i > 18 ? "r" : argument.Name, "tail");
 
+        public static T TakeFromGetterParams<T>(System.Func<T[]> get, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string[] GetNonNullArray() => new string[] { "a" };
+
+        public static string FixedByNonNullArrayMethodGroupParamsCall(Model.Arg argument, int i) =>
+            TakeFromGetterParams(GetNonNullArray, i > 19 ? "s" : argument.Name, "tail");
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
         public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
@@ -532,6 +554,7 @@ namespace App
             printed
         )
         Assert.Contains("if i > 18 { \"r\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 19 { \"s\" } else { argument.Name!! }", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -540,6 +563,48 @@ namespace App
         // A user-defined conversion is an invocation boundary: the arm feeds
         // the operator's non-null parameter, not the widened local `d`.
         Assert.Contains("if flag { argument.Name!! } else { \"x\" }", printed)
+    }
+
+    @Fact
+    func FixedGenericParamsBounds_CompileAndRun() {
+        const app = `
+using System;
+using System.Collections.Generic;
+using Model;
+using ObLib;
+
+namespace App
+{
+    public static class Use
+    {
+        public static T FixedByListParams<T>(List<T> fixedValues, params ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByActionParams<T>(Action<T> consume, params ReadOnlySpan<T> values) => values[0];
+
+        public static void Consume(string s) { }
+
+        public static void Consume(int n) { }
+
+        public static string Run()
+        {
+            var list = new List<string> { "x" };
+            var present = new Arg("v", "named");
+            var missing = new Arg("v");
+            string ok = FixedByListParams(list, 0 > 1 ? "b" : present.Name, "tail") + ":" +
+                list.FixedByReceiverParams(0 > 1 ? "c" : present.Name, "tail") + ":" +
+                FixedByActionParams(Consume, 0 > 1 ? "d" : present.Name, "tail");
+            int throwsCount = 0;
+            try { FixedByListParams(list, 0 > 1 ? "b" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            try { list.FixedByReceiverParams(0 > 1 ? "c" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            try { FixedByActionParams(Consume, 0 > 1 ? "d" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            return ok + ":" + throwsCount;
+        }
+    }
+}`
+        let (library, consumer) = TranslateBothProjects(app)
+        Assert.Contains("present.Name!!", consumer)
+        Assert.Contains("missing.Name!!", consumer)
+        Assert.Equal("named:named:named:3", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
     }
 
     /// A `var` local is not a nil-accepting target, even though
@@ -632,6 +697,7 @@ namespace ObLib
         public static Outer<int>.Inner<string> NestedInner() => new Outer<int>.Inner<string>();
 #nullable enable
         public static T ImportedListParams<T>(System.Collections.Generic.List<T> fixedValues, params T[] values) => values[0];
+        public static T FixedByReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params T[] values) => values[0];
 #nullable restore
     }
 }`
@@ -692,8 +758,12 @@ namespace ObLib
             )
             Directory.CreateDirectory(workDir)
             try {
+                let obLibPath = Path.Combine(workDir, "ObLib.dll")
+                let (obCompilation, _) = Compile(ObLibSource, "ObLib", Array.Empty[MetadataReference]())
+                let obEmit = obCompilation.Emit(obLibPath)
+                Assert.True(obEmit.Success, string.Join(Environment.NewLine, obEmit.Diagnostics))
                 let dllPath = Path.Combine(workDir, "Snippet.dll")
-                let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath"}
+                let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath", "/reference:$obLibPath"}
                 for var i = 0; i < printedFiles.Count; i++ {
                     let gsPath = Path.Combine(workDir, "Unit$i.gs")
                     File.WriteAllText(gsPath, printedFiles[i])
