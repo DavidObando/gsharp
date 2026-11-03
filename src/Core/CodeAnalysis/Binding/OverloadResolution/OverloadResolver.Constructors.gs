@@ -120,6 +120,7 @@ internal partial class OverloadResolver {
             let tps = classType.TypeParameters
             let defParams = classType.PrimaryConstructorParameters
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            SeedEnclosingTypeArguments(classType, substitution)
             if syntax.TypeArgumentList is {} typeArgumentList {
                 let explicitArgs = typeArgumentList.Arguments
                 if explicitArgs.Count != tps.Length {
@@ -1491,6 +1492,20 @@ internal partial class OverloadResolver {
     /// constraints, then yields the constructed closed (cref:StructSymbol).
     /// Returns `false` after reporting a diagnostic when the type
     /// arguments cannot be resolved.
+    private func SeedEnclosingTypeArguments(
+        classType StructSymbol,
+        substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) {
+        if classType.EnclosingTypeArguments.IsDefaultOrEmpty {
+            return
+        }
+        let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(classType)
+        let count = Math.Min(enclosingParams.Length, classType.EnclosingTypeArguments.Length)
+        for var i = 0; i < count; i++ {
+            substitution[enclosingParams[i]] = classType.EnclosingTypeArguments[i]
+        }
+    }
+
     private func TryCloseGenericExplicitConstructorType(
         syntax CallExpressionSyntax,
         classType StructSymbol,
@@ -1514,6 +1529,7 @@ internal partial class OverloadResolver {
         }
         let tps = classType.TypeParameters
         var substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+        SeedEnclosingTypeArguments(classType, substitution)
         if syntax.TypeArgumentList is {} typeArgumentList {
             let explicitArgs = typeArgumentList.Arguments
             if explicitArgs.Count != tps.Length {
@@ -1561,6 +1577,7 @@ internal partial class OverloadResolver {
                     continue
                 }
                 let candidateSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                SeedEnclosingTypeArguments(classType, candidateSubstitution)
                 InferExplicitConstructorTypeArguments(
                     syntax,
                     constructor,

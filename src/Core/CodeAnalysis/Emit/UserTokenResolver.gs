@@ -1374,6 +1374,7 @@ internal class UserTokenResolver {
             }
         ) +
             defProp.Name
+        using let _ = this.remaps.PushSmRemap(defType)
         return this.GetUserStructMethodRef(
             containingType,
             accessor,
@@ -1686,6 +1687,7 @@ internal class UserTokenResolver {
             }
         }
         let sigBlob = BlobBuilder()
+        using let _ = this.remaps.PushSmRemap(constructedBase.Definition ?? constructedBase)
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             paramCount,
             (r ReturnTypeEncoder) -> r.Void(),
@@ -2440,7 +2442,14 @@ internal class UserTokenResolver {
 
         private func GetGenericTypeArguments(type TypeSymbol?) ImmutableArray[TypeSymbol] {
             let args = switch type {
-                case s is StructSymbol: s.TypeArguments
+                case s is StructSymbol: if s.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    s.TypeArguments
+                } else if s.TypeArguments.IsDefaultOrEmpty {
+                    s.EnclosingTypeArguments
+                } else {
+                    s.EnclosingTypeArguments.AddRange(s.TypeArguments)
+                }
+                case e is EnumSymbol: e.EnclosingTypeArguments
                 case i is InterfaceSymbol: i.TypeArguments
                 case it is ImportedTypeSymbol: it.TypeArguments
                 default: default(ImmutableArray[TypeSymbol])

@@ -2855,16 +2855,8 @@ class Conversion {
             if from == nil || to == nil || !object.ReferenceEquals(from.Definition, to.Definition) {
                 return false
             }
-            let fromArgs = if from.TypeArguments.IsDefaultOrEmpty {
-                from.TypeParameters.CastArray[TypeSymbol]()
-            } else {
-                from.TypeArguments
-            }
-            let toArgs = if to.TypeArguments.IsDefaultOrEmpty {
-                to.TypeParameters.CastArray[TypeSymbol]()
-            } else {
-                to.TypeArguments
-            }
+            let fromArgs = GetEffectiveStructTypeArguments(from)
+            let toArgs = GetEffectiveStructTypeArguments(to)
             if fromArgs.IsDefaultOrEmpty && toArgs.IsDefaultOrEmpty {
                 // Non-generic struct/class: same Definition already suffices.
                 return true
@@ -2882,6 +2874,45 @@ class Conversion {
                 }
             }
             return true
+        }
+
+        internal func GetEffectiveStructTypeArguments(s StructSymbol) ImmutableArray[TypeSymbol] {
+            let def = s.Definition ?? s
+            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+            let ownParams = def.DeclaredTypeParameters
+            if enclosingParams.IsDefaultOrEmpty {
+                return if !s.TypeArguments.IsDefaultOrEmpty {
+                    s.TypeArguments
+                } else {
+                    ownParams.CastArray[TypeSymbol]()
+                }
+            }
+            if s
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty &&
+                !s
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                s
+                .TypeArguments
+                .Length == enclosingParams.Length +
+                ownParams.Length {
+                return s.TypeArguments
+            }
+            let enclosingArgs = if !s.EnclosingTypeArguments.IsDefaultOrEmpty {
+                s.EnclosingTypeArguments
+            } else {
+                enclosingParams.CastArray[TypeSymbol]()
+            }
+            if ownParams.IsDefaultOrEmpty {
+                return enclosingArgs
+            }
+            let ownArgs = if !s.TypeArguments.IsDefaultOrEmpty {
+                s.TypeArguments
+            } else {
+                ownParams.CastArray[TypeSymbol]()
+            }
+            return enclosingArgs.AddRange(ownArgs)
         }
 
         internal func IsClassLikeReferenceType(type TypeSymbol) bool -> type is StructSymbol &&
@@ -3418,14 +3449,13 @@ class Conversion {
         /// (only some of the derived's parameters reaching the base). A wrong type
         /// argument or an unrelated definition still fails (GS0155).
         private func DerivesFromConstructed(fromClass StructSymbol, toClass StructSymbol) bool {
+            let targetArgs = GetEffectiveStructTypeArguments(toClass)
             if !TryProjectConstructedBaseArguments(fromClass, toClass, out var projected) ||
-                projected.Length != toClass
-                .TypeArguments
-                .Length {
+                projected.Length != targetArgs.Length {
                 return false
             }
             for var i = 0; i < projected.Length; i++ {
-                if !AreTypeArgumentsEquivalent(projected[i], toClass.TypeArguments[i]) {
+                if !AreTypeArgumentsEquivalent(projected[i], targetArgs[i]) {
                     return false
                 }
             }
@@ -3440,6 +3470,7 @@ class Conversion {
             out projected ImmutableArray[TypeSymbol]
         ) bool {
             projected = ImmutableArray[TypeSymbol].Empty
+            let targetArgs = GetEffectiveStructTypeArguments(toClass)
             // Maps each visited class's declaration type parameters onto concrete
             // type arguments resolved in fromClass's context, composed across hops.
             var running Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
@@ -3447,11 +3478,12 @@ class Conversion {
                 // The most-derived class itself is the identity case (handled by the
                 // caller); only its base chain is an upcast target.
                 if !object.ReferenceEquals(c, fromClass) && object.ReferenceEquals(c.Definition, toClass.Definition) {
-                    if c.TypeArguments.IsDefaultOrEmpty {
-                        return toClass.TypeArguments.IsDefaultOrEmpty
+                    let currentArgs = GetEffectiveStructTypeArguments(c)
+                    if currentArgs.IsDefaultOrEmpty {
+                        return targetArgs.IsDefaultOrEmpty
                     }
-                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](c.TypeArguments.Length)
-                    for argument in c.TypeArguments {
+                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](currentArgs.Length)
+                    for argument in currentArgs {
                         builder.Add(
                             if running == nil {
                                 argument
@@ -3463,6 +3495,19 @@ class Conversion {
                     projected = builder.MoveToImmutable()
                     return true
                 }
+                if !c.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(c)
+                    let enclosingCount = Math.Min(enclosingParams.Length, c.EnclosingTypeArguments.Length)
+                    for var i = 0; i < enclosingCount; i++ {
+                        let arg = if running == nil {
+                            c.EnclosingTypeArguments[i]
+                        } else {
+                            Binder.SubstituteType(c.EnclosingTypeArguments[i], running)
+                        }
+                        running ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
+                        running!![enclosingParams[i]] = arg
+                    }
+                }
                 // Extend the running map with this class's own declaration
                 // parameters -> (resolved) arguments, so a deeper base whose type
                 // arguments reference these parameters can be substituted.
@@ -3471,9 +3516,9 @@ class Conversion {
                     .TypeArguments
                     .IsDefaultOrEmpty &&
                     !c.Definition!!
-                    .TypeParameters
+                    .DeclaredTypeParameters
                     .IsDefaultOrEmpty {
-                    let defParams = c.Definition!!.TypeParameters
+                    let defParams = c.Definition!!.DeclaredTypeParameters
                     let count = Math.Min(defParams.Length, c.TypeArguments.Length)
                     for var i = 0; i < count; i++ {
                         let arg = if running == nil {
@@ -4280,18 +4325,15 @@ class Conversion {
             // Reuse the same symbolic hierarchy projection as the ordinary class
             // upcast so rule 3 sees `Parent[string!]`, not the erased match that
             // DerivesFromConstructed intentionally uses for runtime identity.
-            if from is StructSymbol sourceClass &&
-                to is StructSymbol targetClass &&
-                !targetClass
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected) &&
-                projected.Length == targetClass
-                .TypeArguments
-                .Length &&
-                (AnyContainsPlatformType(projected) || AnyContainsPlatformType(targetClass.TypeArguments)) {
-                targetArguments = targetClass.TypeArguments
-                return true
+            if from is StructSymbol sourceClass && to is StructSymbol targetClass {
+                let effectiveTargetArguments = GetEffectiveStructTypeArguments(targetClass)
+                if !effectiveTargetArguments.IsDefaultOrEmpty &&
+                    TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected) &&
+                    projected.Length == effectiveTargetArguments.Length &&
+                    (AnyContainsPlatformType(projected) || AnyContainsPlatformType(effectiveTargetArguments)) {
+                    targetArguments = effectiveTargetArguments
+                    return true
+                }
             }
             if !TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr) ||
                 targetArguments.IsDefaultOrEmpty ||

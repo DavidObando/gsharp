@@ -999,8 +999,15 @@ internal partial class ExpressionBinder {
         // CollectConstructedEnclosingArguments).
         var enclosingBuilder ImmutableArray[TypeSymbol].Builder? = ImmutableArray.CreateBuilder[TypeSymbol]()
         for var i = 0; i < segments.Count - 1; i++ {
+            if definitions[i] is StructSymbol nestedConstruction &&
+                !nestedConstruction
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty {
+                enclosingBuilder!!.Clear()
+                enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+            }
             let ownParams = switch definitions[i] {
-                case s is StructSymbol: (s.Definition ?? s).TypeParameters
+                case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
                 case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
                 default: ImmutableArray[TypeParameterSymbol].Empty
             }
@@ -1018,12 +1025,6 @@ internal partial class ExpressionBinder {
             if constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length {
                 enclosingBuilder = nil
                 break
-            }
-            if definitions[i] is StructSymbol nestedConstruction &&
-                !nestedConstruction
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty {
-                enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
             }
             enclosingBuilder!!.AddRange(constructionArgs)
         }
@@ -1905,7 +1906,8 @@ internal partial class ExpressionBinder {
             return HasStaticMember(importedClassSymbol.ClassType, headName, isCall)
         }
         if userStructSymbol != nil {
-            return HasUserTypeStaticMember(userStructSymbol, headName, isCall)
+            return HasUserTypeStaticMember(userStructSymbol, headName, isCall) ||
+                IsNestedTypeOf(headName, userStructSymbol)
         }
         if interfaceSymbol != nil {
             return HasUserTypeStaticMember(interfaceSymbol, headName, isCall)
@@ -3771,15 +3773,28 @@ internal partial class ExpressionBinder {
             // counterpart of the imported-generic fix in issue #1216 and exercises
             // the binding receiver added in issue #1323.
             var substitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
-            if ownerDefinition != nil && !object.ReferenceEquals(ownerDefinition, ownerType) &&
+            if effectiveStructOwner != nil && !effectiveStructOwner.EnclosingTypeArguments.IsDefaultOrEmpty {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(effectiveStructOwner)
+                let enclosingCount = Math.Min(
+                    enclosingParams.Length,
+                    effectiveStructOwner.EnclosingTypeArguments.Length
+                )
+                if enclosingCount > 0 {
+                    substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                    for var i = 0; i < enclosingCount; i++ {
+                        substitution[enclosingParams[i]] = effectiveStructOwner.EnclosingTypeArguments[i]
+                    }
+                }
+            }
+            if ownerDefinition != nil && !object.ReferenceEquals(ownerDefinition, effectiveOwnerType) &&
                 !ownerTypeArguments.IsDefaultOrEmpty &&
                 !ownerDefTypeParameters
                 .IsDefaultOrEmpty {
-                substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+                substitution ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
                 let defParams = ownerDefTypeParameters
                 let count = Math.Min(defParams.Length, ownerTypeArguments.Length)
                 for var i = 0; i < count; i++ {
-                    substitution[defParams[i]] = ownerTypeArguments[i]
+                    substitution!![defParams[i]] = ownerTypeArguments[i]
                 }
             }
             // Issue #312 / ADR-0020: resolve a generic static method's own type
@@ -4231,6 +4246,10 @@ internal partial class ExpressionBinder {
                     identifier = call.Identifier.ValueText
                     return true
                 }
+                case generic is GenericNameExpressionSyntax {
+                    identifier = generic.Identifier.ValueText
+                    return true
+                }
                 case accessor is AccessorExpressionSyntax {
                     return TryGetHeadIdentifier(accessor.LeftPart, out identifier)
                 }
@@ -4359,6 +4378,16 @@ internal partial class ExpressionBinder {
                 }
                 case ne is NameExpressionSyntax when !ne.IdentifierToken.IsMissing {
                     headName = ne.IdentifierToken.ValueText
+                    isCall = false
+                    return !string.IsNullOrEmpty(headName)
+                }
+                case generic is GenericNameExpressionSyntax when !generic.Identifier.IsMissing {
+                    headName = generic.Identifier.ValueText
+                    isCall = false
+                    return !string.IsNullOrEmpty(headName)
+                }
+                case structLiteral is StructLiteralExpressionSyntax when !structLiteral.TypeIdentifier.IsMissing {
+                    headName = structLiteral.TypeIdentifier.ValueText
                     isCall = false
                     return !string.IsNullOrEmpty(headName)
                 }

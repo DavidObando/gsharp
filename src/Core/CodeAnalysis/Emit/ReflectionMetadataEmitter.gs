@@ -640,7 +640,7 @@ internal class ReflectionMetadataEmitter {
             let combinedList = combined.ToImmutable()
             // Issue #1499: remap self-/cross-referential constraints onto the
             // nested type's cloned combined-parameter set.
-            s.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(combinedList))
+            s.SetReifiedTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(combinedList))
             // Record the enclosing arity so a use site can split its combined
             // type-argument vector into enclosing/own halves.
             this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length)

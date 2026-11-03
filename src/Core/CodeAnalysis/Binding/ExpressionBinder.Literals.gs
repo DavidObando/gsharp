@@ -1891,6 +1891,13 @@ internal partial class ExpressionBinder {
         // StructSymbol object).
         if structSymbol.IsGenericDefinition {
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            if !enclosingTypeArguments.IsDefaultOrEmpty {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(structSymbol)
+                let enclosingCount = Math.Min(enclosingParams.Length, enclosingTypeArguments.Length)
+                for var i = 0; i < enclosingCount; i++ {
+                    substitution[enclosingParams[i]] = enclosingTypeArguments[i]
+                }
+            }
             let tps = structSymbol.TypeParameters
             if syntax.TypeArgumentList != nil {
                 let explicitArgs = syntax.TypeArgumentList!!.Arguments

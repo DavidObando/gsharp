@@ -298,6 +298,71 @@ func Bad() { let rejected = Outer[int32].` + "$call" + ` }`), "RejectedNested480
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "RejectedNested4803.dll")))
     }
 
+    @Fact
+    func Issue4750_ClosedEnclosingGenericNestedClass_VerifiesAndExecutesAcrossConstructionForms() {
+        using let contract = CSharpFixture(`namespace NativeNested4750;
+public sealed class NativeOuter<T> {
+    public sealed class NativeInner {
+        public T Seed;
+        public NativeInner() { Seed = default!; }
+        public NativeInner(T seed) { Seed = seed; }
+    }
+}`)
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let library = fixture.Compile(`package Nested4750
+import NativeNested4750
+public class Outer[T] {
+    public class Inner {
+        shared {
+            public func Create() Inner -> Inner()
+            public func Echo(value T) T -> value
+        }
+    }
+    public class PrimaryInner(Value T) {
+    }
+    public open class ExplicitInner {
+        public var Value T
+        public init(value T) {
+            Value = value
+        }
+    }
+    public class Middle {
+        public class DeepInner { }
+    }
+}
+public class Sub : Outer[int32].ExplicitInner {
+    public init(value int32) : base(value) { }
+}
+public class Probe {
+    shared {
+        private func Consume(value Outer[int32].Inner) int32 -> 42
+        private func ConsumeDeep(value Outer[int32].Middle.DeepInner) int32 -> 10
+        private func Infer[U](value Outer[U].Inner, fallback U) U -> fallback
+        public func Run() int32 -> Probe.Consume(Outer[int32].Inner())
+        public func RunAll() int32 {
+            let direct = Probe.Consume(Outer[int32].Inner())
+            let viaFactory = Probe.Consume(Outer[int32].Inner.Create())
+            let echoed = Outer[int32].Inner.Echo(5)
+            let inferred = Probe.Infer(Outer[int32].Inner(), 3)
+            let primary = Outer[int32].PrimaryInner(11).Value
+            let explicitCtor = Outer[int32].ExplicitInner(13).Value
+            let sub Outer[int32].ExplicitInner = Sub(17)
+            let deep = Probe.ConsumeDeep(Outer[int32].Middle.DeepInner())
+            let importedDefault = NativeOuter[int32].NativeInner().Seed
+            let importedArg = NativeOuter[int32].NativeInner(19).Seed
+            return direct + viaFactory + echoed + inferred + primary + explicitCtor + sub.Value + deep + importedDefault + importedArg
+        }
+    }
+}`, "Nested4750", executable: false, "/r:" + contract.AssemblyPath)
+        IlVerifier.Verify(contract.AssemblyPath)
+        IlVerifier.Verify(library, []string{contract.AssemblyPath})
+        let assemblies = EmittedFixture.LoadTogether(contract.AssemblyPath, library)
+        let probe = assemblies[1].GetType("Nested4750.Probe") ??
+            throw InvalidOperationException("Missing Nested4750.Probe.")
+        Assert.Equal(42, Invoke(probe, "Run"))
+        Assert.Equal(42 + 42 + 5 + 3 + 11 + 13 + 17 + 10 + 0 + 19, Invoke(probe, "RunAll"))
+    }
+
     shared {
         private func AssertConstructorParity(api Type, native Type, ownerModule Module, expectedValue int32 = 99) {
             let tree = Assert.IsAssignableFrom[ExpressionsLambdaExpression](Invoke(api, "Tree"))
