@@ -1072,9 +1072,9 @@ open partial class TypeSymbol : Symbol {
             if left is StructSymbol leftStruct && right is StructSymbol rightStruct {
                 return AreSameConstructedUserTypeCore(
                     leftStruct.Definition ?? leftStruct,
-                    leftStruct.TypeArguments,
+                    Conversion.GetEffectiveStructTypeArguments(leftStruct),
                     rightStruct.Definition ?? rightStruct,
-                    rightStruct.TypeArguments
+                    Conversion.GetEffectiveStructTypeArguments(rightStruct)
                 )
             }
             if left is EnumSymbol leftEnum && right is EnumSymbol rightEnum {

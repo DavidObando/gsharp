@@ -580,25 +580,39 @@ shared class BaseCallForwarderRewriter {
                 return
             }
             let declaringDefinition = declaring.Definition ?? declaring
-            if declaringDefinition.TypeParameters.IsDefaultOrEmpty {
+            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(declaringDefinition)
+            let ownParams = declaringDefinition.DeclaredTypeParameters
+            if enclosingParams.IsDefaultOrEmpty && ownParams.IsDefaultOrEmpty {
                 return
             }
             let constructed StructSymbol? = this.classDef.FindConstructedGenericBase(
                 (definition StructSymbol) -> object.ReferenceEquals(definition, declaringDefinition)
             )
-            if constructed == nil ||
-                constructed
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                constructed
-                .TypeArguments
-                .Length != declaringDefinition
-                .TypeParameters
-                .Length {
+            if constructed == nil {
                 return
             }
-            for var i = 0; i < declaringDefinition.TypeParameters.Length; i++ {
-                substitution[declaringDefinition.TypeParameters[i]] = constructed.TypeArguments[i]
+            if !enclosingParams.IsDefaultOrEmpty &&
+                !constructed
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty &&
+                constructed
+                .EnclosingTypeArguments
+                .Length == enclosingParams
+                .Length {
+                for var i = 0; i < enclosingParams.Length; i++ {
+                    substitution[enclosingParams[i]] = constructed.EnclosingTypeArguments[i]
+                }
+            }
+            if !ownParams.IsDefaultOrEmpty &&
+                !constructed
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                constructed
+                .TypeArguments
+                .Length == ownParams.Length {
+                for var i = 0; i < ownParams.Length; i++ {
+                    substitution[ownParams[i]] = constructed.TypeArguments[i]
+                }
             }
         }
 

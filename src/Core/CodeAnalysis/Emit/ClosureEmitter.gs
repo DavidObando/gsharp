@@ -838,7 +838,8 @@ internal class ClosureEmitter {
         }
 
         private func TryAdd(type TypeSymbol?) {
-            if type is StructSymbol s && !s.TypeArguments.IsDefaultOrEmpty {
+            if type is StructSymbol s &&
+                (!s.TypeArguments.IsDefaultOrEmpty || !s.EnclosingTypeArguments.IsDefaultOrEmpty) {
                 this.Constructed.Add(s)
             }
         }

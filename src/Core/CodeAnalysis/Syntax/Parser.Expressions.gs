@@ -932,6 +932,9 @@ open partial class Parser {
     // expression grammar (keeping `.` member-access and float literals
     // unambiguous everywhere else).
     private func ParseIndexArgument() ExpressionSyntax {
+        if TryParseRefArgument(out var refArg) {
+            return refArg!!
+        }
         var lower ExpressionSyntax? = nil
         if Current.Kind != SyntaxKind.DotDotToken && Current.Kind != SyntaxKind.CloseSquareBracketToken {
             lower = ParseIndexBound()
