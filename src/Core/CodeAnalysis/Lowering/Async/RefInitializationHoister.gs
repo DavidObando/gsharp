@@ -323,8 +323,8 @@ shared class RefInitializationHoister {
             refLocals.Keys.Cast[VariableSymbol]()
         )
         for local in refLocals.Keys.ToArray() {
-            if !crossing.Contains(local) {
-                // Keep a reference local in MoveNext when no suspension crosses its lifetime.
+            if !crossing.Contains(local) && RefCapabilities.IsBorrowedLocation(refLocals[local]) {
+                // Keep an opaque address in a MoveNext local when no suspension needs it.
                 refLocals.Remove(local)
             }
         }

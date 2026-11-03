@@ -201,7 +201,9 @@ internal class MemberLookup {
                     }
                     parameterTypes.Add(parameterType)
                     let parameterRefKind = RefCapabilities.GetParameterRefKind(parameters[i])
-                    if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
+                    if boundArguments[i].Type is ByRefTypeSymbol && ByRefStorageMatching.TryGetStorageType(
+                        boundArguments[i]
+                    ) is {} storageType {
                         if parameterRefKind == RefKind.None || ByRefStorageMatching.IsExactStorageMatch(
                             storageType,
                             parameterType
@@ -7107,7 +7109,9 @@ internal class MemberLookup {
         ) bool {
             var hasBetterConversion = false
             for var i = 0; i < arguments.Length; i++ {
-                if ByRefStorageMatching.TryGetStorageType(arguments[i]) is {} storageType {
+                if arguments[i].Type is ByRefTypeSymbol && ByRefStorageMatching.TryGetStorageType(
+                    arguments[i]
+                ) is {} storageType {
                     let candidateExact = ByRefStorageMatching.IsExactStorageMatch(storageType, candidate[i]) == true
                     let otherExact = ByRefStorageMatching.IsExactStorageMatch(storageType, other[i]) == true
                     if candidateExact != otherExact {
@@ -7154,9 +7158,15 @@ internal class MemberLookup {
             }
             let candidateParameters = candidateProperty.GetIndexParameters()
             let otherParameters = otherProperty.GetIndexParameters()
+            if candidateParameters.Length != otherParameters.Length {
+                return candidateParameters.Length < otherParameters.Length
+            }
             var hasBetterPassingMode = false
             for var i = 0; i < arguments.Length; i++ {
-                if ByRefStorageMatching.TryGetStorageType(arguments[i]) != nil {
+                if !SameTypeSymbol(candidate[i], other[i]) {
+                    return false
+                }
+                if arguments[i].Type is ByRefTypeSymbol {
                     continue
                 }
                 let candidateIsByValue = RefCapabilities.GetParameterRefKind(candidateParameters[i]) == RefKind.None
@@ -7168,13 +7178,7 @@ internal class MemberLookup {
                     hasBetterPassingMode = true
                 }
             }
-            if hasBetterPassingMode {
-                return true
-            }
-            if candidateParameters.Length != otherParameters.Length {
-                return candidateParameters.Length < otherParameters.Length
-            }
-            return false
+            return hasBetterPassingMode
         }
 
         private func ClassifySymbolicIndexerConversion(source BoundExpression, target TypeSymbol)(

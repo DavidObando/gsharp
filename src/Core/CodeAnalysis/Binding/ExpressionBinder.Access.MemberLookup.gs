@@ -3303,7 +3303,9 @@ internal partial class ExpressionBinder {
                     converted.Add(conversions.BindImplicitInArgument(location, arguments[i], inPointee, parameter: nil))
                     continue
                 }
-                if ByRefStorageMatching.TryGetStorageType(arguments[i]) is {} storageType {
+                if arguments[i].Type is ByRefTypeSymbol && ByRefStorageMatching.TryGetStorageType(
+                    arguments[i]
+                ) is {} storageType {
                     let parameter = RefCapabilities.CreateParameterSymbol(
                         indexParameters[i],
                         inPointee,

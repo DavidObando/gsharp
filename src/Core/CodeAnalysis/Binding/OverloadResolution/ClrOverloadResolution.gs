@@ -6866,8 +6866,12 @@ internal shared class ClrOverloadResolution {
                     }
                     if IsBetterOmittedByRefPassingMode(
                         other.Method,
+                        other.Conversions,
+                        other.ParamTypes,
                         other.Mapping,
                         candidate.Method,
+                        candidate.Conversions,
+                        candidate.ParamTypes,
                         candidate.Mapping,
                         argTypes
                     ) {
@@ -7223,15 +7227,32 @@ internal shared class ClrOverloadResolution {
 
     private func IsBetterOmittedByRefPassingMode(
         candidateMethod MethodBase,
+        candidateConversions[]ImplicitConversionKind,
+        candidateParams[]Type,
         candidateMapping[]?int32,
         otherMethod MethodBase,
+        otherConversions[]ImplicitConversionKind,
+        otherParams[]Type,
         otherMapping[]?int32,
         sources IReadOnlyList[Type?]
     ) bool {
         let candidateParameters = candidateMethod.GetParameters()
         let otherParameters = otherMethod.GetParameters()
+        let count = Math.Min(
+            sources.Count,
+            Math.Min(
+                Math.Min(candidateConversions.Length, otherConversions.Length),
+                Math.Min(candidateParams.Length, otherParams.Length)
+            )
+        )
         var hasBetter = false
-        for var i = 0; i < sources.Count; i++ {
+        for var i = 0; i < count; i++ {
+            if candidateConversions[i] != otherConversions[i] || !ClrTypeUtilities.AreSame(
+                PeelByRef(candidateParams[i]),
+                PeelByRef(otherParams[i])
+            ) {
+                return false
+            }
             let source = sources[i]
             if source?.IsByRef == true || object.ReferenceEquals(source, SymbolicByRefArgumentType) {
                 continue

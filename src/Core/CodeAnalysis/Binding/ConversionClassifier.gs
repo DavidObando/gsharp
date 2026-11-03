@@ -2781,7 +2781,7 @@ internal class ConversionClassifier {
         argumentIndex int32
     ) BoundExpression {
         if parameter != nil && parameter.RefKind != RefKind.None {
-            if argument is BoundAddressOfExpression addr {
+            if argument is BoundAddressOfExpression{IsUnmanaged: false} addr {
                 let operandType TypeSymbol? = addr.Operand?.Type
                 if operandType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
@@ -4805,7 +4805,7 @@ internal class ConversionClassifier {
         /// @returns `true` when an `in` slot needs it passed by implicit reference.
         func IsPlainValueArgument(argument BoundExpression) bool -> !(
             (
-                argument is BoundAddressOfExpression ||
+                argument is BoundAddressOfExpression{IsUnmanaged: false} ||
                     argument is BoundConditionalAddressExpression ||
                     argument is BoundErrorExpression
             )

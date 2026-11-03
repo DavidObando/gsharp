@@ -293,13 +293,20 @@ internal partial class ExpressionBinder {
                 SubstituteIndexerType(candidate.Indexer.Parameters[0].Type, candidate.Substitution).ClrType,
                 parameterClrType
             ) {
-                indexer = candidate.Indexer
-                substitution = candidate.Substitution
-                view = candidate.View
-                return true
+                if candidate.Indexer.Parameters[0].RefKind == RefKind.None {
+                    indexer = candidate.Indexer
+                    substitution = candidate.Substitution
+                    view = candidate.View
+                    return true
+                }
+                if indexer == nil && candidate.Indexer.Parameters[0].RefKind == RefKind.In {
+                    indexer = candidate.Indexer
+                    substitution = candidate.Substitution
+                    view = candidate.View
+                }
             }
         }
-        return false
+        return indexer != nil
     }
 
     /// Binds a read of a selected user indexer: converts each index argument
@@ -399,7 +406,9 @@ internal partial class ExpressionBinder {
             var bound BoundExpression
             if preBound != nil {
                 bound = preBound
-            } else if syntax is DefaultExpressionSyntax || syntax is InterpolatedStringExpressionSyntax {
+            } else if syntax is BlockExpressionSyntax ||
+                syntax is DefaultExpressionSyntax ||
+                syntax is InterpolatedStringExpressionSyntax {
                 bound = conversions.BindConversion(syntax, parameterType)
             } else {
                 bound = BindExpression(syntax)
@@ -429,6 +438,7 @@ internal partial class ExpressionBinder {
                     isReadOnly: true
                 )
                 let condLocal = DeclareRangeTemp("index", condReference.Type, condReference, statements)
+                condLocal.ManagedReferenceOrigin = condAddress
                 return BoundVariableExpression(condAddress.Syntax, condLocal)
             }
             let argumentLocal = DeclareRangeTemp("index", argument.Type, argument, statements)
@@ -450,10 +460,14 @@ internal partial class ExpressionBinder {
             )
         }
         let referenceLocal = DeclareRangeTemp("index", address.Type, address, statements)
+        referenceLocal.ManagedReferenceOrigin = address
         return BoundVariableExpression(address.Syntax, referenceLocal)
     }
 
     private func RequiresSuspensionFreeAddressCapture(argument BoundExpression) bool {
+        if argument is BoundVariableExpression{Variable: LocalVariableSymbol{ManagedReferenceOrigin: {} origin}} {
+            return RequiresSuspensionFreeAddressCapture(origin)
+        }
         if argument is BoundConditionalAddressExpression condAddress {
             return RefCapabilities.IsBorrowedLocation(condAddress) ||
                 !CanReconstructAddressAcrossSuspension(condAddress.WhenTrueOperand) ||
@@ -461,6 +475,9 @@ internal partial class ExpressionBinder {
         }
         if !(argument is BoundAddressOfExpression address) {
             return argument.Type is ByRefTypeSymbol
+        }
+        if address.IsUnmanaged {
+            return false
         }
         var spilledValue BoundExpression? = nil
         if OverloadResolver.TryGetImplicitInSpilledValue(address, out spilledValue) && spilledValue != nil {

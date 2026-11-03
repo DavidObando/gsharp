@@ -527,6 +527,36 @@ public unsafe class PtrIdx
     public int this[in int* p, int bias] => (p == null ? 0 : *p) + bias;
 }
 
+public interface IA { }
+public interface IB { }
+
+public class UnrelatedIfaceIdx
+{
+    public int this[in IA x] => 1;
+    public int this[IB x] => 2;
+}
+
+public static class MixedInOverloads
+{
+    public static int M(in int a, long b) => 1;
+    public static int M(long a, int b) => 2;
+}
+
+public class SetOnlyArityOverloads
+{
+    public int Last;
+
+    public int this[in int x]
+    {
+        set => Last = x + 100 + value;
+    }
+
+    public int this[int x, int y = 0]
+    {
+        set => Last = x + 10 + y + value;
+    }
+}
+
 public class OverloadedGenIdx<T>
 {
     public string Last = "";
@@ -557,14 +587,22 @@ unsafe func UsePointers() string {
     pIdx[nil] = 9
     let nullWrite = pIdx.Last
     var cell = 40
+    pIdx[&cell] = 5
+    let addrWrite = pIdx.Last
+    cell = 50
     var ptr *int32 = &cell
     pIdx[ptr] = 1
     let valWrite = pIdx.Last
     let readInPtr = pIdx[in ptr, 2]
     let readOmittedInPtr = pIdx[ptr, 3]
-    return "${nullWrite} ${valWrite} ${readInPtr} ${readOmittedInPtr}"
+    let readAddrInPtr = pIdx[&cell, 4]
+    return "${nullWrite} ${addrWrite} ${valWrite} ${readInPtr} ${readOmittedInPtr} ${readAddrInPtr}"
 }
 
+let sOnly = SetOnlyArityOverloads()
+var sIdx = 5
+sOnly[sIdx] = 6
+let sOnlyRes = sOnly.Last
 let g = OverloadedGenIdx[Key]()
 var key = Key{Id: 7}
 let rVal = g[key]
@@ -573,7 +611,7 @@ g[key] = "A"
 let wVal = g.Last
 g[in key] = "B"
 let wIn = g.Last
-Console.WriteLine("${UsePointers()} | ${rVal} ${rIn} ${wVal} ${wIn}")`
+Console.WriteLine("${UsePointers()} | ${sOnlyRes} | ${rVal} ${rIn} ${wVal} ${wIn}")`
         let tempDir = Directory.CreateTempSubdirectory("gs_4421_rev_").FullName
         try {
             let csLibPath = CompileCSharpUnsafe(tempDir, "InIdxReviewLib", csLibSource)
@@ -582,7 +620,23 @@ Console.WriteLine("${UsePointers()} | ${rVal} ${rIn} ${wVal} ${wIn}")`
             Assert.True(File.Exists(appPath), "App must compile. Log:\n$log")
             let (exit, output) = RunDotnet(appPath)
             Assert.True(exit == 0, "App must run. Exit $exit:\n$output")
-            Assert.Equal("-1 40 42 43 | val:K(7) in:K(7) val:K(7)=A in:K(7)=B", output.Trim())
+            Assert.Equal("-1 40 50 52 53 54 | 111 | val:K(7) in:K(7) val:K(7)=A in:K(7)=B", output.Trim())
+
+            let ambigIfaceLog = Compile(tempDir, `package P
+import InIdxReviewLib
+class Both : IA, IB { }
+let u = UnrelatedIfaceIdx()
+let b = Both()
+let _ = u[b]`, Path.Combine(tempDir, "AmbigIface.dll"), "/target:library", "/reference:" + csLibPath)
+            Assert.Contains("GS0266", ambigIfaceLog, StringComparison.Ordinal)
+
+            let ambigMethodLog = Compile(tempDir, `package P
+import InIdxReviewLib
+let _ = MixedInOverloads.M(1, 2)`, Path.Combine(
+                    tempDir,
+                    "AmbigMethod.dll"
+                ), "/target:library", "/reference:" + csLibPath)
+            Assert.Contains("GS0160", ambigMethodLog, StringComparison.Ordinal)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }

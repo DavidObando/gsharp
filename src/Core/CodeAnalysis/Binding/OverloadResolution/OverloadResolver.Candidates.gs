@@ -636,6 +636,12 @@ internal partial class OverloadResolver {
                 if cand
                     .Parameters[slot + parameterOffset]
                     .RefKind != RefKind.None &&
+                    (
+                    cand
+                        .Parameters[slot + parameterOffset]
+                        .RefKind != RefKind.In ||
+                        boundArguments[i]?.Type is ByRefTypeSymbol
+                ) &&
                     ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} byRefStorage &&
                     !TypeSymbol
                     .ContainsTypeParameter(paramType) {
@@ -782,7 +788,7 @@ internal partial class OverloadResolver {
                 if object.ReferenceEquals(c.Candidate, o.Candidate) {
                     continue
                 }
-                if IsBetterOmittedInPassingMode(o.Candidate, c.Candidate, argumentNames, boundArguments) {
+                if IsBetterOmittedInPassingMode(o, c, argumentNames, boundArguments) {
                     dominated = true
                     break
                 }
@@ -799,11 +805,13 @@ internal partial class OverloadResolver {
     }
 
     private func IsBetterOmittedInPassingMode(
-        candidate FunctionSymbol,
-        other FunctionSymbol,
+        candidateRank UserCandidateRankData,
+        otherRank UserCandidateRankData,
         argumentNames ImmutableArray[string],
         boundArguments ImmutableArray[BoundExpression].Builder
     ) bool {
+        let candidate = candidateRank.Candidate
+        let other = otherRank.Candidate
         let candidateOffset = if candidate.ExplicitReceiverParameter == nil {
             0
         } else {
@@ -831,7 +839,14 @@ internal partial class OverloadResolver {
         }
         var hasBetter = false
         for var i = 0; i < boundArguments.Count; i++ {
-            if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) != nil {
+            if candidateRank.IsTailSlot[i] != otherRank.IsTailSlot[i] ||
+                candidateRank.Kinds[i] != otherRank.Kinds[i] ||
+                candidateRank.ParamTypes[i] == nil ||
+                otherRank.ParamTypes[i] == nil ||
+                !DeclarationBinder.TypeSignaturesEquivalent(candidateRank.ParamTypes[i], otherRank.ParamTypes[i]) {
+                return false
+            }
+            if boundArguments[i]?.Type is ByRefTypeSymbol || candidateRank.IsTailSlot[i] {
                 continue
             }
             let candidateSlot = MapArgumentIndexToParameterSlot(
@@ -1041,7 +1056,8 @@ internal partial class OverloadResolver {
             // `in`), it converts by value first, so fall through to the ordinary
             // convertibility check below.
             if parameter.RefKind != RefKind.None {
-                if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
+                if (parameter.RefKind != RefKind.In || boundArguments[i]?.Type is ByRefTypeSymbol) &&
+                    ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
                     let byRefParameterType = if substitution != nil {
                         GSharp.Core.CodeAnalysis.Binding.Binder.SubstituteType(parameter.Type, substitution)
                     } else {
@@ -1054,13 +1070,9 @@ internal partial class OverloadResolver {
                     continue
                 }
                 if parameter.RefKind != RefKind.In {
-                    if boundArguments[i] is not BoundAddressOfExpression &&
-                        boundArguments[i] is not BoundConditionalAddressExpression {
-                        return false
-                    }
                     continue
                 }
-            } else if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) != nil {
+            } else if boundArguments[i]?.Type is ByRefTypeSymbol {
                 return false
             }
             let argType TypeSymbol? = boundArguments[i]?.Type

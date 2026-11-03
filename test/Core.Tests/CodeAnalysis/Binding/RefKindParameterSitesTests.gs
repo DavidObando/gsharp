@@ -531,6 +531,28 @@ async func Bad() Task[int32] {
 0
 `)
         Assert.Contains(asyncBorrowed.Diagnostics, (d Diagnostic) -> d.Id == "GS0604")
+
+        let asyncCompoundLocal = Evaluate(`
+import System.Threading.Tasks
+
+class Idx {
+    var cells []int32 = []int32{10, 20}
+    prop this[in i int32] int32 {
+        get { return cells[i] }
+        set { cells[i] = value }
+    }
+}
+
+async func Good() Task[int32] {
+    let idx = Idx()
+    var i = 1
+    idx[in i] += await Task.FromResult(5)
+    return idx[in i]
+}
+Good().Result
+`)
+        Assert.Empty(asyncCompoundLocal.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(25, asyncCompoundLocal.Value)
     }
 
     @Fact
@@ -538,6 +560,14 @@ async func Bad() Task[int32] {
         let result = Evaluate(`
 class Dual {
     var Last int32
+    prop this[in i System.Index] int32 {
+        get { return i.Value + 200 }
+        set { Last = i.Value + 200 + value }
+    }
+    prop this[i System.Index] int32 {
+        get { return i.Value + 20 }
+        set { Last = i.Value + 20 + value }
+    }
     prop this[i int32] int32 {
         get { return i + 10 }
         set { Last = i + 10 + value }
@@ -548,6 +578,38 @@ class Dual {
     }
 }
 
+unsafe class PtrDual {
+    prop this[p *int32] int32 -> *p + 10
+    prop this[in i int32, unused int32 = 0] int32 -> i + 100 + unused
+}
+
+unsafe class InPtrUserIdx {
+    prop this[in p *int32] int32 -> *p + 5
+}
+
+class MultiFuncIdx {
+    var Last int32
+    prop this[in f(int32) -> int32, arg int32] int32 {
+        get -> f(arg)
+        set {
+            Last = f(arg) + value
+        }
+    }
+}
+
+unsafe func ProbePtr() int32 {
+    let pd = PtrDual()
+    let ip = InPtrUserIdx()
+    var cell = 7
+    return pd[&cell] + ip[&cell]
+}
+
+let mf = MultiFuncIdx()
+mf[{
+    let marker = 1
+    (x) -> x + marker
+}, 4] = 5
+let mfWrite = mf.Last
 let d = Dual()
 var k = 5
 let a = d[1]
@@ -557,11 +619,27 @@ d[k] = 2
 let w1 = d.Last
 d[in k] = 3
 let w2 = d.Last
-a * 100000 + b * 1000 + c + w1 * 10 + w2
+let p = ProbePtr()
+let idxRead = d[^2]
+d[^2] = 4
+let idxWrite = d.Last
+var sysIdx = ^3
+let idxInRead = d[in sysIdx]
+a * 100000 + b * 1000 + c + w1 * 10 + w2 + p + idxRead + idxWrite + idxInRead + mfWrite
 `)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
-        // a = 11, b = 15, c = 105, w1 = 17, w2 = 108 -> 1100000 + 15000 + 105 + 170 + 108 = 1115383
-        Assert.Equal(1115383, result.Value)
+        // 1115651 + 12 (ip[&cell]) + 10 (mfWrite) = 1115673
+        Assert.Equal(1115673, result.Value)
+
+        let mixedAmbiguous = Evaluate(`
+class Mixed {
+    prop this[in a int32, b int64] int32 -> a
+    prop this[a int64, b int32] int32 -> b
+}
+let m = Mixed()
+m[1, 2]
+`)
+        Assert.Contains(mixedAmbiguous.Diagnostics, (d Diagnostic) -> d.Id == "GS0266")
     }
 
     shared {
