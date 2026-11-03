@@ -224,6 +224,24 @@ class Issue4750SliceBadOuter[T] {
 }`)
         let siblingError = Assert.Single(siblingUpcastBadDiagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal("GS0155", siblingError.Id)
+
+        let openOwnerInferenceDiagnostics = GetDiagnostics(`package Issue4750BinderOpenOwnerInference
+class Issue4750OpenOuter[T] {
+    class Inner {
+        shared {
+            func InnerPick[U](x Issue4750OpenOuter[T].Inner, seed U) T -> default(T)
+        }
+    }
+    shared {
+        func Pick[U](x Issue4750OpenOuter[T].Inner, seed U) T -> default(T)
+        func BadOuterQualified() int32 -> Issue4750OpenOuter.Pick(Issue4750OpenOuter[int32].Inner(), 0)
+        func BadInnerQualified() int32 -> Inner.InnerPick(Issue4750OpenOuter[int32].Inner(), 0)
+        func BadBare() int32 -> Pick(Issue4750OpenOuter[int32].Inner(), 0)
+    }
+}`)
+        let openOwnerErrors = openOwnerInferenceDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(3, openOwnerErrors.Count((d Diagnostic) -> d.Id == "GS0154"))
+        Assert.Equal(3, openOwnerErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
     }
 
     @Fact

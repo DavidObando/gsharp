@@ -344,6 +344,12 @@ public class Outer[T] {
             return box.Echo
         }
     }
+    public open class SliceBase[U] {
+        public class NestedInBase(Items T, Tag U) {
+        }
+    }
+    public class SliceDerived[V] : Outer[[]T].SliceBase[V] {
+    }
     public class Middle {
         public class DeepInner { }
     }
@@ -355,6 +361,9 @@ public class Probe {
     shared {
         private func Consume(value Outer[int32].Inner) int32 -> 42
         private func ConsumeDeep(value Outer[int32].Middle.DeepInner) int32 -> 10
+        private func ConsumeInheritedNested(
+            value Outer[int32].SliceDerived[string].NestedInBase
+        ) int32 -> value.Items.Length + value.Tag.Length
         private func Infer[U](value Outer[U].Inner, fallback U) U -> fallback
         public func Run() int32 -> Probe.Consume(Outer[int32].Inner())
         public func RunAll() int32 {
@@ -370,7 +379,10 @@ public class Probe {
             let importedArg = NativeOuter[int32].NativeInner(19).Seed
             let siblingDerived = Outer[int32].GenericDerived[string]("ab").Saved.Length
             let siblingProp = Outer[int32].GenericCaller[string]().RoundTrip(Outer[int32].GenericBox[string](), "cde").Length
-            return direct + viaFactory + echoed + inferred + primary + explicitCtor + sub.Value + deep + importedDefault + importedArg + siblingDerived + siblingProp
+            let inheritedNested = Probe.ConsumeInheritedNested(
+                Outer[int32].SliceDerived[string].NestedInBase([]int32{1, 2}, "abcd")
+            )
+            return direct + viaFactory + echoed + inferred + primary + explicitCtor + sub.Value + deep + importedDefault + importedArg + siblingDerived + siblingProp + inheritedNested
         }
     }
 }`, "Nested4750", executable: false, "/r:" + contract.AssemblyPath)
@@ -380,7 +392,7 @@ public class Probe {
         let probe = assemblies[1].GetType("Nested4750.Probe") ??
             throw InvalidOperationException("Missing Nested4750.Probe.")
         Assert.Equal(42, Invoke(probe, "Run"))
-        Assert.Equal(42 + 42 + 5 + 3 + 11 + 13 + 17 + 10 + 0 + 19 + 2 + 3, Invoke(probe, "RunAll"))
+        Assert.Equal(42 + 42 + 5 + 3 + 11 + 13 + 17 + 10 + 0 + 19 + 2 + 3 + 6, Invoke(probe, "RunAll"))
     }
 
     @Fact

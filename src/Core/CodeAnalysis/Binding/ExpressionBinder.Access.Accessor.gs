@@ -3802,6 +3802,7 @@ internal partial class ExpressionBinder {
             // left-to-right inference from argument types.
             if method!!.IsGeneric {
                 substitution ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
+                OverloadResolver.SeedFixedOwnerTypeParameters(effectiveOwnerType, substitution!!)
                 if ce.TypeArgumentList is {} typeArgumentList {
                     let explicitArgs = typeArgumentList.Arguments
                     if explicitArgs.Count != method!!.TypeParameters.Length {

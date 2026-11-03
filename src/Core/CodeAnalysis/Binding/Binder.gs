@@ -5057,7 +5057,28 @@ partial class Binder {
             }
             if inheritedDeclaringContainers[i] is {} declaredOwner &&
                 constructedSegments[i] is StructSymbol constructedContainer {
-                constructedSegments[i] = TypeMemberModel.ResolveStaticMemberOwner(constructedContainer, declaredOwner)
+                var resolvedContainer = constructedContainer
+                if i > 0 {
+                    let precedingEnclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, 0, i)
+                    if !precedingEnclosingArgs.IsDefaultOrEmpty {
+                        let ownArgs = resolvedContainer.TypeArguments
+                        resolvedContainer = if ownArgs.IsDefaultOrEmpty {
+                            StructSymbol.ConstructNested(
+                                resolvedContainer.Definition ?? resolvedContainer,
+                                precedingEnclosingArgs,
+                                $scope.References!!.MapClrTypeToReferences
+                            )!!
+                        } else {
+                            StructSymbol.ConstructNestedGeneric(
+                                resolvedContainer.Definition ?? resolvedContainer,
+                                precedingEnclosingArgs,
+                                ownArgs,
+                                $scope.References!!.MapClrTypeToReferences
+                            )!!
+                        }
+                    }
+                }
+                constructedSegments[i] = TypeMemberModel.ResolveStaticMemberOwner(resolvedContainer, declaredOwner)
             }
         }
         // Issue #1521: when the deepest segment is a type nested inside one or

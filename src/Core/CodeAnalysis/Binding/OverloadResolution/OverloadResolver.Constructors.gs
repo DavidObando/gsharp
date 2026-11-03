@@ -1496,13 +1496,18 @@ internal partial class OverloadResolver {
         classType StructSymbol,
         substitution Dictionary[TypeParameterSymbol, TypeSymbol]
     ) {
-        if classType.EnclosingTypeArguments.IsDefaultOrEmpty {
-            return
-        }
         let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(classType)
-        let count = Math.Min(enclosingParams.Length, classType.EnclosingTypeArguments.Length)
-        for var i = 0; i < count; i++ {
-            substitution[enclosingParams[i]] = classType.EnclosingTypeArguments[i]
+        for var i = 0; i < enclosingParams.Length; i++ {
+            substitution[enclosingParams[i]] = if !classType
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty &&
+                i < classType
+                .EnclosingTypeArguments
+                .Length {
+                classType.EnclosingTypeArguments[i]
+            } else {
+                enclosingParams[i]
+            }
         }
     }
 
@@ -2318,6 +2323,49 @@ internal partial class OverloadResolver {
     }
 
     shared {
+        internal func SeedFixedOwnerTypeParameters(
+            owner TypeSymbol?,
+            substitution Dictionary[TypeParameterSymbol, TypeSymbol]
+        ) {
+            if owner is StructSymbol structOwner {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(structOwner)
+                let enclosingArgs = structOwner.EnclosingTypeArguments
+                for var i = 0; i < enclosingParams.Length; i++ {
+                    if !substitution.ContainsKey(enclosingParams[i]) {
+                        substitution[enclosingParams[i]] = if !enclosingArgs.IsDefaultOrEmpty &&
+                            i < enclosingArgs.Length {
+                            enclosingArgs[i]
+                        } else {
+                            enclosingParams[i]
+                        }
+                    }
+                }
+                let ownParams = (structOwner.Definition ?? structOwner).DeclaredTypeParameters
+                let ownArgs = structOwner.TypeArguments
+                for var i = 0; i < ownParams.Length; i++ {
+                    if !substitution.ContainsKey(ownParams[i]) {
+                        substitution[ownParams[i]] = if !ownArgs.IsDefaultOrEmpty && i < ownArgs.Length {
+                            ownArgs[i]
+                        } else {
+                            ownParams[i]
+                        }
+                    }
+                }
+            } else if owner is InterfaceSymbol ifaceOwner {
+                let ownParams = (ifaceOwner.Definition ?? ifaceOwner).TypeParameters
+                let ownArgs = ifaceOwner.TypeArguments
+                for var i = 0; i < ownParams.Length; i++ {
+                    if !substitution.ContainsKey(ownParams[i]) {
+                        substitution[ownParams[i]] = if !ownArgs.IsDefaultOrEmpty && i < ownArgs.Length {
+                            ownArgs[i]
+                        } else {
+                            ownParams[i]
+                        }
+                    }
+                }
+            }
+        }
+
         /// Issue #2263: rewrites an imported `data class` primary-constructor
         /// call into the field-initialising (cref:BoundStructLiteralExpression)
         /// shared with the `with`/copy lowering. The constructor's arguments
