@@ -7439,6 +7439,7 @@ public class Box<T> {
 public class Base<T> {
     public Box<T> Value = new();
     public T PropValue { get; set; }
+    public virtual event Action<T> Changed;
     public Func<Box<T>> Factory = () => new Box<T>();
     public Base() { }
     public Base(ref T value) { }
@@ -7464,10 +7465,15 @@ public class OwnGenericDerived<U> : Base<ManagedRef<int>> {
 }
 public class FixedMemberDerived : Base<ManagedRef<int>> {
     public Box<ManagedRef<int>> Fixed = new();
+    public void CallImplicitFixed(ManagedRef<int>[] items) => Fixed.Add(items[0]);
 }
 public class OverrideParentDerived : Base<ManagedRef<int>> { }
 public class OverrideChildDerived : OverrideParentDerived {
     public override void Add(ManagedRef<int> value) { }
+}
+public class EventOverrideParentDerived : Base<ManagedRef<int>> { }
+public class EventOverrideChildDerived : EventOverrideParentDerived {
+    public override event Action<ManagedRef<int>> Changed;
 }
 public class InterfaceDerived : Base<ManagedRef<int>>, IStore<ManagedRef<int>> { }
 public class InterfacePropertyDerived : Base<ManagedRef<int>>, IFixedProperty { }
@@ -7476,6 +7482,7 @@ public class IndexerDerived : Base<ManagedRef<int>> { }
 public class MultiLevelBoxDerived : Mid<ManagedRef<int>> { }
 public class LambdaMemberDerived : Base<ManagedRef<int>> { }
 public class MemberReadDerived : Base<ManagedRef<int>> { }
+public class ConditionalAccessDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
@@ -7525,8 +7532,11 @@ public class Probe {
         fixedMember.Add(source[0]);
         fixedMember.Fixed = new Box<ManagedRef<int>>(source);
         fixedMember.Fixed.Add(source[0]);
+        fixedMember.CallImplicitFixed(source);
 
         new OverrideParentDerived().Add(source[0]);
+
+        new EventOverrideParentDerived().Add(source[0]);
 
         new InterfaceDerived().Add(source[0]);
 
@@ -7550,6 +7560,10 @@ public class Probe {
         var memberRead = new MemberReadDerived();
         AcceptBox(memberRead.Value);
         memberRead.Add(source[0]);
+
+        ConditionalAccessDerived conditionalAccess = new();
+        conditionalAccess?.Use(FixedBox);
+        conditionalAccess.Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7564,7 +7578,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            18,
+            21,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7592,6 +7606,7 @@ public class Probe {
         Assert.Contains("open class OwnGenericDerived[U] : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class FixedMemberDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class OverrideParentDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class EventOverrideParentDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains(
             "open class InterfaceDerived : Base[managed[int32]], IStore[managed[int32]]",
             text,
@@ -7607,6 +7622,7 @@ public class Probe {
         Assert.Contains("open class MultiLevelBoxDerived : Mid[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class LambdaMemberDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class MemberReadDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ConditionalAccessDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

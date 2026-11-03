@@ -1629,20 +1629,33 @@ partial class CSharpToGSharpTranslator {
                 ) is IArrayTypeSymbol projectedReceiver {
                     return projectedReceiver.ElementType
                 }
-                if invokedMethod != nil &&
-                    !invokedMethod.IsGenericMethod &&
-                    invocation.Expression is MemberAccessExpressionSyntax calledMember &&
-                    this.GetProjectedReceiverType(calledMember.Expression) is INamedTypeSymbol projectedOwner &&
-                    this.GetProjectedMember(projectedOwner, invokedMethod) is IMethodSymbol projectedCalledMethod {
-                    let substitutedCalledReturn ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
-                        projectedOwner,
-                        projectedCalledMethod.ReturnType
-                    )
-                    if !SymbolEqualityComparer.IncludeNullability.Equals(
-                        this.context.GetTypeInfo(expression).Type,
-                        substitutedCalledReturn
-                    ) {
-                        return substitutedCalledReturn
+                if invokedMethod != nil && !invokedMethod.IsGenericMethod {
+                    let calledReceiver Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ExpressionSyntax? = switch invocation
+                        .Expression {
+                        case calledMember is MemberAccessExpressionSyntax: calledMember.Expression
+                        case calledBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                            calledBinding
+                        )
+                        default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                    }
+                    if calledReceiver != nil && this.GetProjectedReceiverType(
+                        calledReceiver
+                    ) is INamedTypeSymbol projectedOwner &&
+                        this.GetProjectedMember(projectedOwner, invokedMethod) is IMethodSymbol projectedCalledMethod {
+                        let substitutedCalledReturn ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
+                            projectedOwner,
+                            projectedCalledMethod.ReturnType
+                        )
+                        if !SymbolEqualityComparer.IncludeNullability.Equals(
+                            this.context.GetTypeInfo(expression).Type,
+                            substitutedCalledReturn
+                        ) {
+                            return substitutedCalledReturn
+                        }
                     }
                 }
                 invokedMethod = invokedMethod?.ReducedFrom ?? invokedMethod?.OriginalDefinition
@@ -1697,22 +1710,41 @@ partial class CSharpToGSharpTranslator {
                 .TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 return projectedConstructor!!.ContainingType
             }
-            var receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            if expression is ConditionalAccessExpressionSyntax conditionalAccess &&
+                this.GetManagedReferenceArrayProjectedExpressionType(
+                conditionalAccess.WhenNotNull
+            ) is {} projectedWhenNotNull {
+                return if this.IsReferenceLikeOrManagedReference(projectedWhenNotNull) {
+                    projectedWhenNotNull.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                } else {
+                    projectedWhenNotNull
+                }
+            }
+            var receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             var memberSymbol ISymbol?
             switch expression {
                 case member is MemberAccessExpressionSyntax {
                     receiver = member.Expression
                     memberSymbol = this.context.GetSymbolInfo(member).Symbol
                 }
+                case memberBinding is MemberBindingExpressionSyntax {
+                    receiver = this.GetConditionalBindingReceiver(memberBinding)
+                    memberSymbol = this.context.GetSymbolInfo(memberBinding).Symbol
+                }
                 case element is ElementAccessExpressionSyntax {
                     receiver = element.Expression
                     memberSymbol = this.context.GetSymbolInfo(element).Symbol
+                }
+                case elementBinding is ElementBindingExpressionSyntax {
+                    receiver = this.GetConditionalBindingReceiver(elementBinding)
+                    memberSymbol = this.context.GetSymbolInfo(elementBinding).Symbol
                 }
                 default {
                     return nil
                 }
             }
-            if this.GetProjectedReceiverType(receiver) is not INamedTypeSymbol receiverType || memberSymbol == nil {
+            if receiver == nil || this.GetProjectedReceiverType(receiver) is not INamedTypeSymbol receiverType ||
+                memberSymbol == nil {
                 return nil
             }
             let projectedMemberType ITypeSymbol? = switch this.GetProjectedMember(receiverType, memberSymbol) {
@@ -2192,6 +2224,26 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return invoke.Parameters[index].Type
                 }
+            }
+            return nil
+        }
+
+        private func GetConditionalBindingReceiver(node Microsoft.CodeAnalysis.SyntaxNode?) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .ExpressionSyntax? {
+            var current Microsoft.CodeAnalysis.SyntaxNode? = node
+            while current?.Parent != nil {
+                if current!!.Parent is ConditionalAccessExpressionSyntax conditional &&
+                    conditional.WhenNotNull == current {
+                    return conditional.Expression
+                }
+                if current!!.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current {
+                    current = invocation
+                    continue
+                }
+                break
             }
             return nil
         }
@@ -7037,6 +7089,9 @@ partial class CSharpToGSharpTranslator {
             var effectiveParameter IParameterSymbol = parameter
             let receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch argument.Parent?.Parent {
                 case element is ElementAccessExpressionSyntax: element.Expression
+                case elementBinding is ElementBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                    elementBinding
+                )
                 case ImplicitElementAccessSyntax{
                     Parent: Microsoft
                         .CodeAnalysis
