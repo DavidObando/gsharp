@@ -283,7 +283,7 @@ class Box {
         return n + 1
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let box = assembly.GetTypes().Single((t Type) -> t.Name == "Box")
         let nested = box.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
         Assert.Contains(nested, (t Type) -> t.Name.Contains("Inc") && t.Name.Contains("d__"))
@@ -547,7 +547,7 @@ p.Pc_Roundtrip().Wait()`
             }
         }
 
-        private func CompileToAssembly(source string) Assembly {
+        private func CompileToAssembly(source string, library bool = false) Assembly {
             let tempDir = Directory.CreateTempSubdirectory("gs_async_instance_emit_").FullName
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -561,7 +561,16 @@ p.Pc_Roundtrip().Wait()`
             var compileExit int32
             try {
                 compileExit = Program.Main(
-                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                    []string{
+                        "/out:" + outPath,
+                        if library {
+                            "/target:library"
+                        } else {
+                            "/target:exe"
+                        },
+                        "/targetframework:net10.0",
+                        srcPath
+                    }
                 )
             } finally {
                 Console.SetOut(prevOut)

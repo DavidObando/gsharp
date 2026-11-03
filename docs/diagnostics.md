@@ -696,6 +696,14 @@ These complement the existing top-level statement diagnostics in the main table 
 | GS0286 | Warning | Top-level statements should form a single contiguous block within a file. | A `.gs` file that interleaves declarations between top-level statements, e.g. `var x = 1; func helper() {}; var y = 2`. Both the C# style (TLS first, then decls) and the Go style (decls first, then TLS) are accepted; only interleaved layouts trigger the warning. |
 | GS0287 | Error | Top-level statements mix bare `return;` and `return <expr>;`. | TLS that contains both `return` (no value) and `return 0` — the synthesized `<Main>$` must have a single return type, so choose one shape. |
 
+## Entry-point diagnostics (GS0634)
+
+`gsc` reports this error only when it writes an executable with `/out:` and no other error stops the output. The language server does not know the project output type, so it does not report it. See issue #5623.
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0634 | Error | An executable (`/target:exe`, `<OutputType>Exe</OutputType>`) has no entry point: no `Main` function and no top-level statements. Mirrors C# CS5001. When a function differs from `Main` only in case, such as Go-style `func main()`, the message adds "Did you mean 'Main'?" and the diagnostic is on that function. | Rename `func main()` to `func Main()`, write top-level statements, or set `<OutputType>Library</OutputType>`. A test project gets an empty generated entry point from the SDK; set `<GenerateProgramFile>false</GenerateProgramFile>` if it declares its own. |
+
 ## Field declaration diagnostics (GS0288)
 
 See [ADR-0067](adr/0067-fields-require-var-keyword.md). Field declarations inside class/struct bodies must use `var` or `let`.

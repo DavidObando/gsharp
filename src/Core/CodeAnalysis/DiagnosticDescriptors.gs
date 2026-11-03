@@ -8,6 +8,7 @@ internal shared class DiagnosticDescriptors {
     internal const AmbiguousOverloadCandidatesMessageFormat string = " Candidates: {0}."
     internal const NonVoidFallthroughGuardMessage string = "Compiler-generated guard reached: non-void function fell through without returning a value."
     internal const ObsoleteUseDetailMessageFormat string = ": '{0}'"
+    internal const EntryPointNameCaseHintMessageFormat string = " Did you mean 'Main'? Entry-point names are case-sensitive, so '{0}' is not an entry point."
     internal let ManagedReference DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0604",
         DiagnosticSeverity.Error,
@@ -2591,6 +2592,11 @@ internal shared class DiagnosticDescriptors {
         "GS0632",
         DiagnosticSeverity.Error,
         "Invalid UTF-8 span literal: {0}"
+    )
+    internal let ExecutableWithoutEntryPoint DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0634",
+        DiagnosticSeverity.Error,
+        "The program has no entry point. Declare 'func Main()', write top-level statements, or set <OutputType>Library</OutputType>.{0}"
     )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
