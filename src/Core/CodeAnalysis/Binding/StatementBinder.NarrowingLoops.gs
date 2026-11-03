@@ -596,6 +596,12 @@ internal partial class StatementBinder {
                 if outcome != StepFound {
                     return nil
                 }
+                // An extension method of the name can bind the call instead, with another result type.
+                if step.Kind == RegionReceiverStepKind.Call &&
+                    step.Name is {} called &&
+                    ExtensionMayBind(type.Symbol, called) {
+                    return nil
+                }
             }
             types = Distinct(next)
             // Overloads and unions can multiply the candidates at each step; a path with too many does not resolve.
@@ -1595,12 +1601,9 @@ internal partial class StatementBinder {
                 if name == RegionEffectScanner.IndexMemberName {
                     AddIndexParameterLists(receiver, call, effects, found)
                 } else if !AddMethodParameterLists(receiver, name, staticAccess, found, otherArity) ||
-                    found.Count == 0 &&
                     !staticAccess &&
-                    (
-                    HasExtensionFunction(receiver.Symbol, name) || MemberLookup(binderCtx)
-                        .CollectImportedExtensionMethods(name).Count > 0
-                ) {
+                    ExtensionMayBind(receiver.Symbol, name) {
+                    // An extension method can bind the call even when the type has methods of the name.
                     return nil
                 }
                 lists.AddRange(found)
@@ -2263,6 +2266,13 @@ internal partial class StatementBinder {
             return true
         }
     }
+
+    // Whether an extension method of the name, of the package or imported, can bind a call on the type.
+    private func ExtensionMayBind(receiverType TypeSymbol?, name string) bool -> HasExtensionFunction(
+        receiverType,
+        name
+    ) ||
+        MemberLookup(binderCtx).CollectImportedExtensionMethods(name).Count > 0
 
     private func HasExtensionFunction(receiverType TypeSymbol?, member string) bool {
         if receiverType == nil {

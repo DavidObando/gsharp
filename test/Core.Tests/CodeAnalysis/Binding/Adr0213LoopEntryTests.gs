@@ -3456,6 +3456,48 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@13:16")
+            Add("guard-else-sees-an-enclosing-name-that-a-later-binding-hides (W5)", `package T
+import System
+var g string? = "ab"
+class Holder {
+    prop Clear int32 {
+        get {
+            g = nil
+            return 1
+        }
+    }
+    func Run(ref text string?, one int32?, two int32?) int32 {
+        if text == nil { return 0 }
+        var n = 0
+        while text.Length > 0 && n < 3 {
+            n++
+            guard let a = one, let Clear = two else {
+                let ignored = Clear
+                continue
+            }
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0158@14:20")
+            Add("relational-pattern-operand-is-a-conversion-site (W4)", `package T
+import System
+var g string? = "ab"
+struct Threshold { var Raw int32 }
+func operator implicit(t Threshold) int32 {
+    g = nil
+    return t.Raw
+}
+func Run(ref text string?, n int32, threshold Threshold) int32 {
+    if text == nil { return 0 }
+    var k = 0
+    while text.Length > 0 && k < 3 {
+        k++
+        if n is > threshold { }
+    }
+    return k
+}
+func Main() { }`, "GS0158@12:16")
             return rows
         }
     }

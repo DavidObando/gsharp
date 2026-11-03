@@ -62,6 +62,50 @@ func Main() { }`
         Assert.Equal("GS0158@7:16", string.Join(" ", errors))
     }
 
+    private const ExtensionLibrarySource string = `namespace ExtLib;
+public struct Token { public int Raw; }
+public struct Payload {
+    public int Raw;
+    public static implicit operator Payload(Token t) => new Payload { Raw = t.Raw };
+}
+public class R { public void Run() { } }
+public class Q { public System.Action Run = () => { }; }
+public class S {
+    public void Use(string s) { }
+    public R Create(string x) => new R();
+}
+public static class Ext {
+    public static void Use(this S s, Payload p) { }
+    public static Q Create(this S s) => new Q();
+}`
+
+    @Theory
+    @InlineData("s.Use(tok)")
+    @InlineData("s.Create().Run()")
+    func ImportedExtensionBesideAnInstanceMethod_RemovesAByReferenceFact(call string) {
+        let source = `package T
+import System
+import ExtLib
+func Run(ref text string?, s S, tok Token) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        ` + call + `
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(ExtensionLibrarySource, assemblyName: "ExtLib")
+        let errors = GsCompilation(fixture.RuntimeReferences(), GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@7:16", string.Join(" ", errors))
+    }
+
     @Fact
     func ImportedOptionalOverloadWithAConversion_RemovesAByReferenceFact() {
         let source = `package T

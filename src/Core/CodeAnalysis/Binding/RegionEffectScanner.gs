@@ -373,6 +373,14 @@ internal sealed class RegionEffectScanner {
                 RecordPatternTest(cast[ConstantPatternSyntax](node).Expression, nil)
                 VisitChildren(node)
             }
+            case SyntaxKind.RelationalPattern {
+                // The binder converts the operand to the subject's type, which a conversion operator can do (W4).
+                if Active() && cast[RelationalPatternSyntax](node).Expression !is LiteralExpressionSyntax {
+                    current.ContainsConversionCandidate = true
+                    current.Conversions.Add(RegionConversion(nil, nil, false))
+                }
+                VisitChildren(node)
+            }
             case SyntaxKind.IfStatement {
                 let ifStatement = cast[IfStatementSyntax](node)
                 VisitIf(
@@ -415,6 +423,10 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.GuardLetStatement {
                 let guardLet = cast[GuardLetStatementSyntax](node)
+                // The binder binds the else branch after each binding, so a name in it can be an enclosing one (a
+                // binding that fails before the name is declared) or a binding. Visiting it before and after the
+                // bindings covers every prefix.
+                Visit(guardLet.ElseStatement)
                 // The names are visible to the statements that follow the guard.
                 VisitBindings(guardLet.Bindings)
                 VisitCondition(guardLet.Guard)
