@@ -53,7 +53,8 @@ func Run(ref text string?, s S, tok Token) int32 {
 }
 func Main() { }`
         using let fixture = CSharpFixture(ParamsLibrarySource, assemblyName: "ParamsLib")
-        let errors = GsCompilation(fixture.RuntimeReferences(), GsSyntaxTree.Parse(SourceText.From(source)))
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
             .BoundProgram
             .Diagnostics
             .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
@@ -97,7 +98,8 @@ func Run(ref text string?, s S, tok Token) int32 {
 }
 func Main() { }`
         using let fixture = CSharpFixture(ExtensionLibrarySource, assemblyName: "ExtLib")
-        let errors = GsCompilation(fixture.RuntimeReferences(), GsSyntaxTree.Parse(SourceText.From(source)))
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
             .BoundProgram
             .Diagnostics
             .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
@@ -122,7 +124,8 @@ func Run(ref text string?, s S, tok Token) int32 {
 }
 func Main() { }`
         using let fixture = CSharpFixture(LibrarySource, assemblyName: "OptLib")
-        let errors = GsCompilation(fixture.RuntimeReferences(), GsSyntaxTree.Parse(SourceText.From(source)))
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
             .BoundProgram
             .Diagnostics
             .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
