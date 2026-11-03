@@ -879,12 +879,29 @@ internal class PatternBinder {
     }
 
     private func BindRelationalPattern(syntax RelationalPatternSyntax, discriminantType TypeSymbol) BoundPattern {
-        let value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
-        var op BoundBinaryOperator? = BoundBinaryOperator.Bind(
-            syntax.OperatorToken.Kind,
-            discriminantType,
-            discriminantType
-        )
+        var value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false)
+        var operandType = discriminantType
+        // Issue #5681: a value-type `T?` input with a non-nullable value compares the underlying `T` values.
+        // The emitter tests `HasValue` first, so the pattern has the lifted operator result.
+        if discriminantType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
+            value is BoundConversionExpression lift &&
+            lift.Type == discriminantType {
+            let underlying = nullable.UnderlyingType
+            let source = lift.Expression
+            let toUnderlying = Conversion.Classify(source.Type, underlying)
+            if source.Type != TypeSymbol.Null && toUnderlying.Exists && toUnderlying.IsImplicit {
+                let underlyingOp = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, underlying, underlying)
+                if underlyingOp != nil {
+                    value = if toUnderlying.IsIdentity {
+                        source
+                    } else {
+                        conversions.BindConversion(syntax.Expression.Location, source, underlying)
+                    }
+                    operandType = underlying
+                }
+            }
+        }
+        var op BoundBinaryOperator? = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, operandType, operandType)
         if op == nil {
             Diagnostics.ReportRelationalPatternOperatorUndefined(
                 syntax.OperatorToken.Location,
