@@ -67,6 +67,7 @@ public interface ITokenContract {
     shared {
         const Bonus float64 = 3.5
         const DefaultColumn int32 = 2
+        private const Secret int32 = 19
         var DefaultHolder Holder = Holder()
         var BuiltScale float64 = ITokenContract.MakeScale()
         var Handler Callback[int32] = func(x int32, c int32) int32 { return x + c }
@@ -81,8 +82,8 @@ public interface ITokenContract {
         get -> row + column + pad
     }
 
-    func Apply(v float64 = Bonus, baseSize float64 = Tokens.Size) float64 {
-        return v + baseSize
+    func Apply(v float64 = Bonus, baseSize float64 = Tokens.Size, secret int32 = ITokenContract.Secret) float64 {
+        return v + baseSize + float64(secret)
     }
 }
 
@@ -177,7 +178,7 @@ public func RunConsumer() string {
                 )!!
                 let actual = Assert.IsType[string](runConsumer.Invoke(nil, nil))
                 Assert.Equal(
-                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:17.5:10:14:7:17:7:-2147483648:1:1:v:14:14:30:-2147483648:1",
+                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:36.5:10:14:7:17:7:-2147483648:1:1:v:14:14:30:-2147483648:1",
                     actual
                 )
             } finally {
@@ -231,6 +232,17 @@ func BadCheckedNeg(value int64 = checked(-Tokens.MinInt)) int64 -> value
 func BadCheckedConvInt(value int32 = checked(uint8(Tokens.OverflowByte))) int32 -> value
 func BadCheckedConvFloat(value float64 = checked(uint8(Tokens.OverflowByte))) float64 -> value
 
+class Outer {
+    shared {
+        const N int32 = 1
+    }
+
+    class Inner {
+        var N int32
+        func M(x int32 = N) int32 -> x
+    }
+}
+
 interface ICollide {
     shared {
         var F int32
@@ -253,6 +265,10 @@ interface ICollide {
         let gs0265 = result.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == "GS0265").ToArray()
         Assert.Equal(3, gs0265.Length)
         Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0102")
+        Assert.Contains(
+            result.Diagnostics,
+            (diagnostic Diagnostic) -> diagnostic.Id == "GS0125" && diagnostic.Message.Contains("'N'")
+        )
     }
 
     shared {

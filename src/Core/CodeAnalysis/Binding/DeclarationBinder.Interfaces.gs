@@ -832,11 +832,18 @@ internal partial class DeclarationBinder {
             () -> {
                 let outerScope = $scope
                 let outerTypeParameters = binderCtx.CurrentTypeParameters
+                let previousFunction = getCurrentFunction()
                 $scope = capturedScope
                 using let unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext)
                 let savedPackage = $scope.SetCurrentDeclaringPackage(packageName)
                 let savedTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
                 this.binderCtx.CurrentTypeParameters = capturedTypeParameters
+                let defaultValueContext = FunctionSymbol(
+                    "<parameter-default>",
+                    ImmutableArray[ParameterSymbol].Empty,
+                    TypeSymbol.Void
+                ){IsUnsafe = capturedInUnsafeContext, IsStatic = true, StaticOwnerType = interfaceSymbol}
+                setCurrentFunction(defaultValueContext)
                 let previousScope = binderCtx.RootScope
                 let staticScope = BoundScope(previousScope)
                 for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
@@ -854,6 +861,7 @@ internal partial class DeclarationBinder {
                     $scope.SetCurrentReferencingSyntaxTree(savedTree)
                     $scope = outerScope
                     this.binderCtx.CurrentTypeParameters = outerTypeParameters
+                    setCurrentFunction(previousFunction)
                 }
             }
         )

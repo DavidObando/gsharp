@@ -3930,8 +3930,15 @@ internal partial class DeclarationBinder {
         let previous = binderCtx.RootScope
         let staticScope = BoundScope(previous)
         for var owner TypeSymbol? = structSymbol; owner != nil; owner = owner!!.ContainingType {
+            let isOuterOwner = !object.ReferenceEquals(owner, structSymbol)
             if owner is InterfaceSymbol ownerInterface {
                 for fld in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
+                    if isOuterOwner && !object.ReferenceEquals(
+                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, fld.Name),
+                        ownerInterface
+                    ) {
+                        continue
+                    }
                     staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
                 }
                 continue
@@ -3941,16 +3948,34 @@ internal partial class DeclarationBinder {
             }
             if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                 for fld in ownerStruct.StaticFields {
+                    if isOuterOwner && !object.ReferenceEquals(
+                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, fld.Name),
+                        ownerStruct
+                    ) {
+                        continue
+                    }
                     staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                 }
             }
             if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                 for fld in ownerStruct.ConstFields {
+                    if isOuterOwner && !object.ReferenceEquals(
+                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, fld.Name),
+                        ownerStruct
+                    ) {
+                        continue
+                    }
                     staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
                 }
             }
             if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                 for prop in ownerStruct.StaticProperties {
+                    if isOuterOwner && !object.ReferenceEquals(
+                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, prop.Name),
+                        ownerStruct
+                    ) {
+                        continue
+                    }
                     staticScope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
                 }
             }
@@ -3962,6 +3987,12 @@ internal partial class DeclarationBinder {
             // emits a static call on the owning method.
             if !ownerStruct.StaticMethods.IsDefaultOrEmpty {
                 for method in ownerStruct.StaticMethods {
+                    if isOuterOwner && !object.ReferenceEquals(
+                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, method.Name),
+                        ownerStruct
+                    ) {
+                        continue
+                    }
                     staticScope.TryDeclareFunction(method)
                 }
             }

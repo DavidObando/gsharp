@@ -59,6 +59,8 @@ internal class ConversionClassifier {
     private let binderCtx BinderContext
 
     private let memberLookup MemberLookup
+
+    internal prop MemberLookup MemberLookup -> memberLookup
     private let bindExpression(ExpressionSyntax) -> BoundExpression
     private let bindExpressionWithTargetType(ExpressionSyntax, TypeSymbol) -> BoundExpression
     private let isFormattableStringTargetType(TypeSymbol) -> bool
