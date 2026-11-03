@@ -4180,6 +4180,13 @@ internal class ConversionClassifier {
                 }
             }
             if TryGetConstantParameterDefault(parameter, out var constant) {
+                if typeSymbol is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    return BoundConversionExpression(
+                        nil,
+                        typeSymbol,
+                        BoundLiteralExpression(nil, constant, nullable.UnderlyingType)
+                    )
+                }
                 let literal = BoundLiteralExpression(nil, constant)
                 return if parameter.ParameterType.IsEnum {
                     cast[BoundExpression](BoundConversionExpression(nil, typeSymbol, literal))
@@ -5593,12 +5600,14 @@ internal class ConversionClassifier {
         ) bool {
             value = nil
             reason = nil
-            var expressionType = bound.Type
-            if ExpressionBinder.IsIntegerType(bound.Type) &&
+            let expressionType = bound.Type
+            let projected = ProjectValueNullableConversions(bound)
+            if (expressionType is not NullableTypeSymbol || parameterType is NullableTypeSymbol) &&
+                ExpressionBinder.IsIntegerType(projected.Type) &&
                 (
-                ExpressionBinder.TryGetConstantIntegerValue(bound, out var integerValue) ||
+                ExpressionBinder.TryGetConstantIntegerValue(projected, out var integerValue) ||
                     (
-                    ConstantExpressionEvaluator.TryEvaluate(bound, out var evaluatedInt) &&
+                    ConstantExpressionEvaluator.TryEvaluate(projected, out var evaluatedInt) &&
                         ExpressionBinder.IsIntegerLiteralValue(evaluatedInt) &&
                         (integerValue = ExpressionBinder.ToBigInteger(evaluatedInt)) == integerValue
                 )
@@ -5616,18 +5625,19 @@ internal class ConversionClassifier {
                 reason = "integer constant '$integerValue' is outside the range of parameter type '${parameterType.Name}'."
                 value = nil
                 return false
-            } else if bound is BoundLiteralExpression lit {
+            } else if projected is BoundLiteralExpression lit {
                 value = lit.Value
-            } else if bound is BoundDefaultExpression def {
+            } else if projected is BoundDefaultExpression def {
                 // Issue #1182: a value-type `default(T)` (and the zero-value `T()`
                 // form, which the binder also lowers to a BoundDefaultExpression for
                 // value types with no surfaced parameterless constructor) is a valid
                 // compile-time constant — the type's all-zero value. Accept it and
                 // record a constant the call site can materialize, mirroring C#.
                 return TryExtractValueTypeDefaultConstant(def, parameterType, out value, out reason)
-            } else if ConstantExpressionEvaluator.TryEvaluate(bound, out var evaluated) {
+            } else if IsConvertedNilConstant(projected) {
+                value = nil
+            } else if ConstantExpressionEvaluator.TryEvaluate(projected, out var evaluated) {
                 value = evaluated
-                expressionType = bound.Type
             } else {
                 reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, nil, or a value-type default(T))."
                 return false
@@ -5647,6 +5657,36 @@ internal class ConversionClassifier {
                 return false
             }
             return TryNormalizeMetadataConstant(value!!, parameterType, out value, out reason)
+        }
+
+        private func ProjectValueNullableConversions(expression BoundExpression) BoundExpression {
+            if expression is BoundConversionExpression conversion {
+                let inner = ProjectValueNullableConversions(conversion.Expression)
+                let targetType = if conversion.Type is NullableTypeSymbol nullable &&
+                    NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    nullable.UnderlyingType
+                } else {
+                    conversion.Type
+                }
+                if inner is BoundDefaultExpression innerDef && DefaultTypeMatchesParameter(innerDef.Type, targetType) {
+                    return innerDef
+                }
+                if object.ReferenceEquals(inner, conversion.Expression) && object.ReferenceEquals(
+                    targetType,
+                    conversion.Type
+                ) {
+                    return conversion
+                }
+                return BoundConversionExpression(conversion.Syntax, targetType, inner, conversion.IsChecked)
+            }
+            return expression
+        }
+
+        private func IsConvertedNilConstant(expression BoundExpression) bool -> switch expression {
+            case BoundConversionExpression{Type: {IsValueType: false}} conversion:
+            IsConvertedNilConstant(conversion.Expression)
+            case BoundLiteralExpression{Value: nil}: true
+            default: false
         }
 
         private func TryGetIntegralMetadataTarget(parameterType TypeSymbol, out target TypeSymbol) bool {

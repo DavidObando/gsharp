@@ -1630,6 +1630,13 @@ internal partial class DeclarationBinder {
             if parameter.ExplicitDefaultValue == nil {
                 return BoundDefaultExpression(nil, targetType)
             }
+            if targetType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
+                return BoundConversionExpression(
+                    nil,
+                    targetType,
+                    BoundLiteralExpression(nil, parameter.ExplicitDefaultValue, nullable.UnderlyingType)
+                )
+            }
             return BoundLiteralExpression(nil, parameter.ExplicitDefaultValue, targetType)
         }
 

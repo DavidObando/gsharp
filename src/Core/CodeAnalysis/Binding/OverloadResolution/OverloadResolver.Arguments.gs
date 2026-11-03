@@ -1250,6 +1250,13 @@ internal partial class OverloadResolver {
             if v == nil {
                 return BoundDefaultExpression(nil, parameter.Type)
             }
+            if parameter.Type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
+                return BoundConversionExpression(
+                    nil,
+                    parameter.Type,
+                    BoundLiteralExpression(nil, v, nullable.UnderlyingType)
+                )
+            }
             return BoundLiteralExpression(nil, v, parameter.Type)
         }
 

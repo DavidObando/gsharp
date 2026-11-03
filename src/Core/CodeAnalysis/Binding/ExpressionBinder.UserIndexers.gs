@@ -1049,6 +1049,14 @@ internal partial class ExpressionBinder {
             parameterType TypeSymbol
         ) BoundExpression -> if parameter.ExplicitDefaultValue == nil {
             cast[BoundExpression](BoundDefaultExpression(nil, parameterType))
+        } else if parameterType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
+            cast[BoundExpression](
+                BoundConversionExpression(
+                    nil,
+                    parameterType,
+                    BoundLiteralExpression(nil, parameter.ExplicitDefaultValue, nullable.UnderlyingType)
+                )
+            )
         } else {
             cast[BoundExpression](BoundLiteralExpression(nil, parameter.ExplicitDefaultValue, parameterType))
         }

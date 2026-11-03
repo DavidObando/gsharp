@@ -121,6 +121,11 @@ public class Tokens {
 
 public func UncheckedNegMin(value int64 = unchecked(-Tokens.MinInt)) int64 -> value
 public func ConvertedByte(b uint8 = uint8(Tokens.OverflowByte), i int32 = uint8(Tokens.OverflowByte)) string -> "${b}:${i}"
+public func NullableCasts(
+    lit int32? = cast[int32?](1),
+    named int32? = cast[int32?](Tokens.SmallCount),
+    narrow uint8? = cast[uint8?](Tokens.OverflowByte)
+) string -> "${lit ?? -1}:${named ?? -1}:${narrow ?? uint8(0)}"
 public func Qualified(value float64 = Tokens.Size) float64 -> value
 public func Imported(value float64 = Size) float64 -> value
 `
@@ -133,13 +138,14 @@ func LocalImported(value float64 = Size) float64 -> value
 func LocalArithmetic(value float64 = Tokens.DoubleSize + 2) float64 -> value
 func LocalUncheckedNegMin(value int64 = unchecked(-Tokens.MinInt)) int64 -> value
 func LocalConvertedByte(i int32 = uint8(Tokens.OverflowByte)) int32 -> i
+func LocalNullableCast(x int32? = cast[int32?](1), y int32? = cast[int32?](Tokens.SmallCount)) string -> "${x ?? -1}:${y ?? -1}"
 
 public func RunConsumer() string {
     let iface ITokenContract = TokenContractImpl()
     let widget = Widget()
     let cbResult = ITokenContract.Handler(10)
     let gResult = ITokenContract.GenericRef.Run(0)
-    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${gResult}:${UncheckedNegMin()}:${ConvertedByte()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}:${LocalUncheckedNegMin()}:${LocalConvertedByte()}"
+    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${gResult}:${UncheckedNegMin()}:${ConvertedByte()}:${NullableCasts()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}:${LocalUncheckedNegMin()}:${LocalConvertedByte()}:${LocalNullableCast()}"
 }
 `
             let libraryPath = CompileAssembly(
@@ -178,7 +184,7 @@ public func RunConsumer() string {
                 )!!
                 let actual = Assert.IsType[string](runConsumer.Invoke(nil, nil))
                 Assert.Equal(
-                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:36.5:10:14:7:17:7:-2147483648:1:1:v:14:14:30:-2147483648:1",
+                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:36.5:10:14:7:17:7:-2147483648:1:1:1:7:1:v:14:14:30:-2147483648:1:1:7",
                     actual
                 )
             } finally {
@@ -231,6 +237,7 @@ class Tokens {
 func BadCheckedNeg(value int64 = checked(-Tokens.MinInt)) int64 -> value
 func BadCheckedConvInt(value int32 = checked(uint8(Tokens.OverflowByte))) int32 -> value
 func BadCheckedConvFloat(value float64 = checked(uint8(Tokens.OverflowByte))) float64 -> value
+func BadCheckedNullableConv(value uint8? = checked(cast[uint8?](Tokens.OverflowByte))) uint8? -> value
 
 class Outer {
     shared {
@@ -263,7 +270,7 @@ interface ICollide {
         )
         Assert.False(result.Success)
         let gs0265 = result.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == "GS0265").ToArray()
-        Assert.Equal(3, gs0265.Length)
+        Assert.Equal(4, gs0265.Length)
         Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0102")
         Assert.Contains(
             result.Diagnostics,
