@@ -47,8 +47,24 @@ class BoundConstantPattern : BoundPattern {
         /// @param valueType The static type of the tested value.
         /// @param value The pattern value.
         /// @returns The test.
-        internal func ClassifyTest(valueType TypeSymbol, value BoundExpression) ConstantPatternTestKind {
-            if value is BoundLiteralExpression literal && literal.Value == nil {
+        internal func ClassifyTest(
+            valueType TypeSymbol,
+            value BoundExpression
+        ) ConstantPatternTestKind -> ClassifyTestOf(
+            valueType,
+            value is BoundLiteralExpression literal && literal.Value == nil,
+            UnwrapInputConversion(valueType, value).Type
+        )
+
+        /// The test that a constant pattern emits, from the types alone (ADR-0213: the loop walker has no bound
+        /// value): the static type of the tested value, whether the pattern value is the `nil` literal, and the type
+        /// of the pattern value without its conversion to the input type, or `nil` when it is not known.
+        internal func ClassifyTestOf(
+            valueType TypeSymbol,
+            valueIsNullLiteral bool,
+            patternValueType TypeSymbol?
+        ) ConstantPatternTestKind {
+            if valueIsNullLiteral {
                 return ConstantPatternTestKind.NullCheck
             }
             if valueType == TypeSymbol.String ||
@@ -68,8 +84,7 @@ class BoundConstantPattern : BoundPattern {
             if !isObject && !isValueNullable {
                 return ConstantPatternTestKind.PrimitiveEquals
             }
-            let patternValue = UnwrapInputConversion(valueType, value)
-            return if patternValue.Type == TypeSymbol.Float32 || patternValue.Type == TypeSymbol.Float64 {
+            return if patternValueType == TypeSymbol.Float32 || patternValueType == TypeSymbol.Float64 {
                 ConstantPatternTestKind.BoxedFloatEquals
             } else {
                 ConstantPatternTestKind.ObjectEquals

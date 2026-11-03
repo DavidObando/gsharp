@@ -112,35 +112,6 @@ internal partial class StatementBinder {
         RestoreExternalCallableAliases(left)
     }
 
-    private func ComputeLoopEntryExternalCallableAliases(
-        body BoundStatement,
-        backEdgeTail BoundStatement?,
-        breakLabel BoundLabel,
-        continueLabel BoundLabel,
-        entryAliases IReadOnlyCollection[VariableSymbol],
-        backEdgeCondition BoundExpression? = nil
-    ) HashSet[VariableSymbol] {
-        let iteration = ImmutableArray.CreateBuilder[BoundStatement]()
-        if backEdgeCondition != nil {
-            iteration.Add(BoundExpressionStatement(nil, backEdgeCondition))
-        }
-        iteration.Add(body)
-        iteration.Add(BoundLabelStatement(nil, continueLabel))
-        if backEdgeTail != nil {
-            iteration.Add(backEdgeTail)
-        }
-        iteration.Add(BoundLabelStatement(nil, breakLabel))
-        let loop = BoundForInfiniteStatement(
-            nil,
-            BoundBlockStatement(nil, iteration.ToImmutable()),
-            breakLabel,
-            continueLabel
-        )
-        let collector = NewCollector(nil, entryAliases)
-        collector.Visit(loop)
-        return collector.DefinitelyExternalFunctionValues.ToHashSet()
-    }
-
     /// If [`statement`](paramref) is a call expression statement whose
     /// called function carries `[MemberNotNull("_f", …)]`, narrows each
     /// named field (via its (cref:ImplicitFieldVariableSymbol)) to its
@@ -739,257 +710,9 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func CollectInheritedNarrowingInvalidations(
-        mutations AssignedRootsCollector,
-        mayMutateMemberPaths bool,
-        frameCount int32,
-        frames IReadOnlyList[Dictionary[AccessPath, TypeSymbol]]
-    ) List[(FrameIndex int32, Path AccessPath)] {
-        let invalidations = List[(FrameIndex int32, Path AccessPath)]()
-        for var i = Math.Min(frameCount, frames.Count) - 1; i >= 0; i-- {
-            for path in frames[i].Keys {
-                if MayBeMutatedByUnknownWrite(mutations, path) || mutations.MayMutateGlobalRoot(
-                    path.Root,
-                    frames[i][path]
-                ) ||
-                    mutations.InvalidatesNarrowing(path.Root, frames[i][path]) ||
-                    DropsOnMemberMutation(path, mutations) {
-                    invalidations.Add((i, path))
-                }
-            }
-        }
-        return invalidations
-    }
-
     private func InvalidateInheritedNarrowings(invalidations IReadOnlyList[(FrameIndex int32, Path AccessPath)]) {
         for (frameIndex, path) in invalidations {
             binderCtx.NarrowedVariables[frameIndex].Remove(path)
-        }
-    }
-
-    private func CollectLoopBackEdgeMutations(
-        body BoundStatement,
-        breakLabel BoundLabel,
-        continueLabel BoundLabel,
-        backEdgeTail BoundStatement?,
-        backEdgeCondition BoundExpression?
-    ) LoopBackEdgeMutationCollector {
-        let markerLabel = BoundLabel("loopBackEdge")
-        let marker = BoundExpressionStatement(nil, BoundLiteralExpression(nil, true))
-        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        statements.Add(body)
-        statements.Add(BoundLabelStatement(nil, continueLabel))
-        if backEdgeTail != nil {
-            statements.Add(backEdgeTail)
-        }
-        if backEdgeCondition != nil {
-            statements.Add(BoundConditionalGotoStatement(nil, markerLabel, backEdgeCondition, jumpIfTrue: true))
-            statements.Add(BoundGotoStatement(nil, breakLabel))
-            statements.Add(BoundLabelStatement(nil, markerLabel))
-        }
-        statements.Add(marker)
-        statements.Add(BoundLabelStatement(nil, breakLabel))
-        let graph = ControlFlowGraph.Create(Lowerer.Lower(BoundBlockStatement(nil, statements.ToImmutable())))
-        let markerBlock ControlFlowGraph.BasicBlock? = graph.Blocks.FirstOrDefault(
-            (block ControlFlowGraph.BasicBlock) -> block.Statements.Any(
-                (statement BoundStatement) -> object.ReferenceEquals(statement, marker)
-            )
-        )
-        let collector = LoopBackEdgeMutationCollector(
-            AssignmentPreservesNarrowing,
-            (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
-        )
-        // #5629: a switch, `try` or `fixed` statement is one statement of the graph, so a `continue` inside it adds no
-        // edge. The statements of its block up to it reach the back edge through that jump (not those after it, which
-        // the jump skips), and so do the blocks before it; the jump also runs the tail and the condition, which have no
-        // reachable block when it is the only one.
-        let seeds = List[ControlFlowGraph.BasicBlock]()
-        if markerBlock != nil {
-            seeds.Add(markerBlock)
-        }
-        let hiddenSeeds = List[(Block ControlFlowGraph.BasicBlock, Index int32)]()
-        let continueTargets = HashSet[BoundLabel]()
-        continueTargets.Add(continueLabel)
-        var hiddenContinue = false
-        // A `continue` reaches only the condition of `do { } while false`, which ends the loop.
-        let conditionIsFalse = backEdgeCondition is BoundLiteralExpression literalCondition &&
-            literalCondition.Value is bool conditionValue &&
-            !conditionValue
-        for block in(
-            if conditionIsFalse {
-                List[ControlFlowGraph.BasicBlock]()
-            } else {
-                graph.Blocks
-            }
-        ) {
-            // The last such statement of a block decides how far the block runs before a hidden jump.
-            var hiddenIndex = -1
-            for var index = 0; index < block.Statements.Count; index++ {
-                let statement = block.Statements[index]
-                if statement is BoundPatternSwitchStatement or BoundTryStatement or BoundFixedStatement {
-                    let finder = JumpToLabelsFinder(continueTargets)
-                    finder.VisitStatement(statement)
-                    if finder.Found {
-                        hiddenIndex = index
-                    }
-                }
-            }
-            if hiddenIndex >= 0 {
-                hiddenSeeds.Add((block, hiddenIndex))
-                hiddenContinue = true
-            }
-        }
-        if seeds.Count == 0 && hiddenSeeds.Count == 0 {
-            return collector
-        }
-        let reachesBackEdge = HashSet[ControlFlowGraph.BasicBlock]()
-        let pending = Stack[ControlFlowGraph.BasicBlock]()
-        for seed in seeds {
-            pending.Push(seed)
-        }
-        for hidden in hiddenSeeds {
-            for incoming in hidden.Block.Incoming {
-                pending.Push(incoming.From)
-            }
-        }
-        while pending.Count > 0 {
-            let block = pending.Pop()
-            if !reachesBackEdge.Add(block) {
-                continue
-            }
-            for incoming in block.Incoming {
-                pending.Push(incoming.From)
-            }
-        }
-        for block in reachesBackEdge {
-            for statement in block.Statements {
-                collector.Visit(statement)
-            }
-        }
-        for hidden in hiddenSeeds {
-            if reachesBackEdge.Contains(hidden.Block) {
-                continue
-            }
-            for var index = 0; index < hidden.Index; index++ {
-                collector.Visit(hidden.Block.Statements[index])
-            }
-            VisitPathsToHiddenJump(collector, hidden.Block.Statements[hidden.Index], continueTargets)
-        }
-        if hiddenContinue && markerBlock == nil {
-            collector.Visit(backEdgeTail)
-            if backEdgeCondition != nil {
-                collector.Visit(BoundExpressionStatement(nil, backEdgeCondition))
-            }
-        }
-        return collector
-    }
-
-    // The parts of a statement with a hidden jump that run on the paths to the jump (#5629). Of a `switch`: the
-    // discriminant, every header, and the bodies of the arms that reach the jump directly or by falling through into
-    // such an arm. The body of an arm that only leaves the loop adds nothing to the back edge.
-    private func VisitPathsToHiddenJump(
-        collector AssignedRootsCollector,
-        statement BoundStatement,
-        targets HashSet[BoundLabel]
-    ) {
-        if !(statement is BoundPatternSwitchStatement switchStatement) {
-            collector.Visit(statement)
-            return
-        }
-        let labels = HashSet[BoundLabel](targets)
-        let reaches = HashSet[BoundPatternSwitchArm]()
-        var changed = true
-        while changed {
-            changed = false
-            for arm in switchStatement.Arms {
-                if reaches.Contains(arm) {
-                    continue
-                }
-                let finder = JumpToLabelsFinder(labels)
-                finder.VisitArm(arm)
-                if finder.Found {
-                    reaches.Add(arm)
-                    changed = true
-                    // A fallthrough into this arm jumps to the label its body starts with.
-                    if arm.Body is BoundBlockStatement entryBlock &&
-                        entryBlock
-                        .Statements
-                        .Length > 0 &&
-                        entryBlock.Statements[0] is BoundLabelStatement entry {
-                        labels.Add(entry.Label)
-                    }
-                }
-            }
-        }
-        let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](switchStatement.Arms.Length)
-        for arm in switchStatement.Arms {
-            arms.Add(
-                if reaches.Contains(arm) {
-                    arm
-                } else {
-                    BoundPatternSwitchArm(
-                        arm.Syntax,
-                        arm.Pattern,
-                        arm.Guard,
-                        BoundBlockStatement(arm.Body.Syntax, ImmutableArray[BoundStatement].Empty)
-                    )
-                }
-            )
-        }
-        collector.Visit(
-            BoundPatternSwitchStatement(
-                switchStatement.Syntax,
-                switchStatement.Discriminant,
-                arms.MoveToImmutable(),
-                switchStatement.IsExhaustive
-            )
-        )
-    }
-
-    // Whether a statement contains a jump to one of a set of labels (#5629).
-    private sealed class JumpToLabelsFinder : BoundTreeWalker {
-        private let labels HashSet[BoundLabel]
-
-        init(labels HashSet[BoundLabel]) {
-            this.labels = labels
-        }
-
-        prop Found bool {
-            get;
-            private set;
-        }
-
-        override func VisitStatement(node BoundStatement?) {
-            if Found {
-                return
-            }
-            if (node is BoundGotoStatement jump && labels.Contains(jump.Label)) ||
-                (node is BoundConditionalGotoStatement conditional && labels.Contains(conditional.Label)) {
-                Found = true
-                return
-            }
-            // An arm whose guard is the literal `false` never runs its body. The discriminant, the patterns and the
-            // guards can hold a block expression with a jump.
-            if node is BoundPatternSwitchStatement switchStatement {
-                VisitExpression(switchStatement.Discriminant)
-                for arm in switchStatement.Arms {
-                    VisitArm(arm)
-                }
-                return
-            }
-            base.VisitStatement(node)
-        }
-
-        func VisitArm(arm BoundPatternSwitchArm) {
-            if arm.Pattern != nil {
-                VisitPattern(arm.Pattern)
-            }
-            VisitExpression(arm.Guard)
-            if !(
-                arm.Guard is BoundLiteralExpression literalGuard && literalGuard.Value is bool guardValue && !guardValue
-            ) {
-                VisitStatement(arm.Body)
-            }
         }
     }
 
@@ -3320,11 +3043,6 @@ internal partial class StatementBinder {
             }
         }
 
-        // ADR-0208 R11 (#5170): the loop header runs user code before every body run.
-        func MarkIterationRunsUserCode() {
-            MarkMayMutateGlobalRoots()
-        }
-
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
         // (ADR-0208 row R15).
         private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true, runsSourceCode bool = true) {
@@ -3699,13 +3417,6 @@ internal partial class StatementBinder {
         Mutations AssignedRootsCollector,
         NonNullOnNormalExit Dictionary[AccessPath, TypeSymbol]?
     ) : IEquatable[FinallyFlowSummary] { }
-
-    private class LoopBackEdgeMutationCollector : AssignedRootsCollector {
-        init(
-            assignmentPreservesNarrowing(BoundAssignmentExpression, TypeSymbol) -> bool,
-            mayShareStorage(VariableSymbol, VariableSymbol) -> bool
-        ) : base(assignmentPreservesNarrowing, nil, mayShareStorage) { }
-    }
 
     private func HasInternallyReachableFallthrough(statement BoundStatement) bool {
         if internallyReachableFallthroughStatements.Contains(statement) {
@@ -5711,15 +5422,27 @@ internal partial class StatementBinder {
         /// of a reference or nullable type) never reaches it. A nullable value input holds its underlying type,
         /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
         internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
-            if BoundConstantPattern.ClassifyTest(node.Type, node.Value) != ConstantPatternTestKind.ObjectEquals {
-                return false
-            }
             let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
-            if value is BoundLiteralExpression{Value: nil} ||
-                (value is BoundDefaultExpression && IsNullDefault(value.Type)) {
+            return ConstantPatternTestRunsUserCode(
+                BoundConstantPattern.ClassifyTest(node.Type, node.Value),
+                node.Type,
+                value is BoundLiteralExpression{Value: nil} ||
+                    (value is BoundDefaultExpression && IsNullDefault(value.Type))
+            )
+        }
+
+        /// The one R19 decision for a constant pattern's test of an input of type [`inputType`](paramref), which the
+        /// bound pattern and the loop walker (ADR-0213) both use. `valueIsNull` is whether the pattern value is null
+        /// for every instantiation.
+        internal func ConstantPatternTestRunsUserCode(
+            test ConstantPatternTestKind,
+            inputType TypeSymbol,
+            valueIsNull bool
+        ) bool {
+            if test != ConstantPatternTestKind.ObjectEquals || valueIsNull {
                 return false
             }
-            if node.Type is not NullableTypeSymbol nullable {
+            if inputType is not NullableTypeSymbol nullable {
                 return true
             }
             let underlying = nullable.UnderlyingType
