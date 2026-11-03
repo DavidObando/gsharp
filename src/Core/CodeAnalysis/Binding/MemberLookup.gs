@@ -2285,9 +2285,14 @@ internal class MemberLookup {
                     ContainsRankOneNonSzArray(mappedElement) ||
                     ClrNullability
                     .ContainsFunctionPointer(openClr) {
-                    let erasedArray = ResolveErasedObjectInContext(openDefinition ?? openClr).MakeArrayType(1)
+                    let elementClr = if !TypeSymbol.RequiresSymbolicProjection(mappedElement) &&
+                        mappedElement.ClrType is {ContainsGenericParameters: false} concreteElementClr {
+                        concreteElementClr
+                    } else {
+                        ResolveErasedObjectInContext(openDefinition ?? openClr)
+                    }
                     return ImportedTypeSymbol.GetConstructed(
-                        erasedArray,
+                        elementClr.MakeArrayType(1),
                         openDefinition: nil,
                         ImmutableArray.Create(mappedElement)
                     )

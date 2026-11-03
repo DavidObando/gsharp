@@ -275,6 +275,22 @@ Console.WriteLine("x")`, appPath, "/target:exe", "/reference:" + libPath)
             Assert.Contains("INonSz[Shape].M", log, StringComparison.Ordinal)
             Assert.Contains("INonSz[Shape].R", log, StringComparison.Ordinal)
             Assert.Contains("error GS0331:", log, StringComparison.Ordinal)
+
+            let mismatchPath = Path.Combine(tempDir, "Mismatch.dll")
+            let mismatchLog = Compile(tempDir, "Mismatch.gs", `package P
+import System
+import NonSzLib
+
+func Check(x INonSz[Tuple[int32, int32]], y INonSz[Tuple[string, string]]) int32 {
+    let ok = x.M(x.R())
+    return ok + x.M(y.R())
+}
+Console.WriteLine("x")`, mismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(mismatchPath),
+                "Projected rank-1 non-SZ arrays with different element types must not unify. Log:\n" + mismatchLog
+            )
+            Assert.Contains(" error GS", mismatchLog, StringComparison.Ordinal)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }

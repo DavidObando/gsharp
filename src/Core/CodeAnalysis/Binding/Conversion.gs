@@ -1928,7 +1928,12 @@ class Conversion {
                         IsRejectedFixedArrayShapeMismatch(from, to)
                 )
             ) &&
-                TryGetConstructedGenericShape(to, out _, out _) {
+                (
+                TryGetConstructedGenericShape(to, out _, out _) || DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                    to,
+                    out _
+                )
+            ) {
                 return Conversion.None
             }
             if from?.ClrType != nil &&
@@ -5569,8 +5574,12 @@ class Conversion {
                 .TryGetEnumerableInterfaceShape(type!!, out _, out var elementType) {
                 return RequiresSymbolicTypeArgumentIdentity(elementType)
             }
-            if type is not ImportedTypeSymbol{OpenDefinition: not nil} imported {
+            if type is not ImportedTypeSymbol imported ||
+                (imported.OpenDefinition == nil && imported.TypeArguments.IsDefaultOrEmpty) {
                 return false
+            }
+            if imported.OpenDefinition == nil {
+                return true
             }
             if imported.HasSubstitutableTypeArgument {
                 return true

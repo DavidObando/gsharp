@@ -3376,14 +3376,14 @@ internal partial class DeclarationBinder {
             if conformanceMatchingDepth > 0 && (a is RectangularArrayTypeSymbol || b is RectangularArrayTypeSymbol) {
                 return false
             }
+            let aIsNonSzRankOne = TryGetRankOneNonSzArrayElementType(a, out var aNonSzElement)
+            let bIsNonSzRankOne = TryGetRankOneNonSzArrayElementType(b, out var bNonSzElement)
+            if aIsNonSzRankOne || bIsNonSzRankOne {
+                return aIsNonSzRankOne &&
+                    bIsNonSzRankOne &&
+                    TypeSignaturesEquivalent(aNonSzElement, bNonSzElement, typeParamMap)
+            }
             if conformanceMatchingDepth > 0 {
-                let aIsNonSzRankOne = TryGetRankOneNonSzArrayElementType(a, out var aNonSzElement)
-                let bIsNonSzRankOne = TryGetRankOneNonSzArrayElementType(b, out var bNonSzElement)
-                if aIsNonSzRankOne || bIsNonSzRankOne {
-                    return aIsNonSzRankOne &&
-                        bIsNonSzRankOne &&
-                        TypeSignaturesEquivalent(aNonSzElement, bNonSzElement, typeParamMap)
-                }
                 let aIsSlice = TryGetSliceElementType(a, out var aSliceElement)
                 let bIsSlice = TryGetSliceElementType(b, out var bSliceElement)
                 if aIsSlice || bIsSlice {
@@ -3391,24 +3391,44 @@ internal partial class DeclarationBinder {
                 }
             }
             if a is ImportedTypeSymbol pa && b is ImportedTypeSymbol pb {
+                if pa.ClrType?.IsSZArray == true || pb.ClrType?.IsSZArray == true {
+                    return TryGetSliceElementType(pa, out var paSliceElem) &&
+                        TryGetSliceElementType(pb, out var pbSliceElem) &&
+                        TypeSignaturesEquivalent(paSliceElem, pbSliceElem, typeParamMap)
+                }
                 // Constructed imported generics carrying symbolic arguments (e.g.
                 // `IEnumerator[T]`) are compared by open definition and ordered
                 // arguments so an unbound type parameter compares by identity
                 // rather than by its erased `object` CLR projection.
-                if pa.OpenDefinition != nil &&
-                    pb.OpenDefinition != nil &&
-                    (
-                    pa.OpenDefinition == pb.OpenDefinition ||
-                        (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(pa.OpenDefinition, pb.OpenDefinition))
-                ) {
-                    return TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap)
+                if pa.OpenDefinition != nil && pb.OpenDefinition != nil {
+                    return (
+                        pa.OpenDefinition == pb.OpenDefinition ||
+                            (
+                            conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(
+                                pa.OpenDefinition,
+                                pb.OpenDefinition
+                            )
+                        )
+                    ) &&
+                        TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap)
                 }
-                // Otherwise (one or both sides expressed as a plain closed CLR
-                // type, e.g. a fully concrete `IEnumerator[int32]`) fall back to a
-                // closed-type comparison. This is only sound when neither side
-                // carries an unbound type parameter, whose CLR shape is erased to
-                // `object` and would otherwise equate distinct constructions.
-                if !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) &&
+                if pa.OpenDefinition != nil || pb.OpenDefinition != nil {
+                    return TryGetImportedConstructedGenericParts(pa, out var paOpen, out var paArgs) &&
+                        TryGetImportedConstructedGenericParts(pb, out var pbOpen, out var pbArgs) &&
+                        (
+                        paOpen == pbOpen || (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(paOpen, pbOpen))
+                    ) &&
+                        TypeArgumentsEquivalent(paArgs, pbArgs, typeParamMap)
+                }
+                // Otherwise (both sides expressed as plain closed CLR types)
+                // fall back to a closed-type comparison.
+                if pa
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    pb
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) &&
                     pa
                     .ClrType
                     ?.ContainsGenericParameters != true &&
@@ -3481,7 +3501,50 @@ internal partial class DeclarationBinder {
             return TypeArgumentsEquivalent(aEnclosing, bEnclosing, typeParamMap)
         }
 
-        private func TryGetRankOneNonSzArrayElementType(
+        internal func TryGetImportedConstructedGenericParts(
+            imported ImportedTypeSymbol,
+            @NotNullWhen(true) out openDefinition Type?,
+            out typeArguments ImmutableArray[TypeSymbol]
+        ) bool {
+            if imported.OpenDefinition != nil && !imported.TypeArguments.IsDefaultOrEmpty {
+                openDefinition = imported.OpenDefinition
+                typeArguments = imported.TypeArguments
+                return true
+            }
+            if imported.OpenDefinition == nil &&
+                imported
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                imported.ClrType is {
+                IsGenericType: true,
+                IsGenericTypeDefinition: false,
+                ContainsGenericParameters: false
+            } closedGeneric {
+                openDefinition = closedGeneric.GetGenericTypeDefinition()
+                let clrArgs = closedGeneric.GetGenericArguments()
+                let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
+                for clrArg in clrArgs {
+                    builder.Add(
+                        MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                            clrArg,
+                            openDefinition: nil,
+                            ImmutableArray[TypeSymbol].Empty,
+                            openMethodDefinition: nil,
+                            default(ImmutableArray[TypeSymbol?]),
+                            NullabilityFreeReason.TypeStructure,
+                            preserveReferenceTupleIdentity: true
+                        )
+                    )
+                }
+                typeArguments = builder.MoveToImmutable()
+                return true
+            }
+            openDefinition = nil
+            typeArguments = default(ImmutableArray[TypeSymbol])
+            return false
+        }
+
+        internal func TryGetRankOneNonSzArrayElementType(
             type TypeSymbol,
             @NotNullWhen(true) out elementType TypeSymbol?
         ) bool {
@@ -3513,7 +3576,7 @@ internal partial class DeclarationBinder {
             return false
         }
 
-        private func TryGetSliceElementType(type TypeSymbol, @NotNullWhen(true) out elementType TypeSymbol?) bool {
+        internal func TryGetSliceElementType(type TypeSymbol, @NotNullWhen(true) out elementType TypeSymbol?) bool {
             switch type {
                 case slice is SliceTypeSymbol {
                     elementType = slice.ElementType

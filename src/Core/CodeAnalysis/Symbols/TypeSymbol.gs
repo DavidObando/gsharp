@@ -1109,32 +1109,53 @@ open partial class TypeSymbol : Symbol {
                     rightDelegate.TypeArguments
                 )
             }
-            if left is ImportedTypeSymbol{OpenDefinition: not nil} leftImported &&
-                !leftImported
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                right is ImportedTypeSymbol{OpenDefinition: not nil} rightImported &&
-                !rightImported
-                .TypeArguments
-                .IsDefaultOrEmpty {
-                return ClrTypeUtilities.AreSame(leftImported.OpenDefinition, rightImported.OpenDefinition) &&
-                    leftImported
-                    .TypeArguments
-                    .Length == rightImported
-                    .TypeArguments
-                    .Length &&
-                    leftImported
-                    .TypeArguments
-                    .Zip(rightImported.TypeArguments)
-                    .All(
-                    (pair(First TypeSymbol, Second TypeSymbol)) -> AreRuntimeEquivalentIgnoringReferenceNullability(
-                        pair.First,
-                        pair.Second
-                    )
-                )
+            let leftIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                left,
+                out var leftNonSzElement
+            )
+            let rightIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                right,
+                out var rightNonSzElement
+            )
+            if leftIsNonSzRankOne || rightIsNonSzRankOne {
+                return leftIsNonSzRankOne &&
+                    rightIsNonSzRankOne &&
+                    AreRuntimeEquivalentIgnoringReferenceNullability(leftNonSzElement, rightNonSzElement)
             }
             if left is ImportedTypeSymbol leftPlain && right is ImportedTypeSymbol rightPlain {
-                if !ContainsTypeParameter(leftPlain) &&
+                if leftPlain.ClrType?.IsSZArray == true || rightPlain.ClrType?.IsSZArray == true {
+                    return DeclarationBinder.TryGetSliceElementType(leftPlain, out var leftSzElement) &&
+                        DeclarationBinder.TryGetSliceElementType(rightPlain, out var rightSzElement) &&
+                        AreRuntimeEquivalentIgnoringReferenceNullability(leftSzElement, rightSzElement)
+                }
+                if leftPlain.OpenDefinition != nil || rightPlain.OpenDefinition != nil {
+                    return DeclarationBinder.TryGetImportedConstructedGenericParts(
+                        leftPlain,
+                        out var leftOpen,
+                        out var leftArgs
+                    ) &&
+                        DeclarationBinder.TryGetImportedConstructedGenericParts(
+                        rightPlain,
+                        out var rightOpen,
+                        out var rightArgs
+                    ) &&
+                        ClrTypeUtilities.AreSame(leftOpen, rightOpen) &&
+                        leftArgs.Length == rightArgs.Length &&
+                        leftArgs
+                        .Zip(rightArgs).All(
+                        (pair(First TypeSymbol, Second TypeSymbol)) -> AreRuntimeEquivalentIgnoringReferenceNullability(
+                            pair.First,
+                            pair.Second
+                        )
+                    )
+                }
+                if leftPlain
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    rightPlain
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    !ContainsTypeParameter(leftPlain) &&
                     !ContainsTypeParameter(rightPlain) &&
                     !ContainsSameCompilationUserType(leftPlain) &&
                     !ContainsSameCompilationUserType(rightPlain) &&
