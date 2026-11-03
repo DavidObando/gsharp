@@ -3277,11 +3277,13 @@ partial class CSharpToGSharpTranslator {
                 !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a non-null slot.
-            // A sink that G# types from the value takes its `T?`: a generic parameter that G# infers, or the result
-            // of a lambda whose type G# infers (`var read = () => …`). An arm with no sink of its own (the arm of a
-            // receiver or of a `var` initializer) flows into its whole value, which its own bridge decides.
+            // A sink that G# types from the value takes its `T?`: a generic parameter that G# infers, a `var` local
+            // or a deconstructed local that the value (or a tuple of it) initializes, or the result of a lambda
+            // whose type G# infers (`var read = () => …`). An arm with no sink of its own (the arm of a receiver)
+            // flows into its whole value, which its own bridge decides.
             let valueTypedSink = inferredSink ||
                 (targetSymbol == nil && IsBranchArm(value)) ||
+                InitializesStorageTypedByValue(value) ||
                 (this.FindResultLambda(value) is {} resultLambda && this.LambdaTypeIsInferred(resultLambda))
             let emittedNilableValue = !valueTypedSink && this.YieldsValueNilableBeyondItsCSharpType(value)
             if !flowRequiresAssertion && !emittedNilableValue && !this.NullableReferenceValueMayBeNull(
@@ -9002,6 +9004,22 @@ partial class CSharpToGSharpTranslator {
                     node = node!!.Parent
                 }
                 return node
+            }
+
+            // Issue #5627: whether `value` initializes storage that G# types from it: a `var` local, a local that a
+            // deconstruction declares, or either through the elements of a tuple literal (`var t = (value, 0)`). A
+            // conditional, switch expression or `??` that yields the value counts as the value.
+            private func InitializesStorageTypedByValue(
+                value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            ) bool {
+                var node Microsoft.CodeAnalysis.SyntaxNode? = SkipValuePreservingParents(value)
+                while node!!.Parent is ArgumentSyntax element && element.Parent is TupleExpressionSyntax tuple {
+                    if ElementDeclaresDeconstructedLocal(tuple, element) {
+                        return true
+                    }
+                    node = SkipValuePreservingParents(tuple)
+                }
+                return node!!.Parent is EqualsValueClauseSyntax clause && LocalDeclarationOf(clause)?.Type.IsVar == true
             }
 
             // ADR-0186 step 6 (PR 0): whether <paramref name="element"/> of a tuple

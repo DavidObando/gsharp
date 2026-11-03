@@ -22,9 +22,9 @@ import Xunit
 /// composed receivers and the `??` return do not bind. Without the target check, the control row asserts and
 /// throws `NullReferenceException`. Without the check for an inferred generic parameter, the control row
 /// asserts `Id(…)`. Without the check for a `var` local that such a value initializes, its reassignment
-/// throws. Without the check for an inferred lambda result, the lambda control row throws. Without the check
-/// for an arm with no sink of its own, a `var` initializer asserts its arms and a composed receiver asserts an
-/// arm instead of its whole value.
+/// throws. Without the check for storage that a tuple element initializes, the tuple control rows throw.
+/// Without the check for an inferred lambda result, the lambda control row throws. Without the check
+/// for an arm with no sink of its own, a composed receiver asserts an arm instead of its whole value.
 open class Issue5627ByRefSuppressionBridgeTests {
     /// The issue's repro: an argument, a return and a conditional receiver of a dropped by-ref suppression.
     @Fact
@@ -175,6 +175,40 @@ namespace Demo
         Assert.Contains("let read = () -> Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
         RunsAs(printed, "True True 1 1")
+    }
+
+    /// Control: a tuple element that initializes a `var` local (also named or nested) or a local that a
+    /// deconstruction declares takes the null as C# does: G# types that storage from the element. A tuple stored
+    /// into an explicitly typed local, or into a `var` local that a non-null value fixed, keeps the `!!`.
+    @Fact
+    func ATupleElementOfInferredStorage_TakesTheNullUnasserted() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        static bool Inferred() { var t = (Volatile.Read(ref cache!), 0); return t.Item1 == null; }
+        static bool Named() { var t = (D: Volatile.Read(ref cache!), N: 0); return t.D == null; }
+        static bool Nested() { var t = ((Volatile.Read(ref cache!), 1), 0); return t.Item1.Item1 == null; }
+        static bool Deconstruct() { var (d, n) = (Volatile.Read(ref cache!), 0); return d == null; }
+        static bool DeconstructEach() { (var d, var n) = (Volatile.Read(ref cache!), 0); return d == null; }
+        static int Typed() { (Dictionary<string, int> D, int N) t = (Volatile.Read(ref full!), 0); return t.D.Count; }
+        static int Reassigned() { var t = (new Dictionary<string, int>(), 0); t = (Volatile.Read(ref full!), 1); return t.Item1.Count; }
+        public static string Run() =>
+            Inferred() + " " + Named() + " " + Nested() + " " + Deconstruct() + " " + DeconstructEach() + " " + Typed() + " " + Reassigned();
+    }
+}`)
+        Assert.Contains("let t = (Volatile.Read(&cache), 0)\n", printed)
+        Assert.Contains("let t = ((Volatile.Read(&cache), 1), 0)\n", printed)
+        Assert.Contains("let (d, n) = (Volatile.Read(&cache), 0)\n", printed)
+        Assert.Contains("= (Volatile.Read(&full)!!, 0)\n", printed)
+        Assert.Contains("t = (Volatile.Read(&full)!!, 1)\n", printed)
+        RunsAs(printed, "True True True True True 1 1")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference
