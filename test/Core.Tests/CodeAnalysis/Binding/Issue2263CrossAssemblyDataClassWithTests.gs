@@ -160,7 +160,11 @@ import Geometry
 
 func Main() {
     let { Field = f } = Box[Data[string?]]().Value
+    let { Field = df } = MakeNullableData()
+    let (pf, _) = MakeNullablePair()
     Console.WriteLine(f.Length)
+    Console.WriteLine(df.Length)
+    Console.WriteLine(pf.Length)
 }`)))
         using let unguardedStream = MemoryStream()
         let unguardedResult = unguarded.Emit(
@@ -170,11 +174,13 @@ func Main() {
             assemblyName: "Geometry.GenericDataUnguarded"
         )
         Assert.False(unguardedResult.Success)
-        Assert.Contains(
-            unguardedResult.Diagnostics,
-            (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
-                "Length",
-                StringComparison.Ordinal
+        Assert.Equal(
+            3,
+            unguardedResult.Diagnostics.Count(
+                (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                    "Length",
+                    StringComparison.Ordinal
+                )
             )
         )
     }
@@ -196,9 +202,15 @@ data class Data[T] {
     var Field T
 }
 
+data class Pair[T](First T, Second T)
+
 class Box[T] {
     var Value T
-}`
+}
+
+func MakeNullableData() Data[string?] -> Data[string?]{ Field: "factory" }
+
+func MakeNullablePair() Pair[string?] -> Pair[string?]("left", "right")`
 
         private func EmitLibrary(caseName string) string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue2263", caseName)

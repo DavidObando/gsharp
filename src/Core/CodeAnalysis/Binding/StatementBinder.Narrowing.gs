@@ -4551,11 +4551,7 @@ internal partial class StatementBinder {
                 )
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
-            let receiverType = if initializer.Type is ImportedTypeSymbol {
-                initializer.Type
-            } else {
-                cast[TypeSymbol](aggregate)
-            }
+            let receiverType = initializer.Type
             let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
             $scope.TryDeclareVariable(tempVar)
@@ -4954,11 +4950,7 @@ internal partial class StatementBinder {
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
         let aggregate = structType!!
-        let receiverType = if initializer.Type is ImportedTypeSymbol {
-            initializer.Type
-        } else {
-            cast[TypeSymbol](aggregate)
-        }
+        let receiverType = initializer.Type
         let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
         let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
         $scope.TryDeclareVariable(tempVar)
@@ -6266,11 +6258,18 @@ internal partial class StatementBinder {
                 field.Type
             }
             case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
-                ImportedTypeSymbol.NormalizeSemanticAggregate(
-                    MemberLookup.GetClrPropertyTypeSymbol(receiverType, importedProperty),
-                    importedProperty.PropertyType,
-                    references
-                )
+                let projected = MemberLookup.GetClrPropertyTypeSymbol(receiverType, importedProperty)
+                let pointee = if projected is ByRefTypeSymbol byRefProperty {
+                    byRefProperty.PointeeType
+                } else {
+                    projected
+                }
+                let clrPropertyType = if importedProperty.PropertyType.IsByRef {
+                    importedProperty.PropertyType.GetElementType()
+                } else {
+                    importedProperty.PropertyType
+                }
+                ImportedTypeSymbol.NormalizeSemanticAggregate(pointee, clrPropertyType, references)
             } else {
                 property.Type
             }
@@ -6283,19 +6282,44 @@ internal partial class StatementBinder {
             member Symbol,
             memberType TypeSymbol? = nil
         ) BoundExpression -> switch member {
-            case field is FieldSymbol: cast[BoundExpression](
-                BoundFieldAccessExpression(nil, receiver, type, field, substitutedType: memberType, narrowedType: nil)
-            )
-            case property is PropertySymbol: cast[BoundExpression](
-                BoundPropertyAccessExpression(
-                    nil,
-                    receiver,
-                    type,
-                    property,
-                    substitutedType: memberType,
-                    narrowedType: nil
+            case field is FieldSymbol: if field.ImportedMember is FieldInfo importedField {
+                cast[BoundExpression](
+                    BoundClrPropertyAccessExpression(nil, receiver, importedField, memberType ?? field.Type)
                 )
-            )
+            } else {
+                cast[BoundExpression](
+                    BoundFieldAccessExpression(
+                        nil,
+                        receiver,
+                        type,
+                        field,
+                        substitutedType: memberType,
+                        narrowedType: nil
+                    )
+                )
+            }
+            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+                let effectiveType = memberType ?? property.Type
+                let accessType = if property.ReturnRefKind != RefKind.None && effectiveType is not ByRefTypeSymbol {
+                    cast[TypeSymbol](ByRefTypeSymbol.Get(effectiveType))
+                } else {
+                    effectiveType
+                }
+                ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrPropertyAccessExpression(nil, receiver, importedProperty, accessType)
+                )
+            } else {
+                cast[BoundExpression](
+                    BoundPropertyAccessExpression(
+                        nil,
+                        receiver,
+                        type,
+                        property,
+                        substitutedType: memberType,
+                        narrowedType: nil
+                    )
+                )
+            }
             default: cast[BoundExpression](BoundErrorExpression(nil))
         }
     }
