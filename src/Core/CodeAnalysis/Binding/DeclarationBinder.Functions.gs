@@ -3506,10 +3506,19 @@ internal partial class DeclarationBinder {
             @NotNullWhen(true) out openDefinition Type?,
             out typeArguments ImmutableArray[TypeSymbol]
         ) bool {
-            if imported.OpenDefinition != nil && !imported.TypeArguments.IsDefaultOrEmpty {
-                openDefinition = imported.OpenDefinition
-                typeArguments = imported.TypeArguments
-                return true
+            if !imported.TypeArguments.IsDefaultOrEmpty {
+                openDefinition = imported.OpenDefinition ??
+                    (
+                    if imported.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} closedType {
+                        closedType.GetGenericTypeDefinition()
+                    } else {
+                        default(Type?)
+                    }
+                )
+                if openDefinition != nil {
+                    typeArguments = imported.TypeArguments
+                    return true
+                }
             }
             if imported.OpenDefinition == nil &&
                 imported

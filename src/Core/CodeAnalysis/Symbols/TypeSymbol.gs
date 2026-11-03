@@ -1122,57 +1122,29 @@ open partial class TypeSymbol : Symbol {
                     rightIsNonSzRankOne &&
                     AreRuntimeEquivalentIgnoringReferenceNullability(leftNonSzElement, rightNonSzElement)
             }
-            if left is ImportedTypeSymbol leftPlain && right is ImportedTypeSymbol rightPlain {
-                if leftPlain.ClrType?.IsSZArray == true || rightPlain.ClrType?.IsSZArray == true {
-                    return DeclarationBinder.TryGetSliceElementType(leftPlain, out var leftSzElement) &&
-                        DeclarationBinder.TryGetSliceElementType(rightPlain, out var rightSzElement) &&
-                        AreRuntimeEquivalentIgnoringReferenceNullability(leftSzElement, rightSzElement)
-                }
-                if leftPlain.OpenDefinition != nil || rightPlain.OpenDefinition != nil {
-                    return DeclarationBinder.TryGetImportedConstructedGenericParts(
-                        leftPlain,
-                        out var leftOpen,
-                        out var leftArgs
-                    ) &&
-                        DeclarationBinder.TryGetImportedConstructedGenericParts(
-                        rightPlain,
-                        out var rightOpen,
-                        out var rightArgs
-                    ) &&
-                        ClrTypeUtilities.AreSame(leftOpen, rightOpen) &&
-                        leftArgs.Length == rightArgs.Length &&
-                        leftArgs
-                        .Zip(rightArgs).All(
-                        (pair(First TypeSymbol, Second TypeSymbol)) -> AreRuntimeEquivalentIgnoringReferenceNullability(
-                            pair.First,
-                            pair.Second
-                        )
-                    )
-                }
-                if leftPlain
+            if left is ImportedTypeSymbol{OpenDefinition: not nil} leftImported &&
+                !leftImported
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                right is ImportedTypeSymbol{OpenDefinition: not nil} rightImported &&
+                !rightImported
+                .TypeArguments
+                .IsDefaultOrEmpty {
+                return ClrTypeUtilities.AreSame(leftImported.OpenDefinition, rightImported.OpenDefinition) &&
+                    leftImported
                     .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    rightPlain
+                    .Length == rightImported
                     .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    !ContainsTypeParameter(leftPlain) &&
-                    !ContainsTypeParameter(rightPlain) &&
-                    !ContainsSameCompilationUserType(leftPlain) &&
-                    !ContainsSameCompilationUserType(rightPlain) &&
-                    !ContainsFixedLengthArray(leftPlain) &&
-                    !ContainsFixedLengthArray(rightPlain) &&
-                    leftPlain
-                    .ClrType
-                    ?.ContainsGenericParameters != true &&
-                    rightPlain
-                    .ClrType
-                    ?.ContainsGenericParameters != true {
-                    return leftPlain.ClrType != nil && rightPlain.ClrType != nil && ClrTypeUtilities.AreSame(
-                        leftPlain.ClrType,
-                        rightPlain.ClrType
+                    .Length &&
+                    leftImported
+                    .TypeArguments
+                    .Zip(rightImported.TypeArguments)
+                    .All(
+                    (pair(First TypeSymbol, Second TypeSymbol)) -> AreRuntimeEquivalentIgnoringReferenceNullability(
+                        pair.First,
+                        pair.Second
                     )
-                }
-                return false
+                )
             }
             if left.GetType() != right.GetType() {
                 return MemberLookup.IsNaturalStructuralDelegateTarget(left, right) ||

@@ -4648,8 +4648,17 @@ internal class ReflectionMetadataEmitter {
         function FunctionSymbol?,
         locals IReadOnlyDictionary[VariableSymbol, int32]
     ) bool {
-        if variable is ParameterSymbol ps && function != nil && function.Parameters.Any(
-            (p ParameterSymbol) -> object.ReferenceEquals(p, ps)
+        if variable is ParameterSymbol ps &&
+            (
+            ps.IsReceiverParameter ||
+                (
+                function != nil &&
+                    (
+                    object.ReferenceEquals(function.ThisParameter, ps) || function.Parameters.Any(
+                        (p ParameterSymbol) -> object.ReferenceEquals(p, ps)
+                    )
+                )
+            )
         ) {
             return true
         }

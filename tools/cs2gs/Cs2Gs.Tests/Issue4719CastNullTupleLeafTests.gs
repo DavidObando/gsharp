@@ -168,12 +168,13 @@ public static class Obj {
     @InlineData("struct")
     @InlineData("unmanaged")
     func NonNullableGenericNullableUnboxResult_PreservesTheNonNullTupleLeaf(constraint string) {
-        // Generic nullable unwrap binding is independently tracked in #4735.
+        let fixture = this.EmitFixture()
         let printed = Translate((`public static class Obj {
     public static (object Value, int Code) Row<T>() where T : ` + "$constraint" + `
         => ((T)default(T?), 1);
-}`))
+}`), fixture)
         Assert.Contains("func Row[T $constraint]() (Value object, Code int32)", printed)
+        AssertBindsAndThrows(printed, fixture, typeof(InvalidOperationException), "Obj.Row[int32]()")
     }
 
     @Theory
@@ -229,11 +230,16 @@ public static class Obj {
     @InlineData("struct", "(T?)default(T?)")
     @InlineData("unmanaged", "(T?)default(T?)")
     func NullableGenericCastResult_PreservesTheNullableTupleLeaf(constraint string, value string) {
-        // Generic implicit nullable boxing is independently tracked in #4735.
+        let fixture = this.EmitFixture()
         let printed = Translate((`public static class Obj {
     public static (object Value, int Code) Row<T>() where T : ` + "$constraint" + ` => (` + "$value" + `, 1);
-}`))
+    public static int Run() {
+        var row = Row<int>();
+        return row.Value == null && row.Code == 1 ? 1 : -1;
+    }
+}`), fixture)
         Assert.Contains("func Row[T $constraint]() (Value object?, Code int32)", printed)
+        AssertBindsAndRuns(printed, fixture, expected: 1)
     }
 
     @Theory
