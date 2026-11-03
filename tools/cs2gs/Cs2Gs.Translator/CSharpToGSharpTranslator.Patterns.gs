@@ -3008,11 +3008,11 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return NonNullAssertionExpression(receiver)
                 }
-                if this.MapTypeSyntax(narrowedTypeSyntax) is NamedTypeReference namedTarget {
-                    return InvocationExpression(
-                        BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
-                        []GExpression{NonNullAssertionExpression(receiver)},
-                        namedTarget.TypeArguments
+                if this.MapTypeSyntax(narrowedTypeSyntax) is {} targetType {
+                    return ConversionExpression(
+                        targetType,
+                        NonNullAssertionExpression(receiver),
+                        isCheckedReferenceCast: true
                     )
                 }
                 return NonNullAssertionExpression(receiver)

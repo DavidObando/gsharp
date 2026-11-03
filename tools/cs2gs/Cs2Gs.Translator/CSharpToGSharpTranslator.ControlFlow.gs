@@ -288,7 +288,9 @@ partial class CSharpToGSharpTranslator {
             let separateMainBinder = mainBinder != nil &&
                 isPattern.Pattern is not VarPatternSyntax &&
                 (
-                binding == BindingKind.Var || this.ShouldPromoteToNullableReference(mainBinder) ||
+                wholeValueBinders.Count > 1 || binding == BindingKind.Var || this.ShouldPromoteToNullableReference(
+                    mainBinder
+                ) ||
                     scrutineeIsNullable ||
                     !IsAssignableNonNull(scrutineeType, mainBinder.Type)
             )
@@ -350,21 +352,15 @@ partial class CSharpToGSharpTranslator {
                     .SpecialType != SpecialType.System_Nullable_T &&
                     !SymbolEqualityComparer
                     .Default
-                    .Equals(scrutineeType, mainBinder.Type) && binderType is NamedTypeReference namedTarget {
-                    cast[GExpression](
-                        InvocationExpression(
-                            BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
-                            []GExpression{idExpr},
-                            namedTarget.TypeArguments
-                        )
-                    )
+                    .Equals(scrutineeType, mainBinder.Type) && binderType != nil {
+                    cast[GExpression](ConversionExpression(binderType, idExpr, isCheckedReferenceCast: true))
                 } else {
                     cast[GExpression](idExpr)
                 }
                 into.Add(LocalDeclarationStatement(binding, binderName, binderType, binderInit))
             }
             for nestedBinder in this.EnumeratePatternBinders(isPattern.Pattern) {
-                if wholeValueBinders.Contains(nestedBinder) ||
+                if SymbolEqualityComparer.Default.Equals(nestedBinder, mainBinder) ||
                     !this
                     .state
                     .PatternBindings
@@ -410,7 +406,21 @@ partial class CSharpToGSharpTranslator {
                 }
                 this.state.EmittedLocalStorageAcceptsNil[nestedBinder] = nestedType != nil && nestedType.IsNullable
                 this.RecordEmittedLocalNullability(nestedBinder, nestedType, nil, nil)
-                into.Add(LocalDeclarationStatement(nestedBinding, nestedName, nestedType, projectedInit))
+                let nestedInit GExpression = if wholeValueBinders.Contains(nestedBinder) &&
+                    nestedBinder
+                    .Type
+                    .IsValueType &&
+                    scrutineeType
+                    ?.OriginalDefinition
+                    .SpecialType != SpecialType.System_Nullable_T &&
+                    !SymbolEqualityComparer
+                    .Default
+                    .Equals(scrutineeType, nestedBinder.Type) && nestedType != nil {
+                    cast[GExpression](ConversionExpression(nestedType, projectedInit, isCheckedReferenceCast: true))
+                } else {
+                    projectedInit
+                }
+                into.Add(LocalDeclarationStatement(nestedBinding, nestedName, nestedType, nestedInit))
             }
         }
 

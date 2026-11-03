@@ -614,6 +614,12 @@ namespace Demo
             return "skipped/" + matched;
         }
 
+        public struct Token
+        {
+            public int Code;
+            public Token(object ignored) => this.Code = -999;
+        }
+
         public sealed class Box
         {
             private int reads;
@@ -645,7 +651,27 @@ namespace Demo
                 return n + ":" + (x ?? "nil");
             }
 
+            step = 0;
+            while (Next(out string x) && box is { Value: Token t })
+            {
+                x = null;
+                return "tok" + t.Code + ":" + (x ?? "nil");
+            }
+
             return "no-int";
+        }
+
+        public static string ReassignedSecondaryWholeValueBinder(object o)
+        {
+            step = 0;
+            while (Next(out string x) && o is string first and var second)
+            {
+                x = null;
+                second = "changed";
+                return RequireNonNull(first) + ":" + second + ":" + (x ?? "nil");
+            }
+
+            return "no-match";
         }
 
         public static string ComputedPropertyPatternEvaluatedOnce()
@@ -811,7 +837,9 @@ namespace Demo
             GenericTypeParameterPatternInHoistedLoop<string>(null) + ":" +
             GenericTypeParameterPatternInHoistedLoop<string>("hi") + "|" +
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = 42 }) + ":" +
+            BoxedValuePropertyPatternInHoistedLoop(new Box { Value = new Token { Code = 7 } }) + ":" +
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = "nope" }) + "|" +
+            ReassignedSecondaryWholeValueBinder("orig") + "|" +
             ComputedPropertyPatternEvaluatedOnce() + ":" +
             ComputedPropertyVarPatternEvaluatedOnce() + ":" +
             NullComputedPropertyVarPatternMatches(new Box()) + "|" +
@@ -822,7 +850,7 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:no-int|N1:1:N1:1:replaced:loop|2:2/1|1"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:tok7:nil:no-int|ORIG:changed:nil|N1:1:N1:1:replaced:loop|2:2/1|1"
         )
     }
 
