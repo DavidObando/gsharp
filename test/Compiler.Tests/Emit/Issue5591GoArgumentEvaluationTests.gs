@@ -150,6 +150,18 @@ class Spawner : Base {
             go Pair(b: Next("d"), a: Next("e"))
             go PairIn(b: Next("f"), a: Next("g"))
             go ConsumeSpan(extra: Next("h"), value: label.AsSpan())
+            go Show("span-block", {
+                let s = (order += "i").AsSpan()
+                let n = s.Length
+                n
+            })
+            go ConsumeSpan({
+                let _ = Next("j")
+                let s = "abcd".AsSpan()
+                let n = s.Length
+                let len = n
+                s.Slice(0, len)
+            }, Next("k"))
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -183,8 +195,10 @@ method first 41
 named a=5 b=4
 named-in a=7 b=6
 named-span len=3 extra=8
-order abcdefgh|
+named-span len=4 extra=11
+order abcdefghijk|
 positional 123
+span-block 9
 suspending 7
 `)
     }

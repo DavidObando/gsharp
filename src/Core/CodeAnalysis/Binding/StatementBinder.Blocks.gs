@@ -1213,12 +1213,15 @@ internal partial class StatementBinder {
     private func CaptureGoOperands(
         expression BoundExpression,
         prefix ImmutableArray[BoundStatement].Builder
-    ) BoundExpression -> CaptureCallOperands(
-        expression,
-        prefix,
-        (receiver BoundExpression) -> CaptureGoReceiver(receiver, prefix),
-        (argument BoundExpression) -> CaptureGoOperand(argument, prefix)
-    )
+    ) BoundExpression {
+        let retainedVariables = HashSet[VariableSymbol]()
+        return CaptureCallOperands(
+            expression,
+            prefix,
+            (receiver BoundExpression) -> CaptureGoReceiver(receiver, prefix, retainedVariables),
+            (argument BoundExpression) -> CaptureGoOperand(argument, prefix, retainedVariables)
+        )
+    }
 
     // A value-type receiver is a storage location, not a value: the method runs
     // against (and may mutate) that storage, as the same call does outside `go`.
@@ -1233,13 +1236,14 @@ internal partial class StatementBinder {
     // result) is copied.
     private func CaptureGoReceiver(
         receiver BoundExpression,
-        prefix ImmutableArray[BoundStatement].Builder
+        prefix ImmutableArray[BoundStatement].Builder,
+        retainedVariables HashSet[VariableSymbol]
     ) BoundExpression {
         if !MayBeValueType(receiver.Type) {
-            return CaptureGoOperand(receiver, prefix)
+            return CaptureGoOperand(receiver, prefix, retainedVariables)
         }
-        let rebuilt = CaptureGoReceiverCore(receiver, prefix)
-        if ReadsUncapturableVariable(rebuilt) {
+        let rebuilt = CaptureGoReceiverCore(receiver, prefix, retainedVariables)
+        if ReadsUncapturableVariable(rebuilt, retainedVariables) {
             return rebuilt
         }
         if NeedsLocationProbe(rebuilt) {
@@ -1270,10 +1274,11 @@ internal partial class StatementBinder {
 
     private func CaptureGoReceiverCore(
         receiver BoundExpression,
-        prefix ImmutableArray[BoundStatement].Builder
+        prefix ImmutableArray[BoundStatement].Builder,
+        retainedVariables HashSet[VariableSymbol]
     ) BoundExpression {
         if !MayBeValueType(receiver.Type) {
-            return CaptureGoOperand(receiver, prefix)
+            return CaptureGoOperand(receiver, prefix, retainedVariables)
         }
         if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsOpaqueStorageReceiver(receiver) {
             let local = LocalVariableSymbol(
@@ -1292,21 +1297,27 @@ internal partial class StatementBinder {
         }
         switch receiver {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
-                return CaptureGoReceiverCore(address.Operand, prefix)
+                return CaptureGoReceiverCore(address.Operand, prefix, retainedVariables)
             }
-            case block is BoundBlockExpression when !ReadsUncapturableVariable(block) {
-                return HoistArgumentBlock(block, prefix, (tail BoundExpression) -> CaptureGoReceiverCore(tail, prefix))
+            case block is BoundBlockExpression when block.Syntax is not BlockExpressionSyntax &&
+                !ReadsUncapturableVariable(block, retainedVariables) {
+                return HoistArgumentBlock(
+                    block,
+                    prefix,
+                    retainedVariables,
+                    (tail BoundExpression) -> CaptureGoReceiverCore(tail, prefix, retainedVariables)
+                )
             }
             case dereference is BoundDereferenceExpression when dereference.Operand is BoundConditionalAddressExpression {
                 let address = cast[BoundConditionalAddressExpression](dereference.Operand)
-                let condition = CaptureGoOperand(address.Condition, prefix)
+                let condition = CaptureGoOperand(address.Condition, prefix, retainedVariables)
                 let trueStatements = ImmutableArray.CreateBuilder[BoundStatement]()
-                let whenTrue = CaptureGoReceiverCore(address.WhenTrueOperand, trueStatements)
+                let whenTrue = CaptureGoReceiverCore(address.WhenTrueOperand, trueStatements, retainedVariables)
                 if TryGetStaticFieldRoot(whenTrue) is {} trueStaticRoot {
                     trueStatements.Add(BoundExpressionStatement(nil, trueStaticRoot))
                 }
                 let falseStatements = ImmutableArray.CreateBuilder[BoundStatement]()
-                let whenFalse = CaptureGoReceiverCore(address.WhenFalseOperand, falseStatements)
+                let whenFalse = CaptureGoReceiverCore(address.WhenFalseOperand, falseStatements, retainedVariables)
                 if TryGetStaticFieldRoot(whenFalse) is {} falseStaticRoot {
                     falseStatements.Add(BoundExpressionStatement(nil, falseStaticRoot))
                 }
@@ -1326,7 +1337,7 @@ internal partial class StatementBinder {
             case tuple is BoundTupleElementAccessExpression {
                 return BoundTupleElementAccessExpression(
                     tuple.Syntax,
-                    CaptureGoReceiverCore(tuple.Receiver, prefix),
+                    CaptureGoReceiverCore(tuple.Receiver, prefix, retainedVariables),
                     tuple.TupleType,
                     tuple.Index
                 )
@@ -1337,7 +1348,7 @@ internal partial class StatementBinder {
                 }
                 return BoundFieldAccessExpression(
                     field.Syntax,
-                    CaptureGoReceiverCore(instance, prefix),
+                    CaptureGoReceiverCore(instance, prefix, retainedVariables),
                     field.StructType,
                     field.Field,
                     field.SubstitutedType,
@@ -1350,7 +1361,7 @@ internal partial class StatementBinder {
                 }
                 return BoundClrPropertyAccessExpression(
                     clrField.Syntax,
-                    CaptureGoReceiverCore(instance, prefix),
+                    CaptureGoReceiverCore(instance, prefix, retainedVariables),
                     clrField.Member,
                     clrField.Type,
                     clrField.StaticContainerType,
@@ -1361,10 +1372,10 @@ internal partial class StatementBinder {
                 )
             }
             case element is BoundIndexExpression when element.IsArrayBackedElementAccess {
-                let target = CaptureGoOperand(element.Target, prefix)
+                let target = CaptureGoOperand(element.Target, prefix, retainedVariables)
                 let indices = CaptureArguments(
                     element.Indices,
-                    (index BoundExpression) -> CaptureGoOperand(index, prefix)
+                    (index BoundExpression) -> CaptureGoOperand(index, prefix, retainedVariables)
                 )
                 return BoundIndexExpression(element.Syntax, target, indices, element.Type)
             }
@@ -1372,7 +1383,7 @@ internal partial class StatementBinder {
                 return receiver
             }
             default {
-                return CaptureGoOperand(receiver, prefix)
+                return CaptureGoOperand(receiver, prefix, retainedVariables)
             }
         }
     }
@@ -1442,12 +1453,18 @@ internal partial class StatementBinder {
 
     private func CaptureGoOperand(
         operand BoundExpression,
-        prefix ImmutableArray[BoundStatement].Builder
+        prefix ImmutableArray[BoundStatement].Builder,
+        retainedVariables HashSet[VariableSymbol]
     ) BoundExpression {
         if operand is BoundAddressOfExpression{
             Operand: BoundDereferenceExpression{Operand: BoundBlockExpression block}
         } outerAddress {
-            let rewritten = HoistArgumentBlock(block, prefix, (tail BoundExpression) -> CaptureGoOperand(tail, prefix))
+            let rewritten = HoistArgumentBlock(
+                block,
+                prefix,
+                retainedVariables,
+                (tail BoundExpression) -> CaptureGoOperand(tail, prefix, retainedVariables)
+            )
             if rewritten is BoundBlockExpression {
                 return BoundAddressOfExpression(
                     outerAddress.Syntax,
@@ -1459,8 +1476,8 @@ internal partial class StatementBinder {
             return rewritten
         }
         if operand is BoundAddressOfExpression{Operand: BoundBlockExpression block} addressBlock &&
-            !ReadsUncapturableVariable(addressBlock) {
-            let rewritten = HoistArgumentBlock(block, prefix, (tail BoundExpression) -> tail)
+            !ReadsUncapturableVariable(addressBlock, retainedVariables) {
+            let rewritten = HoistArgumentBlock(block, prefix, retainedVariables, (tail BoundExpression) -> tail)
             return BoundAddressOfExpression(
                 addressBlock.Syntax,
                 rewritten,
@@ -1468,8 +1485,19 @@ internal partial class StatementBinder {
                 addressBlock.IsReadOnly
             )
         }
-        if operand is BoundBlockExpression plainBlock && !ReadsUncapturableVariable(plainBlock) {
-            return HoistArgumentBlock(plainBlock, prefix, (tail BoundExpression) -> CaptureGoOperand(tail, prefix))
+        if operand is BoundBlockExpression plainBlock &&
+            !ReadsUncapturableVariable(plainBlock, retainedVariables) &&
+            (
+            IsSharedArgumentBlock(plainBlock) || plainBlock.Type is ByRefTypeSymbol || TypeSymbol.IsByRefLike(
+                plainBlock.Type
+            )
+        ) {
+            return HoistArgumentBlock(
+                plainBlock,
+                prefix,
+                retainedVariables,
+                (tail BoundExpression) -> CaptureGoOperand(tail, prefix, retainedVariables)
+            )
         }
         // A constant and `this` cannot change before the child runs, and a
         // function literal only allocates a closure over shared variables, so
@@ -1488,7 +1516,7 @@ internal partial class StatementBinder {
                 BoundConditionalAddressExpression
         ) ||
             operand is BoundVariableExpression{Variable: ParameterSymbol{IsReceiverParameter: true}} ||
-            ReadsUncapturableVariable(operand) ||
+            ReadsUncapturableVariable(operand, retainedVariables) ||
             operand.Type is ByRefTypeSymbol ||
             TypeSymbol.IsByRefLike(operand.Type) {
             return operand
@@ -1496,19 +1524,37 @@ internal partial class StatementBinder {
         return SpillToReadOnlyLocal(operand, "$$go$$arg$$${binderCtx.GoArgumentCounter++}", prefix)
     }
 
+    private func IsSharedArgumentBlock(block BoundBlockExpression) bool {
+        for statement in block.Statements {
+            if statement is BoundVariableDeclaration{Variable: {Name: var name}} &&
+                (
+                name.StartsWith("<>namedArg", StringComparison.Ordinal) || name.StartsWith(
+                    "<>expandedNamedArg",
+                    StringComparison.Ordinal
+                )
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func HoistArgumentBlock(
         block BoundBlockExpression,
         prefix ImmutableArray[BoundStatement].Builder,
+        retainedVariables HashSet[VariableSymbol],
         captureTail Func[BoundExpression, BoundExpression]
     ) BoundExpression {
         let retained = ImmutableArray.CreateBuilder[BoundStatement]()
         for statement in block.Statements {
-            if statement is BoundVariableDeclaration declaration &&
-                (
-                ClosureCaptureLegalityChecker.RejectsCapture(declaration.Variable) ||
-                    (declaration.Initializer != nil && ReadsUncapturableVariable(declaration.Initializer))
-            ) {
+            if (
+                statement is BoundVariableDeclaration declaration && ClosureCaptureLegalityChecker.RejectsCapture(
+                    declaration.Variable
+                )
+            ) ||
+                ReadsUncapturableVariable(statement, retainedVariables) {
                 retained.Add(statement)
+                GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
                 continue
             }
             if statement is BoundVariableDeclaration hoistedDeclaration {
@@ -1516,16 +1562,29 @@ internal partial class StatementBinder {
             }
             prefix.Add(statement)
         }
-        let tail = captureTail(block.Expression)
+        let tail = if ReadsUncapturableVariable(block.Expression, retainedVariables) {
+            block.Expression
+        } else {
+            captureTail(block.Expression)
+        }
         if retained.Count == 0 {
             return tail
         }
         return BoundBlockExpression(block.Syntax, retained.ToImmutable(), tail)
     }
 
-    private func ReadsUncapturableVariable(operand BoundExpression) bool {
+    private func ReadsUncapturableVariable(operand BoundExpression, retainedVariables HashSet[VariableSymbol]) bool {
         for variable in GoCapturedVariableCollector.CollectCapturedVariables(operand) {
-            if ClosureCaptureLegalityChecker.RejectsCapture(variable) {
+            if ClosureCaptureLegalityChecker.RejectsCapture(variable) || retainedVariables.Contains(variable) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ReadsUncapturableVariable(statement BoundStatement, retainedVariables HashSet[VariableSymbol]) bool {
+        for variable in GoCapturedVariableCollector.CollectCapturedVariables(statement) {
+            if ClosureCaptureLegalityChecker.RejectsCapture(variable) || retainedVariables.Contains(variable) {
                 return true
             }
         }

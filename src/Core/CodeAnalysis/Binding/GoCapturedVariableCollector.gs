@@ -29,15 +29,18 @@ internal shared class GoCapturedVariableCollector {
         private let seen HashSet[VariableSymbol]
         private let declared HashSet[VariableSymbol]
         private let captured ImmutableArray[VariableSymbol].Builder
+        private let written HashSet[VariableSymbol]?
 
         init(
             seen HashSet[VariableSymbol],
             declared HashSet[VariableSymbol],
-            captured ImmutableArray[VariableSymbol].Builder
+            captured ImmutableArray[VariableSymbol].Builder,
+            written HashSet[VariableSymbol]? = nil
         ) {
             this.seen = seen
             this.declared = declared
             this.captured = captured
+            this.written = written
         }
 
         override func VisitExpression(node BoundExpression?) {
@@ -77,14 +80,22 @@ internal shared class GoCapturedVariableCollector {
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             this.CaptureIfFree(node.Variable)
+            this.written?.Add(node.Variable)
             base.VisitAssignmentExpression(node)
+        }
+
+        protected override func VisitAddressOfExpression(node BoundAddressOfExpression) {
+            if this.TryGetRootVariable(node.Operand) is {} variable {
+                this.written?.Add(variable)
+            }
+            base.VisitAddressOfExpression(node)
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Initializer != nil {
                 this.VisitExpression(node.Initializer)
             }
-            this.declared.Add(node.Variable)
+            this.DeclareVariable(node.Variable)
         }
 
         // Issue #5591: `?.` evaluates its receiver into a synthetic capture
@@ -95,10 +106,10 @@ internal shared class GoCapturedVariableCollector {
         // into the closure, so the child dereferenced nil.
         protected override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
             if node.Capture != nil {
-                this.declared.Add(node.Capture)
+                this.DeclareVariable(node.Capture)
             }
             if node.ResultSlot != nil {
-                this.declared.Add(node.ResultSlot)
+                this.DeclareVariable(node.ResultSlot)
             }
             base.VisitNullConditionalAccessExpression(node)
         }
@@ -108,15 +119,27 @@ internal shared class GoCapturedVariableCollector {
         // same three forms.
         override func VisitPattern(node BoundPattern?) {
             if node is BoundDiscardPattern{Variable: not nil} varPattern {
-                this.declared.Add(varPattern.Variable!!)
+                this.DeclareVariable(varPattern.Variable!!)
             }
             if node is BoundTypePattern typePattern && typePattern.Variable != nil {
-                this.declared.Add(typePattern.Variable)
+                this.DeclareVariable(typePattern.Variable)
             }
             if node is BoundSlicePattern slicePattern && slicePattern.Variable != nil {
-                this.declared.Add(slicePattern.Variable)
+                this.DeclareVariable(slicePattern.Variable)
             }
             base.VisitPattern(node)
+        }
+
+        private func DeclareVariable(variable VariableSymbol) {
+            this.declared.Add(variable)
+            this.written?.Add(variable)
+        }
+
+        private func TryGetRootVariable(operand BoundExpression?) VariableSymbol? -> switch operand {
+            case BoundVariableExpression{Variable: var variable}: variable
+            case BoundFieldAccessExpression{Receiver: {} receiver}: this.TryGetRootVariable(receiver)
+            case BoundTupleElementAccessExpression{Receiver: var receiver}: this.TryGetRootVariable(receiver)
+            default: default(VariableSymbol?)
         }
 
         private func CaptureIfFree(variable VariableSymbol) {
@@ -136,5 +159,22 @@ internal shared class GoCapturedVariableCollector {
         let collector = GoCapturedVariableCollector.Walker(seen, declared, captured)
         collector.VisitExpression(expression)
         return captured.ToImmutable()
+    }
+
+    func CollectCapturedVariables(statement BoundStatement) ImmutableArray[VariableSymbol] {
+        let seen = HashSet[VariableSymbol]()
+        let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
+        let declared = HashSet[VariableSymbol]()
+        let collector = GoCapturedVariableCollector.Walker(seen, declared, captured)
+        collector.VisitStatement(statement)
+        return captured.ToImmutable()
+    }
+
+    func CollectWrittenVariables(statement BoundStatement, written HashSet[VariableSymbol]) {
+        let seen = HashSet[VariableSymbol]()
+        let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
+        let declared = HashSet[VariableSymbol]()
+        let collector = GoCapturedVariableCollector.Walker(seen, declared, captured, written)
+        collector.VisitStatement(statement)
     }
 }
