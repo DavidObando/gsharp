@@ -1936,7 +1936,10 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func KnownCompilations() IEnumerable[CSharpCompilation] -> []CSharpCompilation{this.context.Compilation}
+        private func KnownCompilations() IEnumerable[CSharpCompilation] -> []CSharpCompilation{
+            this.context.RootCompilation,
+            this.context.Compilation
+        }
             .Concat(this.context.SiblingCompilations ?? Array.Empty[CSharpCompilation]())
             .Concat(this.context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]())
             .Distinct()
