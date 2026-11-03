@@ -478,6 +478,46 @@ func Main() {
         Assert.Contains("(10,21,10,26): error GS0235:", output, StringComparison.Ordinal)
     }
 
+    @Fact
+    func Issue4740_BaseConstructorByRefNullabilityAndReadOnlyDiagnostics_AreReported() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (nullabilityCode, nullabilityOutput) = fixture.TryCompile(`package Ctors4740BaseNull
+
+open class BaseRef {
+    init(ref x string) { }
+}
+
+class DerivedRef : BaseRef {
+    init(ref x string?) : base(ref x) { }
+}
+`, "Ctors4740BaseNull", false, "/warnaserror+")
+        Assert.Equal(1, nullabilityCode)
+        Assert.Contains("GS0612", nullabilityOutput, StringComparison.Ordinal)
+
+        let (readOnlyCode, readOnlyOutput) = fixture.TryCompile(`package Ctors4740BaseReadOnly
+
+open class BaseMut {
+    init(ref x int32) { x++ }
+}
+
+class DerivedInAsRef : BaseMut {
+    init(in x int32) : base(ref x) { }
+}
+
+class DerivedInModifierToRef : BaseMut {
+    init(in x int32) : base(in x) { }
+}
+
+class DerivedOutModifierToRef : BaseMut {
+    init(ref x int32) : base(out x) { }
+}
+`, "Ctors4740BaseReadOnly", false)
+        Assert.Equal(1, readOnlyCode)
+        Assert.Contains("GS9005", readOnlyOutput, StringComparison.Ordinal)
+        Assert.Contains("(12,24,12,28): error GS0214:", readOnlyOutput, StringComparison.Ordinal)
+        Assert.Contains("(16,25,16,29): error GS0214:", readOnlyOutput, StringComparison.Ordinal)
+    }
+
     shared {
         private func ModuleInitializerCalls(image[]uint8)[]string {
             using let pe = PEReader(MemoryStream(image))

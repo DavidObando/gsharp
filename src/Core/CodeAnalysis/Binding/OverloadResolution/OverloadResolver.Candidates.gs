@@ -1072,7 +1072,7 @@ internal partial class OverloadResolver {
                 let argumentSyntax = if callSyntax != nil && i < callSyntax.Arguments.Count {
                     UnwrapNamedArgumentValue(callSyntax.Arguments[i])
                 } else {
-                    default(ExpressionSyntax?)
+                    boundArguments[i]?.Syntax as ExpressionSyntax
                 }
                 let explicitRefKind = if argumentSyntax is RefArgumentExpressionSyntax refArgument {
                     getRefKindFromModifier(refArgument.RefKindModifier)
@@ -1086,6 +1086,12 @@ internal partial class OverloadResolver {
                     boundArguments[i]?.Type is ByRefTypeSymbol ||
                     boundArguments[i] is BoundAddressOfExpression ||
                     boundArguments[i] is BoundConditionalAddressExpression
+                if hasAddress &&
+                    parameter.RefKind != RefKind.In &&
+                    boundArguments[i] != nil &&
+                    RefCapabilities.IsReadOnlyStorage(boundArguments[i]) {
+                    return false
+                }
                 if (parameter.RefKind != RefKind.In || hasAddress) && ByRefStorageMatching.TryGetStorageType(
                     boundArguments[i]
                 ) is {} storageType {
@@ -1107,6 +1113,7 @@ internal partial class OverloadResolver {
                     continue
                 }
             } else if boundArguments[i]?.Type is ByRefTypeSymbol ||
+                boundArguments[i]?.Syntax is RefArgumentExpressionSyntax ||
                 (
                 callSyntax != nil &&
                     i < callSyntax
@@ -1636,7 +1643,7 @@ internal partial class OverloadResolver {
             let argumentSyntax = if callSyntax != nil && i < callSyntax.Arguments.Count {
                 UnwrapNamedArgumentValue(callSyntax.Arguments[i])
             } else {
-                default(ExpressionSyntax?)
+                argument?.Syntax as ExpressionSyntax
             }
             let explicitRefKind = if argumentSyntax is RefArgumentExpressionSyntax refArgument {
                 getRefKindFromModifier(refArgument.RefKindModifier)
@@ -1663,6 +1670,11 @@ internal partial class OverloadResolver {
             let hasAddress = isByRefArgument ||
                 argument is BoundAddressOfExpression ||
                 argument is BoundConditionalAddressExpression
+            if hasAddress && parameter.RefKind != RefKind.In && argument != nil && RefCapabilities.IsReadOnlyStorage(
+                argument
+            ) {
+                return false
+            }
             if !hasAddress && parameter.RefKind != RefKind.In {
                 return false
             }

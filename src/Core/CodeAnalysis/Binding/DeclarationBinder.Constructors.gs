@@ -259,7 +259,14 @@ internal partial class DeclarationBinder {
                 visibleConstructors.Add(constructor)
             }
         }
-        let ctors = visibleConstructors.ToArray()
+        var ctors = visibleConstructors.ToArray()
+        let refCompatibleCtors = visibleConstructors.Where(
+            (ctor ConstructorInfo) -> IsCompatibleClrBaseRefArguments(ctor, boundArguments)
+        )
+            .ToArray()
+        if refCompatibleCtors.Length > 0 {
+            ctors = refCompatibleCtors
+        }
         RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments, importedBaseType)
         let argTypes = [boundArguments.Count]Type?
         var argsAllTyped = true
@@ -464,17 +471,7 @@ internal partial class DeclarationBinder {
         for var i = 0; i < ctorParams.Length; i++ {
             let clrParamType = ctorParams[i].ParameterType
             if clrParamType.IsByRef {
-                let refKind = if ctorParams[i].IsOut {
-                    RefKind.Out
-                } else {
-                    (
-                        if ctorParams[i].IsIn {
-                            RefKind.In
-                        } else {
-                            RefKind.Ref
-                        }
-                    )
-                }
+                let refKind = RefCapabilities.GetParameterRefKind(ctorParams[i])
                 refKindsBuilder.Add(refKind)
                 // Issue #4400: a plain argument at an imported `in` base
                 // constructor parameter is passed by readonly reference.
@@ -520,6 +517,26 @@ internal partial class DeclarationBinder {
                     )
                     continue
                 }
+                if !IsCompatibleExplicitByRefBaseArgument(orderedArgs[i], refKind, out var explicitClrRefKind) {
+                    if explicitClrRefKind != RefKind.None && explicitClrRefKind != refKind {
+                        Diagnostics.ReportRefKindMismatch(
+                            argLocation(i),
+                            i + 1,
+                            ctorParams[i].Name ?? "value",
+                            refKindToString(refKind),
+                            refKindToString(explicitClrRefKind)
+                        )
+                    } else {
+                        Diagnostics.ReportReadOnlyArgumentForWritableRef(
+                            argLocation(i),
+                            i + 1,
+                            clrBase.Name,
+                            refKindToString(refKind)
+                        )
+                    }
+                    convertedArgs.Add(BoundErrorExpression(orderedArgs[i].Syntax))
+                    continue
+                }
                 // A by-ref argument is forwarded as-is (it is already a managed
                 // pointer, e.g. the result of `&x`); no value conversion applies.
                 if ByRefStorageMatching.TryGetStorageType(orderedArgs[i]) is {} baseByRefStorage {
@@ -540,12 +557,16 @@ internal partial class DeclarationBinder {
                             symbolicMethodTypeArgs: default(ImmutableArray[TypeSymbol?])
                         )
                     )
-                    if baseByRefPointee != TypeSymbol.Error && !ByRefStorageMatching.AreSameStorageType(
-                        baseByRefStorage,
+                    let syntheticParameter = ParameterSymbol(
+                        ctorParams[i].Name ?? "value",
                         baseByRefPointee,
-                        out _,
-                        out _,
-                        out _
+                        refKind: refKind
+                    )
+                    if baseByRefPointee != TypeSymbol.Error && !conversions.CheckByRefArgumentStorage(
+                        argLocation(i),
+                        syntheticParameter,
+                        baseByRefStorage,
+                        baseByRefPointee
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             argLocation(i),
@@ -820,10 +841,26 @@ internal partial class DeclarationBinder {
                 boundArguments[i] = argument
             }
             if parameter.RefKind != RefKind.None && !IsImplicitInArgument(parameter, argument) {
-                if !TryGetAddressedArgumentType(argument, out var addressedType) || addressedType != parameter.Type {
+                if !IsCompatibleExplicitByRefBaseArgument(argument, parameter.RefKind, out _) ||
+                    !TryGetAddressedArgumentType(argument, out var addressedType) ||
+                    (
+                    addressedType != parameter.Type && !ByRefStorageMatching.AreSameStorageType(
+                        addressedType!!,
+                        parameter.Type,
+                        out _,
+                        out _,
+                        out _
+                    )
+                ) {
                     Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count)
                     return nil
                 }
+                let _ = conversions.CheckByRefArgumentStorage(
+                    argLocation(i),
+                    parameter,
+                    addressedType!!,
+                    parameter.Type
+                )
                 convertedArgs.Add(argument)
                 continue
             }
@@ -900,7 +937,8 @@ internal partial class DeclarationBinder {
                 // applicable like a by-value one (it is passed by implicit
                 // readonly reference after the ordinary conversion).
                 if parameter.RefKind != RefKind.None && !IsImplicitInArgument(parameter, boundArguments[i]) {
-                    if !TryGetAddressedArgumentType(boundArguments[i], out var addressedType) ||
+                    if !IsCompatibleExplicitByRefBaseArgument(boundArguments[i], parameter.RefKind, out _) ||
+                        !TryGetAddressedArgumentType(boundArguments[i], out var addressedType) ||
                         (
                         addressedType != paramType && !ByRefStorageMatching.AreSameStorageType(
                             addressedType!!,
@@ -972,24 +1010,31 @@ internal partial class DeclarationBinder {
                 convertedArgs.Add(CreateProjectedOptionalUserDefaultArgument(best.Parameters[i], bestParamTypes[i]))
                 continue
             }
-            convertedArgs.Add(
-                if IsImplicitInArgument(best.Parameters[i], boundArguments[i]) {
+            if IsImplicitInArgument(best.Parameters[i], boundArguments[i]) {
+                convertedArgs.Add(
                     conversions.BindImplicitInArgument(
                         argLocation(i),
                         boundArguments[i],
                         bestParamTypes[i],
                         best.Parameters[i]
                     )
-                } else {
-                    (
-                        if best.Parameters[i].RefKind != RefKind.None {
-                            boundArguments[i]
-                        } else {
-                            conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i])
-                        }
+                )
+            } else if best.Parameters[i].RefKind != RefKind.None {
+                if TryGetAddressedArgumentType(boundArguments[i], out var selectedAddressedType) &&
+                    selectedAddressedType != TypeSymbol.Error &&
+                    bestParamTypes[i] != TypeSymbol
+                    .Error {
+                    let _ = conversions.CheckByRefArgumentStorage(
+                        argLocation(i),
+                        best.Parameters[i],
+                        selectedAddressedType!!,
+                        bestParamTypes[i]
                     )
                 }
-            )
+                convertedArgs.Add(boundArguments[i])
+            } else {
+                convertedArgs.Add(conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]))
+            }
         }
         return BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol, best)
     }
@@ -1629,7 +1674,67 @@ internal partial class DeclarationBinder {
             parameter ParameterSymbol,
             argument BoundExpression
         ) bool -> parameter.RefKind == RefKind.In &&
-            !TryGetAddressedArgumentType(argument, out _)
+            !TryGetAddressedArgumentType(argument, out _) &&
+            !(argument.Syntax is RefArgumentExpressionSyntax)
+
+        private func IsCompatibleExplicitByRefBaseArgument(
+            argument BoundExpression,
+            parameterRefKind RefKind,
+            out explicitRefKind RefKind
+        ) bool {
+            explicitRefKind = if argument.Syntax is RefArgumentExpressionSyntax refArgument {
+                GetRefKindFromModifierText(refArgument.RefKindModifier.Text)
+            } else {
+                RefKind.None
+            }
+            if explicitRefKind != RefKind.None && explicitRefKind != parameterRefKind {
+                return false
+            }
+            if parameterRefKind != RefKind.In && RefCapabilities.IsReadOnlyStorage(argument) {
+                return false
+            }
+            return true
+        }
+
+        private func IsCompatibleClrBaseRefArguments(
+            ctor ConstructorInfo,
+            boundArguments ImmutableArray[BoundExpression].Builder
+        ) bool {
+            let parameters = ctor.GetParameters()
+            let isVariadic = parameters.Length > 0 && ClrOverloadResolution.IsParamsArrayParameter(parameters[^1])
+            let fixedCount = if isVariadic {
+                parameters.Length - 1
+            } else {
+                parameters.Length
+            }
+            let count = Math.Min(boundArguments.Count, fixedCount)
+            for var i = 0; i < count; i++ {
+                let argument = boundArguments[i]
+                let parameter = parameters[i]
+                if parameter.ParameterType.IsByRef {
+                    let refKind = RefCapabilities.GetParameterRefKind(parameter)
+                    if ConversionClassifier.IsImplicitInClrArgument(argument, parameter) &&
+                        !(argument.Syntax is RefArgumentExpressionSyntax) {
+                        continue
+                    }
+                    if !TryGetAddressedArgumentType(argument, out _) ||
+                        !IsCompatibleExplicitByRefBaseArgument(argument, refKind, out _) {
+                        return false
+                    }
+                } else if TryGetAddressedArgumentType(argument, out _) ||
+                    argument.Syntax is RefArgumentExpressionSyntax {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func GetRefKindFromModifierText(text string?) RefKind -> switch text {
+            case "ref": RefKind.Ref
+            case "out": RefKind.Out
+            case "in": RefKind.In
+            default: RefKind.None
+        }
 
         private func CreateProjectedOptionalUserDefaultArgument(
             parameter ParameterSymbol,
