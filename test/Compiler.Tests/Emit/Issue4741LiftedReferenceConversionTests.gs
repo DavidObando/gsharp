@@ -333,6 +333,10 @@ public struct ActionButton {
 public class Style {
     public Length FontSize { get; set; }
     public Length? OptionalFontSize { get; set; }
+}
+public struct GenericNullableValueBox<T> where T : struct {
+    public T? Value;
+    public static implicit operator GenericNullableValueBox<T>(T? value) => new GenericNullableValueBox<T> { Value = value };
 }`, fixturePath)
             let validSourcePath = Path.Combine(directory, "Valid5587.gs")
             let validAssemblyPath = Path.Combine(directory, "Valid5587.dll")
@@ -349,11 +353,15 @@ class Theme {
     var InstanceStyle Style = Style{FontSize: Theme.Button.FontSize!!, OptionalFontSize: Theme.Button.FontSize}
 }
 
+func WrapGeneric[T struct](value T?) GenericNullableValueBox[T] -> value
+
 func Run() string {
     let instance = Theme()
     let localStyle = Style{FontSize: Theme.Button.FontSize!!, OptionalFontSize: Theme.Button.FontSize}
     let hasEmpty = Theme.EmptyStyle.OptionalFontSize == nil
-    return "${Theme.ButtonStyle.FontSize.Value},${Theme.ButtonStyle.OptionalFontSize!!.Value},${instance.InstanceStyle.FontSize.Value},${localStyle.OptionalFontSize!!.Value},${hasEmpty}"
+    let wrappedPresent = WrapGeneric[int32](19)
+    let wrappedEmpty = WrapGeneric[int32](nil)
+    return "${Theme.ButtonStyle.FontSize.Value},${Theme.ButtonStyle.OptionalFontSize!!.Value},${instance.InstanceStyle.FontSize.Value},${localStyle.OptionalFontSize!!.Value},${hasEmpty},${wrappedPresent.Value!!},${wrappedEmpty.Value == nil}"
 }`)
             let validCompilation = CompileGSharp(validSourcePath, validAssemblyPath, fixturePath)
             Assert.True(validCompilation.Exit == 0, validCompilation.Diagnostics)
@@ -366,7 +374,7 @@ func Run() string {
                 nil,
                 nil
             )
-            Assert.Equal("14,14,14,14,True", actual)
+            Assert.Equal("14,14,14,14,True,19,True", actual)
             let invalidBody = switch sink {
                 case "shared-object-initializer": `class Theme {
     shared {

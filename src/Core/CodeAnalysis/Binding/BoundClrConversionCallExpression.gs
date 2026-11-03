@@ -90,12 +90,7 @@ class BoundClrConversionCallExpression : BoundExpression {
             let isLifted = ComputeIsLifted(source, target, method, nil, nil)
             if source is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
                 !isLifted &&
-                (
-                method.GetParameters() is not{Length: 1} parameters || !ClrTypeUtilities.AreSame(
-                    parameters[0].ParameterType,
-                    NullableLifting.GetEffectiveClrType(source)
-                )
-            ) {
+                !AcceptsNullableValueSource(nullable, target, method, out _) {
                 return false
             }
             return Conversion.ClassifyNonStructural(GetEffectiveResultType(source, target, method, isLifted), target)
@@ -112,11 +107,8 @@ class BoundClrConversionCallExpression : BoundExpression {
                 return NullableTypeSymbol.Get(target)
             }
             if source is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
-                method?.GetParameters() is {Length: 1} parameters && ClrTypeUtilities.AreSame(
-                parameters[0].ParameterType,
-                NullableLifting.GetEffectiveClrType(source)
-            ) {
-                let declaredResult = ClrNullability.GetReturnTypeSymbol(method!!)
+                method != nil &&
+                AcceptsNullableValueSource(nullable, target, method, out var declaredResult) {
                 if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(declaredResult, target) &&
                     !Conversion
                     .ClassifyNonStructural(declaredResult, target).IsImplicit {
@@ -124,6 +116,65 @@ class BoundClrConversionCallExpression : BoundExpression {
                 }
             }
             return target
+        }
+
+        private func AcceptsNullableValueSource(
+            source NullableTypeSymbol,
+            target TypeSymbol,
+            method MethodInfo,
+            out declaredResult TypeSymbol
+        ) bool {
+            declaredResult = target
+            if method.GetParameters() is not{Length: 1} parameters {
+                return false
+            }
+            if method.DeclaringType is {IsGenericTypeDefinition: true} openDeclaring {
+                let targetUnderlying = if target is NullableTypeSymbol nullableTarget {
+                    nullableTarget.UnderlyingType
+                } else {
+                    target
+                }
+                let symbolicOwner ImportedTypeSymbol? = if source.UnderlyingType is ImportedTypeSymbol{
+                    OpenDefinition: {} sourceOpen
+                } importedSource &&
+                    !importedSource
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    ClrTypeUtilities.AreSame(sourceOpen, openDeclaring) {
+                    importedSource
+                } else if targetUnderlying is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
+                    !importedTarget
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    ClrTypeUtilities.AreSame(targetOpen, openDeclaring) {
+                    importedTarget
+                } else {
+                    nil
+                }
+                if symbolicOwner == nil {
+                    return false
+                }
+                let mappedParameter = MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                    parameters[0],
+                    openDeclaring,
+                    symbolicOwner.TypeArguments
+                )
+                    .StripToBareShape()
+                if !Conversion.ClassifyNonStructural(source, mappedParameter).IsIdentity {
+                    return false
+                }
+                declaredResult = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+                    method,
+                    openDeclaring,
+                    symbolicOwner.TypeArguments
+                )
+                return true
+            }
+            if !ClrTypeUtilities.AreSame(parameters[0].ParameterType, NullableLifting.GetEffectiveClrType(source)) {
+                return false
+            }
+            declaredResult = ClrNullability.GetReturnTypeSymbol(method)
+            return true
         }
 
         private func ComputeIsLifted(
