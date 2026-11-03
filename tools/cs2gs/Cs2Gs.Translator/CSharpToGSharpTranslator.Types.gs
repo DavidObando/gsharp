@@ -2928,6 +2928,65 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func ResolveRangeVariableTypeSymbol(
+            explicitType TypeSyntax?,
+            source Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            anchor Microsoft.CodeAnalysis.SyntaxNode
+        ) ITypeSymbol? {
+            let elementType ITypeSymbol? = this.ResolveRangeVariableElementTypeSymbol(source, anchor)
+            if explicitType != nil {
+                let explicitTypeSymbol ITypeSymbol? = this.context.GetTypeInfo(explicitType).Type
+                if elementType != nil && explicitTypeSymbol != nil && this.GetProjectedBindingType(
+                    elementType,
+                    explicitTypeSymbol,
+                    this.context.Compilation.ClassifyConversion(elementType, explicitTypeSymbol)
+                ) is {} projectedBinding {
+                    return projectedBinding
+                }
+                return explicitTypeSymbol
+            }
+            return elementType
+        }
+
+        private func TryGetProjectedRangeVariableType(rangeVariable IRangeVariableSymbol) ITypeSymbol? {
+            return switch rangeVariable.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() {
+                case fromClause is FromClauseSyntax: this.ResolveRangeVariableTypeSymbol(
+                    fromClause.Type,
+                    fromClause.Expression,
+                    fromClause
+                )
+                case letClause is LetClauseSyntax: this.GetManagedReferenceArrayProjectedExpressionType(
+                    letClause.Expression
+                )
+                case joinClause is JoinClauseSyntax: this.ResolveRangeVariableTypeSymbol(
+                    joinClause.Type,
+                    joinClause.InExpression,
+                    joinClause
+                )
+                case joinInto is JoinIntoClauseSyntax when joinInto.Parent is JoinClauseSyntax parentJoin: if this.ResolveRangeVariableTypeSymbol(
+                    parentJoin.Type,
+                    parentJoin.InExpression,
+                    parentJoin
+                ) is {} innerType &&
+                    this
+                    .context
+                    .Compilation
+                    .GetTypeByMetadataName("System.Collections.Generic.IEnumerable`1") is {} enumerableType {
+                    cast[ITypeSymbol](enumerableType.Construct(innerType))
+                } else {
+                    default(ITypeSymbol?)
+                }
+                case continuation is QueryContinuationSyntax when continuation.Parent is QueryBodySyntax body: switch body
+                    .SelectOrGroup {
+                    case selectClause is SelectClauseSyntax: this.GetManagedReferenceArrayProjectedExpressionType(
+                        selectClause.Expression
+                    )
+                    default: default(ITypeSymbol?)
+                }
+                default: default(ITypeSymbol?)
+            }
+        }
+
         private func ResolveRangeVariableElementTypeSymbol(
             source Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             anchor Microsoft.CodeAnalysis.SyntaxNode

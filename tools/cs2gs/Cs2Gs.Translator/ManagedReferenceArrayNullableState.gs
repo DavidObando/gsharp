@@ -9,6 +9,7 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp.Syntax
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 
 internal class ManagedReferenceArrayNullableState {
     init() {
@@ -22,6 +23,7 @@ internal class ManagedReferenceArrayNullableState {
             ReferenceEqualityComparer.Instance
         )
         ManagedReferenceArrayProjectedLocalType = Dictionary[ILocalSymbol, ITypeSymbol?](SymbolEqualityComparer.Default)
+        ProjectedBaseTypesInProgress = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
     }
 
     // Effective type of conditional/switch expressions whose arms carry
@@ -46,6 +48,79 @@ internal class ManagedReferenceArrayNullableState {
     // active foreach binding agree on managed-reference projection.
     prop ManagedReferenceArrayProjectedLocalType Dictionary[ILocalSymbol, ITypeSymbol?] {
         get;
+    }
+
+    // Source-declared types whose base-type projection is currently being computed.
+    prop ProjectedBaseTypesInProgress HashSet[INamedTypeSymbol] {
+        get;
+    }
+
+    prop ProjectedBaseIndex ProjectedBaseCompilationIndex? {
+        get;
+        set;
+    }
+}
+
+internal class ProjectedBaseCompilationIndex {
+    init() {
+        MemberConsumersByCandidate = Dictionary[INamedTypeSymbol, List[SyntaxNode]](SymbolEqualityComparer.Default)
+        ConversionsByCandidate = Dictionary[INamedTypeSymbol, List[ExpressionSyntax]](SymbolEqualityComparer.Default)
+        DerivedTypesByCandidate = Dictionary[INamedTypeSymbol, List[INamedTypeSymbol]](SymbolEqualityComparer.Default)
+        GenericInstantiationsByCandidate = Dictionary[
+            INamedTypeSymbol,
+            List[(SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
+        ](SymbolEqualityComparer.Default)
+        ReplacementsByType = Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?](
+            SymbolEqualityComparer.Default
+        )
+        IndexedCompilations = Array.Empty[Compilation]()
+    }
+
+    prop MemberConsumersByCandidate Dictionary[INamedTypeSymbol, List[SyntaxNode]] {
+        get;
+    }
+
+    prop ConversionsByCandidate Dictionary[INamedTypeSymbol, List[ExpressionSyntax]] {
+        get;
+    }
+
+    prop DerivedTypesByCandidate Dictionary[INamedTypeSymbol, List[INamedTypeSymbol]] {
+        get;
+    }
+
+    prop GenericInstantiationsByCandidate Dictionary[
+        INamedTypeSymbol,
+        List[(SyntaxTree, ImmutableArray[ITypeParameterSymbol], ImmutableArray[ITypeSymbol])]
+    ] {
+        get;
+    }
+
+    prop ReplacementsByType Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?] {
+        get;
+    }
+
+    prop IsIndexed bool {
+        get;
+        set;
+    }
+
+    prop IndexedCompilations IReadOnlyList[Compilation] {
+        get;
+        set;
+    }
+
+    shared {
+        private let ByCompilation System
+            .Runtime
+            .CompilerServices
+            .ConditionalWeakTable[Compilation, ProjectedBaseCompilationIndex] = System
+            .Runtime
+            .CompilerServices
+            .ConditionalWeakTable[Compilation, ProjectedBaseCompilationIndex]()
+
+        internal func For(compilation Compilation) ProjectedBaseCompilationIndex -> ByCompilation.GetOrCreateValue(
+            compilation
+        )
     }
 }
 

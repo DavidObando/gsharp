@@ -664,6 +664,7 @@ partial class CSharpToGSharpTranslator {
             Statements List[GStatement],
             Value GExpression
         ) {
+            this.RegisterProjectedDeconstructionBindings(leftTuple, right)
             let statements = List[GStatement]()
             let captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements)
             let values = this.LowerTuplePattern(

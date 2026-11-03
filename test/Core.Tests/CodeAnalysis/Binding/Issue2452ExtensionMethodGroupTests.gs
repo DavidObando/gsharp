@@ -8,6 +8,8 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.Core.Tests
+import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
@@ -119,6 +121,207 @@ let conditional = maybe?.Checksum32()
 Console.WriteLine(checksum())
 Console.WriteLine(conditional)`
         AssertCompilesWithoutErrors(source)
+    }
+
+    @Fact
+    func AsyncExtensionMethodGroups_ConvertToTaskAndValueTaskDelegatesAndRun() {
+        let source = `package Repro
+import System
+import System.Collections.Generic
+import System.Linq
+import System.Threading.Tasks
+
+data class Payload(Tag int32)
+
+class Box[T] {
+    var Value T
+    init(value T) {
+        Value = value
+    }
+
+    async func Get() T {
+        await Task.Yield()
+        return Value
+    }
+}
+
+async func (value string) LengthAsync() int32 {
+    await Task.Yield()
+    return value.Length
+}
+
+async func (value string) DelayTextAsync() {
+    await Task.Yield()
+    Console.WriteLine(value)
+}
+
+async func (value string) ValueLengthAsync() ValueTask[int32] {
+    await Task.Yield()
+    return value.Length
+}
+
+async func (value string) ValueDelayAsync() ValueTask {
+    await Task.Yield()
+    Console.WriteLine("vt:" + value)
+}
+
+async func (value int32) ValueAsync() ValueTask[int32] {
+    await Task.Yield()
+    return value + 1
+}
+
+async func (value int32) DelayNumberAsync() {
+    await Task.Yield()
+    Console.WriteLine(value)
+}
+
+async func (value T) DelayIdentityAsync[T]() T {
+    await Task.Yield()
+    return value
+}
+
+async func (value object) SaveAsync() {
+    await Task.Yield()
+    Console.WriteLine("saved:" + value.ToString())
+}
+
+async func (value string) MakePayloadAsync() Payload {
+    await Task.Yield()
+    return Payload(value.Length)
+}
+
+async func Seq(value int32) IAsyncEnumerable[int32] {
+    await Task.Yield()
+    yield value
+}
+
+async func Iter(value int32) IAsyncEnumerator[int32] {
+    await Task.Yield()
+    yield value + 1
+}
+
+async func (value string) ComputeAsync() int32 {
+    await Task.Yield()
+    return value.Length
+}
+
+async func (value string) ComputeAsync(delta int32) int32 {
+    await Task.Yield()
+    return value.Length + delta
+}
+
+delegate AsyncInt() Task[int32];
+
+func MakeIdentity[T](value T) () -> Task[T] -> value.DelayIdentityAsync
+
+func MakeEnumIdentity[T Enum](value T) () -> Task[T] -> value.DelayIdentityAsync
+
+func MakeDependentEnumSave[T Enum, U T](value U) () -> Task -> value.SaveAsync
+
+func MakeObjectIdentity[T System.Object](value T) () -> Task[T] -> value.DelayIdentityAsync
+
+func MakeDependentObjectSave[T System.Object, U T](value U) () -> Task -> value.SaveAsync
+
+func MakeSave[T](value T) () -> Task -> value.SaveAsync
+
+func RunTask[T](step () -> Task[T]) T -> step().GetAwaiter().GetResult()
+
+let lengthAsync async () -> int32 = "four".LengthAsync
+let explicitTask () -> Task[int32] = "seven".LengthAsync
+let clrFunc Func[Task[int32]] = "three".LengthAsync
+let clrPayloadFunc Func[Task[Payload]] = "four".MakePayloadAsync
+let namedDelegate AsyncInt = "four".LengthAsync
+let inferred = "eight".LengthAsync
+let delayAsync async () -> void = "later".DelayTextAsync
+let valueLengthAsync () -> ValueTask[int32] = "five".ValueLengthAsync
+let valueDelayAsync () -> ValueTask = "soon".ValueDelayAsync
+let intValueAsync () -> ValueTask[int32] = (9).ValueAsync
+let intDelayAsync async () -> void = (10).DelayNumberAsync
+let genericRef async () -> string = "echo".DelayIdentityAsync
+let genericVal async () -> int32 = (6).DelayIdentityAsync
+let openGenericRef = MakeIdentity("open")
+let openGenericVal = MakeIdentity(21)
+let enumGenericVal = MakeEnumIdentity(DayOfWeek.Friday)
+let dependentEnumSave = MakeDependentEnumSave[DayOfWeek, DayOfWeek](DayOfWeek.Monday)
+let objectBoundVal = MakeObjectIdentity(31)
+let dependentObjectSave = MakeDependentObjectSave[int32, int32](32)
+let saveFromInt = MakeSave(1)
+let overloadZero async () -> int32 = "four".ComputeAsync
+let overloadOne async (int32) -> int32 = "four".ComputeAsync
+let box = Box[IAsyncEnumerable[int32]](Seq(33))
+let getSeq = box.Get
+
+Console.WriteLine(lengthAsync().GetAwaiter().GetResult())
+Console.WriteLine(explicitTask().GetAwaiter().GetResult())
+Console.WriteLine(clrFunc().GetAwaiter().GetResult())
+Console.WriteLine(clrPayloadFunc().GetAwaiter().GetResult().Tag)
+Console.WriteLine(namedDelegate().GetAwaiter().GetResult())
+Console.WriteLine(inferred().GetAwaiter().GetResult())
+delayAsync().GetAwaiter().GetResult()
+Console.WriteLine(valueLengthAsync().AsTask().GetAwaiter().GetResult())
+valueDelayAsync().AsTask().GetAwaiter().GetResult()
+Console.WriteLine(intValueAsync().AsTask().GetAwaiter().GetResult())
+intDelayAsync().GetAwaiter().GetResult()
+Console.WriteLine(genericRef().GetAwaiter().GetResult())
+Console.WriteLine(genericVal().GetAwaiter().GetResult())
+Console.WriteLine(openGenericRef().GetAwaiter().GetResult())
+Console.WriteLine(openGenericVal().GetAwaiter().GetResult())
+Console.WriteLine(enumGenericVal().GetAwaiter().GetResult())
+dependentEnumSave().GetAwaiter().GetResult()
+Console.WriteLine(objectBoundVal().GetAwaiter().GetResult())
+dependentObjectSave().GetAwaiter().GetResult()
+saveFromInt().GetAwaiter().GetResult()
+Console.WriteLine(overloadZero().GetAwaiter().GetResult())
+Console.WriteLine(overloadOne(3).GetAwaiter().GetResult())
+let seqEnumerator = getSeq().GetAwaiter().GetResult().GetAsyncEnumerator()
+let _ = seqEnumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult()
+Console.WriteLine(seqEnumerator.Current)
+let iterEnumerator = Enumerable.Select([]int32{40}, Iter).Single()
+let _ = iterEnumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult()
+Console.WriteLine(iterEnumerator.Current)
+Console.WriteLine(RunTask("six".LengthAsync))
+Console.WriteLine(RunTask((12).DelayIdentityAsync))
+Console.WriteLine(Task.Run("nine".LengthAsync).GetAwaiter().GetResult())
+Console.WriteLine(Task.Run((15).DelayIdentityAsync).GetAwaiter().GetResult())
+Console.WriteLine(Task.Run(Payload(77).DelayIdentityAsync).GetAwaiter().GetResult().Tag)`
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "4",
+                "5",
+                "5",
+                "4",
+                "4",
+                "5",
+                "later",
+                "4",
+                "vt:soon",
+                "10",
+                "10",
+                "echo",
+                "6",
+                "open",
+                "21",
+                "Friday",
+                "saved:Monday",
+                "31",
+                "saved:32",
+                "saved:1",
+                "4",
+                "7",
+                "33",
+                "41",
+                "3",
+                "12",
+                "4",
+                "15",
+                "77"
+            ) +
+                Environment.NewLine,
+            result.Output
+        )
     }
 
     shared {

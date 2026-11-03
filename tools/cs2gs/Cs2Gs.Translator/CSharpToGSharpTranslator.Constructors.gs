@@ -643,7 +643,7 @@ partial class CSharpToGSharpTranslator {
                 return (nil, interfaces)
             }
             let location = node.GetLocation()
-            let csBase INamedTypeSymbol? = symbol.BaseType
+            let csBase INamedTypeSymbol? = this.GetProjectedBaseType(symbol) ?? symbol.BaseType
             if csBase != nil &&
                 csBase.SpecialType != SpecialType.System_Object &&
                 csBase.SpecialType != SpecialType.System_ValueType &&
@@ -4105,11 +4105,13 @@ partial class CSharpToGSharpTranslator {
             }
             let projectedCollection ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
                 forEach.Expression
-            )
+            ) ??
+                this.GetProjectedReceiverType(forEach.Expression)
             if !CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceConsumer(
                 projectedCollection,
                 this.context.Compilation
-            ) {
+            ) &&
+                !(projectedCollection is INamedTypeSymbol projectedOwner && this.HasProjectedBaseType(projectedOwner)) {
                 return nil
             }
             if projectedCollection is INamedTypeSymbol projectedNamed {
@@ -4123,7 +4125,7 @@ partial class CSharpToGSharpTranslator {
                     return projectedCurrent.Type
                 }
             }
-            return GetEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
+            return this.GetProjectedEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
         }
 
         private func GetProjectedBindingType(
