@@ -93,6 +93,21 @@ public class GenericContractImpl : IGenericContract[int32] {
 public class TokenContractImpl : ITokenContract {
 }
 
+public class OuterWithNestedIface {
+    shared {
+        public const OuterBonus int32 = 11
+    }
+
+    public interface INested {
+        func Read(v int32 = OuterBonus) int32 {
+            return v
+        }
+    }
+
+    public class NestedImpl : INested {
+    }
+}
+
 public class Widget {
     public var Value string
 
@@ -142,10 +157,11 @@ func LocalNullableCast(x int32? = cast[int32?](1), y int32? = cast[int32?](Token
 
 public func RunConsumer() string {
     let iface ITokenContract = TokenContractImpl()
+    let nestedIface OuterWithNestedIface.INested = OuterWithNestedIface.NestedImpl()
     let widget = Widget()
     let cbResult = ITokenContract.Handler(10)
     let gResult = ITokenContract.GenericRef.Run(0)
-    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${gResult}:${UncheckedNegMin()}:${ConvertedByte()}:${NullableCasts()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}:${LocalUncheckedNegMin()}:${LocalConvertedByte()}:${LocalNullableCast()}"
+    return "${Qualified()}:${Imported()}:${ForwardBeforeDeclaration()}:${Holder().Compute()}:${Holder.StaticCompute()}:${Tokens.OwnUnqualified()}:${iface.Apply()}:${iface[1]}:${ITokenContract.DefaultHolder.Scale}:${ITokenContract.BuiltScale}:${cbResult}:${gResult}:${nestedIface.Read()}:${UncheckedNegMin()}:${ConvertedByte()}:${NullableCasts()}:${widget.Value}:${LocalQualified()}:${LocalImported()}:${LocalArithmetic()}:${LocalUncheckedNegMin()}:${LocalConvertedByte()}:${LocalNullableCast()}"
 }
 `
             let libraryPath = CompileAssembly(
@@ -184,7 +200,7 @@ public func RunConsumer() string {
                 )!!
                 let actual = Assert.IsType[string](runConsumer.Invoke(nil, nil))
                 Assert.Equal(
-                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:36.5:10:14:7:17:7:-2147483648:1:1:1:7:1:v:14:14:30:-2147483648:1:1:7",
+                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:36.5:10:14:7:17:7:11:-2147483648:1:1:1:7:1:v:14:14:30:-2147483648:1:1:7",
                     actual
                 )
             } finally {
@@ -226,6 +242,7 @@ func BadReadOnly(value float64 = ReadOnlySize) float64 -> value
     @Fact
     func CheckedOverflowNegationAndInterfaceFieldMethodCollision_ReportExpectedDiagnostics() {
         const source = `package ConstantDefaults
+import ConstantDefaults.Tokens
 
 class Tokens {
     shared {
@@ -248,6 +265,11 @@ class Outer {
         var N int32
         func M(x int32 = N) int32 -> x
     }
+}
+
+class ShadowImported {
+    var MinInt int32
+    func M(x int32 = MinInt) int32 -> x
 }
 
 interface ICollide {
@@ -275,6 +297,10 @@ interface ICollide {
         Assert.Contains(
             result.Diagnostics,
             (diagnostic Diagnostic) -> diagnostic.Id == "GS0125" && diagnostic.Message.Contains("'N'")
+        )
+        Assert.Contains(
+            result.Diagnostics,
+            (diagnostic Diagnostic) -> diagnostic.Id == "GS0125" && diagnostic.Message.Contains("'MinInt'")
         )
     }
 

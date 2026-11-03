@@ -1246,18 +1246,7 @@ internal partial class OverloadResolver {
             if !parameter.HasExplicitDefaultValue {
                 return BoundDefaultExpression(nil, parameter.Type)
             }
-            let v object? = parameter.ExplicitDefaultValue
-            if v == nil {
-                return BoundDefaultExpression(nil, parameter.Type)
-            }
-            if parameter.Type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
-                return BoundConversionExpression(
-                    nil,
-                    parameter.Type,
-                    BoundLiteralExpression(nil, v, nullable.UnderlyingType)
-                )
-            }
-            return BoundLiteralExpression(nil, v, parameter.Type)
+            return ConversionClassifier.CreateConstantDefaultArgument(parameter.ExplicitDefaultValue, parameter.Type)
         }
 
         /// Issue #343: returns the underlying value expression for a call-argument

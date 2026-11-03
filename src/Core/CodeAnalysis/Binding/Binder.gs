@@ -305,7 +305,20 @@ partial class Binder {
             conversions,
             bindExpression: (syntax ExpressionSyntax) -> Expressions.BindExpression(syntax),
             bindTypeClause: BindTypeClause,
-            isNilLiteral: StatementBinder.IsNilLiteral
+            isNilLiteral: StatementBinder.IsNilLiteral,
+            bindEqualityOperation: (syntax RelationalPatternSyntax, input BoundExpression, value BoundExpression) -> {
+                return Expressions.BindBinaryOperation(
+                    syntax,
+                    syntax.OperatorToken.Kind,
+                    syntax.OperatorToken.Location,
+                    syntax.OperatorToken.Text,
+                    syntax.Location,
+                    input,
+                    value,
+                    syntax.Location,
+                    syntax.Expression.Location
+                )
+            }
         )
         // ADR-0185: bindLocalVariable/bindTupleDestructuringPrelude below
         // reuse StatementBinder's own local-declaration callback and its

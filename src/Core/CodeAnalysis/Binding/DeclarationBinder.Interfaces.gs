@@ -844,19 +844,13 @@ internal partial class DeclarationBinder {
                     TypeSymbol.Void
                 ){IsUnsafe = capturedInUnsafeContext, IsStatic = true, StaticOwnerType = interfaceSymbol}
                 setCurrentFunction(defaultValueContext)
-                let previousScope = binderCtx.RootScope
-                let staticScope = BoundScope(previousScope)
-                for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
-                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(interfaceSymbol, fld))
-                }
-                this.binderCtx.RootScope = staticScope
                 try {
+                    using let _ = PushStaticMemberScope(interfaceSymbol)
                     conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter)
                     if parameter.HasExplicitDefaultValue {
                         interfaceSymbol.NotifyParameterDefaultAttached()
                     }
                 } finally {
-                    this.binderCtx.RootScope = previousScope
                     $scope.SetCurrentDeclaringPackage(savedPackage)
                     $scope.SetCurrentReferencingSyntaxTree(savedTree)
                     $scope = outerScope
@@ -989,21 +983,12 @@ internal partial class DeclarationBinder {
                     StaticOwnerType = interfaceSymbol
                 }
                 setCurrentFunction(initializerContext)
-                let previousScope = binderCtx.RootScope
-                let staticScope = BoundScope(previousScope)
-                for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
-                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(interfaceSymbol, fld))
-                }
-                for method in interfaceSymbol.StaticMethods {
-                    staticScope.TryDeclareFunction(method)
-                }
-                this.binderCtx.RootScope = staticScope
                 try {
+                    using let _ = PushStaticMemberScope(interfaceSymbol)
                     using let _ = binderCtx.PushCheckedContext(false)
                     action()
                 } finally {
                     Diagnostics.DrainSince(diagnosticMark, deferredInitializerDiagnostics)
-                    this.binderCtx.RootScope = previousScope
                     $scope.SetCurrentDeclaringPackage(savedPackage)
                     $scope.SetCurrentReferencingSyntaxTree(savedTree)
                     $scope = outerScope

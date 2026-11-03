@@ -3926,20 +3926,29 @@ internal partial class DeclarationBinder {
     /// `let`/`var`, `shared` field, or `const`) can reference a
     /// sibling `const` or `shared` field regardless of declaration order.
     /// The returned token restores the previous scope when disposed.
-    private func PushStaticMemberScope(structSymbol StructSymbol) StaticMemberScope {
+    private func PushStaticMemberScope(lexicalOwner TypeSymbol) StaticMemberScope {
         let previous = binderCtx.RootScope
         let staticScope = BoundScope(previous)
-        for var owner TypeSymbol? = structSymbol; owner != nil; owner = owner!!.ContainingType {
-            let isOuterOwner = !object.ReferenceEquals(owner, structSymbol)
+        for var owner TypeSymbol? = lexicalOwner; owner != nil; owner = owner!!.ContainingType {
+            let isOuterOwner = !object.ReferenceEquals(owner, lexicalOwner)
             if owner is InterfaceSymbol ownerInterface {
                 for fld in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
                     if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, fld.Name),
+                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
                         ownerInterface
                     ) {
                         continue
                     }
                     staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
+                }
+                for method in ownerInterface.StaticMethods {
+                    if isOuterOwner && !object.ReferenceEquals(
+                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, method.Name),
+                        ownerInterface
+                    ) {
+                        continue
+                    }
+                    staticScope.TryDeclareFunction(method)
                 }
                 continue
             }
@@ -3949,7 +3958,7 @@ internal partial class DeclarationBinder {
             if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                 for fld in ownerStruct.StaticFields {
                     if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, fld.Name),
+                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
                         ownerStruct
                     ) {
                         continue
@@ -3960,7 +3969,7 @@ internal partial class DeclarationBinder {
             if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                 for fld in ownerStruct.ConstFields {
                     if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, fld.Name),
+                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
                         ownerStruct
                     ) {
                         continue
@@ -3971,7 +3980,7 @@ internal partial class DeclarationBinder {
             if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                 for prop in ownerStruct.StaticProperties {
                     if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, prop.Name),
+                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, prop.Name),
                         ownerStruct
                     ) {
                         continue
@@ -3988,7 +3997,7 @@ internal partial class DeclarationBinder {
             if !ownerStruct.StaticMethods.IsDefaultOrEmpty {
                 for method in ownerStruct.StaticMethods {
                     if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(structSymbol, method.Name),
+                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, method.Name),
                         ownerStruct
                     ) {
                         continue
