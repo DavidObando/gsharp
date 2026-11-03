@@ -22,10 +22,6 @@ internal class ManagedReferenceArrayNullableState {
             ReferenceEqualityComparer.Instance
         )
         ManagedReferenceArrayProjectedLocalType = Dictionary[ILocalSymbol, ITypeSymbol?](SymbolEqualityComparer.Default)
-        ProjectedBaseTypeReplacementsByType = Dictionary[
-            INamedTypeSymbol,
-            IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?
-        ](SymbolEqualityComparer.Default)
         ProjectedBaseTypesInProgress = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
     }
 
@@ -53,17 +49,50 @@ internal class ManagedReferenceArrayNullableState {
         get;
     }
 
-    // Type-parameter replacements for a source-declared type's generic base type.
-    prop ProjectedBaseTypeReplacementsByType Dictionary[
-        INamedTypeSymbol,
-        IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?
-    ] {
-        get;
-    }
-
     // Source-declared types whose base-type projection is currently being computed.
     prop ProjectedBaseTypesInProgress HashSet[INamedTypeSymbol] {
         get;
+    }
+}
+
+internal class ProjectedBaseCompilationIndex {
+    init() {
+        MemberConsumersByCandidate = Dictionary[INamedTypeSymbol, List[SyntaxNode]](SymbolEqualityComparer.Default)
+        ConversionsByCandidate = Dictionary[INamedTypeSymbol, List[ExpressionSyntax]](SymbolEqualityComparer.Default)
+        ReplacementsByType = Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?](
+            SymbolEqualityComparer.Default
+        )
+    }
+
+    prop MemberConsumersByCandidate Dictionary[INamedTypeSymbol, List[SyntaxNode]] {
+        get;
+    }
+
+    prop ConversionsByCandidate Dictionary[INamedTypeSymbol, List[ExpressionSyntax]] {
+        get;
+    }
+
+    prop ReplacementsByType Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?] {
+        get;
+    }
+
+    prop IsIndexed bool {
+        get;
+        set;
+    }
+
+    shared {
+        private let ByCompilation System
+            .Runtime
+            .CompilerServices
+            .ConditionalWeakTable[Compilation, ProjectedBaseCompilationIndex] = System
+            .Runtime
+            .CompilerServices
+            .ConditionalWeakTable[Compilation, ProjectedBaseCompilationIndex]()
+
+        internal func For(compilation Compilation) ProjectedBaseCompilationIndex -> ByCompilation.GetOrCreateValue(
+            compilation
+        )
     }
 }
 

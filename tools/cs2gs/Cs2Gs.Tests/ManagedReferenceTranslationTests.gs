@@ -7387,18 +7387,31 @@ public class Probe {
 
     @Fact
     func NonGenericDerivedReceiverRejectsFixedBaseConversionWhenProjected() {
-        const source = `using Gsharp.Values;
+        const source = `using System.Collections.Generic;
+using Gsharp.Values;
 namespace ManagedArrayInheritedGenericBaseFixedDestination;
+public class Box<T> { }
 public class Base<T> {
+    public Base() { }
+    public Base(ref T value) { }
     public void Add(T value) { }
+    public void Use(Box<T> box) { }
 }
 public class Derived : Base<ManagedRef<int>> { }
 public class ConditionalDerived : Base<ManagedRef<int>> { }
 public class SwitchDerived : Base<ManagedRef<int>> { }
+public class BoxDerived : Base<ManagedRef<int>> { }
+public class ByRefCtorDerived : Base<ManagedRef<int>> {
+    public ByRefCtorDerived(ref ManagedRef<int> value) : base(ref value) { }
+}
+public class PrimaryByRefCtorDerived(ref ManagedRef<int> value) : Base<ManagedRef<int>>(ref value);
+public class ListCovariantDerived : Base<ManagedRef<int>> { }
+public class ArrayCovariantDerived : Base<ManagedRef<int>> { }
 public class Probe {
+    private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
 
-    public static void Run(bool flag) {
+    public static void Run(bool flag, ref ManagedRef<int> nonNullRef) {
         var source = new ManagedRef<int>[1];
         var derived = new Derived();
         AcceptFixed(derived);
@@ -7414,6 +7427,22 @@ public class Probe {
             false => new Base<ManagedRef<int>>(),
         };
         new SwitchDerived().Add(source[0]);
+
+        var boxDerived = new BoxDerived();
+        boxDerived.Add(source[0]);
+        boxDerived.Use(FixedBox);
+
+        var byRefCtorDerived = new ByRefCtorDerived(ref nonNullRef);
+        byRefCtorDerived.Add(source[0]);
+
+        var primaryByRefDerived = new PrimaryByRefCtorDerived(ref nonNullRef);
+        primaryByRefDerived.Add(source[0]);
+
+        IEnumerable<Base<ManagedRef<int>>> listView = new List<ListCovariantDerived>();
+        new ListCovariantDerived().Add(source[0]);
+
+        Base<ManagedRef<int>>[] arrayView = new ArrayCovariantDerived[1];
+        new ArrayCovariantDerived().Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7428,7 +7457,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            3,
+            8,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7437,6 +7466,15 @@ public class Probe {
         Assert.Contains("open class Derived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class ConditionalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class SwitchDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class BoxDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ByRefCtorDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class PrimaryByRefCtorDerived(ref value managed[int32]) : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class ListCovariantDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ArrayCovariantDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
