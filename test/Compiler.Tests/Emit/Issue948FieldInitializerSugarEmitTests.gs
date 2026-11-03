@@ -151,6 +151,212 @@ Console.WriteLine(p.x.ToString() + "," + p.y.ToString())`
     }
 
     @Fact
+    func Issue5596_EarlierFieldInitializer_RetainsLaterStructDefaults() {
+        let source = `package FieldInitializerRepro
+
+import System
+
+class InlineHistory {
+    var Value Report = Report{}
+    var DataValue DataReport = DataReport{}
+    var OuterValue OuterReport = OuterReport{}
+
+    shared {
+        var SharedValue Report = Report{}
+    }
+}
+
+class ConstructorHistory {
+    var Value Report
+    var DataValue DataReport
+
+    init() {
+        Value = Report{}
+        DataValue = DataReport{}
+    }
+}
+
+struct OuterReport {
+    var Inner Report = Report{}
+}
+
+struct Report {
+    var Samples []int32 = []int32{}
+    var Available bool = true
+    var Top int32 = 7
+
+    shared {
+        var Default Report = Report{}
+    }
+}
+
+data struct DataReport {
+    var Samples []int32 = []int32{}
+    var Available bool = true
+    var Top int32 = 7
+}
+
+struct SnapshotA {
+    var Value SnapshotB = SnapshotB{}
+}
+
+struct SnapshotB {
+    var Count int32 = 7
+
+    shared {
+        var Snapshot SnapshotA = SnapshotA{}
+    }
+}
+
+struct MutualA {
+    var Value MutualB = MutualB{}
+    var Base int32 = 11
+}
+
+struct MutualB {
+    var Override int32 = MutualA{Value: MutualB{Override: 0, Extra: 2}}.Base
+    var Extra int32 = 13
+}
+
+struct PeerA {
+    var Peers []PeerB = []PeerB{PeerB{Peers: []PeerA{}}}
+    var Tag int32 = 17
+}
+
+struct PeerB {
+    var Peers []PeerA = []PeerA{PeerA{Peers: []PeerB{}}}
+    var Scale int32 = 19
+}
+
+struct ZeroOwnerA {
+    var Value ZeroChildB
+}
+
+func IsMissingItems(child ZeroChildB) bool {
+    return Object.ReferenceEquals(child.Items, nil)
+}
+
+struct ZeroChildB {
+    var Items []int32
+    var Missing bool = IsMissingItems(ZeroOwnerA{}.Value)
+}
+
+struct ExplicitCollectionOwner {
+    var Value ExplicitCollectionChild
+}
+
+func IsMissingBoolItems(child ExplicitCollectionChild) bool {
+    return Object.ReferenceEquals(child.Items, nil)
+}
+
+struct ExplicitCollectionChild {
+    var Items []bool = []bool{IsMissingBoolItems(ExplicitCollectionOwner{}.Value)}
+}
+
+class ClassZeroOwner {
+    var Items []int32
+    var Child ZeroChildB
+}
+
+class CheckedCaller {
+    var Value UncheckedPayload = checked(UncheckedPayload{})
+}
+
+func One() int32 {
+    return 1
+}
+
+struct UncheckedPayload {
+    var Count int32 = 2147483647 + One()
+}
+
+func FormatReport(label string, report Report) string {
+    return label + ": samples-nil=" + Object.ReferenceEquals(report.Samples, nil).ToString() +
+        ", available=" + report.Available.ToString() + ", top=" + report.Top.ToString()
+}
+
+func FormatDataReport(label string, report DataReport) string {
+    return label + ": samples-nil=" + Object.ReferenceEquals(report.Samples, nil).ToString() +
+        ", available=" + report.Available.ToString() + ", top=" + report.Top.ToString()
+}
+
+func Main() {
+    let inlineHistory = InlineHistory()
+    let ctorHistory = ConstructorHistory()
+    Console.WriteLine(FormatReport("local", Report{}))
+    Console.WriteLine(FormatReport("inline field", inlineHistory.Value))
+    Console.WriteLine(FormatReport("constructor body", ctorHistory.Value))
+    Console.WriteLine(FormatReport("outer struct field", inlineHistory.OuterValue.Inner))
+    Console.WriteLine(FormatReport("shared field", InlineHistory.SharedValue))
+    Console.WriteLine(FormatReport("self shared field", Report.Default))
+    Console.WriteLine(FormatDataReport("data inline field", inlineHistory.DataValue))
+    Console.WriteLine(FormatDataReport("data constructor body", ctorHistory.DataValue))
+    Console.WriteLine("snapshot=" + SnapshotB.Snapshot.Value.Count.ToString())
+    let mutual = MutualA{}
+    Console.WriteLine(
+        "mutual=" + mutual.Base.ToString() + "," + mutual.Value.Override.ToString() + "," +
+            mutual.Value.Extra.ToString()
+    )
+    let peerA = PeerA{}
+    let peerB = PeerB{}
+    Console.WriteLine(
+        "peers=" + peerA.Tag.ToString() + "," + peerA.Peers[0].Scale.ToString() + "," +
+            peerB.Scale.ToString() + "," + peerB.Peers[0].Tag.ToString()
+    )
+    Console.WriteLine("zero-missing=" + ZeroChildB{}.Missing.ToString())
+    Console.WriteLine("explicit-collection-missing=" + ExplicitCollectionChild{}.Items[0].ToString())
+    let classZero = ClassZeroOwner()
+    Console.WriteLine(
+        "class-zero=" + Object.ReferenceEquals(classZero.Items, nil).ToString() + "," +
+            Object.ReferenceEquals(classZero.Child.Items, nil).ToString()
+    )
+    Console.WriteLine("unchecked-payload=" + CheckedCaller().Value.Count.ToString())
+}`
+        let output = CompileAndRun(source)
+        let expected = string.Join(
+            Environment.NewLine,
+            []string{
+                "local: samples-nil=False, available=True, top=7",
+                "inline field: samples-nil=False, available=True, top=7",
+                "constructor body: samples-nil=False, available=True, top=7",
+                "outer struct field: samples-nil=False, available=True, top=7",
+                "shared field: samples-nil=False, available=True, top=7",
+                "self shared field: samples-nil=False, available=True, top=7",
+                "data inline field: samples-nil=False, available=True, top=7",
+                "data constructor body: samples-nil=False, available=True, top=7",
+                "snapshot=7",
+                "mutual=11,11,13",
+                "peers=17,19,19,17",
+                "zero-missing=False",
+                "explicit-collection-missing=False",
+                "class-zero=False,False",
+                "unchecked-payload=-2147483648",
+                ""
+            }
+        )
+        Assert.Equal(expected, output)
+    }
+
+    @Fact
+    func Issue5596_InferredConstructorProbe_PreservesLaterStructFieldInitializerDiagnostic() {
+        let source = `package FieldInitializerProbeDiagRepro
+
+class Box[T](var Item T) {}
+
+class Holder {
+    var Wrapped Box[Payload] = Box(Payload{})
+}
+
+struct Payload {
+    var Count int32 = "bad"
+}
+
+func Main() {}`
+        let diagnostics = CompileExpectingFailure(source)
+        Assert.Contains("GS0155", diagnostics)
+    }
+
+    @Fact
     func Issue948_Negative_InstanceInitializerReferencesInstanceMember() {
         let source = `package P
 import System

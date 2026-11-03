@@ -720,9 +720,10 @@ internal shared class MagicCollectionZeroValue {
                         )
                     } else {
                         structType.GetDefinitionField(field) is {} declaredField &&
-                            visitKey
-                            .InstanceFieldInitializers
-                            .ContainsKey(declaredField)
+                            (
+                            visitKey.InstanceFieldInitializers.ContainsKey(declaredField) ||
+                                declaredField.Declaration is FieldDeclarationSyntax{Initializer: not nil}
+                        )
                     }
                     if !initializedInType {
                         retained.Add(initializer)

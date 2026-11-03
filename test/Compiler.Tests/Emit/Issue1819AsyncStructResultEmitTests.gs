@@ -151,6 +151,87 @@ func Main() { System.Console.WriteLine(getX().Result) }`
         Assert.Equal("99${Environment.NewLine}", output)
     }
 
+    @Fact
+    func Issue5594_AsyncHoistedStructCompoundFieldAssignment_Runs() {
+        const source = `package CompoundFieldRepro
+
+import System
+import System.Threading.Tasks
+
+struct Result5594 {
+    var Size int64
+}
+
+data struct DataResult5594 {
+    var Size int64
+}
+
+struct OuterResult5594 {
+    var Inner Result5594
+}
+
+class State5594 {
+    shared {
+        var Current Result5594 = Result5594{}
+    }
+}
+
+async func ReadStructSingle() int64 {
+    var result = Result5594{}
+    let value int64 = 5
+    result.Size += value
+    await Task.Delay(1)
+    return result.Size
+}
+
+async func ReadStructLoop() int64 {
+    var result = Result5594{}
+    for item in []int64{2, 3} {
+        result.Size += item
+        await Task.Delay(1)
+    }
+    return result.Size
+}
+
+async func ReadDataStructSingle() int64 {
+    var result = DataResult5594{}
+    let value int64 = 5
+    result.Size += value
+    await Task.Delay(1)
+    return result.Size
+}
+
+async func ReadDataStructLoop() int64 {
+    var result = DataResult5594{}
+    for item in []int64{2, 3} {
+        result.Size += item
+        await Task.Delay(1)
+    }
+    return result.Size
+}
+
+async func ReadNestedAndPostfixAndAwaitRhs() int64 {
+    var outer = OuterResult5594{}
+    outer.Inner.Size += 2
+    let prev = outer.Inner.Size++
+    await Task.Delay(1)
+    outer.Inner.Size += await Task.FromResult(int64(4))
+    State5594.Current.Size += await Task.FromResult(int64(5))
+    return prev * 100 + outer.Inner.Size * 10 + State5594.Current.Size
+}
+
+func Main() {
+    Console.WriteLine(ReadStructSingle().Result)
+    Console.WriteLine(ReadStructLoop().Result)
+    Console.WriteLine(ReadDataStructSingle().Result)
+    Console.WriteLine(ReadDataStructLoop().Result)
+    Console.WriteLine(ReadNestedAndPostfixAndAwaitRhs().Result)
+}`
+        let output = CompileAndRun(source)
+        let expected = string.Join(Environment.NewLine, []string{"5", "5", "5", "5", "275", ""})
+        Assert.Equal(expected, output)
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1819_exe_").FullName
