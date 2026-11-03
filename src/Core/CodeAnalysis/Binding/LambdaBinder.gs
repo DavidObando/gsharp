@@ -2074,14 +2074,7 @@ internal class LambdaBinder {
             group.Receiver != nil &&
             (
             ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type) ||
-                (
-                group
-                    .Receiver
-                    .Type is TypeParameterSymbol receiverTp &&
-                    !receiverTp.HasReferenceTypeConstraint &&
-                    receiverTp.ClassConstraint == nil &&
-                    !receiverTp.DependentBoundProvesReferenceType
-            )
+                (group.Receiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
         )
         if function.HiddenContextParameter == nil &&
             function.SuspendingKind != SuspendingKind.Inferred &&
@@ -2247,6 +2240,32 @@ internal class LambdaBinder {
                 )
             )
         }
+    }
+
+    private func IsKnownReferenceTypeParameter(typeParameter TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = typeParameter
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasReferenceTypeConstraint {
+                return true
+            }
+            if current.ClassConstraint is {} classConstraint &&
+                classConstraint
+                .ClrType
+                ?.FullName is not("System.Enum" or "System.ValueType") {
+                return true
+            }
+            let next = current.TypeParameterBound
+            if next == nil {
+                return false
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                return false
+            }
+            current = next
+        }
+        return false
     }
 
     /// For an async lambda's declared return type, computes the
