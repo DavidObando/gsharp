@@ -123,6 +123,7 @@ namespace Demo
         public static bool TypedProperty(Entry entry) { Node n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
         public static bool InferredProperty(Entry entry) { var n = entry.Item; n = entry.Item; return ReferenceEquals(n, entry.Item); }
         public static bool Coalesced(Entry entry) { var n = entry.Item ?? entry.Item; var item = entry.Item; n = item; return ReferenceEquals(n, item); }
+        public static bool Assigned(Entry entry) { var item = entry.Item; var slot = entry.Item; var n = (slot = item); n = item; return ReferenceEquals(n, item); }
         public static bool Checked(Entry entry) { var n = checked(entry.Item ?? entry.Item); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
         public static bool Unchecked(Entry entry) { var n = unchecked(entry.Item ?? entry.Item); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
         public static bool Conditional(Entry entry, bool flag) { var n = flag ? entry.Item : new Node(); var item = entry.Item; n = item; return ReferenceEquals(n, item); }
@@ -144,13 +145,13 @@ namespace Demo
         public static string Run() =>
             Typed(Empty()) + " " + Inferred(Empty()) + " " + TypedProperty(Empty()) + " " +
             InferredProperty(Empty()) + " " + Coalesced(Empty()) + " " + Conditional(Empty(), true) + " " +
-            Checked(Empty()) + " " + Unchecked(Empty()) + " " +
+            Checked(Empty()) + " " + Unchecked(Empty()) + " " + Assigned(Empty()) + " " +
             Chained(Empty()) + " " + Convert(Empty()) + " " +
             Convert(new Entry(new Node(), null, 1));
     }
 }`)
-        Assert.Equal("True True True True True True True True True nre node", RunCSharp(compilation).Trim())
-        Assert.Equal("True True True True True True True True True nre node", CompileAndRun(printed).Trim())
+        Assert.Equal("True True True True True True True True True True nre node", RunCSharp(compilation).Trim())
+        Assert.Equal("True True True True True True True True True True nre node", CompileAndRun(printed).Trim())
         Assert.Contains(
             "func Typed(entry Entry) bool {\n        var n = entry.Item\n        let item = entry.Item\n        n = item\n",
             printed
@@ -198,6 +199,7 @@ namespace Demo
         public static implicit operator Box(Node node) => node == null ? new Box() : new Box();
     }
     public record Entry(Node Item, Box Wrap, int Id);
+    public class Holder { public Node Plain = new Node(); }
     public static class Use
     {
         public static Entry Empty() => new Entry(null, null, 0);
@@ -205,6 +207,12 @@ namespace Demo
         public static string Mixed(Entry entry, Node fallback, bool flag)
         {
             var n = flag ? (Node)entry.Item : fallback;
+            n = entry.Item;
+            return n.ToString();
+        }
+        public static string AssignedField(Entry entry, Holder h, Node fallback)
+        {
+            var n = (h.Plain = fallback);
             n = entry.Item;
             return n.ToString();
         }
@@ -222,13 +230,15 @@ namespace Demo
         }
         public static string Run() =>
             Mixed(Full(), new Node(), false) + " " + Mixed(Full(), new Node(), true) + " " +
-            Converted(Full(), new Box(), true) + " " + ConvertedArm(Full(), new Box(), true);
+            Converted(Full(), new Box(), true) + " " + ConvertedArm(Full(), new Box(), true) + " " +
+            AssignedField(Full(), new Holder(), new Node());
     }
 }`)
-        Assert.Equal("node node box box", RunCSharp(compilation).Trim())
-        Assert.Equal("node node box box", CompileAndRun(printed).Trim())
+        Assert.Equal("node node box box node", RunCSharp(compilation).Trim())
+        Assert.Equal("node node box box node", CompileAndRun(printed).Trim())
         Assert.Contains("        n = entry.Item!!\n        return n.ToString()\n", printed)
         Assert.Equal(2, printed.Split("b = entry.Wrap!!\n").Length - 1)
+        Assert.Contains("        n = entry.Item!!\n        return n.ToString()\n    }\n\n    func Converted", printed)
     }
 
     shared {

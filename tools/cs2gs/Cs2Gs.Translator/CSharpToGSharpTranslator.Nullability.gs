@@ -745,7 +745,8 @@ partial class CSharpToGSharpTranslator {
         // (`a ?? b`, `c ? a : b`, a switch expression) takes the type of its result arms, so each arm
         // is asked `IsNullablePromotedValue`, which reads its taint. A checked cast arm is `T` in G#
         // whatever its operand is (#3843). An arm that a user-defined conversion converts has the type
-        // of the operator's result, as `CoerceReferenceValueTo` emits it.
+        // of the operator's result, as `CoerceReferenceValueTo` emits it. An assignment has the type of
+        // its destination's storage.
         private func InitializerHoldsPromotedValue(initializer ExpressionSyntax) bool {
             switch initializer {
                 case parenthesized is ParenthesizedExpressionSyntax {
@@ -753,6 +754,23 @@ partial class CSharpToGSharpTranslator {
                 }
                 case checkedExpression is CheckedExpressionSyntax {
                     return this.InitializerHoldsPromotedValue(checkedExpression.Expression)
+                }
+                case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                    SyntaxKind.SimpleAssignmentExpression
+                ) &&
+                    this
+                    .context
+                    .GetTypeInfo(assignment)
+                    .Type
+                    ?.IsReferenceType == true {
+                    // An assignment has the type of its destination's storage.
+                    return if this.context.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol destination {
+                        this.PatternLocalUsesNullableStorage(assignment.Left) || this.LocalHoldsPromotedValue(
+                            destination
+                        )
+                    } else {
+                        !this.AssignmentResultHasNonNullStaticType(assignment)
+                    }
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                     return this.InitializerHoldsPromotedValue(coalesce.Right)
