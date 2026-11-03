@@ -626,6 +626,26 @@ class Host : IReadOnlyList[Shape] {
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0493")
     }
 
+    @Fact
+    func SymbolicGenericInterfaceIndexer_IsNotSatisfiedByItemField_ReportsGS0187() {
+        let source = `
+package P
+import System.Collections
+import System.Collections.Generic
+
+class Shape { }
+
+class Bad : IReadOnlyList[Shape] {
+    public var Item Shape = Shape()
+    prop Count int32 -> 0
+    func GetEnumerator() IEnumerator[Shape] { return List[Shape]().GetEnumerator() }
+    private func (IEnumerable) GetEnumerator() IEnumerator { return GetEnumerator() }
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0187" && d.Message.Contains("Item"))
+    }
+
     shared {
         private func GetDiagnostics(source string) IEnumerable[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

@@ -1681,7 +1681,11 @@ internal class MemberLookup {
             clrProp PropertyInfo,
             symbolicArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
         ) FieldSymbol? {
-            if !structSymbol.TryGetFieldIncludingInherited(clrProp.Name, out var field, out _) {
+            if clrProp.GetIndexParameters().Length != 0 || !structSymbol.TryGetFieldIncludingInherited(
+                clrProp.Name,
+                out var field,
+                out _
+            ) {
                 return nil
             }
             if field!!.Accessibility != Accessibility.Public {
