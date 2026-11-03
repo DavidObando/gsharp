@@ -5166,6 +5166,15 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if forEach is ForEachVariableStatementSyntax deconstructing {
+                // cs2gs emits only the names (`for (a, b) in items`), so gsc reads the elements of a tuple without a
+                // conversion, whatever the C# target types are.
+                if this
+                    .context
+                    .SemanticModel
+                    .GetForEachStatementInfo(deconstructing)
+                    .ElementType is INamedTypeSymbol{IsTupleType: true} {
+                    return false
+                }
                 return this.DeconstructionCallsMember(
                     this.context.SemanticModel.GetDeconstructionInfo(deconstructing),
                     deconstructing.Variable

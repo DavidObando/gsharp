@@ -692,14 +692,20 @@ public class Demo
     }
 
     /// gsc iterates a single-dimensional array and a `string` by index, which runs no user code, also with a typed
-    /// loop variable that widens, wraps or boxes the element, with a tuple-target loop over value tuples and with a
-    /// deconstruction of a record into discards only, which reads no member (ADR-0213 table T5). A loop that holds a
+    /// loop variable that widens, wraps or boxes the element, with a tuple-target loop over value tuples (cs2gs emits
+    /// only the names, so a typed target converts nothing in the G#) and with a deconstruction of a record into
+    /// discards only, which reads no member (ADR-0213 table T5). A loop that holds a
     /// `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
     @Fact
     func RefParameter_ReadAfterAForEachOverAnArrayOrAString_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
 using System.Text;
 public record Point(int X, int Y);
+public sealed class Wrapper
+{
+    public int V;
+    public static implicit operator Wrapper(int v) => new Wrapper { V = v };
+}
 public class Demo
 {
     public static int Arrays(ref string? s, int[] items)
@@ -728,6 +734,7 @@ public class Demo
         foreach (int? item in items) n += 1;
         foreach (object item in items) n += 1;
         foreach (var (a, b) in pairs) n += s.Length;
+        foreach ((Wrapper w, int m) in pairs) n += 1;
         foreach (var (_, _) in points) n += 1;
         return s.Length + n + (int)sum;
     }
