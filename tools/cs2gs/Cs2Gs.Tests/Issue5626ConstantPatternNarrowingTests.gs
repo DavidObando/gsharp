@@ -30,7 +30,8 @@ import Xunit
 /// does not compile (GS0159). Without the type-test rule, the `object` and `Base` arm rows do not compile (GS0158).
 /// With a `s!!` subject counted as the switched local, the suppressed row does not compile (GS0158). With the native
 /// form for any reference input, the interface row does not compile (GS0171). With a simple-name constant in the
-/// native form, the shadowed-constant row tests the type `Key` and does not compile (GS0158).
+/// native form, the shadowed-constant row tests the type `Key` and does not compile (GS0158). On c90d28792, which
+/// narrowed stacked type labels by each label alone, the `case Circle: case Square:` row does not compile (GS0154).
 open class Issue5626ConstantPatternNarrowingTests {
     /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
     @Fact
@@ -162,7 +163,8 @@ namespace Demo
     }
 
     /// Control: gsc narrows an `and` pattern to the type of its right side, and a type test of a proper supertype
-    /// (`object` for a `string?`) or of a class that does not implement the input interface does not narrow. gsc
+    /// (`object` for a `string?`) or of a class that does not implement the input interface does not narrow. Stacked
+    /// type labels (`case Circle: case Square:`) become one arm, which gsc does not narrow to either type. gsc
     /// does not narrow the local of a `s!!` subject either. Such a switch arm or section keeps the assertion on the
     /// read.
     @Fact
@@ -175,8 +177,14 @@ namespace Demo
     public interface IValue { int Value { get; } }
     public class Base { }
     public class Derived : Base, IValue { public int Value => 7; }
+    public abstract class Shape { }
+    public sealed class Circle : Shape { }
+    public sealed class Square : Shape { }
     public static class P
     {
+        static string Describe(Shape shape) => shape.GetType().Name;
+        static string Stacked(Shape? current) { switch (current) { case Circle: case Square: return Describe(current); default: return "none"; } }
+        static string Single(Shape? current) { switch (current) { case Circle: return Describe(current); default: return "none"; } }
         static string Merge(object? current) => current switch { (1 and int) or 2 => current.ToString()!, _ => "none" };
         static int Supertype(string? current) => current switch { object => current.Length, _ => 0 };
         static int Unrelated(IValue? current) => current switch { Base => current.Value, _ => 0 };
@@ -191,12 +199,15 @@ namespace Demo
         }
         public static string Run() =>
             Merge(1) + " " + Merge(2) + " " + Merge(null) + " " + Supertype("ab") + " " + Supertype(null) + " " +
-            Unrelated(new Derived()) + " " + Unrelated(null) + " " + Suppressed("a");
+            Unrelated(new Derived()) + " " + Unrelated(null) + " " + Suppressed("a") + " " + Stacked(new Square()) + " " +
+            Stacked(null) + " " + Single(new Circle());
     }
 }`)
         Assert.Contains("current!!.ToString()", printed)
         Assert.Contains("case _ is object: current!!.Length", printed)
         Assert.Contains("case _ is Base: current!!.Value", printed)
+        Assert.Contains("case Circle, Square {\n                return Describe(current!!)\n", printed)
+        Assert.Contains("case Circle {\n                return Describe(current)\n", printed)
         Assert.Contains(
             "switch current!! {\n                case \"a\" {\n                    return current!!.Length\n",
             printed

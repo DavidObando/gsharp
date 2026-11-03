@@ -4288,7 +4288,7 @@ partial class CSharpToGSharpTranslator {
 
         /// Issue #5626: gsc narrows the switched local in the guard and the body of a switch section or arm, by
         /// the native pattern of its case (cref:GetNativePatternNarrowedType). A section with more than one label
-        /// narrows its body only when each label narrows. A test or guard of a closure-assigned or by-reference
+        /// narrows its body only when each label narrows, and stacked constants only to a type that each proves. A test or guard of a closure-assigned or by-reference
         /// local can remove the fact (ADR-0208 R19, #5629), so such a local is not narrowed here.
         private func IsGSharpSwitchNarrowedLocal(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
@@ -4300,27 +4300,55 @@ partial class CSharpToGSharpTranslator {
             let IsSwitchedLocal = func (governing Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
                 return governing is IdentifierNameSyntax && this.BindsTo(governing, symbol)
             }
-            let Narrows = func (pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) bool {
-                return this.IsTestOnlyPattern(pattern) && this.GetNativePatternNarrowedType(
-                    pattern,
-                    underlyingType,
-                    whenTrue: true
-                ) != nil
+            let NarrowedType = func (pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) ITypeSymbol? {
+                return if this.IsTestOnlyPattern(pattern) {
+                    this.GetNativePatternNarrowedType(pattern, underlyingType, whenTrue: true)
+                } else {
+                    default(ITypeSymbol?)
+                }
             }
-            let LabelNarrows = func (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) bool {
+            let LabelNarrowedType = func (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) ITypeSymbol? {
                 return switch label {
                     case caseLabel is Microsoft
                         .CodeAnalysis
                         .CSharp
                         .Syntax
-                        .CaseSwitchLabelSyntax: !this.IsNullPatternValue(caseLabel.Value)
+                        .CaseSwitchLabelSyntax: if this
+                        .context
+                        .GetSymbolInfo(caseLabel.Value)
+                        .Symbol is ITypeSymbol labelType {
+                        this.TypeTestNarrowing(labelType, underlyingType)
+                    } else if this.IsNullPatternValue(caseLabel.Value) {
+                        default(ITypeSymbol?)
+                    } else {
+                        underlyingType
+                    }
                     case patternLabel is Microsoft
                         .CodeAnalysis
                         .CSharp
                         .Syntax
-                        .CasePatternSwitchLabelSyntax: Narrows(patternLabel.Pattern)
-                    default: false
+                        .CasePatternSwitchLabelSyntax: NarrowedType(patternLabel.Pattern)
+                    default: default(ITypeSymbol?)
                 }
+            }
+            // The switch translation emits stacked `case` constants as one arm (`case A, B`), and gsc keeps only a
+            // narrowing that every constant proves (an intersection). It emits other stacked labels as one arm each.
+            let SectionNarrows = func (section Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax) bool {
+                let types = section
+                    .Labels
+                    .Select((label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> LabelNarrowedType(label))
+                    .ToList()
+                if types.Count == 0 || types.Any((type ITypeSymbol?) -> type == nil) {
+                    return false
+                }
+                return types.Count == 1 || !section.Labels.All(
+                    (label Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> label is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CaseSwitchLabelSyntax
+                ) ||
+                    types.All((type ITypeSymbol?) -> SymbolEqualityComparer.Default.Equals(type, types[0]))
             }
             for var node Microsoft
                 .CodeAnalysis
@@ -4347,14 +4375,8 @@ partial class CSharpToGSharpTranslator {
                                     .Span
                                     .Contains(expression.Span)
                             )
-                            if (label != nil && LabelNarrows(label)) ||
-                                (
-                                label == nil && section.Labels.Count > 0 && section.Labels.All(
-                                    (candidate Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> LabelNarrows(
-                                        candidate
-                                    )
-                                )
-                            ) {
+                            if (label != nil && LabelNarrowedType(label) != nil) ||
+                                (label == nil && SectionNarrows(section)) {
                                 guard_ = label ?? section.Labels.Last()
                                 governing = switchStatement.Expression
                             }
@@ -4371,7 +4393,7 @@ partial class CSharpToGSharpTranslator {
                             .Pattern
                             .Span
                             .Contains(expression.Span) &&
-                            Narrows(arm.Pattern) {
+                            NarrowedType(arm.Pattern) != nil {
                             guard_ = arm.Pattern
                             governing = switchExpression.GoverningExpression
                         }
