@@ -2331,7 +2331,10 @@ internal partial class StatementBinder {
         }
         for path in state
             .Keys
-            .Where((path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root))
+            .Where(
+            (path AccessPath) -> collector.SharesStorageWithAssignedRoot(path.Root) ||
+                DropsOnMemberMutation(path, collector)
+        )
             .ToArray() {
             state.Remove(path)
         }
@@ -2592,7 +2595,7 @@ internal partial class StatementBinder {
             // with user code may assign a mutable global. A static member access runs the type initializer (#5504).
             if sourcePropertyRunsUserCode ||
                 sourceConstructionRunsUserCode ||
-                StatementBinder.StaticMemberAccessRunsUserCode(node) {
+                StatementBinder.StaticMemberAccessRunsUserCode(node) || node is BoundClrConversionCallExpression {
                 MarkMayMutateGlobalRoots()
             }
             // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
@@ -2622,10 +2625,11 @@ internal partial class StatementBinder {
                 MarkRunsEscapedClosure()
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function, Arguments: var arguments} {
-                // ADR-0208 R12 (#5292, amendment A3): a plain function call does not write by-reference storage;
-                // a property or indexer accessor can assign the members the storage names.
+                // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.
+                // A property accessor, an indexer accessor, or a conversion operator can write the storage.
                 MarkMayMutateGlobalRoots(
-                    writesReferenceStorage: function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet
+                    writesReferenceStorage: (function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet) ||
+                        StatementBinder.IsConversionOperator(function)
                 )
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
@@ -2656,6 +2660,9 @@ internal partial class StatementBinder {
                         RecordWritableReference(argument)
                     }
                 }
+            }
+            if node is BoundClrConversionCallExpression conversionCall {
+                AnalyzeCallableArguments(ImmutableArray.Create(conversionCall.Source))
             }
             if node is BoundCallOperationExpression call {
                 RecordCallSiteAliasing(call)
@@ -5907,6 +5914,9 @@ internal partial class StatementBinder {
             let chain = AliasChain(root)
             return !(chain[chain.Count - 1] is ParameterSymbol)
         }
+
+        internal func IsConversionOperator(function FunctionSymbol) bool -> function.IsSpecialName &&
+            (function.Name == "op_Implicit" || function.Name == "op_Explicit")
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.
