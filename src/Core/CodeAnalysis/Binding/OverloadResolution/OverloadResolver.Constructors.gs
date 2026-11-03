@@ -2316,6 +2316,20 @@ internal partial class OverloadResolver {
         private func LowerImportedDataClassConstruction(ctorCall BoundConstructorCallExpression) BoundExpression {
             let classType = ctorCall.StructType
             let parameters = classType.PrimaryConstructorParameters
+            if classType.IsClass &&
+                classType.ClrType is {} clrType &&
+                ctorCall
+                .Arguments
+                .Length == parameters.Length &&
+                ImportedTypeSymbol.FindPrimaryConstructor(clrType, parameters) is {} primaryConstructor {
+                return BoundClrConstructorCallExpression(
+                    ctorCall.Syntax,
+                    clrType,
+                    primaryConstructor,
+                    ctorCall.Arguments,
+                    classType
+                )
+            }
             let initializers = ImmutableArray.CreateBuilder[BoundFieldInitializer](parameters.Length)
             for var i = 0; i < parameters.Length && i < ctorCall.Arguments.Length; i++ {
                 if classType.TryGetField(parameters[i].Name, out var field) {
