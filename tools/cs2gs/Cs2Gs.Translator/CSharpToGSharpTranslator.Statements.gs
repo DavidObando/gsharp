@@ -4733,10 +4733,20 @@ partial class CSharpToGSharpTranslator {
                 case element is ElementAccessExpressionSyntax: element.Expression
                 default: default(ExpressionSyntax?)
             }
-            return if receiver != nil && target != nil && this.GetManagedReferenceArrayProjectedExpressionType(
+            return if receiver != nil && target != nil && this.GetProjectedReceiverType(
                 receiver
             ) is INamedTypeSymbol projectedReceiver {
                 this.GetProjectedMember(projectedReceiver, target) ?? target
+            } else if receiver == nil &&
+                left is IdentifierNameSyntax &&
+                target is {IsStatic: false} &&
+                this
+                .context
+                .SemanticModel
+                .GetEnclosingSymbol(left.SpanStart)
+                ?.ContainingType is INamedTypeSymbol enclosingType &&
+                this.HasProjectedBaseType(enclosingType) {
+                this.GetProjectedMember(enclosingType, target) ?? target
             } else {
                 target
             }

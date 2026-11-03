@@ -4134,15 +4134,7 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetOperation(collection) as ICollectionExpressionOperation
             if collection.Elements.Count == 0 && isConstructibleClassTarget {
-                return InvocationExpression(
-                    IdentifierExpression(targetRef!!.Name),
-                    List[GExpression](),
-                    if targetRef!!.TypeArguments.Count > 0 {
-                        targetRef!!.TypeArguments
-                    } else {
-                        default(IReadOnlyList[GTypeReference]?)
-                    }
-                )
+                return BuildConstruction(targetRef, List[GExpression]())
             }
             let elementTypeSymbol ITypeSymbol? = GetCollectionTargetElementType(target)
             var elementType GTypeReference?
@@ -4460,7 +4452,9 @@ partial class CSharpToGSharpTranslator {
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
             let candidates = List[IMethodSymbol]()
-            for var type ITypeSymbol? = target; type != nil; type = type!!.BaseType {
+            for var type INamedTypeSymbol? = target as INamedTypeSymbol; type != nil; type = this.GetEffectiveBaseType(
+                type
+            ) {
                 for add in type.GetMembers("Add").OfType[IMethodSymbol]() {
                     if !add.IsStatic &&
                         add

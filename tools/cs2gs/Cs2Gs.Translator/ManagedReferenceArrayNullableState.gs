@@ -22,6 +22,11 @@ internal class ManagedReferenceArrayNullableState {
             ReferenceEqualityComparer.Instance
         )
         ManagedReferenceArrayProjectedLocalType = Dictionary[ILocalSymbol, ITypeSymbol?](SymbolEqualityComparer.Default)
+        ProjectedBaseTypeReplacementsByType = Dictionary[
+            INamedTypeSymbol,
+            IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?
+        ](SymbolEqualityComparer.Default)
+        ProjectedBaseTypesInProgress = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
     }
 
     // Effective type of conditional/switch expressions whose arms carry
@@ -45,6 +50,19 @@ internal class ManagedReferenceArrayNullableState {
     // Effective emitted type of a local whose initializer, assignments, or
     // active foreach binding agree on managed-reference projection.
     prop ManagedReferenceArrayProjectedLocalType Dictionary[ILocalSymbol, ITypeSymbol?] {
+        get;
+    }
+
+    // Type-parameter replacements for a source-declared type's generic base type.
+    prop ProjectedBaseTypeReplacementsByType Dictionary[
+        INamedTypeSymbol,
+        IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?
+    ] {
+        get;
+    }
+
+    // Source-declared types whose base-type projection is currently being computed.
+    prop ProjectedBaseTypesInProgress HashSet[INamedTypeSymbol] {
         get;
     }
 }

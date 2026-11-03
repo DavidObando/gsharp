@@ -4042,11 +4042,22 @@ public class Outer<T> {
         public Inner(T[] items) { this.value = items[0]; }
         public T Get() => this.value;
     }
+    public class Mid {
+        public class Deep {
+            public Deep(T[] items) { }
+        }
+    }
+    public class GenericInner<U> {
+        public GenericInner(T[] items, U tag) { }
+    }
 }
 public class Probe {
     public static int Run() {
         int[] values = { 42 };
         var source = new ManagedRef<int>[1];
+        _ = new Outer<ManagedRef<int>>.Inner(new ManagedRef<int>[1]);
+        _ = new Outer<ManagedRef<int>>.Mid.Deep(new ManagedRef<int>[1]);
+        _ = new Outer<ManagedRef<int>>.GenericInner<string>(new ManagedRef<int>[1], "ok");
         source[0] = ManagedRef<int>.FromArray(values, 0);
         var inner = new Outer<ManagedRef<int>>.Inner(source);
         return inner.Get().Borrow();
@@ -4064,8 +4075,22 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
+        Assert.Contains("Outer[managed[int32]?].Inner([1]managed[int32]?)", text, StringComparison.Ordinal)
+        Assert.Contains("Outer[managed[int32]?].Mid.Deep([1]managed[int32]?)", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "Outer[managed[int32]?].GenericInner[string]([1]managed[int32]?, \"ok\")",
+            text,
+            StringComparison.Ordinal
+        )
         Assert.Contains("let inner = Outer[managed[int32]?].Inner(source)", text, StringComparison.Ordinal)
         Assert.Contains("inner.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
     }
 
     @Fact
@@ -7278,6 +7303,100 @@ public class Probe {
     }
 }`)
         Assert.Empty(context.Diagnostics)
+    }
+
+    @Fact
+    func NonGenericDerivedReceiverProjectsInheritedGenericBaseMembers() {
+        const source = `using Gsharp.Values;
+namespace ManagedArrayInheritedGenericBase;
+public class Base<T> {
+    private T stored;
+    public void Add(T value) { this.stored = value; }
+    public T Get() => this.stored;
+}
+public class Derived : Base<ManagedRef<int>> { }
+public class SubDerived : Derived { }
+public class GenericDerived<T> : Base<T> { }
+public class Probe {
+    public static int Run() {
+        var emptySource = new ManagedRef<int>[1];
+        new Derived().Add(emptySource[0]);
+        new SubDerived().Add(emptySource[0]);
+        new GenericDerived<ManagedRef<int>>().Add(emptySource[0]);
+        var genericLocal = new GenericDerived<ManagedRef<int>>();
+        genericLocal.Add(emptySource[0]);
+
+        int[] values = { 42 };
+        var populatedSource = new ManagedRef<int>[1];
+        populatedSource[0] = ManagedRef<int>.FromArray(values, 0);
+        var populated = new SubDerived();
+        populated.Add(populatedSource[0]);
+        return populated.Get().Borrow();
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayInheritedGenericBase.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Empty(context.Diagnostics)
+        Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SubDerived : Derived", text, StringComparison.Ordinal)
+        Assert.Contains("Derived().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("GenericDerived[managed[int32]?]().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.DoesNotContain("emptySource[0]!!", text, StringComparison.Ordinal)
+        Assert.Contains("populated.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
+    }
+
+    @Fact
+    func NonGenericDerivedReceiverRejectsFixedBaseConversionWhenProjected() {
+        const source = `using Gsharp.Values;
+namespace ManagedArrayInheritedGenericBaseFixedDestination;
+public class Base<T> {
+    public void Add(T value) { }
+}
+public class Derived : Base<ManagedRef<int>> { }
+public class Probe {
+    private static void AcceptFixed(Base<ManagedRef<int>> value) { }
+
+    public static void Run() {
+        var source = new ManagedRef<int>[1];
+        var derived = new Derived();
+        AcceptFixed(derived);
+        derived.Add(source[0]);
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayInheritedGenericBaseFixedDestination.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains(
+            context.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
+                diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
+        )
+        Assert.Contains("open class Derived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
