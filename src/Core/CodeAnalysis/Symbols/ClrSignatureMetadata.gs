@@ -61,6 +61,117 @@ internal shared class ClrSignatureMetadata {
         return result.ToImmutable()
     }
 
+    internal func TryGetInterfaceSlotOverrideIsAbstract(
+        derivedInterface Type,
+        slotOwner Type,
+        slot MethodInfo,
+        matchesSlotOwner(Type) -> bool,
+        out isAbstract bool
+    ) bool {
+        isAbstract = false
+        let candidates = derivedInterface.GetInterfaces()
+        if !candidates.Any(matchesSlotOwner) {
+            return false
+        }
+        using let image = ReferenceResolver.OpenAssemblyImage(derivedInterface.Assembly)
+        if image == nil {
+            return false
+        }
+        using let pe = PEReader(image)
+        if !pe.HasMetadata {
+            return false
+        }
+        let reader = pe.GetMetadataReader()
+        let definition = reader.GetTypeDefinition(
+            MetadataTokens.TypeDefinitionHandle(derivedInterface.MetadataToken & 0xffffff)
+        )
+        let methodImpls = definition.GetMethodImplementations()
+        if methodImpls.Count == 0 {
+            return false
+        }
+        let ifaceMatcher = SignatureMatcher(derivedInterface, nil)
+        let slotParams = slot.GetParameters()
+        let slotGenericArity = if slot.IsGenericMethod {
+            slot.GetGenericArguments().Length
+        } else {
+            0
+        }
+        for handle in methodImpls {
+            let impl = reader.GetMethodImplementation(handle)
+            if impl.MethodBody.Kind != HandleKind.MethodDefinition {
+                continue
+            }
+            var matchesSlot = false
+            switch impl.MethodDeclaration.Kind {
+                case HandleKind.MethodDefinition {
+                    matchesSlot = derivedInterface.Module == slot.Module && MetadataTokens.GetToken(
+                        impl.MethodDeclaration
+                    ) == slot.MetadataToken &&
+                        matchesSlotOwner(slotOwner)
+                }
+                case HandleKind.MemberReference {
+                    let memberRef = reader.GetMemberReference(cast[MemberReferenceHandle](impl.MethodDeclaration))
+                    if reader.GetString(memberRef.Name) != slot.Name {
+                        continue
+                    }
+                    let matchedIface = TryMatch(reader, memberRef.Parent, ifaceMatcher, candidates)
+                    if matchedIface == nil || !matchesSlotOwner(matchedIface) {
+                        continue
+                    }
+                    let sig = memberRef.DecodeMethodSignature(SignatureMatcher(slotOwner, slot), default(object))
+                    let returnMatcher = sig.ReturnType
+                    if sig.GenericParameterCount != slotGenericArity ||
+                        sig
+                        .ParameterTypes
+                        .Length != slotParams.Length ||
+                        !returnMatcher(ClrNullability.GetSignatureType(slot.ReturnParameter)) {
+                        continue
+                    }
+                    var allParamsMatch = true
+                    for var i = 0; i < slotParams.Length; i++ {
+                        let paramMatcher = sig.ParameterTypes[i]
+                        if !paramMatcher(ClrNullability.GetSignatureType(slotParams[i])) {
+                            allParamsMatch = false
+                            break
+                        }
+                    }
+                    matchesSlot = allParamsMatch
+                }
+                default { }
+            }
+            if matchesSlot {
+                let bodyDef = reader.GetMethodDefinition(cast[MethodDefinitionHandle](impl.MethodBody))
+                isAbstract = (bodyDef.Attributes & MethodAttributes.Abstract) != 0
+                return true
+            }
+        }
+        return false
+    }
+
+    private func TryMatch(
+        reader MetadataReader,
+        handle EntityHandle,
+        matcher SignatureMatcher,
+        candidates[]Type
+    ) Type? {
+        let predicate = switch handle.Kind {
+            case HandleKind.TypeSpecification:
+            reader.GetTypeSpecification(cast[TypeSpecificationHandle](handle)).DecodeSignature(matcher, default(object))
+            case HandleKind.TypeDefinition: matcher.GetTypeFromDefinition(reader, cast[TypeDefinitionHandle](handle), 0)
+            case HandleKind.TypeReference: matcher.GetTypeFromReference(reader, cast[TypeReferenceHandle](handle), 0)
+            default: default(Func[Type, bool]?)
+        }
+        if predicate == nil {
+            return nil
+        }
+        let matches = candidates.Where(predicate).ToArray()
+        return if matches.Length == 1 {
+            matches[0]
+        } else {
+            default(Type?)
+        }
+    }
+
     private func Match(reader MetadataReader, handle EntityHandle, matcher SignatureMatcher, candidates[]Type) Type {
         let predicate = switch handle.Kind {
             case HandleKind.TypeSpecification:
@@ -215,12 +326,49 @@ internal shared class ClrSignatureMetadata {
         private let origin Assembly
         private let typeArguments[]Type
         private let methodArguments[]Type
+        private let modified System
+            .Collections
+            .Generic
+            .Dictionary[
+            Func[Type, bool],
+            (
+                Core Func[Type, bool],
+                Required ImmutableArray[Func[Type, bool]],
+                Optional ImmutableArray[Func[Type, bool]]
+            )
+        ]
         private var depth int32
 
         internal init(declaration Type, method MethodBase?) {
             origin = declaration.Assembly
             typeArguments = declaration.GetGenericArguments()
             methodArguments = method?.GetGenericArguments() ?? []Type{}
+            modified = System
+                .Collections
+                .Generic
+                .Dictionary[
+                Func[Type, bool],
+                (
+                    Core Func[Type, bool],
+                    Required ImmutableArray[Func[Type, bool]],
+                    Optional ImmutableArray[Func[Type, bool]]
+                )
+            ]()
+        }
+
+        private func Plain(core Func[Type, bool]) Func[Type, bool] {
+            let result = func (actual Type) bool {
+                if !core(actual) {
+                    return false
+                }
+                if object.ReferenceEquals(actual, actual.UnderlyingSystemType) {
+                    return true
+                }
+                return actual.GetRequiredCustomModifiers().Length == 0 && actual.GetOptionalCustomModifiers()
+                    .Length == 0
+            }
+            modified[result] = (core, ImmutableArray[Func[Type, bool]].Empty, ImmutableArray[Func[Type, bool]].Empty)
+            return result
         }
 
         func GetTypeFromDefinition(reader MetadataReader, handle TypeDefinitionHandle, rawTypeKind uint8) Func[
@@ -238,7 +386,9 @@ internal shared class ClrSignatureMetadata {
         private func Named(reader MetadataReader, handle EntityHandle) Func[Type, bool] {
             let name = TypeName(reader, handle)
             let assemblyScope = ScopeName(reader, handle, origin)
-            return (actual Type) -> actual.FullName == name && HasForwardedIdentity(origin, assemblyScope, actual)
+            return Plain(
+                (actual Type) -> actual.FullName == name && HasForwardedIdentity(origin, assemblyScope, actual)
+            )
         }
 
         func GetTypeFromSpecification(
@@ -261,52 +411,185 @@ internal shared class ClrSignatureMetadata {
             Type,
             bool
         ] ->
-        func (actual Type) bool {
-            if !actual.IsGenericType || !genericType(actual.GetGenericTypeDefinition()) {
+        Plain(
+            func (actual Type) bool {
+                if !actual.IsGenericType || !genericType(actual.GetGenericTypeDefinition()) {
+                    return false
+                }
+                let actualArguments = actual.GetGenericArguments()
+                if actualArguments.Length != arguments.Length {
+                    return false
+                }
+                for var index = 0; index < arguments.Length; index++ {
+                    let argumentMatcher = arguments[index]
+                    if !argumentMatcher(actualArguments[index]) {
+                        return false
+                    }
+                }
+                return true
+            }
+        )
+
+        func GetGenericTypeParameter(context object, index int32) Func[Type, bool] ->
+        Plain((actual Type) -> index < typeArguments.Length && SameTypeOrParameter(actual, typeArguments[index]))
+
+        func GetGenericMethodParameter(context object, index int32) Func[Type, bool] ->
+        Plain((actual Type) -> index < methodArguments.Length && SameTypeOrParameter(actual, methodArguments[index]))
+
+        private func SameTypeOrParameter(actual Type, expected Type) bool ->
+        if actual.IsGenericParameter || expected.IsGenericParameter {
+            actual.UnderlyingSystemType == expected.UnderlyingSystemType
+        } else {
+            ClrTypeUtilities.AreSame(actual, expected)
+        }
+
+        func GetPrimitiveType(code PrimitiveTypeCode) Func[Type, bool] ->
+        Plain((actual Type) -> actual.FullName == "System." + code.ToString())
+
+        func GetSZArrayType(element Func[Type, bool]) Func[Type, bool] ->
+        Plain((actual Type) -> actual.IsSZArray && element(actual.GetElementType()!!))
+
+        func GetArrayType(element Func[Type, bool], shape ArrayShape) Func[Type, bool] ->
+        Plain(
+            (actual Type) -> actual.IsArray && !actual.IsSZArray && actual.GetArrayRank() == shape.Rank &&
+                element(actual.GetElementType()!!)
+        )
+
+        func GetByReferenceType(element Func[Type, bool]) Func[Type, bool] ->
+        Plain((actual Type) -> actual.IsByRef && element(actual.GetElementType()!!))
+
+        func GetPointerType(element Func[Type, bool]) Func[Type, bool] ->
+        Plain((actual Type) -> actual.IsPointer && element(actual.GetElementType()!!))
+
+        func GetModifiedType(modifier Func[Type, bool], unmodifiedType Func[Type, bool], isRequired bool) Func[
+            Type,
+            bool
+        ] {
+            let baseInfo = if modified.TryGetValue(unmodifiedType, out var existing) {
+                existing
+            } else {
+                (
+                    Core: unmodifiedType,
+                    Required: ImmutableArray[Func[Type, bool]].Empty,
+                    Optional: ImmutableArray[Func[Type, bool]].Empty
+                )
+            }
+            let required = if isRequired {
+                baseInfo.Required.Add(modifier)
+            } else {
+                baseInfo.Required
+            }
+            let optional = if isRequired {
+                baseInfo.Optional
+            } else {
+                baseInfo.Optional.Add(modifier)
+            }
+            let core = baseInfo.Core
+            let result = func (actual Type) bool {
+                if !core(actual) {
+                    return false
+                }
+                if object.ReferenceEquals(actual, actual.UnderlyingSystemType) {
+                    return true
+                }
+                return ModifiersMatch(required, actual.GetRequiredCustomModifiers()) &&
+                    ModifiersMatch(optional, actual.GetOptionalCustomModifiers())
+            }
+            modified[result] = (core, required, optional)
+            return result
+        }
+
+        private func ModifiersMatch(expected ImmutableArray[Func[Type, bool]], actual[]Type) bool {
+            if expected.Length != actual.Length {
                 return false
             }
-            let actualArguments = actual.GetGenericArguments()
-            if actualArguments.Length != arguments.Length {
-                return false
-            }
-            for var index = 0; index < arguments.Length; index++ {
-                let argumentMatcher = arguments[index]
-                if !argumentMatcher(actualArguments[index]) {
+            for var index = 0; index < expected.Length; index++ {
+                let matcher = expected[index]
+                if !matcher(actual[index]) {
                     return false
                 }
             }
             return true
         }
 
-        func GetGenericTypeParameter(context object, index int32) Func[Type, bool] ->
-        (actual Type) -> index < typeArguments.Length && actual == typeArguments[index]
-
-        func GetGenericMethodParameter(context object, index int32) Func[Type, bool] ->
-        (actual Type) -> index < methodArguments.Length && actual == methodArguments[index]
-
-        func GetPrimitiveType(code PrimitiveTypeCode) Func[Type, bool] ->
-        (actual Type) -> actual.FullName == "System." + code.ToString()
-
-        func GetSZArrayType(element Func[Type, bool]) Func[Type, bool] ->
-        (actual Type) -> actual.IsSZArray && element(actual.GetElementType()!!)
-
-        func GetArrayType(element Func[Type, bool], shape ArrayShape) Func[Type, bool] ->
-        (actual Type) -> actual.IsArray && !actual.IsSZArray && actual.GetArrayRank() == shape.Rank &&
-            element(actual.GetElementType()!!)
-
-        func GetByReferenceType(element Func[Type, bool]) Func[Type, bool] ->
-        (actual Type) -> actual.IsByRef && element(actual.GetElementType()!!)
-
-        func GetPointerType(element Func[Type, bool]) Func[Type, bool] ->
-        (actual Type) -> actual.IsPointer && element(actual.GetElementType()!!)
-
-        func GetModifiedType(modifier Func[Type, bool], unmodifiedType Func[Type, bool], isRequired bool) Func[
-            Type,
-            bool
-        ] -> unmodifiedType
-
         func GetPinnedType(element Func[Type, bool]) Func[Type, bool] -> element
 
-        func GetFunctionPointerType(signature MethodSignature[Func[Type, bool]]) Func[Type, bool] -> (_ Type) -> false
+        func GetFunctionPointerType(signature MethodSignature[Func[Type, bool]]) Func[Type, bool] ->
+        Plain(
+            func (actual Type) bool {
+                if !actual.IsFunctionPointer ||
+                    signature
+                    .Header
+                    .IsInstance ||
+                    signature
+                    .Header
+                    .HasExplicitThis ||
+                    signature.GenericParameterCount != 0 {
+                    return false
+                }
+                let actualParams = actual.GetFunctionPointerParameterTypes()
+                let returnMatcher = signature.ReturnType
+                if actualParams.Length != signature
+                    .ParameterTypes
+                    .Length ||
+                    signature.RequiredParameterCount != actualParams.Length ||
+                    !CallingConventionMatches(signature.Header.CallingConvention, actual) ||
+                    !returnMatcher(actual.GetFunctionPointerReturnType()) {
+                    return false
+                }
+                for var index = 0; index < actualParams.Length; index++ {
+                    let paramMatcher = signature.ParameterTypes[index]
+                    if !paramMatcher(actualParams[index]) {
+                        return false
+                    }
+                }
+                return true
+            }
+        )
+
+        private func CallingConventionMatches(convention SignatureCallingConvention, actual Type) bool {
+            return switch convention {
+                case SignatureCallingConvention.Default: !actual.IsUnmanagedFunctionPointer
+                case SignatureCallingConvention.CDecl:
+                LegacyUnmanagedConventionMatches(actual, "System.Runtime.CompilerServices.CallConvCdecl")
+                case SignatureCallingConvention.StdCall:
+                LegacyUnmanagedConventionMatches(actual, "System.Runtime.CompilerServices.CallConvStdcall")
+                case SignatureCallingConvention.ThisCall:
+                LegacyUnmanagedConventionMatches(actual, "System.Runtime.CompilerServices.CallConvThiscall")
+                case SignatureCallingConvention.FastCall:
+                LegacyUnmanagedConventionMatches(actual, "System.Runtime.CompilerServices.CallConvFastcall")
+                case SignatureCallingConvention.Unmanaged:
+                actual.IsUnmanagedFunctionPointer &&
+                    (
+                    actual.GetFunctionPointerCallingConventions()
+                        .Length == 0 ||
+                        HasCallConvModifier(actual.GetFunctionPointerReturnType())
+                )
+                default: false
+            }
+        }
+
+        private func LegacyUnmanagedConventionMatches(actual Type, expectedFullName string) bool {
+            if !actual.IsUnmanagedFunctionPointer || HasCallConvModifier(actual.GetFunctionPointerReturnType()) {
+                return false
+            }
+            let conventions = actual.GetFunctionPointerCallingConventions()
+            return conventions.Length == 1 && conventions[0].FullName == expectedFullName
+        }
+
+        private func HasCallConvModifier(returnType Type) bool {
+            if object.ReferenceEquals(returnType, returnType.UnderlyingSystemType) {
+                return false
+            }
+            for modifier in returnType.GetOptionalCustomModifiers() {
+                if modifier.FullName?.StartsWith(
+                    "System.Runtime.CompilerServices.CallConv",
+                    StringComparison.Ordinal
+                ) == true {
+                    return true
+                }
+            }
+            return false
+        }
     }
 }

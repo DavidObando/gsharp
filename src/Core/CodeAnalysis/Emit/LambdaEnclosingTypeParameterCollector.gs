@@ -66,8 +66,15 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
             case BoundLiteralExpression{Value: BoundClrPropertyAccessExpression member} {
                 this.VisitExpression(member)
             }
-            case literal is BoundFunctionLiteralExpression when literal.Function?.IsGeneric != true {
-                this.VisitStatement(literal.Body)
+            case literal is BoundFunctionLiteralExpression {
+                if this.getPromotedExtras != nil && literal.Function != nil {
+                    for extra in this.getPromotedExtras(literal.Function) {
+                        this.sink.Add(extra)
+                    }
+                }
+                if literal.Function?.IsGeneric != true {
+                    this.VisitStatement(literal.Body)
+                }
             }
             case call is BoundCallExpression {
                 // Issue #4223: an implicit-receiver call to a `shared` member
@@ -118,9 +125,19 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
                     this.sink
                 )
                 this.CheckTypeArguments(methodGroup.MethodTypeArguments)
+                if this.getPromotedExtras != nil {
+                    for extra in this.getPromotedExtras(methodGroupFunction) {
+                        this.sink.Add(extra)
+                    }
+                }
             }
             case functionPointer is BoundFunctionPointerFromMethodExpression {
                 TypeSymbol.CollectReferencedTypeParameters(functionPointer.Method.StaticOwnerType, this.sink)
+                if this.getPromotedExtras != nil {
+                    for extra in this.getPromotedExtras(functionPointer.Method) {
+                        this.sink.Add(extra)
+                    }
+                }
             }
             case fieldAccess is BoundFieldAccessExpression {
                 TypeSymbol.CollectReferencedTypeParameters(
