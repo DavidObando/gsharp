@@ -6593,6 +6593,124 @@ Done:
 Run(func() { })`, "4")
     }
 
+    @Fact
+    func TryFinallyInvocationWithNormalResetAndCatchClear_DoesNotOverwriteCatchTarget() {
+        let result = Evaluate(`import System
+
+func Run(callback (() -> void), fail bool) int32 {
+    let failure = Exception()
+    var text string? = nil
+    text = "safe"
+    try {
+        goto Done
+    } finally {
+        let clear = func() { text = nil }
+        var action (() -> void) = clear
+        let reset = func() { action = callback }
+        action = reset
+        try {
+            try {
+                if fail {
+                    throw failure
+                }
+            } catch {
+                action = clear
+                throw failure
+            } finally {
+                action()
+            }
+        } catch {
+        }
+    }
+Done:
+    return text.Length
+}
+
+Run(func() { }, true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func TryFinallyCallableArgumentWithNormalResetAndCatchClear_DoesNotOverwriteCatchTarget() {
+        let result = Evaluate(`import System
+
+func Run(callback (() -> void), invoke ((() -> void) -> void), fail bool) int32 {
+    let failure = Exception()
+    var text string? = nil
+    text = "safe"
+    try {
+        goto Done
+    } finally {
+        let clear = func() { text = nil }
+        var action (() -> void) = clear
+        let reset = func() { action = callback }
+        action = reset
+        try {
+            try {
+                if fail {
+                    throw failure
+                }
+            } catch {
+                action = clear
+                throw failure
+            } finally {
+                invoke(action)
+            }
+        } catch {
+        }
+    }
+Done:
+    return text.Length
+}
+
+Run(func() { }, func(fn (() -> void)) { fn() }, true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func TryFinallyBreakAfterResetAndCatchClear_DoesNotExportActionAsExternal() {
+        let result = Evaluate(`import System
+
+func Run(callback (() -> void), fail bool) int32 {
+    let failure = Exception()
+    var text string? = nil
+    try {
+        goto Done
+    } finally {
+        let clear = func() { text = nil }
+        var action (() -> void) = clear
+        let reset = func() { action = callback }
+        action = reset
+        for {
+            try {
+                if fail {
+                    throw failure
+                }
+            } catch {
+                action = clear
+                throw failure
+            } finally {
+                action()
+                break
+            }
+        }
+        text = "safe"
+        action()
+    }
+Done:
+    return text.Length
+}
+
+Run(func() { }, true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 

@@ -2786,26 +2786,24 @@ internal partial class StatementBinder {
                     continue
                 }
                 let hasNormalTargets = normalCallableState.TryGetFunctionLiterals(argument, out var normalLiterals)
-                if normalLiterals != nil {
-                    for literal in normalLiterals.ToArray() {
-                        VisitFunctionLiteralBody(literal)
-                    }
-                }
+                let normalTargetArray = normalLiterals?.ToArray()
+                let isNormalExternal = normalCallableState.IsExternalCallable(argument)
+                let isNormalUnknown = normalCallableState.IsUnknownCallable(argument) ||
+                    (!hasNormalTargets && !isNormalExternal)
                 let hasAllTargets = allEntryCallableState.TryGetFunctionLiterals(argument, out var allLiterals)
-                if allLiterals != nil {
-                    for literal in allLiterals.ToArray() {
-                        if normalLiterals == nil || !normalLiterals.Contains(literal) {
-                            let savedNormal = normalCallableState.Clone()
-                            VisitFunctionLiteralBody(literal)
-                            normalCallableState.RestoreFrom(savedNormal)
-                        }
-                    }
-                }
+                let allTargetArray = allLiterals?.ToArray()
                 let isExternal = allEntryCallableState.IsExternalCallable(argument)
+                let isUnknown = allEntryCallableState.IsUnknownCallable(argument) || (!hasAllTargets && !isExternal)
+                VisitCallableTargets(
+                    normalTargetArray,
+                    isNormalExternal || isNormalUnknown,
+                    allTargetArray,
+                    isExternal || isUnknown
+                )
                 if isExternal {
                     MarkMayMutateGlobalRoots(runsSourceCode: false)
                 }
-                if allEntryCallableState.IsUnknownCallable(argument) || (!hasAllTargets && !isExternal) {
+                if isUnknown {
                     MayMutateAnyRoot = true
                 }
             }
@@ -3067,36 +3065,100 @@ internal partial class StatementBinder {
         }
 
         private func AnalyzeCallableVariable(variable VariableSymbol) {
-            if normalCallableState.Literals.TryGetValue(variable, out var normalLiterals) {
-                for literal in normalLiterals.ToArray() {
-                    VisitFunctionLiteralBody(literal)
-                }
-            }
-            if allEntryCallableState.Literals.TryGetValue(variable, out var allLiterals) {
-                for literal in allLiterals.ToArray() {
-                    if normalLiterals == nil || !normalLiterals.Contains(literal) {
-                        let savedNormal = normalCallableState.Clone()
-                        VisitFunctionLiteralBody(literal)
-                        normalCallableState.RestoreFrom(savedNormal)
-                    }
-                }
-            }
+            let isReadonlyCallableParameter = variable is ParameterSymbol && variable.IsReadOnly == true
+            normalCallableState.Literals.TryGetValue(variable, out var normalLiterals)
+            let normalTargetArray = normalLiterals?.ToArray()
+            let isNormalExternal = isReadonlyCallableParameter || normalCallableState.External.Contains(variable)
+            let isNormalUnknown = normalCallableState.Unknown.Contains(variable) ||
+                (!isNormalExternal && normalLiterals == nil)
+            allEntryCallableState.Literals.TryGetValue(variable, out var allLiterals)
+            let allTargetArray = allLiterals?.ToArray()
+            let isExternal = isReadonlyCallableParameter || allEntryCallableState.External.Contains(variable)
+            let isUnknown = allEntryCallableState.Unknown.Contains(variable) || (!isExternal && allLiterals == nil)
+            VisitCallableTargets(
+                normalTargetArray,
+                isNormalExternal || isNormalUnknown,
+                allTargetArray,
+                isExternal || isUnknown
+            )
             // A read-only callable parameter originates outside this function
             // and cannot capture this function's local slots.
-            MayMutateAnyRoot |= allEntryCallableState.Unknown.Contains(variable) ||
-                (
-                !(variable is ParameterSymbol && variable.IsReadOnly == true) &&
-                    !allEntryCallableState
-                    .External
-                    .Contains(variable) && !allEntryCallableState.Literals.ContainsKey(variable)
-            )
-            if variable is ParameterSymbol && variable.IsReadOnly == true || allEntryCallableState.External.Contains(
-                variable
-            ) {
+            MayMutateAnyRoot |= isUnknown
+            if isExternal {
                 MarkMayMutateGlobalRoots(runsSourceCode: false)
                 MayMutateWritableReferenceRoots = true
                 MayMutateReferenceStorage = true
             }
+        }
+
+        private func VisitCallableTargets(
+            normalTargets[]?BoundFunctionLiteralExpression,
+            normalKeepsEntry bool,
+            allTargets[]?BoundFunctionLiteralExpression,
+            allKeepsEntry bool
+        ) {
+            if (normalTargets == nil || normalTargets.Length == 0) && (allTargets == nil || allTargets.Length == 0) {
+                return
+            }
+            let entryState = CaptureCallableState()
+            let normalSet = if normalTargets == nil {
+                default(HashSet[BoundFunctionLiteralExpression]?)
+            } else {
+                HashSet[BoundFunctionLiteralExpression](normalTargets)
+            }
+            let allSet = if allTargets == nil {
+                default(HashSet[BoundFunctionLiteralExpression]?)
+            } else {
+                HashSet[BoundFunctionLiteralExpression](allTargets)
+            }
+            let combined = List[BoundFunctionLiteralExpression]()
+            let seen = HashSet[BoundFunctionLiteralExpression]()
+            if normalTargets != nil {
+                for literal in normalTargets {
+                    if seen.Add(literal) {
+                        combined.Add(literal)
+                    }
+                }
+            }
+            if allTargets != nil {
+                for literal in allTargets {
+                    if seen.Add(literal) {
+                        combined.Add(literal)
+                    }
+                }
+            }
+            var joinedNormal CallableAliasState? = if normalKeepsEntry {
+                entryState.Normal.Clone()
+            } else {
+                default(CallableAliasState?)
+            }
+            var joinedAllEntry CallableAliasState? = if allKeepsEntry {
+                entryState.AllEntry.Clone()
+            } else {
+                default(CallableAliasState?)
+            }
+            for literal in combined {
+                if literal.Body == nil || visitedFunctionLiterals.Contains(literal) {
+                    if normalSet != nil && normalSet.Contains(literal) {
+                        joinedNormal = CallableAliasState.Join(joinedNormal, entryState.Normal)
+                    }
+                    if allSet != nil && allSet.Contains(literal) {
+                        joinedAllEntry = CallableAliasState.Join(joinedAllEntry, entryState.AllEntry)
+                    }
+                    continue
+                }
+                RestoreCallableState(CloneCallableState(entryState))
+                VisitFunctionLiteralBody(literal)
+                let exitState = CaptureCallableState()
+                if normalSet != nil && normalSet.Contains(literal) {
+                    joinedNormal = CallableAliasState.Join(joinedNormal, exitState.Normal)
+                }
+                if allSet != nil && allSet.Contains(literal) {
+                    joinedAllEntry = CallableAliasState.Join(joinedAllEntry, exitState.AllEntry)
+                }
+            }
+            normalCallableState.RestoreFrom(joinedNormal ?? entryState.Normal)
+            allEntryCallableState.RestoreFrom(joinedAllEntry ?? entryState.AllEntry)
         }
 
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
