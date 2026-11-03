@@ -1477,6 +1477,73 @@ func G(s string?) string {
         }
     }
 
+    /// <b>Issue #4355 — member access through a constructor-call or
+    /// composite-literal receiver preserves nullable type arguments.</b>
+    @Fact
+    func Issue4355_ConstructorCallReceiver_PreservesNullableTypeArgument() {
+        let nullableProbes = []string{
+            "let probe = Box[List[int32]?]().Value",
+            "let probe = Outer.Inner[List[int32]?]().Value",
+            "let probe = Box[Rec[List[int32]?]]().Value.Value",
+            "let probe = Box[string?]().Value",
+            "let probe = Box[int32?]().Value",
+            "let probe = Box[Entry?]().Value",
+            "let probe = Box[List[string?]]().Value[0]",
+            "let probe = Box[string?]().Get()",
+            "let probe = Box[string?]()[0]",
+            "let probe = Box[string?]().Field",
+            "let probe = Box[List[int32]?]{}.Value",
+            "let probe = (Box[List[int32]?]()).Value",
+            "let probe = Box[List[int32]?](){ Value = nil }.Value",
+            "let probe = Adr0186.Step2.Library.Box[List[int32]?]().Value",
+            "let probe = Adr0186.Step2.Library.Box[List[int32]?]{}.Value",
+            "let probe = Outer.Inner[List[int32]?]{}.Value",
+            "let probe = GenericOuter[List[int32]?].Inner().Value",
+            "let probe = GenericOuter[List[int32]?].Inner{}.Value",
+            "let probe = GenericOuter[string?].DualInner[List[int32]?]().OuterValue",
+            "let probe = GenericOuter[string?].DualInner[List[int32]?]().InnerValue",
+            "class GsBox[T](Value T)\nlet probe = GsBox(default(List[int32]?)).Value"
+        }
+        let unguardedChains = []string{
+            "    Console.WriteLine(Box[List[int32]?]().Value.Capacity)",
+            "    Console.WriteLine(Box[List[int32]?]{}.Value.Capacity)",
+            "    Console.WriteLine(Adr0186.Step2.Library.Box[List[int32]?]().Value.Capacity)",
+            "    Console.WriteLine(Adr0186.Step2.Library.Box[List[int32]?]{}.Value.Capacity)",
+            "    Console.WriteLine(Outer.Inner[List[int32]?]().Value.Capacity)",
+            "    Console.WriteLine(Outer.Inner[List[int32]?]{}.Value.Capacity)",
+            "    Console.WriteLine(GenericOuter[List[int32]?].Inner().Value.Capacity)",
+            "    Console.WriteLine(GenericOuter[List[int32]?].Inner{}.Value.Capacity)",
+            "    Console.WriteLine(Box[Rec[List[int32]?]]().Value.Value.Capacity)"
+        }
+        const remedies = `    Console.WriteLine(Box[List[int32]?](){ Value = List[int32]() }.Value!!.Count)
+    Console.WriteLine(Outer.Inner[List[int32]?]{ Value: List[int32]() }.Value!!.Count)
+    Console.WriteLine(GenericOuter[List[int32]?].Inner{ Value: List[int32]() }.Value?.Count)
+    Console.WriteLine(Box[Rec[List[int32]?]]{ Value: Rec[List[int32]?](List[int32]()) }.Value.Value!!.Count)`
+        using let world = World()
+        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+            Assert.NotEmpty(nullableProbes)
+            for probe in nullableProbes {
+                Assert.IsType[NullableTypeSymbol](world.GlobalProbeType(probe, mode))
+            }
+            Assert.NotEmpty(unguardedChains)
+            for chain in unguardedChains {
+                let compiled = world.Compile(chain, mode)
+                Assert.False(compiled.Success, chain)
+                Assert.Contains(
+                    compiled.Diagnostics,
+                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Capacity", StringComparison.Ordinal)
+                )
+            }
+            Assert.Equal(
+                []string{"0", "0", "0", "0"},
+                world.Run(remedies, mode).Split(
+                    '\n',
+                    StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
+                )
+            )
+        }
+    }
+
     /// <b>ADR-0186 step 4 — the discriminator: an OBLIVIOUS field-read
     /// receiver is checked, not waved through.</b>
     ///
@@ -2097,10 +2164,43 @@ public class Annotated
 // ` + "`" + `[Nullable(2)]` + "`" + ` on the declaration.
 public class Box<T>
 {
-    public T Value { get; set; }
+    public T Value { get; set; } = default!;
 
-    public T Field;
-}`)
+    public T Field = default!;
+
+    public T Get() => Value;
+
+    public T this[int index] => Value;
+}
+
+public class Outer
+{
+    public class Inner<T>
+    {
+        public T Value { get; set; } = default!;
+
+        public T Field = default!;
+    }
+}
+
+public class GenericOuter<T>
+{
+    public class Inner
+    {
+        public T Value { get; set; } = default!;
+
+        public T Field = default!;
+    }
+
+    public class DualInner<U>
+    {
+        public T OuterValue { get; set; } = default!;
+
+        public U InnerValue { get; set; } = default!;
+    }
+}
+
+public record Rec<T>(T Value = default!);`)
 
         private const EntryDeclaration string = `class Entry {
     var Id int32

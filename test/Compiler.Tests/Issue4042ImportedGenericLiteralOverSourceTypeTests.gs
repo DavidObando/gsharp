@@ -203,6 +203,69 @@ Console.WriteLine(h.Options!!.Name)`)
         }
     }
 
+    /// Issue #4355: member access on a constructor-call or composite-literal
+    /// receiver preserves nullable type arguments across top-level and nested
+    /// imported generics.
+    @Fact
+    func Issue4355_ConstructorAndLiteralReceivers_PreserveNullableTypeArguments() {
+        const Rejected = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+Console.WriteLine(PlainBox[List[int32]?]().Value.Capacity)
+Console.WriteLine(Outer.Inner[List[int32]?]().Value.Capacity)
+Console.WriteLine(GenericOuter[List[int32]?].Inner().Value.Capacity)
+Console.WriteLine(GenericOuter[List[int32]?].Inner{}.Value.Capacity)`
+        const Accepted = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+Console.WriteLine(PlainBox[List[int32]?](){ Value = List[int32]{1, 2} }.Value!!.Count)
+Console.WriteLine(Outer.Inner[List[int32]?]{ Value: List[int32]{1, 2, 3} }.Value!!.Count)
+Console.WriteLine(GenericOuter[List[int32]?].Inner(){ Value = List[int32]{4} }.Value!!.Count)
+Console.WriteLine(GenericOuter[List[int32]?].Inner{ Value: List[int32]{5, 6} }.Value!!.Count)`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4355_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let rejectedPath = Path.Combine(tempDir, "Rejected.dll")
+            let rejectedLog = Compile(
+                tempDir,
+                "Rejected.gs",
+                Rejected,
+                rejectedPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.False(File.Exists(rejectedPath), rejectedLog)
+            let gs0158Count = rejectedLog.Split("GS0158", StringSplitOptions.None).Length - 1
+            Assert.Equal(4, gs0158Count)
+            let acceptedPath = Path.Combine(tempDir, "Accepted.dll")
+            let acceptedLog = Compile(
+                tempDir,
+                "Accepted.gs",
+                Accepted,
+                acceptedPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.DoesNotContain("error GS", acceptedLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(acceptedPath), acceptedLog)
+            IlVerifier.Verify(acceptedPath, []string{libPath})
+            let (exit, output) = RunDotnet(acceptedPath)
+            Assert.Equal(0, exit)
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal([]string{"2", "3", "1", "2"}, lines)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         /// Timeout for running an emitted sample.
         private const RunTimeout int32 = 60_000
@@ -230,6 +293,27 @@ public class Box<T>
     public string Tag { get; set; } = "b";
 
     public T? Value { get; set; }
+}
+
+public class PlainBox<T>
+{
+    public T Value { get; set; } = default!;
+}
+
+public class Outer
+{
+    public class Inner<T>
+    {
+        public T Value { get; set; } = default!;
+    }
+}
+
+public class GenericOuter<T>
+{
+    public class Inner
+    {
+        public T Value { get; set; } = default!;
+    }
 }`
 
         /// Every literal spelling that must bind, verify and run.

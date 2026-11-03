@@ -2323,7 +2323,7 @@ internal partial class OverloadResolver {
                     continue
                 }
                 if TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) &&
-                    (property!!.HasSetter || classType.UsesConstructorOwnedDataConstruction) {
+                    (property!!.HasSetter || classType.IsClass || classType.UsesConstructorOwnedDataConstruction) {
                     initializers.Add(BoundFieldInitializer(property!!, ctorCall.Arguments[i]))
                 }
             }
