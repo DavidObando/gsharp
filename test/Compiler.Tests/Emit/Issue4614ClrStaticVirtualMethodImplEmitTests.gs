@@ -196,7 +196,22 @@ public interface IGenOverload { static abstract int Pick<T, U>(T x); static abst
 public interface IDefaultedFirstOverload : IGenOverload { static int IGenOverload.Pick<T, U>(T x) => 300; }
 public class MultiConstraint<T, U> where T : System.IComparable<T>, System.IComparable<U> { public static int Touch(T? x) => 0; }
 public interface IAsync<T> { static abstract System.Threading.Tasks.Task<T> Load(T x); }
+public interface IValueAsync<T> { static abstract System.Threading.Tasks.ValueTask<T> Load(T x); }
+public interface IAsyncTask { static abstract System.Threading.Tasks.Task Run(); }
 public interface IOp { static abstract int operator +(IOp a, int b); }
+public unsafe interface IFnPtrOverload<T> {
+    static abstract int Call(delegate*<int, int> p, T x);
+    static abstract int Call(delegate* unmanaged[Cdecl]<int, int> p, T x);
+    static abstract int Call(delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int> p, T x);
+}
+public unsafe interface IFnPtrOverloadDefaultedAll<T> : IFnPtrOverload<T> {
+    static int IFnPtrOverload<T>.Call(delegate*<int, int> p, T x) => 50;
+    static int IFnPtrOverload<T>.Call(delegate* unmanaged[Cdecl]<int, int> p, T x) => 51;
+    static int IFnPtrOverload<T>.Call(delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int> p, T x) => 52;
+}
+public unsafe interface IFnPtrOverloadDefaultedManagedOnly<T> : IFnPtrOverload<T> {
+    static int IFnPtrOverload<T>.Call(delegate*<int, int> p, T x) => 50;
+}
 
 public static class Probe
 {
@@ -211,6 +226,8 @@ public static class Probe
     public static int A<T>(IArr<T> i, T[] xs) => i.A(xs);
     public static int B<T, U>(IArr<T> i, U[] us, T x) => i.B(us, x);
     public static T Load<T, TImpl>(T x) where TImpl : IAsync<T> => TImpl.Load(x).GetAwaiter().GetResult();
+    public static unsafe int CallFnPtrDefault<T, TImpl>(T x) where TImpl : IFnPtrOverload<T> =>
+        TImpl.Call((delegate*<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl]<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int>)null, x);
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -550,6 +567,14 @@ let iface = typeof(SDefaultSym).GetInterfaces().Where((i Type) -> i.Name == "IH`
 Console.WriteLine(typeof(SDefaultSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))`), []string{
                     "200"
                 }}
+            yield[]object{"defaulted-function-pointer-overloads-in-derived-clr-interface", `package P
+import System
+import Clib
+
+struct SFnPtr : IFnPtrOverloadDefaultedAll[int32] {
+}
+
+Console.WriteLine(Probe.CallFnPtrDefault[int32, SFnPtr](0))`, []string{"153"}}
         }
 
         /// Issue #4620: static methods, properties and events inherited from a
@@ -691,6 +716,47 @@ Console.WriteLine(Probe.Load[int32, DAsync](77))
 let iface = typeof(DAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IAsync` + "`" + `1").First()
 let task = cast[Task[Shape]](typeof(DAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 88}})!!)
 Console.WriteLine(task.GetAwaiter().GetResult().Tag)`), []string{"77", "88"}}
+            yield[]object{"inherited-valuetask-async-static-method-from-generic-gs-base", (`package P
+import System
+import System.Linq
+import System.Threading.Tasks
+import Clib
+
+class Shape {
+    var Tag int32
+}
+open class BValueAsync[T] {
+    shared {
+        async func Load(x T) ValueTask[T] { return x }
+    }
+}
+class DValueAsyncSym : BValueAsync[Shape], IValueAsync[Shape] {
+}
+
+let iface = typeof(DValueAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IValueAsync` + "`" + `1").First()
+let vt = cast[ValueTask[Shape]](typeof(DValueAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 95}})!!)
+Console.WriteLine(vt.GetAwaiter().GetResult().Tag)`), []string{"95"}}
+            yield[]object{"private-static-on-gs-base-with-unrelated-derived-instance-method", `package P
+import System
+import Clib
+
+interface IGsPriv {
+    shared {
+        func Z() int32;
+    }
+}
+open class BGsPriv : IGsPriv {
+    shared {
+        private func Z() int32 { return 73 }
+    }
+}
+class DGsPriv : BGsPriv, IGsPriv {
+    func Z() int32 { return 999 }
+}
+
+Console.WriteLine(typeof(DGsPriv).GetInterfaceMap(typeof(IGsPriv)).TargetMethods[0].Invoke(nil, []object?{}))`, []string{
+                    "73"
+                }}
             yield[]object{"direct-and-inherited-static-abstract-operator", `package P
 import System
 import Clib
@@ -915,6 +981,36 @@ import Clib
 struct SDiamond : ILeft, IRight {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IS.Z'"}
+            yield[]object{"task-async-does-not-satisfy-valuetask-symbolic-slot", `package P
+import System
+import Clib
+
+class Shape { }
+open class BTaskAsync[T] {
+    shared {
+        async func Load(x T) T { return x }
+    }
+}
+class DWrongAsync : BTaskAsync[Shape], IValueAsync[Shape] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IValueAsync[Shape].Load(T)'"}
+            yield[]object{"async-void-does-not-satisfy-task-slot", `package P
+import System
+import Clib
+
+struct SAsyncVoid : IAsyncTask {
+    shared {
+        async func Run() void { }
+    }
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IAsyncTask.Run"}
+            yield[]object{"partial-function-pointer-default-leaves-cdecl-overload-abstract", `package P
+import System
+import Clib
+
+struct SFnPtrMissing : IFnPtrOverloadDefaultedManagedOnly[int32] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IFnPtrOverload[int32].Call"}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {
@@ -952,9 +1048,8 @@ Console.WriteLine("x")`, "GS0331", "'Clib.IS.Z'"}
                 assemblyName,
                 []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
                 references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
-                    NullableContextOptions.Enable
-                )
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true)
+                    .WithNullableContextOptions(NullableContextOptions.Enable)
             )
             let libPath = Path.Combine(tempDir, assemblyName + ".dll")
             let result = compilation.Emit(libPath)

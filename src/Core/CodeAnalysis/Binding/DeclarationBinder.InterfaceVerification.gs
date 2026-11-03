@@ -1168,7 +1168,7 @@ internal partial class DeclarationBinder {
                         break
                     }
                 }
-                if sigMatch {
+                if sigMatch || satisfiedByBase {
                     continue
                 }
                 var reportedNonStatic = false
@@ -1189,7 +1189,7 @@ internal partial class DeclarationBinder {
                         }
                     }
                 }
-                if reportedNonStatic || satisfiedByBase || InterfaceSymbol.HasDefaultBody(imethod) {
+                if reportedNonStatic || InterfaceSymbol.HasDefaultBody(imethod) {
                     continue
                 }
                 Diagnostics.ReportStaticVirtualInterfaceMethodNotImplemented(
@@ -2646,6 +2646,8 @@ internal partial class DeclarationBinder {
                 IsUnsafe = method.IsUnsafe,
                 ReturnRefKind = method.ReturnRefKind,
                 IsAsyncVoid = method.IsAsyncVoid,
+                AsyncReturnsValueTask = method.AsyncReturnsValueTask,
+                SuspendingKind = method.SuspendingKind,
                 IsSpecialName = method.IsSpecialName,
                 IsInitOnlySetter = method.IsInitOnlySetter,
                 StateMachineType = method.StateMachineType,
