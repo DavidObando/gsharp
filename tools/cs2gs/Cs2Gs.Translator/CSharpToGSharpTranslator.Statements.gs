@@ -47,6 +47,8 @@ partial class CSharpToGSharpTranslator {
             let hasExplicitType = !declaration!!.Type.IsVar
             for declarator in declaration!!.Variables {
                 var localAcceptsNil = false
+                var bridgeTarget ILocalSymbol? = nil
+                var bridgeTargetType ITypeSymbol? = nil
                 var initializer GExpression?
                 if declarator.Initializer == nil {
                     initializer = nil
@@ -116,12 +118,8 @@ partial class CSharpToGSharpTranslator {
                             )
                         }
                     }
-                    initializer = this.ForgiveNullableReferenceValue(
-                        initializerSyntax,
-                        initializer,
-                        targetType,
-                        localTarget
-                    )
+                    bridgeTarget = localTarget
+                    bridgeTargetType = targetType
                 }
                 var binding BindingKind
                 if isConst {
@@ -354,9 +352,26 @@ partial class CSharpToGSharpTranslator {
                         declaration!!.Type.GetLocation()
                     )
                 }
+                // Issue #5602: the initializer is a store into the storage that the
+                // declaration emits. A type clause fixes that storage, so a promoted
+                // value gets the bridge that an assignment to the local gets. Without
+                // a clause, G# infers the storage from the initializer.
+                if bridgeTarget != nil {
+                    initializer = this.ForgiveNullableReferenceValue(
+                        declarator.Initializer!!.Value,
+                        initializer,
+                        bridgeTargetType,
+                        bridgeTarget,
+                        includePromotedValue: type != nil
+                    )
+                }
                 // Issue #5561: record whether the emitted storage accepts nil.
                 if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
                     (type != nil || initializer != nil) {
+                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    if type != nil {
+                        this.state.EmittedLocalTypeClauses.Add(storageLocal)
+                    }
                     this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
                         type.IsNullable
                     } else {
@@ -4717,7 +4732,11 @@ partial class CSharpToGSharpTranslator {
             // Issue #5516: G# infers a `var` local from its initializer, so the storage is fixed
             // non-null only when that initializer is not nullable by declaration.
             var inferredStorageIsNonNull = false
-            if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
+            if this.LocalStoreAcceptsNil(assignmentTarget) {
+                assignmentTargetType = assignmentTargetType?.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            } else if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
                 inferredAssignmentLocal
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()

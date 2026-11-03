@@ -305,7 +305,7 @@ const Amount decimal = -405.5m`))
 
     @Fact
     func DecimalTypeConstants_UseInitializedReadOnlyStorage() {
-        using let program = Compile(("Main.gs", `package FindingDecimalTypeConstants
+        using let program = CompileLibrary(("Main.gs", `package FindingDecimalTypeConstants
 
 class Constants {
     shared {
@@ -495,9 +495,19 @@ interface IConstants {
             sources ...(FileName string, Source string)
         ) Issue3519PackageConstEmitTests.CompiledProgram -> CompileWithReferences(Array.Empty[string](), sources)
 
+        private func CompileLibrary(
+            sources ...(FileName string, Source string)
+        ) Issue3519PackageConstEmitTests.CompiledProgram -> CompileTarget(Array.Empty[string](), true, sources)
+
         private func CompileWithReferences(
             references IReadOnlyList[string],
             sources ...(FileName string, Source string)
+        ) Issue3519PackageConstEmitTests.CompiledProgram -> CompileTarget(references, false, sources)
+
+        private func CompileTarget(
+            references IReadOnlyList[string],
+            library bool,
+            sources[](FileName string, Source string)
         ) Issue3519PackageConstEmitTests
             .CompiledProgram {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue3519-" + Guid.NewGuid().ToString("N"))
@@ -510,7 +520,12 @@ interface IConstants {
                     sourcePaths.Add(path)
                 }
                 let outputPath = Path.Combine(directory, "Issue3519.dll")
-                let arguments = List[string]{"/out:" + outputPath, "/target:exe", "/targetframework:net10.0"}
+                let target = if library {
+                    "/target:library"
+                } else {
+                    "/target:exe"
+                }
+                let arguments = List[string]{"/out:" + outputPath, target, "/targetframework:net10.0"}
                 for reference in references {
                     arguments.Add("/r:" + reference)
                 }

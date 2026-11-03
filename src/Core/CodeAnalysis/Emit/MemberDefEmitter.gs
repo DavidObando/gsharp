@@ -379,21 +379,23 @@ internal class MemberDefEmitter {
         if this.emitCtx.MetadataOnly {
             return (nil, -1)
         }
+        let fieldOwner = prop.BackingFieldDeclaringType ?? structSym
         if prop.IsAutoProperty &&
             prop.BackingField != nil &&
+            (
             this
-            .cache
-            .StructFieldDefs
-            .TryGetValue(prop.BackingField!!, out var backingHandle) {
-            // Issue #989: inside a generic type's own accessor body the
-            // backing-field token must be a self-TypeSpec MemberRef
-            // (Box`1<!0>), not the bare FieldDef, or the verifier rejects
-            // the receiver type on the stack.
-            let backingToken = if ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym) {
-                this.resolveFieldToken(structSym, prop.BackingField!!)
-            } else {
-                EntityHandle(backingHandle)
-            }
+                .cache
+                .StructFieldDefs
+                .ContainsKey(prop.BackingField!!) ||
+                this
+                .cache
+                .DeclaredFieldDefs
+                .ContainsKey(prop.BackingField!!)
+        ) {
+            // Issue #989: inside a generic type's own accessor body (or when the
+            // backing field lives on a constructed generic base) the backing-field
+            // token must be a TypeSpec MemberRef, not the bare FieldDef.
+            let backingToken = this.resolveFieldToken(fieldOwner, prop.BackingField!!)
             let il = InstructionEncoder(BlobBuilder())
             if isGetter {
                 if !isStatic {
@@ -519,7 +521,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, true)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
-        } else if prop.ExplicitInterfaceMember != nil {
+        } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceGetterSlot != nil {
             // Issue #2362: a mangled-name explicit interface property
             // implementation is bound to its interface slot purely via an
             // explicit MethodImpl row (see
@@ -631,7 +633,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, false)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
-        } else if prop.ExplicitInterfaceMember != nil {
+        } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceSetterSlot != nil {
             // Issue #2362: see the matching comment in EmitPropertyGetter —
             // the setter half of a mangled-name explicit interface property
             // implementation needs the same Virtual | NewSlot | Final promotion
@@ -1398,7 +1400,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual
         } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.ExplicitInterfaceMember != nil {
+        } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceAddSlot != nil {
             // ADR-0149: mirrors the property MethodImpl-bridge promotion —
             // a MethodImpl body method must be Virtual per ECMA-335 §II.10.3.3;
             // Final additionally prevents an accidental by-name override.
@@ -1488,7 +1490,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual
         } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.ExplicitInterfaceMember != nil {
+        } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRemoveSlot != nil {
             // ADR-0149: see the matching comment in EmitEventAddAccessor.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
@@ -1589,7 +1591,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
-        } else if ev.ExplicitInterfaceMember != nil {
+        } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRaiseSlot != nil {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
         // ADR-0149: see the matching comment in EmitEventAddAccessor.

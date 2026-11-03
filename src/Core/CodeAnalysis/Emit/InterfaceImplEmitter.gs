@@ -582,22 +582,18 @@ internal class InterfaceImplEmitter {
             let interfaces = List[Type]{declaredInterface}
             interfaces.AddRange(declaredInterface!!.GetInterfaces())
             for clrInterface in interfaces {
-                let containingType = if object.ReferenceEquals(clrInterface, declaredInterface) {
-                    ifaceSymbol
-                } else {
-                    TypeSymbol.FromClrTypeWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure)
-                }
                 for slotEvent in clrInterface.GetEvents(
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
                 ) {
-                    let slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
+                    let containingType = MemberLookup.GetClrMemberDeclaringTypeSymbol(
                         Invariant.Required(
-                            containingType,
-                            "a CLR interface slot has a containing type",
-                            expression: "containingType"
+                            ifaceSymbol,
+                            "a CLR interface entry has a type symbol",
+                            expression: "ifaceSymbol"
                         ),
                         slotEvent
                     )
+                    let slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent)
                     if IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent) ||
                         !TryFindImplicitEvent(
                         structSymbol,
@@ -870,22 +866,18 @@ internal class InterfaceImplEmitter {
             let interfaces = List[Type]{declaredInterface}
             interfaces.AddRange(declaredInterface!!.GetInterfaces())
             for clrInterface in interfaces {
-                let containingType = if object.ReferenceEquals(clrInterface, declaredInterface) {
-                    ifaceSymbol
-                } else {
-                    TypeSymbol.FromClrTypeWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure)
-                }
                 for slotEvent in clrInterface.GetEvents(
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
                 ) {
-                    let slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
+                    let containingType = MemberLookup.GetClrMemberDeclaringTypeSymbol(
                         Invariant.Required(
-                            containingType,
-                            "a CLR interface slot has a containing type",
-                            expression: "containingType"
+                            ifaceSymbol,
+                            "a CLR interface entry has a type symbol",
+                            expression: "ifaceSymbol"
                         ),
                         slotEvent
                     )
+                    let slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent)
                     if !IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent) &&
                         TryFindImplicitEvent(
                         structSymbol,

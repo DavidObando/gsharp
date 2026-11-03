@@ -194,6 +194,13 @@ class PropertySymbol : Symbol {
     /// Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.
     prop BackingField FieldSymbol?
 
+    /// Gets or sets the constructed declaring type of (cref:BackingField) when a field-backed synthesized
+    /// interface property reuses an inherited field.
+    internal prop BackingFieldDeclaringType StructSymbol?
+
+    internal func OwnsBackingField(owner StructSymbol) bool -> BackingFieldDeclaringType is not{} declaringType ||
+        object.ReferenceEquals(declaringType.Definition ?? declaringType, owner.Definition ?? owner)
+
     /// Gets or sets the synthesized getter function symbol. Assigning one
     /// records this property as its (cref:FunctionSymbol.AssociatedSymbol).
     prop GetterSymbol FunctionSymbol? {
@@ -251,6 +258,7 @@ class PropertySymbol : Symbol {
             IsIndexer = IsIndexer,
             Parameters = parameters,
             BackingField = BackingField,
+            BackingFieldDeclaringType = BackingFieldDeclaringType,
             GetterSymbol = GetterSymbol,
             SetterSymbol = SetterSymbol,
             OverriddenProperty = OverriddenProperty,

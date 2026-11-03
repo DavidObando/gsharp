@@ -399,7 +399,11 @@ partial class CSharpToGSharpTranslator {
                         default: this.context.GetTypeInfo(lefts[i].Syntax).Type
                     }
                     var promotionTarget ISymbol? = target
-                    if target is ILocalSymbol inferredLocal &&
+                    if this.LocalStoreAcceptsNil(target) {
+                        targetType = targetType?.WithNullableAnnotation(
+                            Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                        )
+                    } else if target is ILocalSymbol inferredLocal &&
                         inferredLocal
                         .DeclaringSyntaxReferences
                         .FirstOrDefault()

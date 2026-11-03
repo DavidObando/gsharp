@@ -567,6 +567,85 @@ class Both : IFoo, IBaz {
         Assert.Empty(diagnostics)
     }
 
+    @Fact
+    func ReListedSymbolicGenericInterfaceOverImportedBase_NoDiagnostics() {
+        let source = `
+package P
+import System.Collections
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class Shape { }
+open class Mid[T] : Collection[T] { }
+class Shapes : Collection[Shape], IList[Shape], IList { }
+class DerivedShapes : Mid[Shape], IList[Shape] { }
+class GenericShapes[T] : Collection[T], IList[T] { }
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Empty(diagnostics)
+    }
+
+    @Theory
+    @InlineData("class Bad : Collection[Shape], IList[OtherShape] { }")
+    @InlineData("class Bad : Collection[Shape], IList[object] { }")
+    @InlineData("class Bad : Collection[object], IList[Shape] { }")
+    @InlineData("class Bad : Collection[Shape], IComparable[Shape] { }")
+    func ReListedSymbolicGenericInterfaceWithMismatchedOrUnimplementedContract_ReportsGS0187(declaration string) {
+        let source = (`
+package P
+import System
+import System.Collections.Generic
+import System.Collections.ObjectModel
+
+class Shape { }
+class OtherShape { }
+` + "$declaration")
+        let diagnostics = GetDiagnostics(source)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0187")
+    }
+
+    @Fact
+    func ExplicitBaseInterfaceClauseWithMismatchedSymbolicTypeArgument_ReportsGS0493() {
+        let source = `
+package P
+import System.Collections
+import System.Collections.Generic
+
+class Shape { }
+class OtherShape { }
+
+class Host : IReadOnlyList[Shape] {
+    prop Count int32 -> 0
+    prop this[index int32] Shape -> Shape()
+    func GetEnumerator() IEnumerator[Shape] { return List[Shape]().GetEnumerator() }
+    private func (IEnumerable) GetEnumerator() IEnumerator { return GetEnumerator() }
+    private func (IEnumerable[OtherShape]) GetEnumerator() IEnumerator[OtherShape] { return List[OtherShape]().GetEnumerator() }
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0493")
+    }
+
+    @Fact
+    func SymbolicGenericInterfaceIndexer_IsNotSatisfiedByItemField_ReportsGS0187() {
+        let source = `
+package P
+import System.Collections
+import System.Collections.Generic
+
+class Shape { }
+
+class Bad : IReadOnlyList[Shape] {
+    public var Item Shape = Shape()
+    prop Count int32 -> 0
+    func GetEnumerator() IEnumerator[Shape] { return List[Shape]().GetEnumerator() }
+    private func (IEnumerable) GetEnumerator() IEnumerator { return GetEnumerator() }
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0187" && d.Message.Contains("Item"))
+    }
+
     shared {
         private func GetDiagnostics(source string) IEnumerable[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))
