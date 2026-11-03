@@ -76,9 +76,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            if isDoWhile &&
-                (hoistsAssignment || OwnLoopContinueCrossesFinally(bodyStatement)) &&
-                BodyContainsOwnLoopContinue(bodyStatement) {
+            if isDoWhile && hoistsAssignment && BodyContainsOwnLoopContinue(bodyStatement) {
                 // The tail-appended hoist runs where C# evaluates `cond` — AFTER the
                 // body. But G# `do`/`while` lowers `continue` to a goto that lands
                 // right after the whole body (ADR-0070's continueLabel), which is
@@ -102,12 +100,29 @@ partial class CSharpToGSharpTranslator {
                 // happened yet (issue #1723).
                 let hasOwnContinue = BodyContainsOwnLoopContinue(bodyStatement)
                 if hasOwnContinue {
-                    originalBody = cast[BlockStatement](this.RewriteOwnLoopContinue(nil, originalBody, hoisted!!))
-                }
-                bodyStatements.AddRange(originalBody.Statements)
-                if hasOwnContinue && hoisted!!.Any((s GStatement) -> s is LocalDeclarationStatement) {
+                    let continueLabel = this.SyntheticLabelName("doContinue", bodyStatement)
+                    originalBody = cast[BlockStatement](
+                        this.RewriteOwnLoopContinue(
+                            bodyStatement,
+                            originalBody,
+                            Array.Empty[GStatement](),
+                            GotoStatement(continueLabel)
+                        )
+                    )
+                    bodyStatements.Add(originalBody)
+                    bodyStatements.Add(LabeledStatement(continueLabel, BlockStatement(hoisted!!)))
+                } else if originalBody.Statements.Any(
+                    (s GStatement) -> s is LocalDeclarationStatement{IsUsing: true}
+                ) ||
+                    (
+                    originalBody.Statements.Any((s GStatement) -> s is LocalDeclarationStatement) && hoisted!!.Any(
+                        (s GStatement) -> s is LocalDeclarationStatement
+                    )
+                ) {
+                    bodyStatements.Add(originalBody)
                     bodyStatements.Add(BlockStatement(hoisted!!))
                 } else {
+                    bodyStatements.AddRange(originalBody.Statements)
                     bodyStatements.AddRange(hoisted!!)
                 }
             } else {
@@ -255,12 +270,26 @@ partial class CSharpToGSharpTranslator {
             }
             let receiver GExpression? = this.TranslateExpression(isPattern.Expression)
             let scrutineeType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
+            let scrutineeIsNullable = this.IsNullableIfLetReceiver(isPattern.Expression) ||
+                this.IsGSharpNullablePatternReceiver(receiver)
             // The hoist local reuses a top-level binder's name when present (so body
             // references to that binder print as the hoist local); otherwise a fresh
             // synthetic name is used.
             let mainBinder ILocalSymbol? = this.FindMainPatternBinder(isPattern.Pattern)
+            let binding = if mainBinder != nil && this.IsLocalReassigned(mainBinder) {
+                BindingKind.Var
+            } else {
+                BindingKind.Let
+            }
+            let separateMainBinder = mainBinder != nil &&
+                isPattern.Pattern is not VarPatternSyntax &&
+                (
+                binding == BindingKind.Var || this.ShouldPromoteToNullableReference(mainBinder) ||
+                    scrutineeIsNullable ||
+                    !IsAssignableNonNull(scrutineeType, mainBinder.Type)
+            )
             var hoistName string?
-            if mainBinder != nil {
+            if mainBinder != nil && !separateMainBinder {
                 hoistName = this.EmittedName(mainBinder, mainBinder.Name)
             } else {
                 do {
@@ -268,20 +297,68 @@ partial class CSharpToGSharpTranslator {
                     this.state.LoopHoistCounter++
                 } while !this.TryClaimSynthesizedLocalName(hoistName, clause)
             }
-            let binding = if mainBinder != nil && this.IsLocalReassigned(mainBinder) {
-                BindingKind.Var
-            } else {
+            let hoistBinding = if separateMainBinder {
                 BindingKind.Let
+            } else {
+                binding
             }
-            into.Add(LocalDeclarationStatement(binding, hoistName, type: nil, initializer: receiver))
+            into.Add(LocalDeclarationStatement(hoistBinding, hoistName, type: nil, initializer: receiver))
             let idExpr = IdentifierExpression(hoistName)
+            if scrutineeIsNullable {
+                this.state.GSharpNullablePatternReceivers.Add(idExpr)
+            }
             // Any secondary binder prints as the hoist local inside the body.
             for binder in this.EnumeratePatternBinders(isPattern.Pattern) {
                 if !SymbolEqualityComparer.Default.Equals(binder, mainBinder) {
                     this.state.PatternBindings[binder] = idExpr
                 }
             }
-            this.EmitMustHoldGuards(idExpr, scrutineeType, isPattern.Pattern, mainBinder, into)
+            this.EmitMustHoldGuards(
+                idExpr,
+                scrutineeType,
+                scrutineeIsNullable,
+                isPattern.Pattern,
+                if separateMainBinder {
+                    default(ILocalSymbol?)
+                } else {
+                    mainBinder
+                },
+                into
+            )
+            if separateMainBinder && mainBinder != nil {
+                this.state.PatternBindings.Remove(mainBinder)
+                let binderName = this.EmittedName(mainBinder, mainBinder.Name)
+                let binderType = this.PromoteIfUsedAsNullable(
+                    this.typeMapper.MapExplicitType(mainBinder.Type, this.context, clause.GetLocation()),
+                    mainBinder
+                )
+                this.state.LocalHoldsPromotedValueAnswers.Clear()
+                if binderType != nil {
+                    this.state.EmittedLocalTypeClauses.Add(mainBinder)
+                }
+                this.state.EmittedLocalStorageAcceptsNil[mainBinder] = binderType != nil && binderType.IsNullable
+                this.RecordEmittedLocalNullability(mainBinder, binderType, nil, nil)
+                let binderInit GExpression = if mainBinder
+                    .Type
+                    .IsValueType &&
+                    scrutineeType
+                    ?.OriginalDefinition
+                    .SpecialType != SpecialType.System_Nullable_T &&
+                    !SymbolEqualityComparer
+                    .Default
+                    .Equals(scrutineeType, mainBinder.Type) && binderType is NamedTypeReference namedTarget {
+                    cast[GExpression](
+                        InvocationExpression(
+                            BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
+                            []GExpression{idExpr},
+                            namedTarget.TypeArguments
+                        )
+                    )
+                } else {
+                    cast[GExpression](idExpr)
+                }
+                into.Add(LocalDeclarationStatement(binding, binderName, binderType, binderInit))
+            }
         }
 
         // Converts a must-hold pattern over the already-hoisted `idExpr` into a list
@@ -291,18 +368,40 @@ partial class CSharpToGSharpTranslator {
         private func EmitMustHoldGuards(
             idExpr GExpression,
             scrutineeType ITypeSymbol?,
+            scrutineeIsNullable bool,
             pattern PatternSyntax,
             mainBinder ILocalSymbol?,
             into List[GStatement]
         ) {
             switch pattern {
                 case parenthesized is ParenthesizedPatternSyntax {
-                    this.EmitMustHoldGuards(idExpr, scrutineeType, parenthesized.Pattern, mainBinder, into)
+                    this.EmitMustHoldGuards(
+                        idExpr,
+                        scrutineeType,
+                        scrutineeIsNullable,
+                        parenthesized.Pattern,
+                        mainBinder,
+                        into
+                    )
                     return
                 }
                 case andPattern is BinaryPatternSyntax when andPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword) {
-                    this.EmitMustHoldGuards(idExpr, scrutineeType, andPattern.Left, mainBinder, into)
-                    this.EmitMustHoldGuards(idExpr, scrutineeType, andPattern.Right, mainBinder, into)
+                    this.EmitMustHoldGuards(
+                        idExpr,
+                        scrutineeType,
+                        scrutineeIsNullable,
+                        andPattern.Left,
+                        mainBinder,
+                        into
+                    )
+                    this.EmitMustHoldGuards(
+                        idExpr,
+                        scrutineeType,
+                        scrutineeIsNullable,
+                        andPattern.Right,
+                        mainBinder,
+                        into
+                    )
                     return
                 }
                 case notPattern is UnaryPatternSyntax when notPattern.IsKind(SyntaxKind.NotPattern) {
@@ -313,6 +412,7 @@ partial class CSharpToGSharpTranslator {
                 case declaration is DeclarationPatternSyntax when this.IsBindOnlyMainBinder(
                     declaration,
                     scrutineeType,
+                    scrutineeIsNullable,
                     mainBinder
                 ) {
                     // The main binder whose static type already satisfies the test is
@@ -340,9 +440,11 @@ partial class CSharpToGSharpTranslator {
         private func IsBindOnlyMainBinder(
             declaration DeclarationPatternSyntax,
             scrutineeType ITypeSymbol?,
+            scrutineeIsNullable bool,
             mainBinder ILocalSymbol?
         ) bool {
-            if mainBinder == nil ||
+            if scrutineeIsNullable ||
+                mainBinder == nil ||
                 declaration.Designation is not SingleVariableDesignationSyntax single ||
                 this
                 .context
@@ -1404,7 +1506,7 @@ partial class CSharpToGSharpTranslator {
         /// leaving a `finally`, so it can never itself contain an own-loop
         /// `continue`.
         private func DuplicateIncrementorsBeforeOwnLoopContinue(
-            forStatement ForStatementSyntax?,
+            forStatement StatementSyntax?,
             body BlockStatement?,
             incrementorStatements IReadOnlyList[GStatement]
         ) BlockStatement? {
@@ -1412,13 +1514,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func RewriteOwnLoopContinue(
-            forStatement ForStatementSyntax?,
+            forStatement StatementSyntax?,
             statement GStatement?,
-            incrementorStatements IReadOnlyList[GStatement]
+            incrementorStatements IReadOnlyList[GStatement],
+            replacement GStatement? = nil
         ) GStatement? {
             switch statement {
                 case ContinueStatement {
                     {
+                        if replacement != nil {
+                            return replacement
+                        }
                         let replaced = List[GStatement](incrementorStatements){statement}
                         return BlockStatement(replaced)
                     }
@@ -1427,9 +1533,13 @@ partial class CSharpToGSharpTranslator {
                     {
                         let rewritten = List[GStatement](block.Statements.Count)
                         for inner in block.Statements {
-                            rewritten.Add(this.RewriteOwnLoopContinue(forStatement, inner, incrementorStatements)!!)
+                            rewritten.Add(
+                                this.RewriteOwnLoopContinue(forStatement, inner, incrementorStatements, replacement)!!
+                            )
                         }
-                        return BlockStatement(rewritten, block.IsUnsafe)
+                        return BlockStatement(rewritten, block.IsUnsafe, block.IsChecked, block.IsUnchecked){
+                            SuppressedDiagnostics = block.SuppressedDiagnostics
+                        }
                     }
                 }
                 case ifStatement is IfStatement {
@@ -1437,12 +1547,22 @@ partial class CSharpToGSharpTranslator {
                         let elseBranch GStatement? = if ifStatement.ElseBranch == nil {
                             default(GStatement?)
                         } else {
-                            this.RewriteOwnLoopContinue(forStatement, ifStatement.ElseBranch, incrementorStatements)
+                            this.RewriteOwnLoopContinue(
+                                forStatement,
+                                ifStatement.ElseBranch,
+                                incrementorStatements,
+                                replacement
+                            )
                         }
                         return IfStatement(
                             ifStatement.Condition,
                             cast[BlockStatement](
-                                this.RewriteOwnLoopContinue(forStatement, ifStatement.Then, incrementorStatements)
+                                this.RewriteOwnLoopContinue(
+                                    forStatement,
+                                    ifStatement.Then,
+                                    incrementorStatements,
+                                    replacement
+                                )
                             ),
                             elseBranch
                         )
@@ -1460,15 +1580,22 @@ partial class CSharpToGSharpTranslator {
                                         this.RewriteOwnLoopContinue(
                                             forStatement,
                                             catchClause.Body,
-                                            incrementorStatements
+                                            incrementorStatements,
+                                            replacement
                                         )
-                                    )
+                                    ),
+                                    catchClause.Filter
                                 )
                             )
                         }
                         return TryStatement(
                             cast[BlockStatement](
-                                this.RewriteOwnLoopContinue(forStatement, tryStatement.TryBlock, incrementorStatements)
+                                this.RewriteOwnLoopContinue(
+                                    forStatement,
+                                    tryStatement.TryBlock,
+                                    incrementorStatements,
+                                    replacement
+                                )
                             ),
                             catchClauses,
                             tryStatement.FinallyBlock
@@ -1486,7 +1613,8 @@ partial class CSharpToGSharpTranslator {
                                         this.RewriteOwnLoopContinue(
                                             forStatement,
                                             switchCase.Body,
-                                            incrementorStatements
+                                            incrementorStatements,
+                                            replacement
                                         )
                                     ),
                                     switchCase.Guard
@@ -1503,7 +1631,25 @@ partial class CSharpToGSharpTranslator {
                             fixedStatement.PointerType,
                             fixedStatement.Source,
                             cast[BlockStatement](
-                                this.RewriteOwnLoopContinue(forStatement, fixedStatement.Body, incrementorStatements)
+                                this.RewriteOwnLoopContinue(
+                                    forStatement,
+                                    fixedStatement.Body,
+                                    incrementorStatements,
+                                    replacement
+                                )
+                            )
+                        )
+                    }
+                }
+                case labeledStatement is LabeledStatement {
+                    {
+                        return LabeledStatement(
+                            labeledStatement.Label,
+                            this.RewriteOwnLoopContinue(
+                                forStatement,
+                                labeledStatement.Statement,
+                                incrementorStatements,
+                                replacement
                             )
                         )
                     }
@@ -1951,6 +2097,9 @@ partial class CSharpToGSharpTranslator {
                     }
                     case fixedStatement is FixedStatement {
                         return ContainsOwnLoopContinue(fixedStatement.Body)
+                    }
+                    case labeledStatement is LabeledStatement {
+                        return ContainsOwnLoopContinue(labeledStatement.Statement)
                     }
                     case WhileStatement,
                     WhileLetStatement,

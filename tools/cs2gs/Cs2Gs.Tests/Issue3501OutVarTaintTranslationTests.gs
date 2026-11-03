@@ -449,6 +449,187 @@ namespace Demo
     }
 
     @Fact
+    func Oblivious_DoWhileContinueAndHoistedPatternNullability_PreserveRuntimeSemantics() {
+        let printed = TranslateOblivious(`
+using System;
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public sealed class ScopeTracker : IDisposable
+    {
+        private readonly List<string> log;
+        public ScopeTracker(List<string> log)
+        {
+            this.log = log;
+            this.log.Add("enter");
+        }
+
+        public void Dispose() => this.log.Add("dispose");
+    }
+
+    public static class C
+    {
+        private static int step;
+        private static int filterCalls;
+
+        private static bool Next(out string value)
+        {
+            step++;
+            value = "v" + step;
+            return step <= 1;
+        }
+
+        private static bool ThrowOnCond(out string value)
+        {
+            value = "boom";
+            throw new InvalidOperationException("cond");
+        }
+
+        private static bool LogCond(List<string> log, out string value)
+        {
+            step++;
+            value = "v" + step;
+            log.Add("cond:" + step);
+            return step <= 1;
+        }
+
+        private static bool FalseFilter()
+        {
+            filterCalls++;
+            return false;
+        }
+
+        private static string RequireNonNull(string s) => s.ToUpperInvariant();
+
+        public static string DoContinueTryCatchDoesNotCatchConditionException()
+        {
+            int bodyCaught = 0;
+            try
+            {
+                do
+                {
+                    try
+                    {
+                        continue;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        bodyCaught++;
+                    }
+                } while (ThrowOnCond(out string value) && (value = null) == null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message + ":" + bodyCaught;
+            }
+
+            return "missed";
+        }
+
+        public static string DoContinueUsingDisposesBeforeCondition()
+        {
+            step = 0;
+            var log = new List<string>();
+            do
+            {
+                using (new ScopeTracker(log))
+                {
+                    if (step == 0)
+                    {
+                        continue;
+                    }
+                }
+            } while (LogCond(log, out string value) && (value = null) == null);
+
+            return string.Join(">", log);
+        }
+
+        public static string DoContinuePreservesCatchFilter()
+        {
+            step = 0;
+            filterCalls = 0;
+            try
+            {
+                do
+                {
+                    if (step == 1)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        throw new InvalidOperationException("filtered");
+                    }
+                    catch (InvalidOperationException) when (FalseFilter())
+                    {
+                        return "swallowed";
+                    }
+                } while (Next(out string value) && (value = null) == null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message + ":" + filterCalls;
+            }
+
+            return "missed";
+        }
+
+        public static string DoContinueInsideSwitchExitsLoop()
+        {
+            step = 1;
+            int afterSwitch = 0;
+            do
+            {
+                switch (step)
+                {
+                    case 1:
+                        continue;
+                }
+
+                afterSwitch++;
+            } while (Next(out string value) && (value = null) == null);
+
+            return step + ":" + afterSwitch;
+        }
+
+        public static string HoistedPatternChecksPromotedNullability()
+        {
+            step = 0;
+            while (Next(out string x) && (x = null) == null && x is string y)
+            {
+                return "entered:" + RequireNonNull(y);
+            }
+
+            step = 0;
+            string matched = "none";
+            while (Next(out string x) && x is string y)
+            {
+                x = null;
+                y = RequireNonNull(y);
+                matched = RequireNonNull(y) + ":" + (x ?? "nil");
+            }
+
+            return "skipped/" + matched;
+        }
+
+        public static string MainEntry() =>
+            DoContinueTryCatchDoesNotCatchConditionException() + "|" +
+            DoContinueUsingDisposesBeforeCondition() + "|" +
+            DoContinuePreservesCatchFilter() + "|" +
+            DoContinueInsideSwitchExitsLoop() + "|" +
+            HoistedPatternChecksPromotedNullability();
+    }
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil"
+        )
+    }
+
+    @Fact
     func Oblivious_NonNullOutVar_StaysBare() {
         // The out parameter is always assigned a non-null value, so neither the
         // parameter nor the receiving local is promoted and no `!!` appears.
