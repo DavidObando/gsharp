@@ -1623,6 +1623,9 @@ internal partial class DeclarationBinder {
         symbolicArgs ImmutableArray[TypeSymbol],
         interfaceName string
     ) {
+        // Issue #4593 / #4613: re-listing an interface the imported base already
+        // implements leaves every slot satisfied by the inherited mapping.
+        let satisfiedByImportedBase = ImportedBaseImplementsClrInterface(structSymbol, interfaceType)
         for openMethod in openDefinition.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
             if openMethod.IsSpecialName {
                 continue
@@ -1655,7 +1658,7 @@ internal partial class DeclarationBinder {
                 FindErasedSlotForOpenMethod(interfaceType.ClrType, openMethod)
             }
             VerifyClrInterfaceMember(
-                isRequired: openMethod.IsAbstract,
+                isRequired: openMethod.IsAbstract && !satisfiedByImportedBase,
                 findImplementation: () -> FindClrInterfaceMethodImplementation(
                     structSymbol,
                     interfaceType,
@@ -1689,8 +1692,9 @@ internal partial class DeclarationBinder {
             }
             let requiresGetter = openProp.GetMethod?.IsAbstract == true
             let requiresSetter = openProp.SetMethod?.IsAbstract == true
+            let isRequired = requiresGetter || requiresSetter
             VerifyClrInterfaceMember(
-                isRequired: requiresGetter || requiresSetter,
+                isRequired: isRequired && !satisfiedByImportedBase,
                 findImplementation: () -> FindClrInterfacePropertyImplementationOrField(
                     structSymbol,
                     interfaceType,
@@ -1699,7 +1703,7 @@ internal partial class DeclarationBinder {
                     erasedSetter,
                     symbolicArgs,
                     requiresSetter,
-                    requiresGetter || requiresSetter
+                    isRequired
                 ),
                 validateImplementation: (implProp PropertySymbol) -> {
                     ValidateUnscopedRefPropertyContract(
@@ -2255,25 +2259,62 @@ internal partial class DeclarationBinder {
             return nil
         }
 
-        /// Issue #4593: decides whether a CLR interface slot owner is already
-        /// implemented by the nearest imported base class. Re-listing such an
-        /// interface (C# interface re-implementation) needs no new member: the CLR
-        /// falls back to the base's interface mapping for every slot the derived
-        /// type does not re-map. Erased symbolic generics (an interface or base
-        /// closed over a G# type) cannot be compared through their CLR shape, so
-        /// they answer `false` and keep the full member check.
+        /// Issue #4593 / #4613: decides whether a CLR interface slot owner is
+        /// already implemented by the nearest imported base class. Re-listing such
+        /// an interface needs no new member because the CLR falls back to the
+        /// base's interface mapping for every slot the derived type does not
+        /// re-map. Symbolic generic interfaces and bases compare their projected
+        /// type arguments instead of their erased CLR types.
         /// @param structSymbol The implementing source type.
         /// @param slotOwner The CLR interface that owns the slot.
         /// @returns `true` when the imported base implements it.
-        private func ImportedBaseImplementsClrInterface(structSymbol StructSymbol, slotOwner TypeSymbol) bool {
-            if slotOwner.ClrType is not{IsInterface: true} slotInterface || MemberLookup.IsSymbolicTypeArgument(
-                slotOwner
-            ) ||
-                !(TypeMemberModel.GetNearestImportedBase(structSymbol) is {ClrType: {} importedBaseClr} importedBase) ||
-                MemberLookup.IsSymbolicTypeArgument(importedBase) {
+        private func ImportedBaseImplementsClrInterface(
+            structSymbol StructSymbol,
+            slotOwner TypeSymbol
+        ) bool -> TypeMemberModel.GetNearestImportedBase(structSymbol) is {} importedBase &&
+            ClrTypeImplementsInterface(importedBase, slotOwner)
+
+        internal func ClrTypeImplementsInterface(source TypeSymbol, targetInterface TypeSymbol) bool {
+            if targetInterface.ClrType is not{IsInterface: true} slotInterface || source.ClrType is not{} sourceClr {
                 return false
             }
-            return ClrTypeUtilities.ImplementsInterfaceByName(importedBaseClr, slotInterface)
+            if !MemberLookup.IsSymbolicTypeArgument(targetInterface) && !MemberLookup.IsSymbolicTypeArgument(source) {
+                return ClrTypeUtilities.ImplementsInterfaceByName(sourceClr, slotInterface)
+            }
+            if !MemberLookup.TryGetSymbolicClrGenericInterface(
+                targetInterface,
+                out var slotOpenDefinition,
+                out var slotArgs
+            ) {
+                if !slotInterface.IsGenericType {
+                    return ClrTypeUtilities.ImplementsInterfaceByName(sourceClr, slotInterface)
+                }
+                slotOpenDefinition = if slotInterface.IsGenericTypeDefinition {
+                    slotInterface
+                } else {
+                    slotInterface.GetGenericTypeDefinition()
+                }
+                slotArgs = targetInterface.GetElementPositions()
+            }
+            for baseArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                source,
+                slotOpenDefinition!!
+            ) {
+                if baseArgs.Length != slotArgs.Length {
+                    continue
+                }
+                var allMatch = true
+                for var i = 0; i < baseArgs.Length; i++ {
+                    if !ExactInterfaceTypeMatches(baseArgs[i], slotArgs[i]) {
+                        allMatch = false
+                        break
+                    }
+                }
+                if allMatch {
+                    return true
+                }
+            }
+            return false
         }
 
         private func VerifyClrInterfaceMember[TMember class](
@@ -2387,7 +2428,9 @@ internal partial class DeclarationBinder {
             }
             let matchingField FieldSymbol? = MemberLookup.FindMatchingFieldForPropertyContract(
                 structSymbol,
-                clrProperty
+                clrProperty,
+                symbolicArgs,
+                out var matchingDeclaringType
             )
             if matchingField == nil {
                 return nil
@@ -2410,7 +2453,8 @@ internal partial class DeclarationBinder {
                 isOverride: false,
                 isInitOnly: contractIsInitOnly
             )
-            synthesized.BackingField = matchingField
+            synthesized.BackingField = matchingDeclaringType?.GetDefinitionField(matchingField) ?? matchingField
+            synthesized.BackingFieldDeclaringType = matchingDeclaringType
             structSymbol.SetProperties(structSymbol.Properties.Add(synthesized))
             return synthesized
         }

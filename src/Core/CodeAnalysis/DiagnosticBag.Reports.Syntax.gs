@@ -166,6 +166,20 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         DiagnosticDescriptors.TopLevelStatementsInLibrary
     )
 
+    /// Issue #5623: reports that an executable has no entry point. Mirrors C#'s CS5001.
+    /// Without this error, the program fails at start with `MissingMethodException`.
+    /// @param location The location of the near-miss function, or the start of the first source file.
+    /// @param nearMissName The name of a function that differs from `Main` only in case, or `nil`.
+    func ReportExecutableWithoutEntryPoint(location TextLocation, nearMissName string?) -> Report(
+        location,
+        DiagnosticDescriptors.ExecutableWithoutEntryPoint,
+        if nearMissName == nil {
+            ""
+        } else {
+            string.Format(DiagnosticDescriptors.EntryPointNameCaseHintMessageFormat, nearMissName)
+        }
+    )
+
     /// Reports an accessibility modifier (`public`/`internal`/`private`) appearing on a construct that does
     /// not accept one.
     /// @param location The text location of the modifier token.

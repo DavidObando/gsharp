@@ -684,12 +684,13 @@ internal partial class StatementBinder {
     /// `null` if the corresponding branch has no narrowing.
     private func TryClassifyTypeTestNarrowing(
         condition BoundExpression,
-        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         switch condition {
             case isExpr is BoundIsExpression {
                 {
-                    if TestMayRemoveItsOperandFact(isExpr) {
+                    if TestMayRemoveItsOperandFact(isExpr, callableAliases) {
                         return (nil, nil)
                     }
                     let operandType = TypeTestOperandTypeAfterEffects(isExpr, removedFacts)
@@ -717,7 +718,7 @@ internal partial class StatementBinder {
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
-                    let (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand, removedFacts)
+                    let (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand, removedFacts, callableAliases)
                     return (inElse, inThen)
                 }
             }
@@ -726,8 +727,8 @@ internal partial class StatementBinder {
                     // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
                     // The else frame is intentionally dropped — either operand could have been
                     // the false one, so we cannot single out a per-variable narrowing.
-                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts)
-                    let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts)
+                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
+                    let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts, callableAliases)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
                     if combinedThen == nil || combinedThen.Count == 0 {
                         return (nil, nil)
@@ -744,8 +745,12 @@ internal partial class StatementBinder {
                     //     (canonical example: `x is T || x is T` keeps `{x → T}`).
                     //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
                     //     were false, so both negative narrowings apply.
-                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts)
-                    let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts)
+                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
+                    let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(
+                        binary.Right,
+                        removedFacts,
+                        callableAliases
+                    )
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
                     let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
                     if (combinedThen == nil || combinedThen.Count == 0) &&
@@ -799,7 +804,10 @@ internal partial class StatementBinder {
     /// nothing about the value a branch reads, so it narrows neither branch. The one statement rule
     /// (cref:StatementKillsPath) decides, applied to the effects of the test, which include a call in a constant
     /// pattern (`x is Read(h)`).
-    private func TestMayRemoveItsOperandFact(isExpr BoundIsExpression) bool {
+    private func TestMayRemoveItsOperandFact(
+        isExpr BoundIsExpression,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) bool {
         let pattern = if isExpr.Pattern is BoundNotPattern notPattern {
             notPattern.Pattern
         } else {
@@ -808,7 +816,7 @@ internal partial class StatementBinder {
         if RunsNoCode(pattern) {
             return false
         }
-        return EffectsMayRemoveFactOf(isExpr.Expression, isExpr, isExpr)
+        return EffectsMayRemoveFactOf(isExpr.Expression, isExpr, isExpr, callableAliases)
     }
 
     /// The one rule of (cref:TestMayRemoveItsOperandFact): whether the effects of [`effects`](paramref) can remove
@@ -817,7 +825,8 @@ internal partial class StatementBinder {
     private func EffectsMayRemoveFactOf(
         operand BoundExpression,
         effects BoundExpression,
-        test BoundIsExpression?
+        test BoundIsExpression?,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) bool {
         var path AccessPath? = nil
         if operand is BoundVariableExpression variable {
@@ -829,7 +838,7 @@ internal partial class StatementBinder {
         if effects.Syntax is {} anchor {
             EnsureClosureAssignedNames(anchor)
         }
-        var aliases HashSet[VariableSymbol] = externalCallableAliases
+        var aliases IReadOnlyCollection[VariableSymbol] = callableAliases ?? externalCallableAliases
         if test != nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(test, out var atTest) {
             aliases = atTest
         }

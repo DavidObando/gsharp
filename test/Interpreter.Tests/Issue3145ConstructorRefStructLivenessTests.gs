@@ -121,7 +121,13 @@ class Holder {
                         () -> GSharp
                             .Compiler
                             .Program
-                            .Main([]string{"/out:" + Path.Combine(outputDirectory, "Probe.dll"), sourcePath})
+                            .Main(
+                            []string{
+                                "/out:" + Path.Combine(outputDirectory, "Probe.dll"),
+                                "/target:library",
+                                sourcePath
+                            }
+                        )
                     )
                     case Issue3145ConstructorRefStructLivenessTests
                         .Driver
