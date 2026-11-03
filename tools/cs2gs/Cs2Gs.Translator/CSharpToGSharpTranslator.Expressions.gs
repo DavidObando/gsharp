@@ -2137,23 +2137,17 @@ partial class CSharpToGSharpTranslator {
             }
             let iteratorForeachReceiverRequiresAssertion = this.IteratorForeachReceiverRequiresAssertion(recv)
             let nullableForEachBindingRequiresAssertion = this.IsNullableForEachBindingUse(recv)
-            let importedGenericTupleElementRequiresAssertion = this.ImportedGenericTupleElementRequiresAssertion(recv)
-            let byRefSuppressionDroppedRequiresAssertion = this.GenericResultInfersNilableThroughByRefArgument(recv)
-            let managedArrayGenericResultRequiresAssertion = this.ManagedReferenceArrayWidenedExpressionMayBeNull(recv)
+            let emittedNilableReceiverRequiresAssertion = this.YieldsValueNilableBeyondItsCSharpType(recv)
             let composedReceiverMayBeNull = this.ComposedReceiverMayBeNull(recv)
             if !iteratorForeachReceiverRequiresAssertion &&
                 !nullableForEachBindingRequiresAssertion &&
-                !importedGenericTupleElementRequiresAssertion &&
-                !byRefSuppressionDroppedRequiresAssertion &&
-                !managedArrayGenericResultRequiresAssertion &&
+                !emittedNilableReceiverRequiresAssertion &&
                 this.GSharpExpressionIsStaticallyNonNull(recv, translated) {
                 return ParenthesizeIfBareNumericLiteral(translated)
             }
             if iteratorForeachReceiverRequiresAssertion ||
                 nullableForEachBindingRequiresAssertion ||
-                importedGenericTupleElementRequiresAssertion ||
-                byRefSuppressionDroppedRequiresAssertion ||
-                managedArrayGenericResultRequiresAssertion ||
+                emittedNilableReceiverRequiresAssertion ||
                 this.IsGSharpNullableAnalyzerExpression(recv) ||
                 (
                 !this.IsActivePatternBinding(recv) && !this.ExpressionTreeForbidsReceiverAssertion(recv) &&
@@ -2941,31 +2935,44 @@ partial class CSharpToGSharpTranslator {
             return answer
         }
 
+        /// Issue #5627: whether the emitted G# value of [`value`](paramref) is `T?` although C# types it non-null:
+        /// a value that (cref:EmittedValueIsNilableBeyondItsCSharpType) names, such as `Volatile.Read(ref cache!)`,
+        /// or a conditional, switch expression or `??` that yields one. Each bridge into a non-null slot asks it: an
+        /// argument, a return, an assignment or initializer and a dereferenced receiver. The bridge then re-states
+        /// the author's dropped suppression as `!!`.
+        /// @remarks Unlike (cref:IsNilableOnlyInEmittedGSharp), it does not count a `var` capture that is not
+        /// known to be non-null: in an oblivious compilation that capture is not `T?` in G#.
+        private func YieldsValueNilableBeyondItsCSharpType(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(value)
+            if unwrapped == nil {
+                return false
+            }
+            if ComposedValueOperands(unwrapped) is {} operands {
+                for operand in operands {
+                    if this.YieldsValueNilableBeyondItsCSharpType(operand) {
+                        return true
+                    }
+                }
+                return false
+            }
+            return this.EmittedValueIsNilableBeyondItsCSharpType(unwrapped)
+        }
+
         private func ComputeNilableOnlyInEmittedGSharp(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
             if this.VarCaptureIsNonNull(value) == false || this.EmittedValueIsNilableBeyondItsCSharpType(value) {
                 return true
             }
-            switch value {
-                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
-                    return this.IsNilableOnlyInEmittedGSharp(conditional.WhenTrue) || this.IsNilableOnlyInEmittedGSharp(
-                        conditional.WhenFalse
-                    )
-                }
-                case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
-                    for arm in switchExpression.Arms {
-                        if this.IsNilableOnlyInEmittedGSharp(arm.Expression) {
-                            return true
-                        }
+            if ComposedValueOperands(value) is {} operands {
+                for operand in operands {
+                    if this.IsNilableOnlyInEmittedGSharp(operand) {
+                        return true
                     }
-                    return false
                 }
-                case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
-                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
-                ) {
-                    return this.IsNilableOnlyInEmittedGSharp(coalesce.Right)
-                }
+                return false
             }
             if this.context.GetSymbolInfo(value).Symbol is not ILocalSymbol local {
                 return false
@@ -3269,7 +3276,13 @@ partial class CSharpToGSharpTranslator {
             let declaredSink = (targetSymbol != nil || fixedSink) &&
                 !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
-            if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
+            // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a non-null slot.
+            // A generic parameter that G# infers from the value takes its `T?`. An arm with no sink of its own
+            // (the arm of a receiver or of a `var` initializer) flows into its whole value, which its own bridge
+            // decides.
+            let valueTypedSink = inferredSink || (targetSymbol == nil && IsBranchArm(value))
+            let emittedNilableValue = !valueTypedSink && this.YieldsValueNilableBeyondItsCSharpType(value)
+            if !flowRequiresAssertion && !emittedNilableValue && !this.NullableReferenceValueMayBeNull(
                 value,
                 respectDeclaredAnnotations: targetSymbol != nil,
                 respectDeclaredCallResults: declaredSink
@@ -3938,7 +3951,8 @@ partial class CSharpToGSharpTranslator {
         /// type is non-null. A generic result that infers `T?` through a by-ref argument
         /// (`Volatile.Read(ref cache!)`, issue #4287, or of widened storage), a widened managed-reference array element and an imported
         /// generic tuple element are such values.
-        /// The receiver bridge asserts each of them. (cref:GSharpExpressionIsStaticallyNonNull) asks it for each
+        /// Each bridge into a non-null slot asserts each of them (cref:YieldsValueNilableBeyondItsCSharpType).
+        /// (cref:GSharpExpressionIsStaticallyNonNull) asks it for each
         /// operand, so a `var` capture of such a value, or of a composed value with such an operand, is `T?`.
         private func EmittedValueIsNilableBeyondItsCSharpType(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
@@ -9158,6 +9172,34 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             )
+
+            // The operands that a composed value yields: both arms of a conditional, each arm of a switch expression
+            // and the right operand of `??`. `nil` for any other expression.
+            private func ComposedValueOperands(
+                value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            ) List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? {
+                let operands = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                switch value {
+                    case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
+                        operands.Add(conditional.WhenTrue)
+                        operands.Add(conditional.WhenFalse)
+                    }
+                    case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
+                        for arm in switchExpression.Arms {
+                            operands.Add(arm.Expression)
+                        }
+                    }
+                    case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                    ) {
+                        operands.Add(coalesce.Right)
+                    }
+                    default {
+                        return nil
+                    }
+                }
+                return operands
+            }
 
             // Whether `value` is (through parentheses) an arm of a conditional or a
             // switch expression, the walk FindContextualValueTarget climbs.
