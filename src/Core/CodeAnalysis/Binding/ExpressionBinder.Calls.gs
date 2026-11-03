@@ -2230,13 +2230,16 @@ internal partial class ExpressionBinder {
                     .ContainsGenericParameters {
                     continue
                 }
-                let expectedType = ResolveConstructorParameterPointeeType(
-                    constructor,
-                    parameterIndex,
-                    openGenericDefinition,
-                    symbolicTypeArguments
-                ) ??
-                    ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex])
+                let expectedType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    parameters[parameterIndex].ParameterType,
+                    ResolveConstructorParameterPointeeType(
+                        constructor,
+                        parameterIndex,
+                        openGenericDefinition,
+                        symbolicTypeArguments
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex])
+                )
                 if ByRefStorageMatching.AreSameStorageType(storage, expectedType, out _, out _, out _) {
                     continue
                 }
@@ -3121,21 +3124,7 @@ internal partial class ExpressionBinder {
             symbolicTypeArguments ImmutableArray[TypeSymbol]
         ) TypeSymbol? {
             if openGenericDefinition == nil || symbolicTypeArguments.IsDefaultOrEmpty {
-                let closedParameters = constructor.GetParameters()
-                return if uint32(parameterIndex) < uint32(closedParameters.Length) &&
-                    closedParameters[parameterIndex]
-                    .ParameterType
-                    .IsByRef &&
-                    !closedParameters[parameterIndex]
-                    .ParameterType
-                    .ContainsGenericParameters &&
-                    constructor
-                    .DeclaringType
-                    ?.IsGenericType != true {
-                    ClrNullability.GetParameterTypeSymbol(closedParameters[parameterIndex])
-                } else {
-                    default(TypeSymbol?)
-                }
+                return nil
             }
             let openConstructor ConstructorInfo? = ClrTypeUtilities.SafeGetConstructors(
                 openGenericDefinition,
@@ -3153,11 +3142,14 @@ internal partial class ExpressionBinder {
                 return nil
             }
             let openParameter = openParameters[parameterIndex]
-            return if openParameter.ParameterType.IsByRef {
-                MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
-                    openParameter,
-                    openGenericDefinition,
-                    symbolicTypeArguments
+            return if openParameter.ParameterType.IsByRef && openParameter.ParameterType.ContainsGenericParameters {
+                ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParameter.ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParameter,
+                        openGenericDefinition,
+                        symbolicTypeArguments
+                    )
                 )
             } else {
                 default(TypeSymbol?)

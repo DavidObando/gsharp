@@ -3483,12 +3483,15 @@ internal partial class ExpressionBinder {
                 ) {
                     continue
                 }
-                let parameterType = TryResolveSymbolicByRefParameterPointee(
-                    parameters[paramIndex],
-                    receiverType,
-                    explicitMethodTypeArguments: explicitMethodTypeArguments
-                ) ??
-                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                let parameterType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    parameters[paramIndex].ParameterType,
+                    TryResolveSymbolicByRefParameterPointee(
+                        parameters[paramIndex],
+                        receiverType,
+                        explicitMethodTypeArguments: explicitMethodTypeArguments
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                )
                 if ByRefStorageMatching.AreSameStorageType(storage, parameterType, out _, out _, out _) {
                     continue
                 }

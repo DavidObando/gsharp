@@ -1444,14 +1444,17 @@ internal class ConversionClassifier {
                     // parameter must match the substituted storage type.
                     var byRefPointeeOverride TypeSymbol? = nil
                     parameterTypeOverrides?.TryGetValue(paramIndex, out byRefPointeeOverride)
-                    let byRefPointee = byRefPointeeOverride ??
-                        GetImplicitInClrPointeeType(
-                        parameters[paramIndex],
-                        paramIndex,
-                        method,
-                        receiverType,
-                        symbolicMethodTypeArgs,
-                        argument
+                    let byRefPointee = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                        parameterType,
+                        byRefPointeeOverride ??
+                            GetImplicitInClrPointeeType(
+                            parameters[paramIndex],
+                            paramIndex,
+                            method,
+                            receiverType,
+                            symbolicMethodTypeArgs,
+                            argument
+                        )
                     )
                     if byRefPointee != TypeSymbol.Error && !ByRefStorageMatching.AreSameStorageType(
                         storageType,

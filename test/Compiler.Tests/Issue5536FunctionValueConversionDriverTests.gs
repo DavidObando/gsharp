@@ -2100,6 +2100,21 @@ class Program {
     }
 }
 `, "CS1503", line: 8, column: 38, length: 3, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var x = (1, 2)
+    Console.Write(S.RT(&x))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var x = (1, 2);
+        Console.Write(S.RT(ref x));
+    }
+}
+`, "CS1503", line: 5, column: 24, length: 2, diagnostic: "GS0154")
         Check(fixture, `import System
 import System.Collections.Generic
 import FunctionControl
@@ -2113,6 +2128,9 @@ func Main() {
     let holder = RefHolder[E](&e)
     var as_ = List[A]{A()}
     let listHolder = RefHolder[List[A]](&as_)
+    var fixedArr = [3]int32{7, 8, 9}
+    var es = List[E]{E.B}
+    var vt = (5, 6)
     Console.Write(S.R(&h))
     Console.Write(S.I(&h))
     Console.Write(S.I(in h))
@@ -2123,6 +2141,9 @@ func Main() {
     Console.Write(int32(holder.Value))
     Console.Write(int32(RefHolder[E].Echo(&next)))
     Console.Write(listHolder.Value.Count)
+    Console.Write(S.Read(&fixedArr))
+    Console.Write(int32(es.ReadExt[E](&next)))
+    Console.Write(S.VT(&vt))
 }
 `, `using System;
 using System.Collections.Generic;
@@ -2138,6 +2159,9 @@ class Program {
         var holder = new RefHolder<E>(ref e);
         var as_ = new List<A> { new A() };
         var listHolder = new RefHolder<List<A>>(ref as_);
+        var fixedArr = new int[] { 7, 8, 9 };
+        var es = new List<E> { E.B };
+        var vt = (5, 6);
         Console.Write(S.R(ref h));
         Console.Write(S.I(in h));
         Console.Write(S.I(in h));
@@ -2148,9 +2172,12 @@ class Program {
         Console.Write((int)holder.Value);
         Console.Write((int)RefHolder<E>.Echo(ref next));
         Console.Write(listHolder.Value.Count);
+        Console.Write(S.Read(ref fixedArr));
+        Console.Write((int)es.ReadExt<E>(ref next));
+        Console.Write(S.VT(ref vt));
     }
 }
-`, "3334422111")
+`, "3334422111725")
     }
 
     /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
@@ -3107,6 +3134,10 @@ namespace FunctionControl {
         public static long I(in long x) => x;
         public static long F(in System.Func<long> f) => f();
         public static string B(in B b) => "B";
+        public static int RT(ref System.Tuple<int, int> x) => x.Item1;
+        public static int VT(ref (int, int) x) => x.Item1;
+        public static int Read(ref int[] a) => a[0];
+        public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
     }
     public class RefHolder<T> {
         public T Value;

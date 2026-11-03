@@ -350,6 +350,7 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         "import System.Collections.Generic\nclass A {}\nclass B {}\nvar bs = List[B]()\nConsole.Write(Holder[List[A]](&bs).Value.Count)",
         "value"
     )
+    @InlineData("var x = (1, 2)\nConsole.Write(S.RT(&x))", "x")
     func ClrCallee_DifferentStorageTypeAtByRefParameter_IsGS0154(body string, parameterName string) {
         using let fixture = CSharpFixture(`namespace Storage {
     public static class S {
@@ -358,6 +359,7 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         public static long F(in System.Func<long> f) => f();
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
+        public static int RT(ref System.Tuple<int, int> x) => x.Item1;
     }
     public class Holder<T> {
         public T Value;
@@ -373,19 +375,27 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
     @Fact
     func ClrGenericConstructor_WithSourceEnumByRefStorage_CompilesAndRuns() {
         using let fixture = CSharpFixture(`namespace Storage {
+    public static class S {
+        public static int Read(ref int[] a) => a[0];
+        public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
+    }
     public class Holder<T> {
         public T Value;
         public Holder(ref T value) { Value = value; }
     }
 }`)
         let result = EmittedOracle.Evaluate(`import System
+import System.Collections.Generic
 import Storage
 enum E { A = 1, B = 2 }
 var e = E.B
 let h = Holder[E](&e)
-Console.WriteLine(int32(h.Value))`, []string{fixture.AssemblyPath})
+var a = [3]int32{7, 8, 9}
+var xs = List[E]{E.B}
+var next = E.A
+Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${int32(xs.ReadExt[E](&next))}")`, []string{fixture.AssemblyPath})
         Assert.Empty(result.Diagnostics)
-        Assert.Equal("2", result.Output.Trim())
+        Assert.Equal("2 7 2", result.Output.Trim())
     }
 
     shared {

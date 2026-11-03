@@ -149,6 +149,21 @@ internal shared class ByRefStorageMatching {
         if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(bareStorage, bareParameter) {
             return true
         }
+        if bareStorage is ArrayTypeSymbol || bareParameter is ArrayTypeSymbol {
+            if bareStorage is ArrayTypeSymbol storageFixed && bareParameter is ArrayTypeSymbol parameterFixed {
+                return storageFixed.Length == parameterFixed.Length &&
+                    IsSameRuntimeType(storageFixed.ElementType, parameterFixed.ElementType)
+            }
+            if bareStorage is ArrayTypeSymbol fixedStorage &&
+                TryGetImportedSzArrayElement(bareParameter, out var importedParamElement) {
+                return IsSameRuntimeType(fixedStorage.ElementType, importedParamElement)
+            }
+            if bareParameter is ArrayTypeSymbol fixedParameter &&
+                TryGetImportedSzArrayElement(bareStorage, out var importedStorageElement) {
+                return IsSameRuntimeType(importedStorageElement, fixedParameter.ElementType)
+            }
+            return false
+        }
         if TryGetSingleDimensionalArrayElement(bareStorage, out var storageArrayElement) &&
             TryGetSingleDimensionalArrayElement(bareParameter, out var parameterArrayElement) {
             return IsSameRuntimeType(storageArrayElement, parameterArrayElement)
@@ -229,6 +244,10 @@ internal shared class ByRefStorageMatching {
             elementType = slice.ElementType
             return true
         }
+        return TryGetImportedSzArrayElement(type, out elementType)
+    }
+
+    private func TryGetImportedSzArrayElement(type TypeSymbol, out elementType TypeSymbol?) bool {
         if type is ImportedTypeSymbol imported && imported.ClrType is {IsSZArray: true} {
             let positions = imported.GetElementPositions()
             if positions.Length == 1 {
@@ -238,6 +257,100 @@ internal shared class ByRefStorageMatching {
         }
         elementType = nil
         return false
+    }
+
+    func PreserveNominalClrPointeeType(clrType Type?, pointeeType TypeSymbol) TypeSymbol {
+        if clrType == nil {
+            return pointeeType
+        }
+        let elementClr = if clrType.IsByRef {
+            clrType.GetElementType()
+        } else {
+            clrType
+        }
+        return if elementClr == nil {
+            pointeeType
+        } else {
+            PreserveNominalClrTypeCore(elementClr, pointeeType)
+        }
+    }
+
+    private func PreserveNominalClrTypeCore(clrType Type, typeSymbol TypeSymbol) TypeSymbol {
+        if typeSymbol is PlatformTypeSymbol platform {
+            let inner = PreserveNominalClrTypeCore(clrType, platform.UnderlyingType)
+            return if object.ReferenceEquals(inner, platform.UnderlyingType) {
+                typeSymbol
+            } else {
+                PlatformTypeSymbol.Get(inner)
+            }
+        }
+        if typeSymbol is NullableTypeSymbol nullable {
+            let underlyingClr = NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) ?? clrType
+            let inner = PreserveNominalClrTypeCore(underlyingClr, nullable.UnderlyingType)
+            return if object.ReferenceEquals(inner, nullable.UnderlyingType) {
+                typeSymbol
+            } else {
+                NullableTypeSymbol.Get(inner)
+            }
+        }
+        if typeSymbol is NullabilityAnnotatedTypeSymbol annotated {
+            let inner = PreserveNominalClrTypeCore(clrType, annotated.BaseType)
+            return if object.ReferenceEquals(inner, annotated.BaseType) {
+                typeSymbol
+            } else {
+                inner
+            }
+        }
+        if clrType.IsGenericType {
+            let openDef = if clrType.IsGenericTypeDefinition {
+                clrType
+            } else {
+                clrType.GetGenericTypeDefinition()
+            }
+            if openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true &&
+                typeSymbol is TupleTypeSymbol tuple {
+                let clrArgs = clrType.GetGenericArguments()
+                if clrArgs.Length == tuple.ElementTypes.Length {
+                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
+                    for var i = 0; i < clrArgs.Length; i++ {
+                        builder.Add(PreserveNominalClrTypeCore(clrArgs[i], tuple.ElementTypes[i]))
+                    }
+                    let closedOrOpen = if clrType.ContainsGenericParameters {
+                        openDef
+                    } else {
+                        clrType
+                    }
+                    return ImportedTypeSymbol.GetConstructed(closedOrOpen, openDef, builder.MoveToImmutable())
+                }
+            }
+            if !clrType.IsGenericTypeDefinition && typeSymbol is ImportedTypeSymbol imported {
+                let clrArgs = clrType.GetGenericArguments()
+                let symArgs = imported.ConstructedTypeArguments
+                if clrArgs.Length == symArgs.Length {
+                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
+                    var changed = false
+                    for var i = 0; i < clrArgs.Length; i++ {
+                        let updated = PreserveNominalClrTypeCore(clrArgs[i], symArgs[i])
+                        changed |= !object.ReferenceEquals(updated, symArgs[i])
+                        builder.Add(updated)
+                    }
+                    if changed {
+                        return ImportedTypeSymbol.GetConstructed(
+                            imported.Type,
+                            imported.OpenDefinition ?? openDef,
+                            builder.MoveToImmutable()
+                        )
+                    }
+                }
+            }
+        }
+        if clrType.IsSZArray && typeSymbol is SliceTypeSymbol slice && clrType.GetElementType() is {} elemClr {
+            let updatedElem = PreserveNominalClrTypeCore(elemClr, slice.ElementType)
+            if !object.ReferenceEquals(updatedElem, slice.ElementType) {
+                return SliceTypeSymbol.Get(updatedElem)
+            }
+        }
+        return typeSymbol
     }
 
     private func TryGetMultiDimensionalArrayShape(type TypeSymbol, out elementType TypeSymbol?, out rank int32) bool {

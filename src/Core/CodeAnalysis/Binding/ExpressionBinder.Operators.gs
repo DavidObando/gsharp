@@ -3944,21 +3944,21 @@ internal partial class ExpressionBinder {
                 importedReceiver.OpenDefinition != nil &&
                 !importedReceiver
                 .TypeArguments
-                .IsDefaultOrEmpty {
-                if parameter.Member?.DeclaringType is {} declaringType && MemberLookup.TryGetSymbolicDeclaringContext(
-                    importedReceiver,
-                    declaringType,
-                    out var resolvedOpenDef,
-                    out var resolvedDeclaringArgs
-                ) &&
-                    resolvedOpenDef != nil &&
-                    !resolvedDeclaringArgs.IsDefaultOrEmpty {
-                    openDef = resolvedOpenDef
-                    declaringTypeArgs = resolvedDeclaringArgs
-                } else {
-                    openDef = importedReceiver.OpenDefinition
-                    declaringTypeArgs = importedReceiver.TypeArguments
-                }
+                .IsDefaultOrEmpty &&
+                parameter
+                .Member
+                ?.DeclaringType is {} declaringType &&
+                MemberLookup
+                .TryGetSymbolicDeclaringContext(
+                importedReceiver,
+                declaringType,
+                out var resolvedOpenDef,
+                out var resolvedDeclaringArgs
+            ) &&
+                resolvedOpenDef != nil &&
+                !resolvedDeclaringArgs.IsDefaultOrEmpty {
+                openDef = resolvedOpenDef
+                declaringTypeArgs = resolvedDeclaringArgs
             }
             if parameter.Member is ConstructorInfo ctor {
                 return ResolveConstructorParameterPointeeType(ctor, parameter.Position, openDef, declaringTypeArgs)
@@ -3988,7 +3988,10 @@ internal partial class ExpressionBinder {
                 if uint32(parameter.Position) >= uint32(openParams.Length) ||
                     !openParams[parameter.Position]
                     .ParameterType
-                    .IsByRef {
+                    .IsByRef ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .ContainsGenericParameters {
                     return nil
                 }
                 if nullableMethodTypeArgs.IsDefaultOrEmpty &&
@@ -3999,16 +4002,19 @@ internal partial class ExpressionBinder {
                     .Length != nullableMethodTypeArgs.Length {
                     return nil
                 }
-                return MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
-                    openParams[parameter.Position],
-                    openDef,
-                    declaringTypeArgs,
-                    if nullableMethodTypeArgs.IsDefaultOrEmpty {
-                        default(MethodInfo?)
-                    } else {
-                        openMethod
-                    },
-                    nullableMethodTypeArgs
+                return ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParams[parameter.Position].ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParams[parameter.Position],
+                        openDef,
+                        declaringTypeArgs,
+                        if nullableMethodTypeArgs.IsDefaultOrEmpty {
+                            default(MethodInfo?)
+                        } else {
+                            openMethod
+                        },
+                        nullableMethodTypeArgs
+                    )
                 )
             }
             if !nullableMethodTypeArgs.IsDefaultOrEmpty && method.IsGenericMethod {
@@ -4024,28 +4030,22 @@ internal partial class ExpressionBinder {
                 if uint32(parameter.Position) >= uint32(openParams.Length) ||
                     !openParams[parameter.Position]
                     .ParameterType
-                    .IsByRef {
+                    .IsByRef ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .ContainsGenericParameters {
                     return nil
                 }
-                return MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
-                    openParams[parameter.Position],
-                    openDefinition: nil,
-                    ImmutableArray[TypeSymbol].Empty,
-                    openMethod,
-                    nullableMethodTypeArgs
+                return ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParams[parameter.Position].ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParams[parameter.Position],
+                        openDefinition: nil,
+                        ImmutableArray[TypeSymbol].Empty,
+                        openMethod,
+                        nullableMethodTypeArgs
+                    )
                 )
-            }
-            if !method.IsGenericMethod &&
-                method
-                .DeclaringType
-                ?.IsGenericType != true &&
-                parameter
-                .ParameterType
-                .IsByRef &&
-                !parameter
-                .ParameterType
-                .ContainsGenericParameters {
-                return ClrNullability.GetParameterTypeSymbol(parameter)
             }
             return nil
         }
