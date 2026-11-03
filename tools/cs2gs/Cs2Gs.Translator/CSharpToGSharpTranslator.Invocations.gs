@@ -32,12 +32,14 @@ partial class CSharpToGSharpTranslator {
                         this
                         .context
                         .GetDeclaredSymbol(designation) is ILocalSymbol local {
+                        let type = this.PromoteIfUsedAsNullable(
+                            this.typeMapper.Map(local.Type, this.context, argument.GetLocation()),
+                            local
+                        )
+                        this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
+                        this.RecordEmittedLocalNullability(local, type, nil, nil)
                         (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(
-                            LocalDeclarationStatement(
-                                BindingKind.Var,
-                                this.EmittedName(local, local.Name),
-                                this.typeMapper.Map(local.Type, this.context, argument.GetLocation())
-                            )
+                            LocalDeclarationStatement(BindingKind.Var, this.EmittedName(local, local.Name), type)
                         )
                     }
                 }

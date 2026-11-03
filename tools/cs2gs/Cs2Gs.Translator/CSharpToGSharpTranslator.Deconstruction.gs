@@ -1387,6 +1387,8 @@ partial class CSharpToGSharpTranslator {
                         }
                     )
                 )
+            } else if argument.Expression is DeclarationExpressionSyntax {
+                value = this.TranslateArgumentValue(argument)!!
             } else {
                 value = this.TranslateWithBlockSpillSeam(
                     func () GExpression {

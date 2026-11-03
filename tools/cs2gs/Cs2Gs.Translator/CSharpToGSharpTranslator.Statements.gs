@@ -2623,19 +2623,16 @@ partial class CSharpToGSharpTranslator {
                 if !preserveExistingValues {
                     values.Clear()
                 }
-                if !assignedValues.TryGetValue(assignment, out var value) {
+                var value ExpressionSyntax?
+                if !assignedValues.TryGetValue(assignment, out value) {
                     let aliasPath HashSet[ISymbol]? = if visited == nil {
                         default(HashSet[ISymbol]?)
                     } else {
                         HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                     }
-                    // ResolveStableTupleAlias returns its input or a reaching value, never null;
-                    // self-migration types that result as nullable (issue #4598).
-                    let source ExpressionSyntax? = this.ResolveStableTupleAlias(assignment.Right, aliasPath)!!
-                    // ProjectTupleElement never returns null; self-migration types
-                    // the result as nullable (issue #4598).
-                    value = ProjectTupleElement(source, path)!!
-                    assignedValues.Add(assignment, value)
+                    let source ExpressionSyntax? = this.ResolveStableTupleAlias(assignment.Right, aliasPath)
+                    value = ProjectTupleElement(source, path)
+                    assignedValues.Add(assignment, value!!)
                 }
                 if preserveDelegateCompoundAssignments && assignment.IsKind(SyntaxKind.SubtractAssignmentExpression) {
                     let priorAddition = FindEnclosingExecutable(assignment)
@@ -2647,13 +2644,13 @@ partial class CSharpToGSharpTranslator {
                     )
                     if !priorAddition && values.Count == 1 {
                         let existing = this.ResolveStableTupleAlias(values.Single()) ?? values.Single()
-                        if SyntaxFactory.AreEquivalent(existing, value) {
+                        if SyntaxFactory.AreEquivalent(existing, value!!) {
                             values.Clear()
                         }
                     }
                     continue
                 }
-                values.Add(value)
+                values.Add(value!!)
             }
         }
 
@@ -2696,9 +2693,7 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                 }
-                // ResolveStableTupleAlias returns its input or a reaching value, never null;
-                // self-migration types that result as nullable (issue #4598).
-                let source ExpressionSyntax? = this.ResolveStableTupleAlias(writtenValue, aliasPath)!!
+                let source ExpressionSyntax? = this.ResolveStableTupleAlias(writtenValue, aliasPath)
                 if elementPath.Count == 0 {
                     values.Clear()
                     values.Add(source!!)
@@ -2714,13 +2709,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 for previous in previousValues {
                     let key = (write, TupleReachingStateKey(previous))
-                    if !elementAssignedValues.TryGetValue(key, out var updated) {
-                        // ReplaceTupleElement never returns null; self-migration types
-                        // the result as nullable (issue #4598).
-                        updated = this.ReplaceTupleElement(previous, local.Type, elementPath, 0, source!!)!!
-                        elementAssignedValues.Add(key, updated)
+                    var updated ExpressionSyntax?
+                    if !elementAssignedValues.TryGetValue(key, out updated) {
+                        updated = this.ReplaceTupleElement(previous, local.Type, elementPath, 0, source!!)
+                        elementAssignedValues.Add(key, updated!!)
                     }
-                    values.Add(updated)
+                    values.Add(updated!!)
                 }
             }
         }
@@ -3610,6 +3604,10 @@ partial class CSharpToGSharpTranslator {
                     Type: {IsVar: false}
                 } ||
                     this.InferredLocalDeclarationIsNullable(local)
+                case single is SingleVariableDesignationSyntax: this.OutDeclarationRequiresNullablePredeclaration(
+                    single,
+                    local
+                )
                 case forEach is ForEachStatementSyntax: this.ForEachHasTypeClause(forEach)
                 default: false
             }
@@ -3816,7 +3814,61 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateOutVarDesignation(single SingleVariableDesignationSyntax) GExpression {
-            return OutArgumentExpression("out var", this.EmittedName(single, single.Identifier))
+            let name = this.EmittedName(single, single.Identifier)!!
+            if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
+                (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue) is {} declarations &&
+                this
+                .OutDeclarationRequiresNullablePredeclaration(single, local) {
+                if !(
+                    single.Parent is DeclarationExpressionSyntax{
+                        Parent: ArgumentSyntax{
+                            Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
+                        }
+                    } &&
+                        this.RequiresFunctionArgumentSpillSeam(invocation)
+                ) {
+                    let type = this.PromoteIfUsedAsNullable(
+                        this.typeMapper.MapExplicitType(local.Type, this.context, single.GetLocation()),
+                        local
+                    )
+                    this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
+                    this.RecordEmittedLocalNullability(local, type, nil, nil)
+                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                }
+                return OutArgumentExpression("out", name)
+            }
+            return OutArgumentExpression("out var", name)
+        }
+
+        // Issue #4598: G# types `out var x` from the callee's `out` parameter.
+        // When the local is promoted to `T?` and that parameter does not
+        // already supply `T?` in this compilation, pre-declare `var x T?` and
+        // pass `out x` so a nullable write to `x` binds without a throwing `!!`.
+        private func OutDeclarationRequiresNullablePredeclaration(
+            single SingleVariableDesignationSyntax,
+            local ILocalSymbol
+        ) bool {
+            if !this.ShouldPromoteToNullableReference(local) {
+                return false
+            }
+            if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
+                argument
+                .RefKindKeyword
+                .IsKind(SyntaxKind.OutKeyword) &&
+                this
+                .context
+                .SemanticModel
+                .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                parameter
+                .OriginalDefinition
+                .DeclaringSyntaxReferences
+                .Any(
+                (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
+            ) &&
+                this.ShouldPromoteToNullableReference(parameter.OriginalDefinition) {
+                return false
+            }
+            return true
         }
 
         // Reports whether the element-access target indexes by `int32`: a C# array,

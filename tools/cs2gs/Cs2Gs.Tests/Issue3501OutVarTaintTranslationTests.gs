@@ -52,6 +52,7 @@ namespace Demo
 }`)
         // The out parameter itself is tainted (assigned an `as`-cast)...
         Assert.Contains("out picked string?", printed)
+        Assert.Contains("if this.TryPick(value, out var picked)", printed)
         // ...and the receiving out-var local now inherits that taint, which the
         // fixpoint carries onward through the argument edge into `Consume`'s
         // parameter — the whole chain agrees on `string?` and the read needs no
@@ -59,6 +60,86 @@ namespace Demo
         // `Consume` kept `string`, and gsc rejected the `T? -> T` argument.)
         Assert.Contains("func Consume(exact string?)", printed)
         Assert.Contains("Consume(picked)", printed)
+    }
+
+    @Fact
+    func Oblivious_TaintedValueAssignedIntoInlineOutDeclaration_PredeclaresNullableLocal() {
+        // Issue #4598: `out var x` / `out T x` takes its G# type from the callee's
+        // `out` parameter. When the callee's parameter stays non-null (`Dictionary<int, Node>`
+        // or an unpromoted source `out Node`) while the local itself is tainted by a
+        // nullable write, emit `var x Node?` ahead of the statement and pass `out x`
+        // so the write binds without a runtime `!!` that would throw on null.
+        let printed = TranslateOblivious(`
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class Node
+    {
+        public int Start => 7;
+    }
+
+    public static class C
+    {
+        private static Node Unwrap(Node node) => node;
+
+        private static bool TryGetFixed(int key, out Node value)
+        {
+            value = new Node();
+            return key > 0;
+        }
+
+        public static int RunHit(Node a, Node maybe)
+        {
+            if (maybe == null) { maybe = a; }
+            var cache = new Dictionary<int, Node>();
+            if (!cache.TryGetValue(1, out Node value))
+            {
+                value = Unwrap(maybe);
+                cache.Add(1, value);
+            }
+
+            return value.Start;
+        }
+
+        private static string Describe(Node node) => node == null ? "null" : "node:" + node.Start;
+
+        public static string RunNullStore(Node maybe)
+        {
+            if (maybe == null) { }
+            var cache = new Dictionary<int, Node>();
+            if (!cache.TryGetValue(1, out var inferred))
+            {
+                inferred = Unwrap(maybe);
+            }
+
+            if (!TryGetFixed(0, out Node fromSource))
+            {
+                fromSource = Unwrap(maybe);
+            }
+
+            return Describe(inferred) + ":" + Describe(fromSource);
+        }
+
+        public static string MainEntry() =>
+            RunHit(new Node(), null) + ":" + RunNullStore(null) + ":" + RunNullStore(new Node());
+    }
+}`)
+        Assert.Contains("var value Node?", printed)
+        Assert.Contains("if !cache.TryGetValue(1, out value)", printed)
+        Assert.Contains("value = Unwrap(maybe)", printed)
+        Assert.Contains("cache.Add(1, value!!)", printed)
+        Assert.Contains("return value!!.Start", printed)
+        Assert.Contains("var inferred Node?", printed)
+        Assert.Contains("if !cache.TryGetValue(1, out inferred)", printed)
+        Assert.Contains("var fromSource Node?", printed)
+        Assert.Contains("if !TryGetFixed(0, out fromSource)", printed)
+        Assert.DoesNotContain("Unwrap(maybe)!!", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.C.MainEntry())",
+            "7:null:null:node:7:node:7"
+        )
     }
 
     @Fact
