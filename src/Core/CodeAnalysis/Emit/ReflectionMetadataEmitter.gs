@@ -1602,8 +1602,7 @@ internal class ReflectionMetadataEmitter {
             // ADR-0051 Phase 6: backing fields for auto-properties.
             // Match emitted-field deduplication, including storage declared on earlier base types.
             for p in s.Properties {
-                if p.IsAutoProperty &&
-                    p.BackingField != nil &&
+                if p.IsAutoProperty && p.BackingField != nil && p.OwnsBackingField(s) &&
                     !this
                     .cache
                     .DeclaredFieldDefs

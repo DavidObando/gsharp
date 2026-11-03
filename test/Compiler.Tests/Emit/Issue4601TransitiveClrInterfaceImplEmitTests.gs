@@ -345,13 +345,27 @@ class WEvent : IFEvent2[Shape] {
     event (IFEvent[Shape]) Changed Action[Shape]?
 }
 
+open class Base[T] {
+    var Value T
+    func SetFromBase(v T) { Value = v }
+    func GetFromBase() T { return Value }
+}
+
+class Impl : Base[Shape], IFProp[Shape] {
+}
+
 Console.WriteLine(Probe.F[Shape](W2(), Shape{Tag: 4}))
 let wp = WProp()
 Console.WriteLine(Probe.GetValue[Shape](wp).Tag)
 Probe.SetValue[Shape](wp, Shape{Tag: 12})
 Console.WriteLine(Probe.GetValue[Shape](wp).Tag)
 let we = WEvent()
-Probe.Subscribe[Shape](we, (s Shape) -> { })`, []string{"5", "9", "12"}}
+Probe.Subscribe[Shape](we, (s Shape) -> { })
+let impl = Impl()
+impl.SetFromBase(Shape{Tag: 33})
+Console.WriteLine(Probe.GetValue[Shape](impl).Tag)
+Probe.SetValue[Shape](impl, Shape{Tag: 44})
+Console.WriteLine(impl.GetFromBase().Tag)`, []string{"5", "9", "12", "33", "44"}}
         }
 
         /// Neighbours whose dispatch was already right and must stay so.

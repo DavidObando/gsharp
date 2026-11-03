@@ -1680,11 +1680,19 @@ internal class MemberLookup {
             structSymbol StructSymbol,
             clrProp PropertyInfo,
             symbolicArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        ) FieldSymbol? -> FindMatchingFieldForPropertyContract(structSymbol, clrProp, symbolicArgs, out _)
+
+        func FindMatchingFieldForPropertyContract(
+            structSymbol StructSymbol,
+            clrProp PropertyInfo,
+            symbolicArgs ImmutableArray[TypeSymbol],
+            out declaringType StructSymbol?
         ) FieldSymbol? {
+            declaringType = nil
             if clrProp.GetIndexParameters().Length != 0 || !structSymbol.TryGetFieldIncludingInherited(
                 clrProp.Name,
                 out var field,
-                out _
+                out declaringType
             ) {
                 return nil
             }

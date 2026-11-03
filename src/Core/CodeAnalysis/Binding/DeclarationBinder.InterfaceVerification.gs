@@ -2429,7 +2429,8 @@ internal partial class DeclarationBinder {
             let matchingField FieldSymbol? = MemberLookup.FindMatchingFieldForPropertyContract(
                 structSymbol,
                 clrProperty,
-                symbolicArgs
+                symbolicArgs,
+                out var matchingDeclaringType
             )
             if matchingField == nil {
                 return nil
@@ -2452,7 +2453,8 @@ internal partial class DeclarationBinder {
                 isOverride: false,
                 isInitOnly: contractIsInitOnly
             )
-            synthesized.BackingField = matchingField
+            synthesized.BackingField = matchingDeclaringType?.GetDefinitionField(matchingField) ?? matchingField
+            synthesized.BackingFieldDeclaringType = matchingDeclaringType
             structSymbol.SetProperties(structSymbol.Properties.Add(synthesized))
             return synthesized
         }

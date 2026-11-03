@@ -379,21 +379,23 @@ internal class MemberDefEmitter {
         if this.emitCtx.MetadataOnly {
             return (nil, -1)
         }
+        let fieldOwner = prop.BackingFieldDeclaringType ?? structSym
         if prop.IsAutoProperty &&
             prop.BackingField != nil &&
+            (
             this
-            .cache
-            .StructFieldDefs
-            .TryGetValue(prop.BackingField!!, out var backingHandle) {
-            // Issue #989: inside a generic type's own accessor body the
-            // backing-field token must be a self-TypeSpec MemberRef
-            // (Box`1<!0>), not the bare FieldDef, or the verifier rejects
-            // the receiver type on the stack.
-            let backingToken = if ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym) {
-                this.resolveFieldToken(structSym, prop.BackingField!!)
-            } else {
-                EntityHandle(backingHandle)
-            }
+                .cache
+                .StructFieldDefs
+                .ContainsKey(prop.BackingField!!) ||
+                this
+                .cache
+                .DeclaredFieldDefs
+                .ContainsKey(prop.BackingField!!)
+        ) {
+            // Issue #989: inside a generic type's own accessor body (or when the
+            // backing field lives on a constructed generic base) the backing-field
+            // token must be a TypeSpec MemberRef, not the bare FieldDef.
+            let backingToken = this.resolveFieldToken(fieldOwner, prop.BackingField!!)
             let il = InstructionEncoder(BlobBuilder())
             if isGetter {
                 if !isStatic {

@@ -77,7 +77,10 @@ shared class TypeMemberModel {
             members.Add(field)
         }
         for property in type.Properties {
-            if !property.IsStatic && !property.IsIndexer && property.BackingField != nil {
+            if !property.IsStatic && !property.IsIndexer && property.BackingField != nil && property.OwnsBackingField(
+                type
+            ) &&
+                !members.Contains(property.BackingField!!) {
                 members.Add(property)
             }
         }

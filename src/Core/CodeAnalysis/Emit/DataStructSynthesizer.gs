@@ -2016,7 +2016,9 @@ internal class DataStructSynthesizer {
             )
             builder.AddRange(structSym.Fields)
             for property in structSym.Properties {
-                if property.BackingField != nil && !builder.Contains(property.BackingField!!) {
+                if property.BackingField != nil && property.OwnsBackingField(structSym) && !builder.Contains(
+                    property.BackingField!!
+                ) {
                     builder.Add(property.BackingField!!)
                 }
             }
