@@ -199,10 +199,10 @@ internal partial class DeclarationBinder {
     ) {
         BindInterfaceBaseInterfaces(syntax, interfaceSymbol)
         let seenNames = HashSet[string]()
+        BindInterfaceStaticFields(syntax, interfaceSymbol, seenNames)
         BindInterfaceMethods(syntax, interfaceSymbol, $package, seenNames)
         BindInterfaceProperties(syntax, interfaceSymbol, $package, seenNames)
         BindInterfaceEvents(syntax, interfaceSymbol, $package, seenNames)
-        BindInterfaceStaticFields(syntax, interfaceSymbol, seenNames)
         VerifyInterfaceMemberVariance(syntax, interfaceSymbol)
     }
 
@@ -324,7 +324,48 @@ internal partial class DeclarationBinder {
                             isScoped: parameterSyntax.IsScoped,
                             refKind: parameterRefKind
                         )
-                        conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ifaceMethodParam)
+                        if parameterSyntax.HasDefaultValue {
+                            let capturedScope = $scope
+                            let packageName = $package.Name
+                            let syntaxTree = parameterSyntax.SyntaxTree
+                            let capturedInUnsafeContext = binderCtx.InUnsafeContext
+                            let capturedTypeParameters = if binderCtx.CurrentTypeParameters == nil {
+                                default(Dictionary[string, TypeParameterSymbol]?)
+                            } else {
+                                Dictionary[string, TypeParameterSymbol](binderCtx.CurrentTypeParameters!!)
+                            }
+                            pendingParameterDefaultValueBindings.Add(
+                                () -> {
+                                    let outerScope = $scope
+                                    let outerTypeParameters = binderCtx.CurrentTypeParameters
+                                    $scope = capturedScope
+                                    using let unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext)
+                                    let savedPackage = $scope.SetCurrentDeclaringPackage(packageName)
+                                    let savedTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
+                                    this.binderCtx.CurrentTypeParameters = capturedTypeParameters
+                                    let previousScope = binderCtx.RootScope
+                                    let staticScope = BoundScope(previousScope)
+                                    for fld in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields) {
+                                        staticScope.TryDeclareVariable(
+                                            ImplicitStaticFieldVariableSymbol(interfaceSymbol, fld)
+                                        )
+                                    }
+                                    this.binderCtx.RootScope = staticScope
+                                    try {
+                                        conversions.BindAndAttachParameterDefaultValue(
+                                            parameterSyntax,
+                                            ifaceMethodParam
+                                        )
+                                    } finally {
+                                        this.binderCtx.RootScope = previousScope
+                                        $scope.SetCurrentDeclaringPackage(savedPackage)
+                                        $scope.SetCurrentReferencingSyntaxTree(savedTree)
+                                        $scope = outerScope
+                                        this.binderCtx.CurrentTypeParameters = outerTypeParameters
+                                    }
+                                }
+                            )
+                        }
                         BindAndAttachParameterAttributes(parameterSyntax, ifaceMethodParam)
                         parameters.Add(ifaceMethodParam)
                     }
@@ -919,9 +960,8 @@ internal partial class DeclarationBinder {
                                 constField.SetConstantValue(constValue)
                             } else if !(boundConst is BoundErrorExpression) &&
                                 !(convertedConst is BoundErrorExpression) {
-                                Diagnostics.ReportConstFieldInitializerNotConstant(
-                                    fieldSyntax.Initializer!!.Location,
-                                    fieldName
+                                pendingCrossTypeConstFolds.Add(
+                                    (constField, convertedConst, fieldSyntax.Initializer!!.Location)
                                 )
                             }
                         }

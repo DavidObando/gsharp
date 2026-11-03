@@ -1734,7 +1734,7 @@ internal partial class DeclarationBinder {
                         )
                         continue
                     }
-                    indexerParameters = BindIndexerParameters(propSyntax)
+                    indexerParameters = BindIndexerParameters(propSyntax, structSymbol, $package)
                 }
                 let propName = if isIndexer {
                     "Item"
@@ -3432,83 +3432,91 @@ internal partial class DeclarationBinder {
         let fieldInitFields = fields.ToImmutable()
         let fieldInitPrimaryCtorParameters = primaryCtorParameters
         let fieldInitPackageName = $package.Name
-        pendingFieldInitializerBindings.Add(
-            () -> {
-                using let unsafeContext = binderCtx.PushUnsafeContext(fieldInitUnsafeContext)
-                let savedFieldInitScope = $scope
-                let savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters
-                let savedFieldInitFunction = getCurrentFunction()
-                $scope = fieldInitScope
-                // Issue #2342: a deferred field initializer is bound long after the
-                // outer per-declaration package-scoped RunWithPackage wrap
-                // (Binder.BindGlobalScope) has already unwound, so re-establish
-                // this type's OWN owning package as the ambient lookup preference
-                // for the duration of this closure — otherwise an unqualified type
-                // reference in the initializer could resolve against an unrelated
-                // package's same-simple-name homonym.
-                let savedFieldInitPackage = $scope.SetCurrentDeclaringPackage(fieldInitPackageName)
-                let savedFieldInitTree = $scope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
-                // Issue #2111: a static field/property initializer is bound outside
-                // any function body, so no "current function" is established. The
-                // accessibility gate (AccessibilityChecker) derives the enclosing
-                // type from the current function, so without one a `private`/
-                // `protected` member of the ENCLOSING type accessed through a
-                // type-qualified receiver (`Type.Member`) or a constructor call
-                // (`Type()`) is wrongly rejected with GS0472 — even though the
-                // initializer belongs to that very type. Establish the enclosing
-                // type as the accessibility context for the duration of initializer
-                // binding by installing a synthetic static function owned by
-                // `structSymbol`, mirroring how a `shared` function body (which
-                // already works) carries its `StaticOwnerType`.
-                setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol))
-                // Issue #3812: this closure runs long after BindStructDeclarationBody
-                // unwound its type-parameter scope, so the scope has to be rebuilt
-                // from scratch — and it must be rebuilt the SAME way, including the
-                // issue #1537 enclosing-type parameters. Seeding only
-                // `structSymbol.TypeParameters` left a nested type's initializer
-                // unable to name the ENCLOSING type's parameters, so
-                // `class Outer[T] { class Inner { var item T = default(T) } }` bound
-                // the field's declared type fine (that happens inside the body scope)
-                // and then failed on the initializer with GS0113 "Type 'T' doesn't
-                // exist" — an initializer-only asymmetry, invisible to any fixture
-                // whose nested field had no initializer.
-                let initializerEnclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType)
-                if !structSymbol.TypeParameters.IsDefaultOrEmpty || initializerEnclosingTypeParameters.Count > 0 {
-                    this.binderCtx.CurrentTypeParameters = Dictionary[string, TypeParameterSymbol]()
-                    // Outermost-first, so an inner level shadows an outer one on a
-                    // name clash — the same precedence BindStructDeclarationBody uses.
-                    for tp in initializerEnclosingTypeParameters {
+        let RunInDeferredStructStaticScope = func (action() -> void) {
+            using let unsafeContext = binderCtx.PushUnsafeContext(fieldInitUnsafeContext)
+            let savedFieldInitScope = $scope
+            let savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters
+            let savedFieldInitFunction = getCurrentFunction()
+            $scope = fieldInitScope
+            // Issue #2342: a deferred field initializer is bound long after the
+            // outer per-declaration package-scoped RunWithPackage wrap
+            // (Binder.BindGlobalScope) has already unwound, so re-establish
+            // this type's OWN owning package as the ambient lookup preference
+            // for the duration of this closure — otherwise an unqualified type
+            // reference in the initializer could resolve against an unrelated
+            // package's same-simple-name homonym.
+            let savedFieldInitPackage = $scope.SetCurrentDeclaringPackage(fieldInitPackageName)
+            let savedFieldInitTree = $scope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
+            // Issue #2111: a static field/property initializer is bound outside
+            // any function body, so no "current function" is established. The
+            // accessibility gate (AccessibilityChecker) derives the enclosing
+            // type from the current function, so without one a `private`/
+            // `protected` member of the ENCLOSING type accessed through a
+            // type-qualified receiver (`Type.Member`) or a constructor call
+            // (`Type()`) is wrongly rejected with GS0472 — even though the
+            // initializer belongs to that very type. Establish the enclosing
+            // type as the accessibility context for the duration of initializer
+            // binding by installing a synthetic static function owned by
+            // `structSymbol`, mirroring how a `shared` function body (which
+            // already works) carries its `StaticOwnerType`.
+            setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol))
+            // Issue #3812: this closure runs long after BindStructDeclarationBody
+            // unwound its type-parameter scope, so the scope has to be rebuilt
+            // from scratch — and it must be rebuilt the SAME way, including the
+            // issue #1537 enclosing-type parameters. Seeding only
+            // `structSymbol.TypeParameters` left a nested type's initializer
+            // unable to name the ENCLOSING type's parameters, so
+            // `class Outer[T] { class Inner { var item T = default(T) } }` bound
+            // the field's declared type fine (that happens inside the body scope)
+            // and then failed on the initializer with GS0113 "Type 'T' doesn't
+            // exist" — an initializer-only asymmetry, invisible to any fixture
+            // whose nested field had no initializer.
+            let initializerEnclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType)
+            if !structSymbol.TypeParameters.IsDefaultOrEmpty || initializerEnclosingTypeParameters.Count > 0 {
+                this.binderCtx.CurrentTypeParameters = Dictionary[string, TypeParameterSymbol]()
+                // Outermost-first, so an inner level shadows an outer one on a
+                // name clash — the same precedence BindStructDeclarationBody uses.
+                for tp in initializerEnclosingTypeParameters {
+                    binderCtx.CurrentTypeParameters!![tp.Name] = tp
+                }
+                if !structSymbol.TypeParameters.IsDefaultOrEmpty {
+                    for tp in structSymbol.TypeParameters {
                         binderCtx.CurrentTypeParameters!![tp.Name] = tp
                     }
-                    if !structSymbol.TypeParameters.IsDefaultOrEmpty {
-                        for tp in structSymbol.TypeParameters {
-                            binderCtx.CurrentTypeParameters!![tp.Name] = tp
-                        }
-                    }
-                }
-                try {
-                    {
-                        using let _ = PushStaticMemberScope(structSymbol)
-                        BindDeferredFieldInitializers(
-                            structSymbol,
-                            fieldInitConstInitializers,
-                            fieldInitSharedConstInitializers,
-                            fieldInitStaticInitializers,
-                            fieldInitInstanceInitializers,
-                            fieldInitZeroValueInstanceFields,
-                            fieldInitZeroValueStaticFields,
-                            fieldInitFields,
-                            fieldInitPrimaryCtorParameters
-                        )
-                    }
-                } finally {
-                    $scope.SetCurrentDeclaringPackage(savedFieldInitPackage)
-                    $scope.SetCurrentReferencingSyntaxTree(savedFieldInitTree)
-                    $scope = savedFieldInitScope
-                    this.binderCtx.CurrentTypeParameters = savedFieldInitTypeParameters
-                    setCurrentFunction(savedFieldInitFunction)
                 }
             }
+            try {
+                {
+                    using let _ = PushStaticMemberScope(structSymbol)
+                    action()
+                }
+            } finally {
+                $scope.SetCurrentDeclaringPackage(savedFieldInitPackage)
+                $scope.SetCurrentReferencingSyntaxTree(savedFieldInitTree)
+                $scope = savedFieldInitScope
+                this.binderCtx.CurrentTypeParameters = savedFieldInitTypeParameters
+                setCurrentFunction(savedFieldInitFunction)
+            }
+        }
+        if fieldInitConstInitializers.Count > 0 || fieldInitSharedConstInitializers.Count > 0 {
+            pendingConstInitializerBindings.Add(
+                () -> RunInDeferredStructStaticScope(
+                    () -> BindDeferredConstInitializers(fieldInitConstInitializers, fieldInitSharedConstInitializers)
+                )
+            )
+        }
+        pendingFieldInitializerBindings.Add(
+            () -> RunInDeferredStructStaticScope(
+                () -> BindDeferredFieldInitializers(
+                    structSymbol,
+                    fieldInitStaticInitializers,
+                    fieldInitInstanceInitializers,
+                    fieldInitZeroValueInstanceFields,
+                    fieldInitZeroValueStaticFields,
+                    fieldInitFields,
+                    fieldInitPrimaryCtorParameters
+                )
+            )
         )
     }
 
@@ -3610,6 +3618,7 @@ internal partial class DeclarationBinder {
                     this.binderCtx.CurrentTypeParameters = nil
                 }
                 try {
+                    using let _ = PushStaticMemberScope(structSymbol)
                     conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter)
                 } finally {
                     $scope.SetCurrentDeclaringPackage(savedPackage)
@@ -3876,30 +3885,41 @@ internal partial class DeclarationBinder {
     private func PushStaticMemberScope(structSymbol StructSymbol) StaticMemberScope {
         let previous = binderCtx.RootScope
         let staticScope = BoundScope(previous)
-        if !structSymbol.StaticFields.IsDefaultOrEmpty {
-            for fld in structSymbol.StaticFields {
-                staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(structSymbol, fld))
+        for var owner TypeSymbol? = structSymbol; owner != nil; owner = owner!!.ContainingType {
+            if owner is InterfaceSymbol ownerInterface {
+                for fld in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
+                }
+                continue
             }
-        }
-        if !structSymbol.ConstFields.IsDefaultOrEmpty {
-            for fld in structSymbol.ConstFields {
-                staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(structSymbol, fld))
+            if owner is not StructSymbol ownerStruct {
+                continue
             }
-        }
-        if !structSymbol.StaticProperties.IsDefaultOrEmpty {
-            for prop in structSymbol.StaticProperties {
-                staticScope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(structSymbol, prop))
+            if !ownerStruct.StaticFields.IsDefaultOrEmpty {
+                for fld in ownerStruct.StaticFields {
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
+                }
             }
-        }
-        // Issue #1194: expose the enclosing type's static methods by bare name so
-        // a field/const/base initializer can call a sibling `static` method
-        // unqualified (matching C#). Declared as functions in the innermost
-        // scope, they shadow any same-named free function — the C# member-lookup
-        // order — and resolve through the normal free-function call path, which
-        // emits a static call on the owning method.
-        if !structSymbol.StaticMethods.IsDefaultOrEmpty {
-            for method in structSymbol.StaticMethods {
-                staticScope.TryDeclareFunction(method)
+            if !ownerStruct.ConstFields.IsDefaultOrEmpty {
+                for fld in ownerStruct.ConstFields {
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
+                }
+            }
+            if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
+                for prop in ownerStruct.StaticProperties {
+                    staticScope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
+                }
+            }
+            // Issue #1194: expose the enclosing type's static methods by bare name so
+            // a field/const/base initializer can call a sibling `static` method
+            // unqualified (matching C#). Declared as functions in the innermost
+            // scope, they shadow any same-named free function — the C# member-lookup
+            // order — and resolve through the normal free-function call path, which
+            // emits a static call on the owning method.
+            if !ownerStruct.StaticMethods.IsDefaultOrEmpty {
+                for method in ownerStruct.StaticMethods {
+                    staticScope.TryDeclareFunction(method)
+                }
             }
         }
         this.binderCtx.RootScope = staticScope
@@ -4028,16 +4048,32 @@ internal partial class DeclarationBinder {
         pendingBaseInitializerBindings.Clear()
     }
 
+    /// Issue #5586: binds and folds every deferred `const` field initializer
+    /// across all structs/classes before parameter default values and top-level
+    /// functions are bound, so optional parameter defaults can reference named
+    /// constants regardless of declaration order.
+    internal func BindPendingConstInitializers() {
+        for bind in pendingConstInitializerBindings {
+            bind()
+        }
+        pendingConstInitializerBindings.Clear()
+        FoldCrossTypeConstInitializers(reportUnfolded: false)
+    }
+
     /// Issue #1194: binds the deferred field-initializer expressions for every
     /// type, run from `Binder.BindGlobalScope` after all top-level
     /// functions have been declared so a field initializer can resolve an
     /// unqualified free-function or sibling static-member call.
     internal func BindPendingFieldInitializers() {
+        for bind in pendingConstInitializerBindings {
+            bind()
+        }
+        pendingConstInitializerBindings.Clear()
         for bind in pendingFieldInitializerBindings {
             bind()
         }
         pendingFieldInitializerBindings.Clear()
-        FoldCrossTypeConstInitializers()
+        FoldCrossTypeConstInitializers(reportUnfolded: true)
     }
 
     /// Issue #3896: the compilation-wide const fixpoint. Every const initializer
@@ -4047,7 +4083,7 @@ internal partial class DeclarationBinder {
     /// independent between types exactly as they already are within one; only a
     /// const still unfolded after this pass is genuinely non-constant (or part
     /// of a cycle) and reported with GS0376.
-    private func FoldCrossTypeConstInitializers() {
+    internal func FoldCrossTypeConstInitializers(reportUnfolded bool = true) {
         var pending = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)](
             pendingCrossTypeConstFolds
         )
@@ -4066,6 +4102,10 @@ internal partial class DeclarationBinder {
             }
             pending = stillPending
         }
+        if !reportUnfolded {
+            pendingCrossTypeConstFolds.AddRange(pending)
+            return
+        }
         for (constField, bound, location) in pending {
             if !(bound is BoundErrorExpression) {
                 Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name)
@@ -4073,21 +4113,9 @@ internal partial class DeclarationBinder {
         }
     }
 
-    /// Issue #1194: binds a single type's deferred field/const/static
-    /// initializers within the active static-member scope. Const initializers
-    /// are folded with a fixpoint so sibling const references resolve regardless
-    /// of declaration order (#1193); instance initializers reject instance
-    /// member references (no `this` is available, GS0377).
-    private func BindDeferredFieldInitializers(
-        structSymbol StructSymbol,
+    private func BindDeferredConstInitializers(
         constInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)],
-        sharedConstInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)],
-        staticFieldInitializers List[(Field FieldSymbol, InitSyntax ExpressionSyntax, FieldType TypeSymbol)],
-        instanceInitializers List[(Field FieldSymbol, InitSyntax ExpressionSyntax, FieldType TypeSymbol)],
-        zeroValueInstanceFields List[(Field FieldSymbol, Syntax SyntaxNode)],
-        zeroValueStaticFields List[(Field FieldSymbol, Syntax SyntaxNode)],
-        fields ImmutableArray[FieldSymbol],
-        primaryCtorParameters ImmutableArray[ParameterSymbol]
+        sharedConstInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)]
     ) {
         // Fold const initializers with a fixpoint so a const that references a
         // sibling const folds regardless of declaration order (#1193). Each
@@ -4126,6 +4154,20 @@ internal partial class DeclarationBinder {
         // every type's initializers are bound; that pass, not this one, reports
         // the const that genuinely cannot fold.
         pendingCrossTypeConstFolds.AddRange(pendingConstFolds)
+    }
+
+    /// Issue #1194: binds a single type's deferred field/static
+    /// initializers within the active static-member scope. Instance initializers
+    /// reject instance member references (no `this` is available, GS0377).
+    private func BindDeferredFieldInitializers(
+        structSymbol StructSymbol,
+        staticFieldInitializers List[(Field FieldSymbol, InitSyntax ExpressionSyntax, FieldType TypeSymbol)],
+        instanceInitializers List[(Field FieldSymbol, InitSyntax ExpressionSyntax, FieldType TypeSymbol)],
+        zeroValueInstanceFields List[(Field FieldSymbol, Syntax SyntaxNode)],
+        zeroValueStaticFields List[(Field FieldSymbol, Syntax SyntaxNode)],
+        fields ImmutableArray[FieldSymbol],
+        primaryCtorParameters ImmutableArray[ParameterSymbol]
+    ) {
         // Bind `shared` static field initializers.
         if staticFieldInitializers.Count > 0 || zeroValueStaticFields.Count > 0 {
             let previousFunction = getCurrentFunction()

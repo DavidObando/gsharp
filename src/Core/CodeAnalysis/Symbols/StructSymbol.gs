@@ -2168,7 +2168,7 @@ class StructSymbol : TypeSymbol {
                     f.IsEventBackingField,
                     f.Declaration
                 )
-                if f.IsConst {
+                if f.IsConst && f.HasConstantValue {
                     substituted.SetConstantValue(f.ConstantValue)
                 }
                 if f.ExplicitOffset is int32 offset {
@@ -3101,7 +3101,15 @@ class StructSymbol : TypeSymbol {
                     }
                     let assertMessage = "StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '${imported.OpenDefinition}' with args [${string.Join(", ", renderedArguments)}] even after mapClrType projection."
                     Debug.WriteLine(assertMessage)
-                    return imported
+                    return ImportedTypeSymbol.GetConstructed(
+                        Invariant.Required(
+                            imported.ClrType,
+                            "a constructed imported type has a CLR representation",
+                            expression: "imported.ClrType"
+                        ),
+                        imported.OpenDefinition,
+                        substitutedArgs.MoveToImmutable()
+                    )
                 }
             }
             // Issue #1503: a constructed generic named delegate referenced as a

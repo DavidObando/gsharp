@@ -3625,6 +3625,28 @@ internal partial class ExpressionBinder {
                     value = ToBigInteger(lit.Value)
                     return true
                 }
+                case fieldAccess is BoundFieldAccessExpression when fieldAccess
+                    .Field
+                    .IsConst &&
+                    fieldAccess
+                    .Field
+                    .HasConstantValue &&
+                    IsIntegerLiteralValue(fieldAccess.Field.ConstantValue) {
+                    value = ToBigInteger(fieldAccess.Field.ConstantValue)
+                    return true
+                }
+                case BoundVariableExpression{
+                    Variable: GlobalVariableSymbol{IsConst: true} global
+                } when IsIntegerLiteralValue(global.ConstantValue) {
+                    value = ToBigInteger(global.ConstantValue)
+                    return true
+                }
+                case BoundVariableExpression{
+                    Variable: LocalVariableSymbol{IsConst: true} localConst
+                } when IsIntegerLiteralValue(localConst.ConstantValue) {
+                    value = ToBigInteger(localConst.ConstantValue)
+                    return true
+                }
                 case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Identity}} identity {
                     return TryGetConstantIntegerValue(identity.Operand, out value)
                 }

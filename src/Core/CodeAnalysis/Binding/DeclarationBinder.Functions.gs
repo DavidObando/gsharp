@@ -18,7 +18,11 @@ import GSharp.Core.CodeAnalysis
 import System.Threading
 
 internal partial class DeclarationBinder {
-    private func BindIndexerParameters(propSyntax PropertyDeclarationSyntax) ImmutableArray[ParameterSymbol] {
+    private func BindIndexerParameters(
+        propSyntax PropertyDeclarationSyntax,
+        structSymbol StructSymbol? = nil,
+        $package PackageSymbol? = nil
+    ) ImmutableArray[ParameterSymbol] {
         let indexerParamBuilder = ImmutableArray.CreateBuilder[ParameterSymbol]()
         let seenIndexParamNames = HashSet[string]()
         for indexParamSyntax in propSyntax.Parameters {
@@ -63,7 +67,11 @@ internal partial class DeclarationBinder {
             // Issue #4350 (review): an indexer parameter may declare
             // a default (`this[row int32, column int32 = 0]`), which
             // was previously dropped silently.
-            conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
+            if structSymbol != nil && $package != nil {
+                DeferParameterDefaultValueBinding(indexParamSyntax, indexerParam, structSymbol, $package)
+            } else {
+                conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
+            }
             indexerParamBuilder.Add(indexerParam)
         }
         return indexerParamBuilder.ToImmutable()

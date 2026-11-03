@@ -5588,9 +5588,15 @@ internal class ConversionClassifier {
             while inner is BoundConversionExpression bce {
                 inner = bce.Expression
             }
-            if ExpressionBinder.IsIntegerType(inner.Type) && ExpressionBinder.TryGetConstantIntegerValue(
-                inner,
-                out var integerValue
+            var expressionType = inner.Type
+            if ExpressionBinder.IsIntegerType(inner.Type) &&
+                (
+                ExpressionBinder.TryGetConstantIntegerValue(inner, out var integerValue) ||
+                    (
+                    ConstantExpressionEvaluator.TryEvaluate(inner, out var evaluatedInt) &&
+                        ExpressionBinder.IsIntegerLiteralValue(evaluatedInt) &&
+                        (integerValue = ExpressionBinder.ToBigInteger(evaluatedInt)) == integerValue
+                )
             ) &&
                 TryGetIntegralMetadataTarget(parameterType, out var integralTarget) {
                 if integralTarget == TypeSymbol.Char &&
@@ -5614,6 +5620,15 @@ internal class ConversionClassifier {
                 // compile-time constant — the type's all-zero value. Accept it and
                 // record a constant the call site can materialize, mirroring C#.
                 return TryExtractValueTypeDefaultConstant(def, parameterType, out value, out reason)
+            } else if ConstantExpressionEvaluator.TryEvaluate(bound, out var evaluated) {
+                value = evaluated
+                expressionType = bound.Type
+            } else if !object.ReferenceEquals(inner, bound) && ConstantExpressionEvaluator.TryEvaluate(
+                inner,
+                out var evaluatedInner
+            ) {
+                value = evaluatedInner
+                expressionType = inner.Type
             } else {
                 reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, nil, or a value-type default(T))."
                 return false
@@ -5627,8 +5642,8 @@ internal class ConversionClassifier {
                 value = nil
                 return false
             }
-            if !Conversion.Classify(inner.Type, parameterType).IsImplicit {
-                reason = "the default value of type '${inner.Type.Name}' is not implicitly convertible to parameter type '${parameterType.Name}'."
+            if !Conversion.Classify(expressionType, parameterType).IsImplicit {
+                reason = "the default value of type '${expressionType.Name}' is not implicitly convertible to parameter type '${parameterType.Name}'."
                 value = nil
                 return false
             }
