@@ -2239,8 +2239,17 @@ partial class CSharpToGSharpTranslator {
                     conditional.WhenNotNull == current {
                     return conditional.Expression
                 }
-                if current!!.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current {
-                    current = invocation
+                if (current!!.Parent is InvocationExpressionSyntax invocation && invocation.Expression == current) ||
+                    (
+                    current!!.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Expression == current
+                ) ||
+                    (
+                    current!!.Parent is ElementAccessExpressionSyntax elementAccess &&
+                        elementAccess.Expression == current
+                ) ||
+                    current!!.Parent is MemberBindingExpressionSyntax ||
+                    current!!.Parent is ElementBindingExpressionSyntax {
+                    current = current!!.Parent
                     continue
                 }
                 break

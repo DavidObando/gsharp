@@ -6326,6 +6326,9 @@ partial class CSharpToGSharpTranslator {
             let GetReceiverOwnerType = func (
                 receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             ) INamedTypeSymbol? {
+                if receiver == nil {
+                    return nil
+                }
                 if Unparenthesize(receiver) is BaseExpressionSyntax baseReceiver {
                     return this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
                 }
@@ -6445,12 +6448,21 @@ partial class CSharpToGSharpTranslator {
                         .CSharp
                         .Syntax
                         .AssignmentExpressionSyntax assignment &&
-                        assignment
-                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
+                        (
+                        assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                            assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddAssignmentExpression) ||
+                            assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SubtractAssignmentExpression)
+                    ) {
                         let receiverType INamedTypeSymbol? = switch assignment.Left {
                             case memberLeft is MemberAccessExpressionSyntax: GetReceiverOwnerType(memberLeft.Expression)
+                            case memberBindLeft is MemberBindingExpressionSyntax: GetReceiverOwnerType(
+                                this.GetConditionalBindingReceiver(memberBindLeft)
+                            )
                             case elementLeft is ElementAccessExpressionSyntax: GetReceiverOwnerType(
                                 elementLeft.Expression
+                            )
+                            case elementBindLeft is ElementBindingExpressionSyntax: GetReceiverOwnerType(
+                                this.GetConditionalBindingReceiver(elementBindLeft)
                             )
                             case IdentifierNameSyntax: this
                                 .context
@@ -6831,7 +6843,25 @@ partial class CSharpToGSharpTranslator {
                         let memberType ITypeSymbol? = switch member {
                             case field is IFieldSymbol: field.Type
                             case property is IPropertySymbol: property.Type
+                            case ev is IEventSymbol: ev.Type
                             default: default(ITypeSymbol?)
+                        }
+                        if assignment.Left is ImplicitElementAccessSyntax implicitAccess &&
+                            member is IPropertySymbol indexerProperty {
+                            for var i = 0;
+                                i < implicitAccess
+                                .ArgumentList
+                                .Arguments
+                                .Count &&
+                                i < indexerProperty
+                                .Parameters
+                                .Length;
+                                i++ {
+                                RecordWidenedBaseArguments(
+                                    implicitAccess.ArgumentList.Arguments[i].Expression,
+                                    indexerProperty.Parameters[i].Type
+                                )
+                            }
                         }
                         if memberType == nil {
                             continue
@@ -6846,6 +6876,9 @@ partial class CSharpToGSharpTranslator {
                 let GetReceiverOwnerType = func (
                     receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
                 ) INamedTypeSymbol? {
+                    if receiver == nil {
+                        return nil
+                    }
                     if Unparenthesize(receiver) is BaseExpressionSyntax baseReceiver {
                         return this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
                     }
@@ -6967,14 +7000,23 @@ partial class CSharpToGSharpTranslator {
                             .CSharp
                             .Syntax
                             .AssignmentExpressionSyntax assignment &&
-                            assignment
-                            .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
+                            (
+                            assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddAssignmentExpression) ||
+                                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SubtractAssignmentExpression)
+                        ) {
                             let receiverType INamedTypeSymbol? = switch assignment.Left {
                                 case memberLeft is MemberAccessExpressionSyntax: GetReceiverOwnerType(
                                     memberLeft.Expression
                                 )
+                                case memberBindLeft is MemberBindingExpressionSyntax: GetReceiverOwnerType(
+                                    this.GetConditionalBindingReceiver(memberBindLeft)
+                                )
                                 case elementLeft is ElementAccessExpressionSyntax: GetReceiverOwnerType(
                                     elementLeft.Expression
+                                )
+                                case elementBindLeft is ElementBindingExpressionSyntax: GetReceiverOwnerType(
+                                    this.GetConditionalBindingReceiver(elementBindLeft)
                                 )
                                 case IdentifierNameSyntax: this
                                     .context
@@ -6991,6 +7033,8 @@ partial class CSharpToGSharpTranslator {
                                         member = field.Field
                                     } else if operation is IPropertyReferenceOperation property {
                                         member = property.Property
+                                    } else if operation is IEventReferenceOperation eventRef {
+                                        member = eventRef.Event
                                     }
                                 }
                                 if member != nil && this.GetProjectedMember(
@@ -7000,6 +7044,7 @@ partial class CSharpToGSharpTranslator {
                                     let openMemberType ITypeSymbol? = switch openMember {
                                         case field is IFieldSymbol: field.Type
                                         case property is IPropertySymbol: property.Type
+                                        case ev is IEventSymbol: ev.Type
                                         default: default(ITypeSymbol?)
                                     }
                                     if openMemberType != nil {
@@ -7170,6 +7215,9 @@ partial class CSharpToGSharpTranslator {
             let GetReceiverOwnerType = func (
                 receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             ) INamedTypeSymbol? {
+                if receiver == nil {
+                    return nil
+                }
                 if Unparenthesize(receiver) is BaseExpressionSyntax baseReceiver {
                     return this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
                 }
@@ -7445,12 +7493,25 @@ partial class CSharpToGSharpTranslator {
                 let projectedBase = this.ResolveProjectedBaseForType(createdType, definition, replacements)
                 return projectedBase != nil && this.InitializerMatchesProjectedBase(initializer, projectedBase)
             }
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment && assignment.IsKind(
-                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment &&
+                (
+                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                    assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddAssignmentExpression) ||
+                    assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SubtractAssignmentExpression)
             ) {
                 let receiverType INamedTypeSymbol? = switch assignment.Left {
                     case memberLeft is MemberAccessExpressionSyntax: GetReceiverOwnerType(memberLeft.Expression)
+                    case memberBindLeft is MemberBindingExpressionSyntax: GetReceiverOwnerType(
+                        this.GetConditionalBindingReceiver(memberBindLeft)
+                    )
                     case elementLeft is ElementAccessExpressionSyntax: GetReceiverOwnerType(elementLeft.Expression)
+                    case elementBindLeft is ElementBindingExpressionSyntax: GetReceiverOwnerType(
+                        this.GetConditionalBindingReceiver(elementBindLeft)
+                    )
                     case IdentifierNameSyntax: this
                         .context
                         .SemanticModel
@@ -7468,6 +7529,8 @@ partial class CSharpToGSharpTranslator {
                         member = field.Field
                     } else if operation is IPropertyReferenceOperation property {
                         member = property.Property
+                    } else if operation is IEventReferenceOperation eventRef {
+                        member = eventRef.Event
                     }
                 }
                 if member == nil || this.GetProjectedMember(definitionBase, member) == nil {
@@ -7480,6 +7543,7 @@ partial class CSharpToGSharpTranslator {
                 let projectedMemberType ITypeSymbol? = switch projectedMember {
                     case field is IFieldSymbol: field.Type
                     case property is IPropertySymbol: property.Type
+                    case ev is IEventSymbol: ev.Type
                     default: default(ITypeSymbol?)
                 }
                 if projectedMemberType != nil && !this.ValueFitsProjectedBaseTarget(
@@ -7680,7 +7744,27 @@ partial class CSharpToGSharpTranslator {
                 let memberType ITypeSymbol? = switch member {
                     case field is IFieldSymbol: field.Type
                     case property is IPropertySymbol: property.Type
+                    case ev is IEventSymbol: ev.Type
                     default: default(ITypeSymbol?)
+                }
+                if assignment.Left is ImplicitElementAccessSyntax implicitAccess &&
+                    member is IPropertySymbol indexerProperty {
+                    for var i = 0;
+                        i < implicitAccess
+                        .ArgumentList
+                        .Arguments
+                        .Count &&
+                        i < indexerProperty
+                        .Parameters
+                        .Length;
+                        i++ {
+                        if !this.ValueFitsProjectedBaseTarget(
+                            implicitAccess.ArgumentList.Arguments[i].Expression,
+                            indexerProperty.Parameters[i].Type
+                        ) {
+                            return false
+                        }
+                    }
                 }
                 if memberType == nil {
                     continue
@@ -7737,13 +7821,24 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if valueExpression is AnonymousFunctionExpressionSyntax lambda {
-                if GetDelegateInvokeMethod(projectedTargetType) is {ReturnsVoid: false} invoke &&
-                    GetLambdaResultTargetType(lambda, invoke) is {} lambdaResultType {
-                    return GetLambdaResultExpressions(lambda).All(
-                        (
-                            result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-                        ) -> this.LambdaResultFitsProjectedDestination(result, lambdaResultType, lambda, invoke)
-                    )
+                if GetDelegateInvokeMethod(projectedTargetType) is {} invoke {
+                    if this.context.GetSymbolInfo(lambda).Symbol is IMethodSymbol lambdaMethod {
+                        for var i = 0; i < lambdaMethod.Parameters.Length && i < invoke.Parameters.Length; i++ {
+                            if !this.ProjectionTypeFitsCompositeDestination(
+                                invoke.Parameters[i].Type,
+                                lambdaMethod.Parameters[i].Type
+                            ) {
+                                return false
+                            }
+                        }
+                    }
+                    if !invoke.ReturnsVoid && GetLambdaResultTargetType(lambda, invoke) is {} lambdaResultType {
+                        return GetLambdaResultExpressions(lambda).All(
+                            (
+                                result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                            ) -> this.LambdaResultFitsProjectedDestination(result, lambdaResultType, lambda, invoke)
+                        )
+                    }
                 }
                 return true
             }

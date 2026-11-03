@@ -7441,6 +7441,8 @@ public class Base<T> {
     public Box<T> Value = new();
     public T PropValue { get; set; }
     public virtual event Action<T> Changed;
+    public event Action<Box<T>> BoxChanged;
+    public Action<Box<T>> Callback = _ => { };
     public Func<Box<T>> Factory = () => new Box<T>();
     public Base() { }
     public Base(ref T value) { }
@@ -7448,7 +7450,10 @@ public class Base<T> {
     public void Use(Box<T> box) { }
     public void Replace(ref T value) { }
     public T Get() => default;
-    public int this[Box<T> key] => 0;
+    public int this[Box<T> key] {
+        get => 0;
+        set { }
+    }
 }
 public class Mid<U> : Base<U> { }
 public class Derived : Base<ManagedRef<int>> { }
@@ -7486,17 +7491,23 @@ public class MemberReadDerived : Base<ManagedRef<int>> { }
 public class ConditionalAccessDerived : Base<ManagedRef<int>> { }
 public class RefLocalDerived : Base<ManagedRef<int>> { }
 public class RefReturnDerived : Base<ManagedRef<int>> { }
+public class EventSubDerived : Base<ManagedRef<int>> { }
+public class ImplicitIndexerInitDerived : Base<ManagedRef<int>> { }
+public class LambdaParamDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
+    private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
     private static void AcceptBox(Box<ManagedRef<int>> value) { }
     private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
 
     public static void Run(
         bool flag,
+        string? nullableText,
         ref ManagedRef<int> nonNullRef,
         OwnGenericDerived<ManagedRef<int>> ownDerived
     ) {
+        _ = nullableText?.Trim().Length;
         var source = new ManagedRef<int>[1];
         var derived = new Derived();
         AcceptFixed(derived);
@@ -7576,6 +7587,17 @@ public class Probe {
         var refReturnDerived = new RefReturnDerived();
         _ = BorrowScalar(refReturnDerived);
         refReturnDerived.Add(source[0]);
+
+        var eventSubDerived = new EventSubDerived();
+        eventSubDerived.BoxChanged += FixedHandler;
+        eventSubDerived.Add(source[0]);
+
+        var implicitIndexerInit = new ImplicitIndexerInitDerived { [FixedBox] = 0 };
+        implicitIndexerInit.Add(source[0]);
+
+        var lambdaParamDerived = new LambdaParamDerived();
+        lambdaParamDerived.Callback = box => { };
+        lambdaParamDerived.Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7590,7 +7612,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            23,
+            26,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7637,6 +7659,9 @@ public class Probe {
         Assert.Contains("open class ConditionalAccessDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class RefLocalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class RefReturnDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class EventSubDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ImplicitIndexerInitDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class LambdaParamDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
