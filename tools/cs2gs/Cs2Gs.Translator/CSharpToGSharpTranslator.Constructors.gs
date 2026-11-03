@@ -3968,7 +3968,8 @@ partial class CSharpToGSharpTranslator {
                             declaredBindingType
                         )
                     )
-                    let nullableElement = (
+                    let nullableElement = !this.ForEachBindingHasObliviousContainerElements(loopSymbol) &&
+                        (
                         projectedBindingType &&
                             (
                             this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression) ||
