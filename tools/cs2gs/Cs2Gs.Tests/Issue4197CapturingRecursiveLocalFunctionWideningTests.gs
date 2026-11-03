@@ -1419,6 +1419,80 @@ namespace Demo
     }
 
     @Fact
+    func DefaultParameterNonRecursiveDependency_TypedStructDefaults_MaterializeAtFoldedCallSites() {
+        // Issue #4642: a non-recursive optional-parameter local function
+        // reached only from a nullable recursion group folds into that group.
+        // `TranslateOperationDefaultArgument` materializes omitted arguments
+        // at its call sites and uses `BuildOptionalParameterDefault` when the
+        // operation has no constant value.
+        let source = `
+using System;
+using System.Runtime.CompilerServices;
+using System.Threading;
+
+namespace Demo
+{
+    public struct Offset
+    {
+        public int Value;
+    }
+
+    public class C<T> where T : struct
+    {
+        public string Run(int value)
+        {
+            return First(value);
+
+            string First(int n) =>
+                n == 0
+                    ? $"{Helper()}:{CancelHelper()}:{NullableHelper()}:{StructHelper()}:{GenericHelper()}:{CallerHelper()}"
+                    : Second(n - 1);
+
+            string Second(int n) => First(n);
+
+            long Helper(TimeSpan span = default) => span.Ticks;
+
+            bool CancelHelper(CancellationToken token = default) => token.IsCancellationRequested;
+
+            long NullableHelper(TimeSpan? span = default) => span?.Ticks ?? -1;
+
+            int StructHelper(Offset offset = default) => offset.Value;
+
+            string GenericHelper(T item = default) => item.ToString();
+
+            string CallerHelper([CallerMemberName] string caller = "") => caller;
+        }
+    }
+}`
+        let project = Cs2Gs
+            .Translator
+            .Loading
+            .CSharpProjectLoader
+            .LoadInMemory([](string, source string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors)
+        let document = Assert.Single(project.Documents)
+        let context = Cs2Gs.Translator.TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath
+        )
+        let _ = Cs2Gs.Translator.CSharpToGSharpTranslator().TranslateDocument(document, context)
+        Assert.Empty(context.Diagnostics)
+        let printed = LocalFunctionHoistTranslationTests.TranslateUnit(source)
+        Assert.Contains("Helper!!(default(TimeSpan))", printed, StringComparison.Ordinal)
+        Assert.Contains("CancelHelper!!(default(CancellationToken))", printed, StringComparison.Ordinal)
+        Assert.Contains("NullableHelper!!(nil)", printed, StringComparison.Ordinal)
+        Assert.Contains("StructHelper!!(default(Offset))", printed, StringComparison.Ordinal)
+        Assert.Contains("GenericHelper!!(default(T))", printed, StringComparison.Ordinal)
+        Assert.Contains("CallerHelper!!(\"Run\")", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C[int32]().Run(2))",
+            "0:False:-1:0:0:Run"
+        )
+    }
+
+    @Fact
     func DefaultParameterCycleMember_KeepsRealNames_WholeGroupIncluded() {
         // Regression for the #4200 follow-up: the default-parameter carve-out
         // that `DefaultParameterNonRecursiveDependency_StaysLiftedNotFolded`

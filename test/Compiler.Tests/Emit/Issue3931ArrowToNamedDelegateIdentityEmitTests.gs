@@ -161,6 +161,7 @@ class Obj {
         func MissingAction() (() -> void)? -> default(Action)
         func MissingFunc() ((int32) -> string?)? -> default(Func[int32, string?])
         func MissingThreadStart() (() -> void)? -> cast[(() -> void)?](default(ThreadStart))
+        func MissingNestedCastThreadStart() (() -> void)? -> cast[(() -> void)?](cast[ThreadStart?](default(object)))
         func MissingPredicate() ((int32) -> bool)? -> cast[((int32) -> bool)?](default(Predicate[int32]))
         func MissingToCustom() CustomAction? -> default(() -> void)
         func MissingToThreadStart() ThreadStart? -> default(() -> void)
@@ -170,6 +171,7 @@ class Obj {
 Console.WriteLine((Obj.MissingAction() == nil).ToString())
 Console.WriteLine((Obj.MissingFunc() == nil).ToString())
 Console.WriteLine((Obj.MissingThreadStart() == nil).ToString())
+Console.WriteLine((Obj.MissingNestedCastThreadStart() == nil).ToString())
 Console.WriteLine((Obj.MissingPredicate() == nil).ToString())
 Console.WriteLine((Obj.MissingToCustom() == nil).ToString())
 Console.WriteLine((Obj.MissingToThreadStart() == nil).ToString())`
@@ -177,7 +179,7 @@ Console.WriteLine((Obj.MissingToThreadStart() == nil).ToString())`
         Assert.Equal(string.Empty, stderr)
         Assert.Equal(0, exitCode)
         Assert.Equal(
-            "True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            "True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
             stdout
         )
     }

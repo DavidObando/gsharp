@@ -237,6 +237,8 @@ internal partial class MethodBodyEmitter {
     ) {
         this.EmitExpression(source)
         if IsAlwaysNullDelegateSource(source) {
+            this.il.OpCode(ILOpCode.Pop)
+            this.il.OpCode(ILOpCode.Ldnull)
             return
         }
         if !IsKnownLegitimateNullDelegateSource(source) {

@@ -349,7 +349,7 @@ internal partial class MethodBodyEmitter {
                 let end = this.il.DefineLabel()
                 this.il.Branch(ILOpCode.Brfalse, fallback)
                 // Non-null branch: reproduce the operator's result type.
-                if b.Type == leftNullable {
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(b.Type, leftNullable) {
                     // Result is `Nullable<T>` — push the spilled wrapper as
                     // a value. Reloading the slot preserves the present
                     // wrapper (`HasValue == true`) so the consumer sees
@@ -373,7 +373,10 @@ internal partial class MethodBodyEmitter {
                     // convert the unwrapped underlying value to the result type so
                     // the non-null branch leaves a value of `b.Type` on the stack,
                     // matching the (already-converted) right branch.
-                    if b.Type != leftNullable.UnderlyingType {
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        b.Type,
+                        leftNullable.UnderlyingType
+                    ) {
                         if b.Type is NullableTypeSymbol resultNullable && ReflectionMetadataEmitter.IsValueTypeNullable(
                             resultNullable
                         ) &&
@@ -410,6 +413,7 @@ internal partial class MethodBodyEmitter {
                         ) {
                             this.il.OpCode(ILOpCode.Box)
                             this.il.Token(this.outer.memberRefs.GetElementTypeToken(leftNullable.UnderlyingType))
+                            this.EmitInterfaceMergeCastIfNeeded(b.Left, b.Type)
                         } else {
                             this.TryEmitNumericConversion(leftNullable.UnderlyingType, b.Type)
                         }
@@ -420,6 +424,7 @@ internal partial class MethodBodyEmitter {
                 // match the operator's result (either `T` or `Nullable<T>`).
                 this.il.MarkLabel(fallback)
                 this.EmitExpression(b.Right)
+                this.EmitInterfaceMergeCastIfNeeded(b.Right, b.Type)
                 this.il.MarkLabel(end)
                 return
             }
@@ -538,7 +543,7 @@ internal partial class MethodBodyEmitter {
                 this.il.OpCode(ILOpCode.Box)
                 this.il.Token(userVtBoxToken)
                 this.il.Branch(ILOpCode.Brfalse, fallback)
-                if b.Type == userVtNullable {
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(b.Type, userVtNullable) {
                     // Result is `Nullable<UserT>` — reload the present wrapper.
                     this.il.LoadLocal(userVtSlot)
                 } else {
@@ -546,7 +551,10 @@ internal partial class MethodBodyEmitter {
                     this.il.LoadLocalAddress(userVtSlot)
                     this.il.OpCode(ILOpCode.Call)
                     this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(userVtNullable))
-                    if b.Type != userVtNullable.UnderlyingType &&
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        b.Type,
+                        userVtNullable.UnderlyingType
+                    ) &&
                         (
                         b
                             .Type
@@ -562,11 +570,13 @@ internal partial class MethodBodyEmitter {
                     ) {
                         this.il.OpCode(ILOpCode.Box)
                         this.il.Token(this.outer.memberRefs.GetElementTypeToken(userVtNullable.UnderlyingType))
+                        this.EmitInterfaceMergeCastIfNeeded(b.Left, b.Type)
                     }
                 }
                 this.il.Branch(ILOpCode.Br, end)
                 this.il.MarkLabel(fallback)
                 this.EmitExpression(b.Right)
+                this.EmitInterfaceMergeCastIfNeeded(b.Right, b.Type)
                 this.il.MarkLabel(end)
                 return
             }
