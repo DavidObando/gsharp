@@ -5118,15 +5118,23 @@ partial class CSharpToGSharpTranslator {
             } else {
                 projectedMethod!!.ReturnType
             }
+            if projectedContainingType != nil || projectedMethodArguments.HasAnyValue {
+                this
+                    .state
+                    .ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedMethodByCall[call] = projectedMethod
+            }
             if !SymbolEqualityComparer.IncludeNullability.Equals(originalResultType, projectedResultType) &&
                 !this
                 .ProjectedResultMatchesDestination(call, projectedResultType, out var destinationType) {
+                this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedMethodByCall[call] = nil
                 let message = "managed-reference array widening cannot change fixed destination storage " +
                     "'$destinationType'; no exact G# translation exists."
                 this.context.ReportUnsupported(call, message)
                 return Complete(false)
             }
             if fixedStorageNeedsNullableArgument {
+                this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedMethodByCall[call] = nil
                 let storageKind = if call is BaseObjectCreationExpressionSyntax {
                     "destination"
                 } else {
@@ -5394,6 +5402,8 @@ partial class CSharpToGSharpTranslator {
                 this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
             } else if receiver != nil {
                 this.context.GetTypeInfo(receiver).Type as INamedTypeSymbol
+            } else if assignment.Left is IdentifierNameSyntax && !targetMember!!.IsStatic {
+                this.context.SemanticModel.GetEnclosingSymbol(assignment.SpanStart)?.ContainingType
             } else {
                 default(INamedTypeSymbol?)
             }
@@ -5413,7 +5423,8 @@ partial class CSharpToGSharpTranslator {
                         .BaseType is {} currentBase &&
                         this
                         .MemberDependsOnProjectableTypeParameter(currentBase, targetMember) {
-                        if this
+                        if projectedType == nil ||
+                            this
                             .state
                             .ManagedReferenceArrayNullable
                             .ProjectedBaseTypesInProgress
@@ -6364,6 +6375,30 @@ partial class CSharpToGSharpTranslator {
                             default(INamedTypeSymbol?)
                         }
                         AddMemberConsumer(receiverType, invocation)
+                    } else if (node is MemberAccessExpressionSyntax || node is IdentifierNameSyntax) &&
+                        !(
+                        node.Parent is InvocationExpressionSyntax parentInvocation &&
+                            parentInvocation.Expression == node
+                    ) &&
+                        this
+                        .context
+                        .GetSymbolInfo(node)
+                        .Symbol is IMethodSymbol methodGroupSymbol &&
+                        methodGroupSymbol.ContainingType != nil {
+                        let receiverType INamedTypeSymbol? = if node is MemberAccessExpressionSyntax methodGroupAccess {
+                            GetReceiverOwnerType(methodGroupAccess.Expression)
+                        } else if !methodGroupSymbol.IsStatic {
+                            this.context.SemanticModel.GetEnclosingSymbol(node.SpanStart)?.ContainingType
+                        } else {
+                            default(INamedTypeSymbol?)
+                        }
+                        AddMemberConsumer(receiverType, node)
+                    } else if node is ElementAccessExpressionSyntax elementAccess &&
+                        this
+                        .context
+                        .GetSymbolInfo(elementAccess)
+                        .Symbol is IPropertySymbol {
+                        AddMemberConsumer(GetReceiverOwnerType(elementAccess.Expression), elementAccess)
                     } else if node is BaseObjectCreationExpressionSyntax{Initializer: not nil} creation &&
                         this
                         .context
@@ -6838,6 +6873,48 @@ partial class CSharpToGSharpTranslator {
                                     )
                                 }
                             }
+                        } else if node is ElementAccessExpressionSyntax elementAccess &&
+                            this
+                            .context
+                            .GetSymbolInfo(elementAccess)
+                            .Symbol is IPropertySymbol indexerSymbol {
+                            let receiverType INamedTypeSymbol? = GetReceiverOwnerType(elementAccess.Expression)
+                            if receiverType != nil &&
+                                DerivesFromOrEquals(receiverType, definition) &&
+                                this.GetProjectedMember(
+                                openDefinitionBase,
+                                indexerSymbol
+                            ) is IPropertySymbol openIndexer &&
+                                this.GetProjectedMember(
+                                definitionBase,
+                                indexerSymbol
+                            ) is IPropertySymbol closedIndexer {
+                                this.state.CurrentBodyScope = GetEnclosingProjectionBodyScope(elementAccess)
+                                for var i = 0;
+                                    i < elementAccess
+                                    .ArgumentList
+                                    .Arguments
+                                    .Count &&
+                                    i < openIndexer
+                                    .Parameters
+                                    .Length;
+                                    i++ {
+                                    RecordWidenedBaseArguments(
+                                        elementAccess.ArgumentList.Arguments[i].Expression,
+                                        openIndexer.Parameters[i].Type
+                                    )
+                                }
+                                if CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceArray(
+                                    closedIndexer.Type,
+                                    this.context.Compilation
+                                ) {
+                                    RecordWidenedBaseTypeParameters(
+                                        openIndexer.Type,
+                                        closedIndexer.Type,
+                                        nullableArrayArgument: true
+                                    )
+                                }
+                            }
                         } else if node is BaseObjectCreationExpressionSyntax{Initializer: {} initializer} creation &&
                             this
                             .context
@@ -7093,8 +7170,109 @@ partial class CSharpToGSharpTranslator {
                     invocation,
                     invocation.ArgumentList.Arguments,
                     effectiveMember,
+                    definitionBase.OriginalDefinition,
                     replacements
                 )
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ExpressionSyntax methodGroupExpr &&
+                (node is MemberAccessExpressionSyntax || node is IdentifierNameSyntax) &&
+                !(node.Parent is InvocationExpressionSyntax parentInvocation && parentInvocation.Expression == node) &&
+                this
+                .context
+                .GetSymbolInfo(node)
+                .Symbol is IMethodSymbol methodGroupSymbol &&
+                methodGroupSymbol.ContainingType != nil {
+                let receiverType INamedTypeSymbol? = if node is MemberAccessExpressionSyntax methodGroupAccess {
+                    GetReceiverOwnerType(methodGroupAccess.Expression)
+                } else if !methodGroupSymbol.IsStatic {
+                    this.context.SemanticModel.GetEnclosingSymbol(node.SpanStart)?.ContainingType
+                } else {
+                    default(INamedTypeSymbol?)
+                }
+                if receiverType == nil || !DerivesFromOrEquals(receiverType, definition) || this.GetProjectedMember(
+                    definitionBase,
+                    methodGroupSymbol
+                ) == nil {
+                    return true
+                }
+                let projectedBase = this.ResolveProjectedBaseForType(receiverType, definition, replacements)
+                if projectedBase == nil || this.GetProjectedMember(
+                    projectedBase,
+                    methodGroupSymbol
+                ) is not IMethodSymbol projectedMethodGroup {
+                    return false
+                }
+                var effectiveMethodGroup IMethodSymbol = projectedMethodGroup
+                if methodGroupSymbol.IsGenericMethod {
+                    effectiveMethodGroup = projectedMethodGroup.ConstructedFrom.Construct(
+                        methodGroupSymbol.TypeArguments.ToArray()
+                    )
+                }
+                if GetDelegateInvokeMethod(this.context.GetTypeInfo(methodGroupExpr).ConvertedType) is {} invokeMethod {
+                    if !effectiveMethodGroup.ReturnsVoid && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        effectiveMethodGroup.ReturnType,
+                        invokeMethod.ReturnType
+                    ) {
+                        return false
+                    }
+                    for var i = 0;
+                        i < effectiveMethodGroup
+                        .Parameters
+                        .Length &&
+                        i < invokeMethod
+                        .Parameters
+                        .Length;
+                        i++ {
+                        if !SymbolEqualityComparer.IncludeNullability.Equals(
+                            effectiveMethodGroup.Parameters[i].Type,
+                            invokeMethod.Parameters[i].Type
+                        ) {
+                            return false
+                        }
+                    }
+                }
+                return true
+            }
+            if node is ElementAccessExpressionSyntax elementAccessRead &&
+                this
+                .context
+                .GetSymbolInfo(elementAccessRead)
+                .Symbol is IPropertySymbol indexerSymbol {
+                let receiverType INamedTypeSymbol? = GetReceiverOwnerType(elementAccessRead.Expression)
+                if receiverType == nil || !DerivesFromOrEquals(receiverType, definition) || this.GetProjectedMember(
+                    definitionBase,
+                    indexerSymbol
+                ) == nil {
+                    return true
+                }
+                let projectedBase = this.ResolveProjectedBaseForType(receiverType, definition, replacements)
+                if projectedBase == nil || this.GetProjectedMember(
+                    projectedBase,
+                    indexerSymbol
+                ) is not IPropertySymbol projectedIndexer {
+                    return false
+                }
+                for var i = 0;
+                    i < elementAccessRead
+                    .ArgumentList
+                    .Arguments
+                    .Count &&
+                    i < projectedIndexer
+                    .Parameters
+                    .Length;
+                    i++ {
+                    if !this.ValueFitsProjectedBaseTarget(
+                        elementAccessRead.ArgumentList.Arguments[i].Expression,
+                        projectedIndexer.Parameters[i].Type
+                    ) {
+                        return false
+                    }
+                }
+                return true
             }
             if node is ConstructorInitializerSyntax ctorInit && ctorInit.ThisOrBaseKeyword.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.BaseKeyword
@@ -7126,6 +7304,7 @@ partial class CSharpToGSharpTranslator {
                     ctorInit,
                     ctorInit.ArgumentList.Arguments,
                     projectedBaseCtor,
+                    definitionBase.OriginalDefinition,
                     replacements
                 )
             }
@@ -7154,6 +7333,7 @@ partial class CSharpToGSharpTranslator {
                     primaryBase,
                     primaryBase.ArgumentList.Arguments,
                     projectedPrimaryBaseCtor,
+                    definitionBase.OriginalDefinition,
                     replacements
                 )
             }
@@ -7236,6 +7416,7 @@ partial class CSharpToGSharpTranslator {
             call Microsoft.CodeAnalysis.SyntaxNode,
             arguments Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax],
             projectedMethod IMethodSymbol,
+            openDefinitionBase INamedTypeSymbol,
             replacements IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]
         ) bool {
             if !this.ProjectedCallableResultsMatch(call, projectedMethod, out _) || !this.ProjectedByRefArgumentsMatch(
@@ -7245,7 +7426,9 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            let openParameters = projectedMethod.OriginalDefinition.Parameters
+            let openMethod = this.GetProjectedMember(openDefinitionBase, projectedMethod) as IMethodSymbol ??
+                projectedMethod.OriginalDefinition
+            let openParameters = openMethod.Parameters
             for argument in arguments {
                 let parameter IParameterSymbol? = this.GetArgumentParameter(argument, projectedMethod)
                 if parameter == nil ||
@@ -7391,7 +7574,15 @@ partial class CSharpToGSharpTranslator {
                     ) -> this.ValueFitsProjectedBaseTarget(arm.Expression, projectedTargetType)
                 )
             }
-            if valueExpression is AnonymousFunctionExpressionSyntax {
+            if valueExpression is AnonymousFunctionExpressionSyntax lambda {
+                if GetDelegateInvokeMethod(projectedTargetType) is {ReturnsVoid: false} invoke &&
+                    GetLambdaResultTargetType(lambda, invoke) is {} lambdaResultType {
+                    return GetLambdaResultExpressions(lambda).All(
+                        (
+                            result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                        ) -> this.LambdaResultFitsProjectedDestination(result, lambdaResultType, lambda, invoke)
+                    )
+                }
                 return true
             }
             if this.IsNullCompositeArm(valueExpression) || valueExpression.IsKind(
@@ -7938,12 +8129,10 @@ partial class CSharpToGSharpTranslator {
             if currentNaturalType == nil {
                 return true
             }
-            let currentProjectedType ITypeSymbol = if currentNaturalType is INamedTypeSymbol currentNamed &&
-                DerivesFromOrEquals(currentNamed, definition) {
-                this.ResolveProjectedBaseForType(currentNamed, definition, replacements) ?? currentNaturalType
-            } else {
-                this.SubstituteBaseTypeInType(currentNaturalType, projectedExpressionBase)
-            }
+            let currentProjectedType ITypeSymbol = this.SubstituteBaseTypeInType(
+                currentNaturalType,
+                projectedExpressionBase
+            )
             if !this.ProjectedResultMatchesDestination(current, currentProjectedType, out _) {
                 return false
             }
@@ -7969,12 +8158,10 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            let expressionProjectedType ITypeSymbol = if expressionType is INamedTypeSymbol expressionNamed &&
-                DerivesFromOrEquals(expressionNamed, definition) {
+            let expressionProjectedType ITypeSymbol = this.SubstituteBaseTypeInType(
+                expressionType,
                 projectedExpressionBase
-            } else {
-                this.SubstituteBaseTypeInType(expressionType, projectedExpressionBase)
-            }
+            )
             return this.ProjectedResultMatchesDestination(expression, expressionProjectedType, out _)
         }
 
@@ -7984,6 +8171,26 @@ partial class CSharpToGSharpTranslator {
             replacements IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol],
             index ProjectedBaseCompilationIndex
         ) bool {
+            let MemberUsesReplacedParameter = func (openMember ISymbol) bool {
+                for parameter in replacements.Keys {
+                    let usesParameter = switch openMember {
+                        case openMethod is IMethodSymbol: TypeContainsTypeParameter(openMethod.ReturnType, parameter) ||
+                            openMethod
+                            .Parameters
+                            .Any((p IParameterSymbol) -> TypeContainsTypeParameter(p.Type, parameter))
+                        case openProperty is IPropertySymbol: TypeContainsTypeParameter(openProperty.Type, parameter) ||
+                            openProperty
+                            .Parameters
+                            .Any((p IParameterSymbol) -> TypeContainsTypeParameter(p.Type, parameter))
+                        case openEvent is IEventSymbol: TypeContainsTypeParameter(openEvent.Type, parameter)
+                        default: false
+                    }
+                    if usesParameter {
+                        return true
+                    }
+                }
+                return false
+            }
             let candidates IReadOnlyList[INamedTypeSymbol] = if index.DerivedTypesByCandidate.TryGetValue(
                 owner,
                 out var derivedTypes
@@ -8004,27 +8211,8 @@ partial class CSharpToGSharpTranslator {
                     }
                     while overridden != nil {
                         if this.GetProjectedMember(openBaseType, overridden) is {} openOverridden {
-                            for parameter in replacements.Keys {
-                                let usesParameter = switch openOverridden {
-                                    case openMethod is IMethodSymbol: TypeContainsTypeParameter(
-                                        openMethod.ReturnType,
-                                        parameter
-                                    ) ||
-                                        openMethod
-                                        .Parameters
-                                        .Any((p IParameterSymbol) -> TypeContainsTypeParameter(p.Type, parameter))
-                                    case openProperty is IPropertySymbol: TypeContainsTypeParameter(
-                                        openProperty.Type,
-                                        parameter
-                                    ) ||
-                                        openProperty
-                                        .Parameters
-                                        .Any((p IParameterSymbol) -> TypeContainsTypeParameter(p.Type, parameter))
-                                    default: false
-                                }
-                                if usesParameter {
-                                    return true
-                                }
+                            if MemberUsesReplacedParameter(openOverridden) {
+                                return true
                             }
                             break
                         }
@@ -8032,6 +8220,17 @@ partial class CSharpToGSharpTranslator {
                             case method is IMethodSymbol: cast[ISymbol](method.OverriddenMethod)
                             case property is IPropertySymbol: cast[ISymbol](property.OverriddenProperty)
                             default: default(ISymbol?)
+                        }
+                    }
+                }
+                for directContract in candidate.Interfaces {
+                    for contract in([]INamedTypeSymbol{directContract}).Concat(directContract.AllInterfaces) {
+                        for interfaceMember in contract.GetMembers() {
+                            if candidate.FindImplementationForInterfaceMember(interfaceMember) is {} implementation &&
+                                this.GetProjectedMember(openBaseType, implementation) is {} openImplementation &&
+                                MemberUsesReplacedParameter(openImplementation) {
+                                return true
+                            }
                         }
                     }
                 }

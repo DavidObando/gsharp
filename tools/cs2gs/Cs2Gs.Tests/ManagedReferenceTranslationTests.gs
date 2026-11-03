@@ -7309,12 +7309,21 @@ public class Probe {
     func NonGenericDerivedReceiverProjectsInheritedGenericBaseMembers() {
         const source = `using Gsharp.Values;
 namespace ManagedArrayInheritedGenericBase;
+public interface IMarker { }
+public class Box<T> {
+    public Box(T[] items) { }
+}
 public class Base<T> {
     private T stored;
+    public T Value;
     public void Add(T value) { this.stored = value; }
     public T Get() => this.stored;
     public U Echo<U>(U value) => value;
     public T Id<U>(T value, U tag) => value;
+    public T this[T key] {
+        get => this.stored;
+        set { this.stored = value; }
+    }
 }
 public class Derived : Base<ManagedRef<int>> {
     public void BaseAdd(ManagedRef<int>[] items) => base.Add(items[0]);
@@ -7322,15 +7331,27 @@ public class Derived : Base<ManagedRef<int>> {
 }
 public class SubDerived : Derived { }
 public class NestedCallDerived : Base<ManagedRef<int>> { }
+public class MarkerDerived : Base<ManagedRef<int>>, IMarker { }
+public class ImplicitAssignDerived : Base<Box<ManagedRef<int>>> {
+    public void Assign(ManagedRef<int>[] items) {
+        Value = new Box<ManagedRef<int>>(items);
+    }
+}
 public class GenericDerived<T> : Base<T> { }
 public class OpenDerived<U> : Base<ManagedRef<U>> { }
 public class TupleDerived<U> : Base<(ManagedRef<U> Reference, U Value)> { }
 public class Probe {
     public static int Run() {
         var emptySource = new ManagedRef<int>[1];
-        new Derived().BaseAdd(emptySource);
+        var derived = new Derived();
+        derived.BaseAdd(emptySource);
+        derived[emptySource[0]] = emptySource[0];
+        _ = derived[emptySource[0]];
         new SubDerived().Add(emptySource[0]);
         new NestedCallDerived().Add(new NestedCallDerived().Id<int>(emptySource[0], 0));
+        IMarker marker = new MarkerDerived();
+        new MarkerDerived().Add(emptySource[0]);
+        new ImplicitAssignDerived().Assign(emptySource);
         new GenericDerived<ManagedRef<int>>().Add(emptySource[0]);
         var genericLocal = new GenericDerived<ManagedRef<int>>();
         genericLocal.Add(emptySource[0]);
@@ -7365,6 +7386,8 @@ public class Probe {
         Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class SubDerived : Derived", text, StringComparison.Ordinal)
         Assert.Contains("open class NestedCallDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class MarkerDerived : Base[managed[int32]?], IMarker", text, StringComparison.Ordinal)
+        Assert.Contains("open class ImplicitAssignDerived : Base[Box[managed[int32]?]]", text, StringComparison.Ordinal)
         Assert.Contains("open class OpenDerived[U] : Base[managed[U]?]", text, StringComparison.Ordinal)
         Assert.Contains(
             "open class TupleDerived[U] : Base[(Reference managed[U]?, Value U)]",
@@ -7373,6 +7396,8 @@ public class Probe {
         )
         Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
         Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("derived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
+        Assert.Contains("_ = derived[emptySource[0]]", text, StringComparison.Ordinal)
         Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains(
             "NestedCallDerived().Add(NestedCallDerived().Id[int32](emptySource[0], 0))",
@@ -7396,19 +7421,28 @@ public class Probe {
 
     @Fact
     func NonGenericDerivedReceiverRejectsFixedBaseConversionWhenProjected() {
-        const source = `using System.Collections.Generic;
+        const source = `using System;
+using System.Collections.Generic;
 using Gsharp.Values;
 namespace ManagedArrayInheritedGenericBaseFixedDestination;
+public interface IStore<T> {
+    void Replace(ref T value);
+}
 public class Box<T> {
     public Box() { }
     public Box(T[] items) { }
 }
 public class Base<T> {
+    public Func<Box<T>> Factory = () => new Box<T>();
     public Base() { }
     public Base(ref T value) { }
     public virtual void Add(T value) { }
     public void Use(Box<T> box) { }
+    public void Replace(ref T value) { }
+    public T Get() => default;
+    public int this[Box<T> key] => 0;
 }
+public class Mid<U> : Base<U> { }
 public class Derived : Base<ManagedRef<int>> { }
 public class ConditionalDerived : Base<ManagedRef<int>> { }
 public class SwitchDerived : Base<ManagedRef<int>> { }
@@ -7429,6 +7463,11 @@ public class OverrideParentDerived : Base<ManagedRef<int>> { }
 public class OverrideChildDerived : OverrideParentDerived {
     public override void Add(ManagedRef<int> value) { }
 }
+public class InterfaceDerived : Base<ManagedRef<int>>, IStore<ManagedRef<int>> { }
+public class MethodGroupDerived : Base<ManagedRef<int>> { }
+public class IndexerDerived : Base<ManagedRef<int>> { }
+public class MultiLevelBoxDerived : Mid<ManagedRef<int>> { }
+public class LambdaMemberDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
@@ -7478,6 +7517,23 @@ public class Probe {
         fixedMember.Fixed = new Box<ManagedRef<int>>(source);
 
         new OverrideParentDerived().Add(source[0]);
+
+        new InterfaceDerived().Add(source[0]);
+
+        var methodGroupDerived = new MethodGroupDerived();
+        Func<ManagedRef<int>> reader = methodGroupDerived.Get;
+        methodGroupDerived.Add(source[0]);
+
+        var indexerDerived = new IndexerDerived();
+        _ = indexerDerived[FixedBox];
+        indexerDerived.Add(source[0]);
+
+        var multiLevel = new MultiLevelBoxDerived();
+        multiLevel.Add(source[0]);
+        multiLevel.Use(FixedBox);
+
+        var lambdaMember = new LambdaMemberDerived { Factory = () => FixedBox };
+        lambdaMember.Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7492,7 +7548,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            10,
+            15,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7520,6 +7576,15 @@ public class Probe {
         Assert.Contains("open class OwnGenericDerived[U] : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class FixedMemberDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class OverrideParentDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class InterfaceDerived : Base[managed[int32]], IStore[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class MethodGroupDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class IndexerDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class MultiLevelBoxDerived : Mid[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class LambdaMemberDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

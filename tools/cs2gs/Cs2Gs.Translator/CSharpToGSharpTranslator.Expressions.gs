@@ -7008,7 +7008,30 @@ partial class CSharpToGSharpTranslator {
             if !(this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter}) {
                 return false
             }
-            return this.ParameterWillRemainNonNullableReference(parameter, argument.Expression)
+            var effectiveParameter IParameterSymbol = parameter
+            let receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch argument.Parent?.Parent {
+                case element is ElementAccessExpressionSyntax: element.Expression
+                case ImplicitElementAccessSyntax{
+                    Parent: Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .AssignmentExpressionSyntax{
+                        Parent: InitializerExpressionSyntax{Parent: BaseObjectCreationExpressionSyntax creation}
+                    }
+                }: creation
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if receiver != nil &&
+                parameter.ContainingSymbol is IPropertySymbol indexerProperty &&
+                this.GetProjectedReceiverType(receiver) is INamedTypeSymbol projectedReceiver &&
+                this.GetProjectedMember(projectedReceiver, indexerProperty) is IPropertySymbol projectedIndexer &&
+                parameter.Ordinal < projectedIndexer
+                .Parameters
+                .Length {
+                effectiveParameter = projectedIndexer.Parameters[parameter.Ordinal]
+            }
+            return this.ParameterWillRemainNonNullableReference(effectiveParameter, argument.Expression)
         }
 
         private func ParameterWillRemainNonNullableReference(
