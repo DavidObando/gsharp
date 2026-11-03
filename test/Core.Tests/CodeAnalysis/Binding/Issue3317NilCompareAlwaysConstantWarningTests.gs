@@ -139,6 +139,24 @@ Check(map[string, int32]{})`)
     }
 
     @Fact
+    func SmartCastNarrowedReadInRelationalPattern_DoesNotWarn() {
+        // Issue #5688: `m is == nil` binds as `m == nil`; the narrowed input must not warn either.
+        let result = EmittedOracle.Evaluate(`package P3317NarrowedPatternOk
+
+func Check(m map[string, int32]?) bool {
+    if m != nil {
+        return m is == nil
+    }
+    return false
+}
+
+Check(map[string, int32]{})`)
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0523")
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal(false, result.Value)
+    }
+
+    @Fact
     func BareSequence_DoesNotWarn() {
         // Excluded from v1: sequence nil comparison predates ADR-0159 (#796)
         // and bare sequence values commonly cross interop boundaries.
