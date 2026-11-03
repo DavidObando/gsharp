@@ -377,6 +377,7 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         using let fixture = CSharpFixture(`namespace Storage {
     public static class S {
         public static int Read(ref int[] a) => a[0];
+        public static T ReadG<T>(ref T[] a) => a[0];
         public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
     }
     public class Holder<T> {
@@ -393,9 +394,11 @@ let h = Holder[E](&e)
 var a = [3]int32{7, 8, 9}
 var xs = List[E]{E.B}
 var next = E.A
-Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${int32(xs.ReadExt[E](&next))}")`, []string{fixture.AssemblyPath})
+Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${S.ReadG[int32](&a)} ${int32(xs.ReadExt[E](&next))}")`, []string{
+                fixture.AssemblyPath
+            })
         Assert.Empty(result.Diagnostics)
-        Assert.Equal("2 7 2", result.Output.Trim())
+        Assert.Equal("2 7 7 2", result.Output.Trim())
     }
 
     shared {

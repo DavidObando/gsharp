@@ -248,10 +248,18 @@ internal shared class ByRefStorageMatching {
     }
 
     private func TryGetImportedSzArrayElement(type TypeSymbol, out elementType TypeSymbol?) bool {
-        if type is ImportedTypeSymbol imported && imported.ClrType is {IsSZArray: true} {
+        if type is ImportedTypeSymbol imported && imported.ClrType is {IsSZArray: true} szArrayClr {
+            if !imported.TypeArguments.IsDefaultOrEmpty && imported.TypeArguments.Length == 1 {
+                elementType = imported.TypeArguments[0]
+                return true
+            }
             let positions = imported.GetElementPositions()
             if positions.Length == 1 {
-                elementType = positions[0]
+                elementType = if szArrayClr.GetElementType() is {} elemClr {
+                    PreserveNominalClrTypeCore(elemClr, positions[0])
+                } else {
+                    positions[0]
+                }
                 return true
             }
         }
@@ -346,9 +354,19 @@ internal shared class ByRefStorageMatching {
         }
         if clrType.IsSZArray && typeSymbol is SliceTypeSymbol slice && clrType.GetElementType() is {} elemClr {
             let updatedElem = PreserveNominalClrTypeCore(elemClr, slice.ElementType)
-            if !object.ReferenceEquals(updatedElem, slice.ElementType) {
-                return SliceTypeSymbol.Get(updatedElem)
+            if !HasErasedRuntimeShape(updatedElem) && NullableLifting.GetEffectiveClrType(
+                updatedElem
+            ) is {} concreteElemClr {
+                return ImportedTypeSymbol.GetWithoutNullability(
+                    concreteElemClr.MakeArrayType(),
+                    NullabilityFreeReason.TypeStructure
+                )
             }
+            return ImportedTypeSymbol.GetConstructed(
+                typeof([]object),
+                openDefinition: nil,
+                ImmutableArray.Create(updatedElem)
+            )
         }
         return typeSymbol
     }
@@ -362,7 +380,11 @@ internal shared class ByRefStorageMatching {
         if type is ImportedTypeSymbol imported && imported.ClrType is {IsArray: true, IsSZArray: false} arrayClr {
             let positions = imported.GetElementPositions()
             if positions.Length == 1 {
-                elementType = positions[0]
+                elementType = if arrayClr.GetElementType() is {} elemClr {
+                    PreserveNominalClrTypeCore(elemClr, positions[0])
+                } else {
+                    positions[0]
+                }
                 rank = arrayClr.GetArrayRank()
                 return true
             }
@@ -445,7 +467,17 @@ internal shared class ByRefStorageMatching {
             }
             if imported.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} genericClr {
                 openDefinition = genericClr.GetGenericTypeDefinition()
-                typeArguments = imported.ConstructedTypeArguments
+                let rawArguments = imported.ConstructedTypeArguments
+                let clrArguments = genericClr.GetGenericArguments()
+                if rawArguments.Length == clrArguments.Length && !rawArguments.IsDefaultOrEmpty {
+                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](rawArguments.Length)
+                    for var i = 0; i < rawArguments.Length; i++ {
+                        builder.Add(PreserveNominalClrTypeCore(clrArguments[i], rawArguments[i]))
+                    }
+                    typeArguments = builder.MoveToImmutable()
+                    return true
+                }
+                typeArguments = rawArguments
                 return !typeArguments.IsDefaultOrEmpty
             }
         }

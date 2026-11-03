@@ -2142,6 +2142,7 @@ func Main() {
     Console.Write(int32(RefHolder[E].Echo(&next)))
     Console.Write(listHolder.Value.Count)
     Console.Write(S.Read(&fixedArr))
+    Console.Write(S.ReadG[int32](&fixedArr))
     Console.Write(int32(es.ReadExt[E](&next)))
     Console.Write(S.VT(&vt))
 }
@@ -2173,11 +2174,12 @@ class Program {
         Console.Write((int)RefHolder<E>.Echo(ref next));
         Console.Write(listHolder.Value.Count);
         Console.Write(S.Read(ref fixedArr));
+        Console.Write(S.ReadG<int>(ref fixedArr));
         Console.Write((int)es.ReadExt<E>(ref next));
         Console.Write(S.VT(ref vt));
     }
 }
-`, "3334422111725")
+`, "33344221117725")
     }
 
     /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
@@ -3137,6 +3139,7 @@ namespace FunctionControl {
         public static int RT(ref System.Tuple<int, int> x) => x.Item1;
         public static int VT(ref (int, int) x) => x.Item1;
         public static int Read(ref int[] a) => a[0];
+        public static T ReadG<T>(ref T[] a) => a[0];
         public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
     }
     public class RefHolder<T> {
