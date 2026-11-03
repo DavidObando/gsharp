@@ -21,9 +21,10 @@ import Xunit
 /// rows do not bind. Without its walk into the operands of a conditional, a switch expression or `??`, the
 /// composed receivers and the `??` return do not bind. Without the target check, the control row asserts and
 /// throws `NullReferenceException`. Without the check for an inferred generic parameter, the control row
-/// asserts `Id(…)`. Without the check for an inferred lambda result, the lambda control row throws. Without
-/// the check for an arm with no sink of its own, a `var` initializer asserts its arms and a composed receiver
-/// asserts an arm instead of its whole value.
+/// asserts `Id(…)`. Without the check for a `var` local that such a value initializes, its reassignment
+/// throws. Without the check for an inferred lambda result, the lambda control row throws. Without the check
+/// for an arm with no sink of its own, a `var` initializer asserts its arms and a composed receiver asserts an
+/// arm instead of its whole value.
 open class Issue5627ByRefSuppressionBridgeTests {
     /// The issue's repro: an argument, a return and a conditional receiver of a dropped by-ref suppression.
     @Fact
@@ -116,8 +117,9 @@ namespace Demo
         RunsAs(printed, "1 1 1 2")
     }
 
-    /// Control: a slot that accepts nil (a `Dictionary?` parameter, return, local, field or conditional arm)
-    /// and a generic parameter that G# infers from the value take the null as C# does, with no `!!`.
+    /// Control: a slot that accepts nil (a `Dictionary?` parameter, return, local, field or conditional arm),
+    /// a generic parameter that G# infers from the value and a `var` local that such a value initializes take the
+    /// null as C# does, with no `!!`.
     @Fact
     func ANullableSlot_TakesTheNullUnasserted() {
         let printed = Translate(`
@@ -133,16 +135,17 @@ namespace Demo
         static int TakeMaybe(Dictionary<string, int>? d) => d == null ? -1 : d.Count;
         static T Id<T>(T value) => value;
         static int Inferred() => TakeMaybe(Id(Volatile.Read(ref cache!)));
+        static int Reassign() { var d = Volatile.Read(ref cache!); d = Volatile.Read(ref cache!); return 1; }
         static int Argument() => TakeMaybe(Volatile.Read(ref cache!));
         static Dictionary<string, int>? Return() => Volatile.Read(ref cache!);
         static bool Local() { Dictionary<string, int>? d = Volatile.Read(ref cache!); return d == null; }
         static bool Member(Holder h) { h.Maybe = Volatile.Read(ref cache!); return h.Maybe == null; }
         static bool Conditional(bool flag) { Dictionary<string, int>? d = flag ? Volatile.Read(ref cache!) : null; return d == null; }
-        public static string Run() => Argument() + " " + (Return() == null) + " " + Local() + " " + Member(new Holder()) + " " + Conditional(true) + " " + Inferred();
+        public static string Run() => Argument() + " " + (Return() == null) + " " + Local() + " " + Member(new Holder()) + " " + Conditional(true) + " " + Inferred() + " " + Reassign();
     }
 }`)
         Assert.DoesNotContain("!!", printed)
-        RunsAs(printed, "-1 True True True True -1")
+        RunsAs(printed, "-1 True True True True -1 1")
     }
 
     /// Control: the result of a lambda whose type G# infers from its body (`var read = () => …`), in block and
