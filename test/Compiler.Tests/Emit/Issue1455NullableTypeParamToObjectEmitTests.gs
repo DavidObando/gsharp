@@ -169,7 +169,7 @@ func ImplicitStruct[T struct](value T?) T -> value
 func ImplicitUnmanaged[T unmanaged](value T?) T -> value`
         let (negExit, negOut, negErr) = CompileOnly(negativeSource)
         Assert.NotEqual(0, negExit)
-        Assert.Contains("GS0156", negOut + negErr)
+        Assert.Contains("GS0155", negOut + negErr)
     }
 
     shared {

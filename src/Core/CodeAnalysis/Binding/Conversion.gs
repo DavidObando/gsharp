@@ -1147,18 +1147,6 @@ class Conversion {
                     }
                 }
             }
-            // Issue #4735: an explicit conversion from a value-type `Nullable<S>`
-            // (`S?`, including `[T struct]` and `[T unmanaged]`) to `S` or any
-            // non-nullable value target `T` with a non-structural `S -> T`
-            // conversion extracts `.Value` before converting (#2732 / #5400).
-            if from is NullableTypeSymbol fromValueNullable && NullableLifting.IsAnyValueTypeNullable(
-                fromValueNullable
-            ) &&
-                !(to is NullableTypeSymbol) &&
-                !IsReferenceLikeTarget(to) &&
-                ClassifyNonStructural(fromValueNullable.UnderlyingType, to).Exists {
-                return Conversion.Explicit
-            }
             // Phase 3.C.2 (generalized by issue #2354 follow-up): nil literal is
             // never assignable to a non-nullable VALUE type — a struct/value-kind
             // type genuinely needs an explicit `T?` (CLR `Nullable<T>`) wrapper to
@@ -2650,7 +2638,18 @@ class Conversion {
         internal func HasCheckedUnboxingConversion(
             from TypeSymbol?,
             to TypeSymbol?
-        ) bool -> HasExplicitUnboxingConversion(from, to)
+        ) bool -> HasExplicitUnboxingConversion(from, to) ||
+            HasExplicitNullableValueUnwrap(from, to)
+
+        internal func HasExplicitNullableValueUnwrap(
+            from TypeSymbol?,
+            to TypeSymbol?
+        ) bool -> from is NullableTypeSymbol sourceNullable &&
+            NullableLifting.IsAnyValueTypeNullable(sourceNullable) &&
+            to != nil &&
+            !(to is NullableTypeSymbol) &&
+            !IsReferenceLikeTarget(to) &&
+            ClassifyNonStructural(sourceNullable.UnderlyingType, to).Exists
 
         /// Returns whether `to(fromValue)` is a checked CLR reference cast.
         /// The conversion preserves a null reference, returns the target reference
