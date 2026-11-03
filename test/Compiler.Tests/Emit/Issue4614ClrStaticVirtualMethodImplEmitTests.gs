@@ -131,6 +131,22 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
         expectedLines[]string
     ) -> CompileVerifyAndRun(name, source, expectedLines)
 
+    /// Issue #4626: symbolic CLR interface signature matching handles async
+    /// `Task<T>` / `ValueTask<T>` / `IAsyncEnumerable<T>` returns, tuple
+    /// positions (including 8+ elements and open generic `NativeRows[T]`),
+    /// function/delegate types, pointers, nested `Nullable<V>`, and `map`/`sequence`
+    /// across instance, explicit, and static-virtual slots.
+    /// @param name The case name.
+    /// @param source The G# source.
+    /// @param expectedLines The expected stdout lines.
+    @Theory
+    @MemberData("SymbolicSignatureMatcherCases")
+    func SymbolicSignatureMatcher_BindsAndExecutes(
+        name string,
+        source string,
+        expectedLines[]string
+    ) -> CompileVerifyAndRun(name, source, expectedLines)
+
     /// Issue #4618: a missing or mismatched implementation of an imported
     /// interface's static abstract member is diagnosed at compile time.
     /// @param name The case name.
@@ -213,6 +229,65 @@ public unsafe interface IFnPtrOverloadDefaultedManagedOnly<T> : IFnPtrOverload<T
     static int IFnPtrOverload<T>.Call(delegate*<int, int> p, T x) => 50;
 }
 
+public interface IAs<T> { System.Threading.Tasks.Task<T> Make(); }
+public interface IAsVt<T> { System.Threading.Tasks.ValueTask<T> MakeVt(); }
+public interface IFactory<TResult> { TResult Create(); }
+public interface ISAs<T> { static abstract System.Threading.Tasks.Task<T> MakeS(); }
+public interface ISAsVt<T> { static abstract System.Threading.Tasks.ValueTask<T> MakeSVt(); }
+public interface IAsyncStream<T> { System.Collections.Generic.IAsyncEnumerable<T> Stream(T seed); }
+public interface ITup<T> {
+    int M((T, int) v);
+    (T, int) Make(T v);
+    (T, U) Pair<U>(T x, (U, int) y);
+}
+public interface ISTup<T> {
+    static abstract (T, int) Pair { get; }
+    static abstract int Take((T, int) v);
+}
+public interface ILongTup<T> {
+    int Sum((int, int, int, int, int, int, int, int, T) v);
+}
+public interface NativeRows<T> where T : class {
+    (T Value, int Code) Required(T value);
+}
+public interface ITupProp<T> {
+    (T, int) Current { get; }
+    int this[(T, int) key] { get; }
+}
+public interface ITupFieldProp<T> {
+    (T, int) Current { get; }
+}
+public interface IFn<T> {
+    int Apply(System.Func<T, int> f);
+    void Run(System.Action<T> a);
+    string Combine<U>(T x, U y, System.Func<T, (U, int), string> f);
+}
+public interface ISFn<T> {
+    static abstract int ApplyS(System.Func<T, int> f);
+}
+public delegate int NominalDel<T>(T x);
+public interface INominalDel<T> {
+    int Apply(NominalDel<T> f);
+}
+public unsafe interface IPtr<T> where T : unmanaged {
+    int Read(T* p);
+    static abstract int ReadS(T* p);
+}
+public unsafe interface IMixedPtr<T> {
+    int Read(T x, int* p);
+}
+public interface INullableNested<T> {
+    int ReadPair((T, int?) v);
+}
+public interface IMapAndSeq<T> {
+    int CountMap(System.Collections.Generic.Dictionary<T, int> m);
+    int CountSeq(System.Collections.Generic.IEnumerable<T> s);
+    static abstract System.Collections.Generic.Dictionary<T, int> MakeMap(T key, int value);
+}
+public interface IListConsumer<T> {
+    int Consume(System.Collections.Generic.List<T> items);
+}
+
 public static class Probe
 {
     public static int Z<T>() where T : IS => T.Z();
@@ -228,6 +303,27 @@ public static class Probe
     public static T Load<T, TImpl>(T x) where TImpl : IAsync<T> => TImpl.Load(x).GetAwaiter().GetResult();
     public static unsafe int CallFnPtrDefault<T, TImpl>(T x) where TImpl : IFnPtrOverload<T> =>
         TImpl.Call((delegate*<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl]<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int>)null, x);
+    public static T CallMake<T>(IAs<T> i) => i.Make().GetAwaiter().GetResult();
+    public static T CallMakeVt<T>(IAsVt<T> i) => i.MakeVt().GetAwaiter().GetResult();
+    public static T CallFactoryTask<T>(IFactory<System.Threading.Tasks.Task<T>> f) => f.Create().GetAwaiter().GetResult();
+    public static int CallTupM<T>(ITup<T> i, (T, int) v) => i.M(v);
+    public static (T, int) CallTupMake<T>(ITup<T> i, T v) => i.Make(v);
+    public static (T, U) CallTupPair<T, U>(ITup<T> i, T x, (U, int) y) => i.Pair(x, y);
+    public static int CallLongTup<T>(ILongTup<T> i, T x) => i.Sum((1, 2, 3, 4, 5, 6, 7, 8, x));
+    public static (T Value, int Code) CallNativeRows<T>(NativeRows<T> r, T v) where T : class => r.Required(v);
+    public static (T, int) CallTupPropCurrent<T>(ITupProp<T> p) => p.Current;
+    public static int CallTupPropIndex<T>(ITupProp<T> p, (T, int) k) => p[k];
+    public static (T, int) CallTupFieldPropCurrent<T>(ITupFieldProp<T> p) => p.Current;
+    public static int CallFnApply<T>(IFn<T> i, System.Func<T, int> f) => i.Apply(f);
+    public static void CallFnRun<T>(IFn<T> i, System.Action<T> a) => i.Run(a);
+    public static string CallFnCombine<T, U>(IFn<T> i, T x, U y, System.Func<T, (U, int), string> f) => i.Combine(x, y, f);
+    public static int CallNominalDel<T>(INominalDel<T> i, NominalDel<T> f) => i.Apply(f);
+    public static unsafe int CallMixedPtr<T>(IMixedPtr<T> i, T x, int v) => i.Read(x, &v);
+    public static int CallNullablePair<T>(INullableNested<T> i, (T, int?) v) => i.ReadPair(v);
+    public static int CallMapAndSeq<T, TImpl>(IMapAndSeq<T> i, T key, int val) where TImpl : IMapAndSeq<T> {
+        var m = TImpl.MakeMap(key, val);
+        return i.CountMap(m) * 100 + i.CountSeq(m.Keys);
+    }
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -1011,6 +1107,268 @@ import Clib
 struct SFnPtrMissing : IFnPtrOverloadDefaultedManagedOnly[int32] {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IFnPtrOverload[int32].Call"}
+            yield[]object{"value-nullable-mismatch-in-symbolic-tuple-instance-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadTup : ITup[Shape] {
+    func M(v (Shape, int32?)) int32 { return 1 }
+    func Make(v Shape) (Shape, int32) { return (v, 1) }
+    func Pair[U](x Shape, y (U, int32)) (Shape, U) { return (x, y.Item1) }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.ITup[Shape].M"}
+            yield[]object{"value-nullable-mismatch-in-symbolic-tuple-static-slot", `package P
+import System
+import Clib
+
+class Shape { }
+struct BadSTup : ISTup[Shape] {
+    shared {
+        prop Pair (Shape, int32) { get { return (Shape(), 1) } }
+        func Take(v (Shape, int32?)) int32 { return 1 }
+    }
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.ISTup[Shape].Take"}
+            yield[]object{"fixed-array-does-not-satisfy-symbolic-slice-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadArr : IArr[Shape] {
+    func A(xs [3]Shape) int32 { return 3 }
+    func B[U](us []U, x Shape) int32 { return 0 }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IArr[Shape].A"}
+            yield[]object{"erased-list-object-does-not-satisfy-symbolic-list-slot", `package P
+import System
+import System.Collections.Generic
+import Clib
+
+class Shape { }
+class BadList : IListConsumer[Shape] {
+    func Consume(items List[object]) int32 { return items.Count }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IListConsumer[Shape].Consume"}
+            yield[]object{"structural-function-type-does-not-satisfy-nominal-delegate-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadNominal : INominalDel[Shape] {
+    func Apply(f (Shape) -> int32) int32 { return f(Shape()) }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.INominalDel[Shape].Apply"}
+        }
+
+        /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
+        /// @returns Case name, G# source, expected stdout lines.
+        func SymbolicSignatureMatcherCases() sequence[[]object] {
+            yield[]object{"symbolic-async-task-valuetask-and-async-sequence", (`package P
+import System
+import System.Linq
+import System.Threading.Tasks
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+class A1 : IAs[Shape] {
+    async func Make() Shape { return Shape{Tag: 10} }
+}
+
+struct SA1 : IAs[Shape] {
+    async func Make() Shape { return Shape{Tag: 11} }
+}
+
+class EA1 : IAs[Shape] {
+    async func (IAs[Shape]) Make() Shape { return Shape{Tag: 12} }
+}
+
+class AVt1 : IAsVt[Shape] {
+    async func MakeVt() ValueTask[Shape] { return Shape{Tag: 13} }
+}
+
+class TaskFactoryImpl : IFactory[Task[Shape]] {
+    async func Create() Shape { return Shape{Tag: 17} }
+}
+
+struct A2 : ISAs[Shape] {
+    shared {
+        async func MakeS() Shape { return Shape{Tag: 14} }
+    }
+}
+
+struct AVt2 : ISAsVt[Shape] {
+    shared {
+        async func MakeSVt() ValueTask[Shape] { return Shape{Tag: 15} }
+    }
+}
+
+class StreamImpl : IAsyncStream[Shape] {
+    async func Stream(seed Shape) async sequence[Shape] {
+        yield seed
+    }
+}
+
+Console.WriteLine(Probe.CallMake[Shape](A1()).Tag)
+Console.WriteLine(Probe.CallMake[Shape](SA1{}).Tag)
+Console.WriteLine(Probe.CallMake[Shape](EA1()).Tag)
+Console.WriteLine(Probe.CallMakeVt[Shape](AVt1()).Tag)
+Console.WriteLine(Probe.CallFactoryTask[Shape](TaskFactoryImpl()).Tag)
+let ifaceTask = typeof(A2).GetInterfaces().Where((i Type) -> i.Name == "ISAs` + "`" + `1").First()
+let taskRes = cast[Task[Shape]](typeof(A2).GetInterfaceMap(ifaceTask).TargetMethods[0].Invoke(nil, []object?{})!!)
+Console.WriteLine(taskRes.GetAwaiter().GetResult().Tag)
+let ifaceVt = typeof(AVt2).GetInterfaces().Where((i Type) -> i.Name == "ISAsVt` + "`" + `1").First()
+let vtRes = cast[ValueTask[Shape]](typeof(AVt2).GetInterfaceMap(ifaceVt).TargetMethods[0].Invoke(nil, []object?{})!!)
+Console.WriteLine(vtRes.GetAwaiter().GetResult().Tag)
+let streamEnum = StreamImpl().Stream(Shape{Tag: 16}).GetAsyncEnumerator()
+if streamEnum.MoveNextAsync().AsTask().GetAwaiter().GetResult() {
+    Console.WriteLine(streamEnum.Current.Tag)
+}`), []string{"10", "11", "12", "13", "17", "14", "15", "16"}}
+            yield[]object{"symbolic-tuples-long-tuples-and-open-generic-rows", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+class T1 : ITup[Shape] {
+    func M(v (Shape, int32)) int32 { return v.Item1.Tag + v.Item2 }
+    func Make(v Shape) (Shape, int32) { return (v, v.Tag * 2) }
+    func Pair[U](x Shape, y (U, int32)) (Shape, U) { return (x, y.Item1) }
+}
+
+struct STup : ISTup[Shape] {
+    shared {
+        prop Pair (Shape, int32) { get { return (Shape{Tag: 30}, 5) } }
+        func Take(v (Shape, int32)) int32 { return v.Item1.Tag + v.Item2 }
+    }
+}
+
+class LongTup : ILongTup[Shape] {
+    func Sum(v (int32, int32, int32, int32, int32, int32, int32, int32, Shape)) int32 {
+        return v.Item1 + v.Item8 + v.Item9.Tag
+    }
+}
+
+class Rows[T class] : NativeRows[T] {
+    func Required(value T) (Value T, Code int32) -> (value, 15)
+}
+
+class TupPropImpl : ITupProp[Shape] {
+    prop Current (Shape, int32) { get { return (Shape{Tag: 40}, 2) } }
+    prop this[key (Shape, int32)] int32 { get { return key.Item1.Tag + key.Item2 } }
+}
+
+class TupFieldImpl : ITupFieldProp[Shape] {
+    var Current (Shape, int32) = (Shape{Tag: 50}, 3)
+}
+
+let t1 = T1()
+Console.WriteLine(Probe.CallTupM[Shape](t1, (Shape{Tag: 20}, 1)))
+let made = Probe.CallTupMake[Shape](t1, Shape{Tag: 11})
+Console.WriteLine(made.Item1.Tag + made.Item2)
+let paired = Probe.CallTupPair[Shape, string](t1, Shape{Tag: 7}, ("ok", 9))
+Console.WriteLine("${paired.Item1.Tag}:${paired.Item2}")
+let stIface = typeof(STup).GetInterfaces().Where((i Type) -> i.Name == "ISTup` + "`" + `1").First()
+let stMethods = typeof(STup).GetInterfaceMap(stIface).TargetMethods
+let stProp = cast[(Shape, int32)](stMethods[0].Invoke(nil, []object?{})!!)
+let stTake = cast[int32](stMethods[1].Invoke(nil, []object?{stProp})!!)
+Console.WriteLine(stTake)
+Console.WriteLine(Probe.CallLongTup[Shape](LongTup(), Shape{Tag: 100}))
+let rowStr = Probe.CallNativeRows[string](Rows[string](), "ab")
+Console.WriteLine("${rowStr.Item1}:${rowStr.Item2}")
+let rowShape = Probe.CallNativeRows[Shape](Rows[Shape](), Shape{Tag: 9})
+Console.WriteLine(rowShape.Item1.Tag + rowShape.Item2)
+let tp = TupPropImpl()
+let cur = Probe.CallTupPropCurrent[Shape](tp)
+Console.WriteLine(Probe.CallTupPropIndex[Shape](tp, cur))
+let tf = Probe.CallTupFieldPropCurrent[Shape](TupFieldImpl())
+Console.WriteLine(tf.Item1.Tag + tf.Item2)`), []string{"21", "33", "7:ok", "35", "109", "ab:15", "24", "42", "53"}}
+            yield[]object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+struct Point {
+    var X int32
+}
+
+class FnImpl : IFn[Shape], ISFn[Shape] {
+    var observed int32 = 0
+    func Apply(f (Shape) -> int32) int32 -> f(Shape{Tag: 6})
+    func Run(a (Shape) -> void) {
+        a(Shape{Tag: 8})
+    }
+    func Combine[U](x Shape, y U, f (Shape, (U, int32)) -> string) string -> f(x, (y, 3))
+    shared {
+        func ApplyS(f (Shape) -> int32) int32 -> f(Shape{Tag: 9})
+    }
+}
+
+class NominalImpl : INominalDel[Shape] {
+    func Apply(f NominalDel[Shape]) int32 -> f(Shape{Tag: 12})
+}
+
+struct PtrImpl : IPtr[Point] {
+    unsafe func Read(p *Point) int32 -> 21
+    shared {
+        unsafe func ReadS(p *Point) int32 -> 30
+    }
+}
+
+class MixedPtrImpl : IMixedPtr[Shape] {
+    unsafe func Read(x Shape, p *int32) int32 -> x.Tag + 36
+}
+
+class NullableImpl : INullableNested[Shape] {
+    func ReadPair(v (Shape, int32?)) int32 -> v.Item1.Tag + (v.Item2 ?? 5)
+}
+
+class MapSeqImpl : IMapAndSeq[Shape] {
+    func CountMap(m map[Shape, int32]) int32 -> m.Count
+    func CountSeq(s sequence[Shape]) int32 -> s.Count()
+    shared {
+        func MakeMap(key Shape, value int32) map[Shape, int32] -> map[Shape, int32]{key: value}
+    }
+}
+
+let fn = FnImpl()
+Console.WriteLine(Probe.CallFnApply[Shape](fn, (s Shape) -> s.Tag * 5))
+var seen = 0
+Probe.CallFnRun[Shape](fn, (s Shape) -> { seen = s.Tag })
+Console.WriteLine(seen)
+Console.WriteLine(Probe.CallFnCombine[Shape, string](fn, Shape{Tag: 4}, "k", (s Shape, p (string, int32)) -> "${s.Tag}-${p.Item1}-${p.Item2}"))
+let sfnIface = typeof(FnImpl).GetInterfaces().Where((i Type) -> i.Name == "ISFn` + "`" + `1").First()
+let sfnDel = cast[Func[Shape, int32]]((s Shape) -> s.Tag + 100)
+Console.WriteLine(typeof(FnImpl).GetInterfaceMap(sfnIface).TargetMethods[0].Invoke(nil, []object?{sfnDel}))
+Console.WriteLine(Probe.CallNominalDel[Shape](NominalImpl(), NominalDel[Shape]((s Shape) -> s.Tag * 2)))
+let ptrIface = typeof(PtrImpl).GetInterfaces().Where((i Type) -> i.Name == "IPtr` + "`" + `1").First()
+let ptrMap = typeof(PtrImpl).GetInterfaceMap(ptrIface).TargetMethods
+Console.WriteLine(cast[int32](ptrMap[0].Invoke(PtrImpl{}, []object?{nil})!!) + cast[int32](ptrMap[1].Invoke(nil, []object?{nil})!!))
+Console.WriteLine(Probe.CallMixedPtr[Shape](MixedPtrImpl(), Shape{Tag: 15}, 36))
+Console.WriteLine(Probe.CallNullablePair[Shape](NullableImpl(), (Shape{Tag: 30}, cast[int32?](nil))))
+Console.WriteLine(Probe.CallNullablePair[Shape](NullableImpl(), (Shape{Tag: 30}, cast[int32?](7))))
+Console.WriteLine(Probe.CallMapAndSeq[Shape, MapSeqImpl](MapSeqImpl(), Shape{Tag: 1}, 99))`), []string{
+                    "30",
+                    "8",
+                    "4-k-3",
+                    "109",
+                    "24",
+                    "51",
+                    "51",
+                    "35",
+                    "37",
+                    "101"
+                }}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {

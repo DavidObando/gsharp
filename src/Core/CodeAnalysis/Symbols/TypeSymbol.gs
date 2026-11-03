@@ -1059,6 +1059,27 @@ open partial class TypeSymbol : Symbol {
                 ) &&
                     AreRuntimeEquivalentIgnoringReferenceNullability(leftSequenceElement, rightSequenceElement)
             }
+            let leftIsTuple = TupleTypeSymbol.TryGetTupleShape(left, out var leftTupleElements)
+            let rightIsTuple = TupleTypeSymbol.TryGetTupleShape(right, out var rightTupleElements)
+            if leftIsTuple || rightIsTuple {
+                if !leftIsTuple || !rightIsTuple || leftTupleElements.Length != rightTupleElements.Length {
+                    return false
+                }
+                for var i = 0; i < leftTupleElements.Length; i++ {
+                    if !AreRuntimeEquivalentIgnoringReferenceNullability(leftTupleElements[i], rightTupleElements[i]) {
+                        return false
+                    }
+                }
+                return true
+            }
+            let leftIsMap = MapTypeSymbol.TryGetMapShape(left, out var leftKeyType, out var leftValueType)
+            let rightIsMap = MapTypeSymbol.TryGetMapShape(right, out var rightKeyType, out var rightValueType)
+            if leftIsMap || rightIsMap {
+                return leftIsMap &&
+                    rightIsMap &&
+                    AreRuntimeEquivalentIgnoringReferenceNullability(leftKeyType, rightKeyType) &&
+                    AreRuntimeEquivalentIgnoringReferenceNullability(leftValueType, rightValueType)
+            }
             if left is NullableTypeSymbol || right is NullableTypeSymbol {
                 let leftNullable NullableTypeSymbol? = left as NullableTypeSymbol
                 let rightNullable NullableTypeSymbol? = right as NullableTypeSymbol

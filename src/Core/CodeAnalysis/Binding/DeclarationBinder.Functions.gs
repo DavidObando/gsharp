@@ -3151,12 +3151,24 @@ internal partial class DeclarationBinder {
             }
         }
 
-        private func StripPlatformOrReferenceNullable(type TypeSymbol?) TypeSymbol? -> switch type {
-            case platform is PlatformTypeSymbol: platform.UnderlyingType
-            case nullable is NullableTypeSymbol when Conversion.IsReferenceLikeTarget(
-                nullable.UnderlyingType
-            ): nullable.UnderlyingType
-            default: type
+        private func StripPlatformOrReferenceNullable(type TypeSymbol?) TypeSymbol? {
+            var current = type
+            while true {
+                switch current {
+                    case annotated is NullabilityAnnotatedTypeSymbol {
+                        current = annotated.BaseType
+                    }
+                    case platform is PlatformTypeSymbol {
+                        current = platform.UnderlyingType
+                    }
+                    case nullable is NullableTypeSymbol when Conversion.IsReferenceLikeTarget(nullable.UnderlyingType) {
+                        current = nullable.UnderlyingType
+                    }
+                    default {
+                        return current
+                    }
+                }
+            }
         }
 
         internal func InterfaceEventTypesEquivalent(
@@ -3182,8 +3194,13 @@ internal partial class DeclarationBinder {
             // Issue #1007: substitute a generic interface method's type parameter
             // with the implementing method's positionally-corresponding type
             // parameter before comparing, so `T_iface` and `T_class` match.
-            if typeParamMap != nil && a is TypeParameterSymbol tpa && typeParamMap.TryGetValue(tpa, out var mappedA) {
-                a = mappedA
+            if typeParamMap != nil {
+                if a is TypeParameterSymbol tpa && typeParamMap.TryGetValue(tpa, out var mappedA) {
+                    a = mappedA
+                }
+                if b is TypeParameterSymbol tpb && typeParamMap.TryGetValue(tpb, out var mappedB) {
+                    b = mappedB
+                }
             }
             // ADR-0186: signature matching (interface implementation, override,
             // event equivalence) is a conformance relation — and ONLY there does
@@ -3199,7 +3216,13 @@ internal partial class DeclarationBinder {
             // means "nothing was stated", one written as `Item?` too, as C#
             // accepts an oblivious override of an annotated member. Recursion
             // applies the same reading to nested positions.
-            if conformanceMatchingDepth > 0 && (a is PlatformTypeSymbol || b is PlatformTypeSymbol) {
+            if conformanceMatchingDepth > 0 &&
+                (
+                a is PlatformTypeSymbol ||
+                    b is PlatformTypeSymbol ||
+                    a is NullabilityAnnotatedTypeSymbol ||
+                    b is NullabilityAnnotatedTypeSymbol
+            ) {
                 a = StripPlatformOrReferenceNullable(a)
                 b = StripPlatformOrReferenceNullable(b)
             }
@@ -3268,6 +3291,35 @@ internal partial class DeclarationBinder {
             if aIsTuple || bIsTuple {
                 return aIsTuple && bIsTuple && TypeArgumentsEquivalent(aTupleElements, bTupleElements, typeParamMap)
             }
+            if conformanceMatchingDepth > 0 {
+                let aIsMap = MapTypeSymbol.TryGetMapShape(a, out var aKeyType, out var aValueType)
+                let bIsMap = MapTypeSymbol.TryGetMapShape(b, out var bKeyType, out var bValueType)
+                if aIsMap || bIsMap {
+                    return aIsMap &&
+                        bIsMap &&
+                        TypeSignaturesEquivalent(aKeyType, bKeyType, typeParamMap) &&
+                        TypeSignaturesEquivalent(aValueType, bValueType, typeParamMap)
+                }
+                let aIsFunction = TryGetNaturalFunctionShape(
+                    a,
+                    out var aParameterTypes,
+                    out var aHasVariadic,
+                    out var aReturnType
+                )
+                let bIsFunction = TryGetNaturalFunctionShape(
+                    b,
+                    out var bParameterTypes,
+                    out var bHasVariadic,
+                    out var bReturnType
+                )
+                if aIsFunction || bIsFunction {
+                    return aIsFunction &&
+                        bIsFunction &&
+                        aHasVariadic == bHasVariadic &&
+                        TypeArgumentsEquivalent(aParameterTypes, bParameterTypes, typeParamMap) &&
+                        TypeSignaturesEquivalent(aReturnType, bReturnType, typeParamMap)
+                }
+            }
             if a is StructSymbol sa && b is StructSymbol sb {
                 return object.ReferenceEquals(sa.Definition, sb.Definition) &&
                     TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments, typeParamMap)
@@ -3312,7 +3364,12 @@ internal partial class DeclarationBinder {
                 // `IEnumerator[T]`) are compared by open definition and ordered
                 // arguments so an unbound type parameter compares by identity
                 // rather than by its erased `object` CLR projection.
-                if pa.OpenDefinition != nil && pb.OpenDefinition != nil && pa.OpenDefinition == pb.OpenDefinition {
+                if pa.OpenDefinition != nil &&
+                    pb.OpenDefinition != nil &&
+                    (
+                    pa.OpenDefinition == pb.OpenDefinition ||
+                        (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(pa.OpenDefinition, pb.OpenDefinition))
+                ) {
                     return TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap)
                 }
                 // Otherwise (one or both sides expressed as a plain closed CLR
@@ -3320,7 +3377,22 @@ internal partial class DeclarationBinder {
                 // closed-type comparison. This is only sound when neither side
                 // carries an unbound type parameter, whose CLR shape is erased to
                 // `object` and would otherwise equate distinct constructions.
-                if !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) {
+                if !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) &&
+                    pa
+                    .ClrType
+                    ?.ContainsGenericParameters != true &&
+                    pb
+                    .ClrType
+                    ?.ContainsGenericParameters != true &&
+                    (
+                    conformanceMatchingDepth == 0 ||
+                        (
+                        !TypeSymbol.ContainsSameCompilationUserType(pa) && !TypeSymbol.ContainsSameCompilationUserType(
+                            pb
+                        ) &&
+                            !TypeSymbol.ContainsFixedLengthArray(pa) && !TypeSymbol.ContainsFixedLengthArray(pb)
+                    )
+                ) {
                     return pa.ClrType != nil && pb.ClrType != nil && ClrTypeUtilities.AreSame(pa.ClrType, pb.ClrType)
                 }
                 return false
@@ -3332,8 +3404,21 @@ internal partial class DeclarationBinder {
                 return ara.Length == arb.Length &&
                     TypeSignaturesEquivalent(ara.ElementType, arb.ElementType, typeParamMap)
             }
+            if conformanceMatchingDepth > 0 && (a is ArrayTypeSymbol || b is ArrayTypeSymbol) {
+                return false
+            }
             if a is RectangularArrayTypeSymbol raa && b is RectangularArrayTypeSymbol rab {
                 return raa.Rank == rab.Rank && TypeSignaturesEquivalent(raa.ElementType, rab.ElementType, typeParamMap)
+            }
+            if conformanceMatchingDepth > 0 && (a is RectangularArrayTypeSymbol || b is RectangularArrayTypeSymbol) {
+                return false
+            }
+            if conformanceMatchingDepth > 0 {
+                let aIsSlice = TryGetSliceElementType(a, out var aSliceElement)
+                let bIsSlice = TryGetSliceElementType(b, out var bSliceElement)
+                if aIsSlice || bIsSlice {
+                    return aIsSlice && bIsSlice && TypeSignaturesEquivalent(aSliceElement, bSliceElement, typeParamMap)
+                }
             }
             if a is NullableTypeSymbol na && b is NullableTypeSymbol nb {
                 return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType, typeParamMap)
@@ -3344,27 +3429,9 @@ internal partial class DeclarationBinder {
             // answer — compare element by element, so `(Item) -> Item` conforms to
             // an oblivious `(Item!) -> Item!`. Scoped to conformance so every
             // exact caller keeps its existing answer for these shapes.
-            if conformanceMatchingDepth > 0 {
-                switch (a, b) {
-                    case {Item1: fa is FunctionTypeSymbol, Item2: fb is FunctionTypeSymbol} {
-                        return fa
-                            .ParameterTypes
-                            .Length == fb
-                            .ParameterTypes
-                            .Length &&
-                            fa.HasVariadic == fb.HasVariadic &&
-                            TypeArgumentsEquivalent(fa.ParameterTypes, fb.ParameterTypes, typeParamMap) &&
-                            TypeSignaturesEquivalent(fa.ReturnType, fb.ReturnType, typeParamMap)
-                    }
-                    case {Item1: ma is MapTypeSymbol, Item2: mb is MapTypeSymbol} {
-                        return TypeSignaturesEquivalent(ma.KeyType, mb.KeyType, typeParamMap) &&
-                            TypeSignaturesEquivalent(ma.ValueType, mb.ValueType, typeParamMap)
-                    }
-                    case {Item1: ca is ChannelTypeSymbol, Item2: cb is ChannelTypeSymbol} {
-                        return ca.Direction == cb.Direction &&
-                            TypeSignaturesEquivalent(ca.ElementType, cb.ElementType, typeParamMap)
-                    }
-                }
+            if conformanceMatchingDepth > 0 && a is ChannelTypeSymbol ca && b is ChannelTypeSymbol cb {
+                return ca.Direction == cb.Direction &&
+                    TypeSignaturesEquivalent(ca.ElementType, cb.ElementType, typeParamMap)
             }
             // Leaf fallback for non-generic types that are not reference-interned
             // (e.g. a primitive supplied as a concrete type argument such as the
@@ -3373,10 +3440,122 @@ internal partial class DeclarationBinder {
             // Conformance spans runtime and metadata-load contexts. Exact storage checks keep their existing identity rule.
             return a.ClrType != nil &&
                 b.ClrType != nil &&
+                !a
+                .ClrType
+                .ContainsGenericParameters &&
+                !b
+                .ClrType
+                .ContainsGenericParameters &&
                 (
                 a.ClrType == b.ClrType ||
                     (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(a.ClrType, b.ClrType))
             )
+        }
+
+        private func TryGetSliceElementType(type TypeSymbol, @NotNullWhen(true) out elementType TypeSymbol?) bool {
+            switch type {
+                case slice is SliceTypeSymbol {
+                    elementType = slice.ElementType
+                    return true
+                }
+                case imported is ImportedTypeSymbol when imported.ClrType?.IsSZArray == true {
+                    elementType = TypeSymbol.FromClrTypeWithoutNullability(
+                        imported.ClrType!!.GetElementType(),
+                        NullabilityFreeReason.TypeStructure
+                    )
+                    return elementType != nil
+                }
+                default {
+                    elementType = nil
+                    return false
+                }
+            }
+        }
+
+        private func TryGetNaturalFunctionShape(
+            type TypeSymbol,
+            out parameterTypes ImmutableArray[TypeSymbol],
+            out hasVariadic bool,
+            @NotNullWhen(true) out returnType TypeSymbol?
+        ) bool {
+            parameterTypes = default(ImmutableArray[TypeSymbol])
+            hasVariadic = false
+            returnType = nil
+            if type is FunctionTypeSymbol function {
+                parameterTypes = function.ParameterTypes
+                hasVariadic = function.HasVariadic
+                returnType = if FunctionTypeSymbol.IsVoidReturn(function.ReturnType) {
+                    TypeSymbol.Void
+                } else {
+                    function.ReturnType
+                }
+                return true
+            }
+            if type is not ImportedTypeSymbol imported {
+                return false
+            }
+            let clrType Type? = imported.OpenDefinition ?? imported.ClrType
+            if clrType == nil {
+                return false
+            }
+            let definition = if clrType.IsGenericType {
+                clrType.GetGenericTypeDefinition()
+            } else {
+                clrType
+            }
+            let baseType Type? = definition.BaseType
+            if baseType == nil || !string.Equals(
+                baseType.FullName,
+                "System.MulticastDelegate",
+                StringComparison.Ordinal
+            ) ||
+                !string.Equals(definition.Assembly.FullName, baseType.Assembly.FullName, StringComparison.Ordinal) {
+                return false
+            }
+            let fullName = definition.FullName
+            if string.Equals(fullName, "System.Action", StringComparison.Ordinal) {
+                parameterTypes = ImmutableArray[TypeSymbol].Empty
+                returnType = TypeSymbol.Void
+                return true
+            }
+            let isAction = fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
+            let isFunc = !isAction && fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true
+            if !isAction && !isFunc {
+                return false
+            }
+            var typeArguments = imported.TypeArguments
+            if typeArguments.IsDefaultOrEmpty {
+                if imported.ClrType is not{IsGenericType: true} closed || closed.IsGenericTypeDefinition {
+                    return false
+                }
+                let clrArguments = closed.GetGenericArguments()
+                let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArguments.Length)
+                for clrArgument in clrArguments {
+                    builder.Add(
+                        TypeSymbol.FromClrTypeWithoutNullability(clrArgument, NullabilityFreeReason.TypeStructure)
+                    )
+                }
+                typeArguments = builder.MoveToImmutable()
+            }
+            if isAction {
+                if typeArguments.Length is < 1 or > 16 {
+                    return false
+                }
+                parameterTypes = typeArguments
+                returnType = TypeSymbol.Void
+                return true
+            }
+            if typeArguments.Length is < 1 or > 17 {
+                return false
+            }
+            let parameterCount = typeArguments.Length - 1
+            let parameterBuilder = ImmutableArray.CreateBuilder[TypeSymbol](parameterCount)
+            for var i = 0; i < parameterCount; i++ {
+                parameterBuilder.Add(typeArguments[i])
+            }
+            parameterTypes = parameterBuilder.MoveToImmutable()
+            returnType = typeArguments[parameterCount]
+            return true
         }
 
         private func TypeArgumentsEquivalent(

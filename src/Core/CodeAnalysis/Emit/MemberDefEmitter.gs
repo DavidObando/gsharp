@@ -2021,26 +2021,28 @@ internal class MemberDefEmitter {
                         }
                     ) {
                         let indexParameters = clrProp.GetIndexParameters()
+                        var slotPropertyType = MemberLookup.GetClrPropertyTypeSymbol(
+                            Invariant.Required(
+                                ifaceSym,
+                                "a CLR interface entry has a type symbol",
+                                expression: "ifaceSym"
+                            ),
+                            clrProp
+                        )
+                        if slotPropertyType is ByRefTypeSymbol slotPropertyByRef {
+                            slotPropertyType = slotPropertyByRef.PointeeType
+                        }
                         // Nullable reference annotations do not participate in CLR interface slots.
-                        if clrProp.Name != prop.Name ||
+                        if clrProp.Name != prop.Name || prop.ReturnRefKind != RefCapabilities.GetReturnRefKind(
+                            clrProp
+                        ) ||
                             prop.IsIndexer != (indexParameters.Length > 0) ||
                             prop
                             .Parameters
                             .Length != indexParameters.Length ||
                             (clrProp.GetMethod != nil && !prop.HasGetter) ||
                             (clrProp.SetMethod != nil && !prop.HasSetter) ||
-                            !TypeSymbol
-                            .AreRuntimeEquivalentIgnoringReferenceNullability(
-                            prop.Type,
-                            MemberLookup.GetClrPropertyTypeSymbol(
-                                Invariant.Required(
-                                    ifaceSym,
-                                    "a CLR interface entry has a type symbol",
-                                    expression: "ifaceSym"
-                                ),
-                                clrProp
-                            )
-                        ) {
+                            !DeclarationBinder.ConformanceSignaturesEquivalent(slotPropertyType, prop.Type) {
                             continue
                         }
                         var parametersMatch = true

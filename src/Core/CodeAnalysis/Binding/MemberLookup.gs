@@ -1700,12 +1700,7 @@ internal class MemberLookup {
             if field!!.Accessibility != Accessibility.Public {
                 return nil
             }
-            let typeMatches = if symbolicArgs.IsDefaultOrEmpty {
-                ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(field!!.Type), clrProp.PropertyType)
-            } else {
-                ParameterTypeMatchesSubstituted(field!!.Type, clrProp.PropertyType, symbolicArgs)
-            }
-            if !typeMatches {
+            if !ParameterTypeMatchesSubstituted(field!!.Type, clrProp.PropertyType, symbolicArgs) {
                 return nil
             }
             // A read-only field cannot satisfy a read-write property contract.
@@ -2212,7 +2207,7 @@ internal class MemberLookup {
                 } else {
                     default(Type?)
                 }
-                if declaring != nil && openDefinition != nil && !typeArguments.IsDefaultOrEmpty {
+                if declaring != nil && !typeArguments.IsDefaultOrEmpty {
                     let declaringDef = if declaring.IsGenericTypeDefinition {
                         declaring
                     } else {
@@ -2224,7 +2219,7 @@ internal class MemberLookup {
                             }
                         )
                     }
-                    if ClrTypeUtilities.AreSame(declaringDef, openDefinition) {
+                    if openDefinition == nil || ClrTypeUtilities.AreSame(declaringDef, openDefinition) {
                         let pos = currentOpenClr.GenericParameterPosition
                         if uint32(pos) < uint32(typeArguments.Length) {
                             return typeArguments[pos]
@@ -4487,103 +4482,14 @@ internal class MemberLookup {
             return nil
         }
 
-        private func TryGetComparableClrReturnType(
-            candidate FunctionSymbol,
-            clrMethod MethodInfo,
-            @NotNullWhen(true) out comparableClrReturnType Type?
-        ) bool {
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
-            comparableClrReturnType = if clrMethod.ReturnType.IsByRef {
-                clrMethod.ReturnType.GetElementType()!!
-            } else {
-                clrMethod.ReturnType
-            }
-            if !candidate.IsAsync || AsyncIteratorDetection.IsAsyncIteratorReturnType(candidate.Type) {
-                return true
-            }
-            if candidate.IsAsyncVoid {
-                return !clrMethod.ReturnType.IsByRef && clrMethod.ReturnType.IsSameAs(typeof(Void))
-            }
-            if !clrMethod.ReturnType.IsByRef && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(
-                clrMethod.ReturnType,
-                out var awaitedReturnClr,
-                out var isValueTask
-            ) &&
-                isValueTask == candidate.AsyncReturnsValueTask {
-                comparableClrReturnType = awaitedReturnClr
-                return true
-            }
-            return false
-        }
-
         /// Determines whether one G# method matches an imported CLR method signature.
         /// @param candidate The candidate G# method.
         /// @param clrMethod The imported CLR method.
         /// @returns `true` when the signatures match.
-        func MethodMatchesClrSignature(candidate FunctionSymbol, clrMethod MethodInfo) bool {
-            if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrMethod) {
-                return false
-            }
-            let clrParams = clrMethod.GetParameters()
-            // Issue #2230: an imported (metadata) interface method may itself be
-            // generic (e.g. `ILogger.BeginScope<TState>(TState state)`). Those
-            // method-own generic parameters need to be matched positionally
-            // against the implementer's method type parameters — the same way
-            // `TryBuildMethodTypeParameterMap` already does for source-declared
-            // interfaces (issue #1007) — because an unbound G# type parameter
-            // carries no `ClrType` and the plain `ClrTypeUtilities.AreSame`
-            // comparison below can never succeed for it.
-            let methodGenericParams = if clrMethod.IsGenericMethodDefinition {
-                clrMethod.GetGenericArguments()
-            } else {
-                Array.Empty[Type]()
-            }
-            let callable = GetCallableParameters(candidate)
-            if callable.Length != clrParams.Length {
-                return false
-            }
-            let candidateTypeParams = if candidate.TypeParameters.IsDefaultOrEmpty {
-                ImmutableArray[TypeParameterSymbol].Empty
-            } else {
-                candidate.TypeParameters
-            }
-            if methodGenericParams.Length != candidateTypeParams.Length {
-                return false
-            }
-            if !TryGetComparableClrReturnType(candidate, clrMethod, out var clrReturnType) ||
-                !ClrParamTypeMatchesGenericMethodParam(
-                candidate.Type,
-                clrReturnType,
-                methodGenericParams,
-                candidateTypeParams
-            ) {
-                return false
-            }
-            for var i = 0; i < callable.Length; i++ {
-                let clrParamType = clrParams[i].ParameterType
-                let gsParam = callable[i]
-                if clrParamType.IsByRef {
-                    if gsParam.RefKind == RefKind.None ||
-                        !ClrParamTypeMatchesGenericMethodParam(
-                        gsParam.Type,
-                        clrParamType.GetElementType(),
-                        methodGenericParams,
-                        candidateTypeParams
-                    ) {
-                        return false
-                    }
-                } else if gsParam.RefKind != RefKind.None ||
-                    !ClrParamTypeMatchesGenericMethodParam(
-                    gsParam.Type,
-                    clrParamType,
-                    methodGenericParams,
-                    candidateTypeParams
-                ) {
-                    return false
-                }
-            }
-            return true
-        }
+        func MethodMatchesClrSignature(
+            candidate FunctionSymbol,
+            clrMethod MethodInfo
+        ) bool -> MethodMatchesSymbolicClrInterfaceSignature(candidate, clrMethod, default(ImmutableArray[TypeSymbol]))
 
         /// Issue #949: detects a CLR generic interface constructed over at least
         /// one user-defined G# type argument (e.g. `IEquatable[Shape]`,
@@ -4675,11 +4581,19 @@ internal class MemberLookup {
             if callable.Length != clrParams.Length {
                 return false
             }
-            if !TryGetComparableClrReturnType(candidate, openMethod, out var openReturnType) {
-                return false
+            let openReturnType = if openMethod.ReturnType.IsByRef {
+                openMethod.ReturnType.GetElementType()
+            } else {
+                openMethod.ReturnType
             }
             if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod) ||
-                !ReturnTypeMatchesSubstituted(candidate.Type, openReturnType, symbolicArgs, methodTypeArgs) {
+                !ReturnTypeMatchesSubstituted(
+                candidate,
+                openReturnType,
+                openMethod.ReturnType.IsByRef,
+                symbolicArgs,
+                methodTypeArgs
+            ) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {
@@ -4828,49 +4742,10 @@ internal class MemberLookup {
         /// @param method The candidate G# method.
         /// @param slot The interface slot to satisfy.
         /// @returns `true` when the method satisfies the slot.
-        func MethodSatisfiesClrSlot(method FunctionSymbol, slot ClrInterfaceSlot) bool {
-            if !TryGetMethodTypeArguments(method, slot.Method, out var methodTypeArgs) {
-                return false
-            }
-            let clrParams = slot.Method.GetParameters()
-            let callable = GetCallableParameters(method)
-            if callable.Length != clrParams.Length {
-                return false
-            }
-            if !TryGetComparableClrReturnType(method, slot.Method, out var slotReturnType) {
-                return false
-            }
-            if method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method) ||
-                !ReturnTypeMatchesSubstituted(method.Type, slotReturnType, slot.SymbolicArgs, methodTypeArgs) {
-                return false
-            }
-            for var i = 0; i < callable.Length; i++ {
-                let clrParamType = clrParams[i].ParameterType
-                let gsParam = callable[i]
-                if clrParamType.IsByRef {
-                    if gsParam.RefKind == RefKind.None ||
-                        !ParameterTypeMatchesSubstituted(
-                        gsParam.Type,
-                        clrParamType.GetElementType(),
-                        slot.SymbolicArgs,
-                        methodTypeArgs
-                    ) {
-                        return false
-                    }
-                } else {
-                    if gsParam.RefKind != RefKind.None ||
-                        !ParameterTypeMatchesSubstituted(
-                        gsParam.Type,
-                        clrParamType,
-                        slot.SymbolicArgs,
-                        methodTypeArgs
-                    ) {
-                        return false
-                    }
-                }
-            }
-            return true
-        }
+        func MethodSatisfiesClrSlot(
+            method FunctionSymbol,
+            slot ClrInterfaceSlot
+        ) bool -> MethodMatchesSymbolicClrInterfaceSignature(method, slot.Method, slot.SymbolicArgs)
 
         /// Issue #985: recognises a covariant-return interface bridge — two
         /// same-name, same-parameter methods that differ ONLY by return type and
@@ -5044,40 +4919,7 @@ internal class MemberLookup {
         /// which arguments survive erasure.
         /// @param arg The type argument to classify.
         /// @returns `true` when the argument is symbolic.
-        func IsSymbolicTypeArgument(arg TypeSymbol) bool {
-            switch arg {
-                case StructSymbol, InterfaceSymbol, EnumSymbol, DelegateTypeSymbol, TypeParameterSymbol {
-                    return true
-                }
-                case nested is ImportedTypeSymbol when nested.OpenDefinition != nil &&
-                    !nested
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    nested
-                    .TypeArguments
-                    .Any(IsSymbolicTypeArgument) {
-                    return true
-                }
-                case arr is ArrayTypeSymbol {
-                    return IsSymbolicTypeArgument(arr.ElementType)
-                }
-                case rectangular is RectangularArrayTypeSymbol {
-                    return IsSymbolicTypeArgument(rectangular.ElementType)
-                }
-                case slice is SliceTypeSymbol {
-                    return IsSymbolicTypeArgument(slice.ElementType)
-                }
-                case nullable is NullableTypeSymbol when nullable.UnderlyingType != nil {
-                    return IsSymbolicTypeArgument(nullable.UnderlyingType)
-                }
-                case tuple is TupleTypeSymbol {
-                    return tuple.ElementTypes.Any(IsSymbolicTypeArgument)
-                }
-                default {
-                    return false
-                }
-            }
-        }
+        func IsSymbolicTypeArgument(arg TypeSymbol) bool -> ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(arg)
 
         /// Looks up a user-declared property on [`structSymbol`](paramref)
         /// whose name and CLR-projected type match [`clrProp`](paramref).
@@ -5117,7 +4959,7 @@ internal class MemberLookup {
             if property.Name != clrProperty.Name || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(
                 clrProperty
             ) ||
-                !SameTypeSymbol(property.Type, slotType) {
+                !DeclarationBinder.ConformanceSignaturesEquivalent(slotType, property.Type) {
                 return false
             }
             let clrParameters = clrProperty.GetIndexParameters()
@@ -5130,7 +4972,7 @@ internal class MemberLookup {
                     slotParameterType = slotParameterByRef.PointeeType
                 }
                 if property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i]) ||
-                    !SameTypeSymbol(property.Parameters[i].Type, slotParameterType) {
+                    !DeclarationBinder.ConformanceSignaturesEquivalent(slotParameterType, property.Parameters[i].Type) {
                     return false
                 }
             }
@@ -5294,6 +5136,33 @@ internal class MemberLookup {
             reason NullabilityFreeReason
         ) TypeSymbol {
             return MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments)
+        }
+
+        /// ADR-0193 §3: the method-generic-aware overload of
+        /// (cref:MapOpenClrTypeToSymbolicWithoutNullability(Type, ImportedTypeSymbol, NullabilityFreeReason)).
+        /// @param openClr The open CLR type to map.
+        /// @param openDefinition The open generic definition the type parameters bind against.
+        /// @param typeArguments The symbolic type arguments.
+        /// @param openMethodDefinition The open generic method definition the method parameters bind against.
+        /// @param methodTypeArguments The symbolic method type arguments.
+        /// @param reason Why no declaration nullability applies.
+        /// @returns The symbolic projection.
+        @NullabilityFunnel
+        internal func MapOpenClrTypeToSymbolicWithoutNullability(
+            openClr Type?,
+            openDefinition Type?,
+            typeArguments ImmutableArray[TypeSymbol],
+            openMethodDefinition MethodInfo?,
+            methodTypeArguments ImmutableArray[TypeSymbol?],
+            reason NullabilityFreeReason
+        ) TypeSymbol {
+            return MapOpenClrTypeToSymbolic(
+                openClr,
+                openDefinition,
+                typeArguments,
+                openMethodDefinition,
+                methodTypeArguments
+            )
         }
 
         @NullabilityFunnel
@@ -7784,7 +7653,7 @@ internal class MemberLookup {
         private func TryGetMethodTypeArguments(
             candidate FunctionSymbol,
             slot MethodInfo,
-            out methodTypeArgs ImmutableArray[TypeSymbol]
+            out methodTypeArgs ImmutableArray[TypeSymbol?]
         ) bool {
             let slotArity = if slot.IsGenericMethodDefinition {
                 slot.GetGenericArguments().Length
@@ -7796,13 +7665,13 @@ internal class MemberLookup {
             } else {
                 candidate.TypeParameters.Length
             }
-            methodTypeArgs = default(ImmutableArray[TypeSymbol])
+            methodTypeArgs = default(ImmutableArray[TypeSymbol?])
             if slotArity == 0 || slotArity != candidateArity {
                 return slotArity == candidateArity
             }
             // Built element by element rather than with `ImmutableArray.CastUp`,
             // which does not survive the cs2gs self-migration of this file.
-            let builder = ImmutableArray.CreateBuilder[TypeSymbol](candidateArity)
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol?](candidateArity)
             for typeParameter in candidate.TypeParameters {
                 builder.Add(typeParameter)
             }
@@ -7811,26 +7680,36 @@ internal class MemberLookup {
         }
 
         private func ReturnTypeMatchesSubstituted(
-            candidateReturn TypeSymbol,
-            openReturn Type,
-            symbolicArgs ImmutableArray[TypeSymbol]
-        ) bool -> ReturnTypeMatchesSubstituted(
-            candidateReturn,
-            openReturn,
-            symbolicArgs,
-            default(ImmutableArray[TypeSymbol])
-        )
-
-        private func ReturnTypeMatchesSubstituted(
-            candidateReturn TypeSymbol,
-            openReturn Type,
+            candidate FunctionSymbol,
+            openReturnType Type?,
+            isByRefReturn bool,
             symbolicArgs ImmutableArray[TypeSymbol],
-            methodTypeArgs ImmutableArray[TypeSymbol]
+            methodTypeArgs ImmutableArray[TypeSymbol?]
         ) bool {
-            if openReturn.IsSameAs(typeof(Void)) {
-                return candidateReturn == TypeSymbol.Void
+            if openReturnType == nil {
+                return false
             }
-            return ParameterTypeMatchesSubstituted(candidateReturn, openReturn, symbolicArgs, methodTypeArgs)
+            let projectedReturn = MapOpenClrTypeToSymbolicWithoutNullability(
+                openReturnType,
+                openDefinition: nil,
+                symbolicArgs,
+                openMethodDefinition: nil,
+                methodTypeArgs,
+                NullabilityFreeReason.IdentityComparison
+            )
+            if !candidate.IsAsync || AsyncIteratorDetection.IsAsyncIteratorReturnType(candidate.Type) {
+                return DeclarationBinder.ConformanceSignaturesEquivalent(projectedReturn, candidate.Type)
+            }
+            if candidate.IsAsyncVoid {
+                return !isByRefReturn && projectedReturn == TypeSymbol.Void
+            }
+            return !isByRefReturn && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+                projectedReturn,
+                out var awaitedReturn,
+                out var isValueTask
+            ) &&
+                isValueTask == candidate.AsyncReturnsValueTask &&
+                DeclarationBinder.ConformanceSignaturesEquivalent(awaitedReturn, candidate.Type)
         }
 
         private func ParameterTypeMatchesSubstituted(
@@ -7841,161 +7720,39 @@ internal class MemberLookup {
             candidate,
             openType,
             symbolicArgs,
-            default(ImmutableArray[TypeSymbol])
+            default(ImmutableArray[TypeSymbol?])
         )
 
-        /// Whether the candidate's type at one signature position matches the
-        /// contract's, with the interface's generic parameters substituted.
+        /// Issue #4626: projects the contract's open CLR signature position into a
+        /// G# symbol with the interface's and method's symbolic type arguments
+        /// substituted, then compares it with the candidate's type through
+        /// (cref:DeclarationBinder.ConformanceSignaturesEquivalent).
         /// @param candidate The candidate's type at this position.
         /// @param openType The contract's type at this position, over the open definition.
-        /// @param symbolicArgs The interface's symbolic type arguments, by the interface's generic-parameter
-        /// position.
-        /// @param methodTypeArgs Issue #4614: the candidate method's own type parameters, matched by a
-        /// METHOD-owned generic parameter's position (`U` in
-        /// `I<T>.M<U>(T x, U y)`); default when the slot is not a
-        /// generic method. A method-owned parameter's position is NOT an index
-        /// into [`symbolicArgs`](paramref).
+        /// @param symbolicArgs The interface's symbolic type arguments, by generic-parameter position.
+        /// @param methodTypeArgs The candidate method's own type parameters, by method generic-parameter position.
         /// @returns `true` when the position matches.
         private func ParameterTypeMatchesSubstituted(
             candidate TypeSymbol,
             openType Type?,
             symbolicArgs ImmutableArray[TypeSymbol],
-            methodTypeArgs ImmutableArray[TypeSymbol]
+            methodTypeArgs ImmutableArray[TypeSymbol?]
         ) bool {
-            var candidate = candidate
             if openType == nil {
                 return false
             }
-            // ADR-0186: implementing an interface slot is a signature relation,
-            // and `T!` has `T`'s runtime signature (§1). A member declared in an
-            // ADR-0186 §9 oblivious scope (`func GetEnumerator() IEnumerator[Item]`
-            // there is `IEnumerator[Item]!`) must still be recognised as the
-            // implementation — declining it left the slot without a MethodImpl,
-            // which the binder did not diagnose and the runtime reported as a
-            // TypeLoadException. (That the relation performs no nil check is
-            // ADR-0186 open question 13, unchanged.)
-            candidate = PlatformTypeSymbol.StripTopLevel(candidate)
-            if openType.IsGenericParameter {
-                let position = openType.GenericParameterPosition
-                let owners = if openType.DeclaringMethod != nil {
-                    methodTypeArgs
-                } else {
-                    symbolicArgs
-                }
-                if owners.IsDefault || position < 0 || position >= owners.Length {
-                    return false
-                }
-                return SameTypeSymbol(candidate, owners[position])
+            if openType.IsSameAs(typeof(Void)) {
+                return candidate == TypeSymbol.Void
             }
-            // Issue #2380 follow-up: a contract position of `Nullable<T>` (e.g.
-            // `T? Find()` on `IRepo<T> where T : struct`) is a constructed
-            // generic whose single type argument is the interface's OWN generic
-            // parameter, not an `ImportedTypeSymbol`'s type argument. A G#
-            // candidate satisfying this via `Color?` projects as a
-            // `NullableTypeSymbol`, which the `ImportedTypeSymbol` branch below
-            // does not recognize — it would fall through to the erased
-            // CLR-projected comparison, which fails for same-compilation
-            // `UnderlyingType`s (their `ClrType` is always null). Unwrap both
-            // sides structurally instead.
-            if openType.IsConstructedGenericType && openType.GetGenericTypeDefinition().IsSameAs(typeof(Nullable[_])) &&
-                candidate is NullableTypeSymbol nullableCandidate {
-                return ParameterTypeMatchesSubstituted(
-                    nullableCandidate.UnderlyingType,
-                    openType.GetGenericArguments()[0],
-                    symbolicArgs,
-                    methodTypeArgs
-                )
-            }
-            // Issue #4614: an array position that mentions a generic parameter
-            // (`T[] xs`, or a method's own `U[] us`) is matched element-wise
-            // with the same substitutions; the erased CLR comparison below can
-            // never succeed for it (a G# slice over a same-compilation or
-            // type-parameter element has no CLR type). Concrete arrays keep that
-            // comparison.
-            if openType.IsArray && openType.ContainsGenericParameters {
-                let openElement = openType.GetElementType()
-                return switch candidate {
-                    case slice is SliceTypeSymbol when openType.IsSZArray: ParameterTypeMatchesSubstituted(
-                        slice.ElementType,
-                        openElement,
-                        symbolicArgs,
-                        methodTypeArgs
-                    )
-                    case fixedArray is ArrayTypeSymbol when openType.IsSZArray: ParameterTypeMatchesSubstituted(
-                        fixedArray.ElementType,
-                        openElement,
-                        symbolicArgs,
-                        methodTypeArgs
-                    )
-                    case rectangular is RectangularArrayTypeSymbol when !openType.IsSZArray &&
-                        rectangular.Rank == openType.GetArrayRank(): ParameterTypeMatchesSubstituted(
-                        rectangular.ElementType,
-                        openElement,
-                        symbolicArgs,
-                        methodTypeArgs
-                    )
-                    default: false
-                }
-            }
-            // Issue #985: the contract position may itself be a *constructed
-            // generic* that mentions the interface's generic parameters — e.g.
-            // `IEnumerable<T>.GetEnumerator()` returns `IEnumerator<T>`. The erased
-            // CLR-projection comparison below would demand `IEnumerator<object>`
-            // and wrongly reject a candidate returning `IEnumerator[T]`. Recurse
-            // structurally instead, substituting the interface's generic parameters
-            // with the symbolic arguments at each nested position (mirrors the
-            // #974 `InterfaceSymbol.SubstituteType` recursion on the G# path).
-            if openType.IsConstructedGenericType &&
-                TryGetSymbolicConstructedGenericShape(
-                candidate,
-                out var candidateOpenDefinition,
-                out var candidateTypeArguments
-            ) {
-                let openDefinition = openType.GetGenericTypeDefinition()
-                if candidateOpenDefinition.IsSameAs(openDefinition) {
-                    let openArgs = openType.GetGenericArguments()
-                    if openArgs.Length == candidateTypeArguments.Length {
-                        for var i = 0; i < openArgs.Length; i++ {
-                            if !ParameterTypeMatchesSubstituted(
-                                candidateTypeArguments[i],
-                                openArgs[i],
-                                symbolicArgs,
-                                methodTypeArgs
-                            ) {
-                                return false
-                            }
-                        }
-                        return true
-                    }
-                }
-                return false
-            }
-            // Non-generic contract position — compare against the CLR-projected
-            // effective type, exactly as the erased path does.
-            return ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(candidate), openType)
-        }
-
-        private func TryGetSymbolicConstructedGenericShape(
-            candidate TypeSymbol,
-            out openDefinition Type?,
-            out typeArguments ImmutableArray[TypeSymbol]
-        ) bool {
-            if candidate is ImportedTypeSymbol imported &&
-                imported.OpenDefinition != nil &&
-                !imported
-                .TypeArguments
-                .IsDefaultOrEmpty {
-                openDefinition = imported.OpenDefinition
-                typeArguments = imported.TypeArguments
-                return true
-            }
-            if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(candidate, out openDefinition, out var elementType) {
-                typeArguments = ImmutableArray.Create(elementType)
-                return true
-            }
-            openDefinition = nil
-            typeArguments = default(ImmutableArray[TypeSymbol])
-            return false
+            let projected = MapOpenClrTypeToSymbolicWithoutNullability(
+                openType,
+                openDefinition: nil,
+                symbolicArgs,
+                openMethodDefinition: nil,
+                methodTypeArgs,
+                NullabilityFreeReason.IdentityComparison
+            )
+            return DeclarationBinder.ConformanceSignaturesEquivalent(projected, candidate)
         }
 
         private func SameTypeSymbol(a TypeSymbol?, b TypeSymbol?) bool {
@@ -8143,20 +7900,10 @@ internal class MemberLookup {
             return false
         }
 
-        private func ReturnTypeSignaturesEqual(a TypeSymbol?, b TypeSymbol?) bool {
-            if object.ReferenceEquals(a, b) {
-                return true
-            }
-            if a == nil || b == nil {
-                return false
-            }
-            if SameTypeSymbol(a, b) {
-                return true
-            }
-            let ca Type? = NullableLifting.GetEffectiveClrType(a)
-            let cb Type? = NullableLifting.GetEffectiveClrType(b)
-            return ca != nil && cb != nil && ClrTypeUtilities.AreSame(ca, cb)
-        }
+        private func ReturnTypeSignaturesEqual(
+            a TypeSymbol?,
+            b TypeSymbol?
+        ) bool -> DeclarationBinder.ConformanceSignaturesEquivalent(a, b)
 
         /// Returns whether [`candidate`](paramref) is hidden by any method
         /// already in [`existing`](paramref). Same-name-and-parameter-types
@@ -9723,162 +9470,6 @@ internal class MemberLookup {
                 case 16: typeof(Func[_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _]).MakeGenericType(args)
                 default: default(Type?)
             }
-        }
-
-        /// Issue #2230: compares a candidate implementer's parameter/return
-        /// (cref:TypeSymbol) against a CLR contract position that may
-        /// reference an imported (metadata) interface METHOD's own generic
-        /// parameter (e.g. the `TState` in `ILogger.BeginScope<TState>`
-        /// / `ILogger.Log<TState>`), either directly or nested inside ANY
-        /// constructed generic shape — a delegate (e.g.
-        /// `Func<TState, Exception, string>`), an array (`TState[]`),
-        /// or any other constructed generic type (`IEnumerable<TState>`,
-        /// `IComparer<TState>`, `Nullable<TState>`, a custom
-        /// generic, etc.), at any nesting depth (e.g.
-        /// `IEnumerable<IEnumerable<TState>>`).
-        /// Falls back to the existing erased-`ClrType` comparison
-        /// ((cref:FindMatchingMethodForClrSignature)'s comparison) for
-        /// every other position, so ordinary non-generic contract members are
-        /// unaffected.
-        /// @param candidate The implementer's parameter or return type.
-        /// @param openType The corresponding CLR contract type (from the open generic method definition).
-        /// @param methodGenericParams The interface method's own generic-parameter (cref:Type)s, positionally.
-        /// @param candidateTypeParams The implementer method's own type parameters, positionally.
-        /// @returns `true` when the positions match.
-        private func ClrParamTypeMatchesGenericMethodParam(
-            candidate TypeSymbol?,
-            openType Type?,
-            methodGenericParams[]Type,
-            candidateTypeParams ImmutableArray[TypeParameterSymbol]
-        ) bool {
-            if candidate == nil || openType == nil {
-                return false
-            }
-            // Direct method-type-parameter position (e.g. `TState state`):
-            // match by position against the implementer's own method type
-            // parameter — an unbound G# type parameter has no ClrType, so the
-            // erased comparison below can never succeed for it.
-            if openType.IsGenericMethodParameter {
-                let position = Array.IndexOf(methodGenericParams, openType)
-                return position >= 0 && position < candidateTypeParams.Length && object.ReferenceEquals(
-                    candidate,
-                    candidateTypeParams[position]
-                )
-            }
-            // Fast path: no method type parameter involved at or below this
-            // position — the pre-existing erased-ClrType comparison works
-            // (covers the overwhelming majority of contract positions,
-            // including non-generic methods entirely).
-            let effectiveClr Type? = NullableLifting.GetEffectiveClrType(candidate)
-            if effectiveClr != nil && ClrTypeUtilities.AreSame(effectiveClr, openType) {
-                return true
-            }
-            // Issue #3088: reference-nullable tuple elements make the tuple's
-            // direct ClrType unavailable even when every element has an exact CLR
-            // identity. Reuse the structural tuple/nullable projection before
-            // falling back to method-type-parameter matching.
-            if effectiveClr == nil &&
-                (
-                candidate is TupleTypeSymbol ||
-                    candidate is NullableTypeSymbol &&
-                    candidate.UnderlyingType is TupleTypeSymbol
-            ) &&
-                !TypeSymbol.ContainsTypeParameter(candidate) && !TypeSymbol.ContainsSameCompilationUserType(
-                candidate
-            ) &&
-                TryProjectErasedClrType(candidate, out var projectedClr) &&
-                ClrTypeUtilities.AreSame(projectedClr, openType) {
-                return true
-            }
-            // Slow path: a constructed generic contract position nests the
-            // method's own type parameter (e.g. `Func<TState, Exception, string>`
-            // in `Log<TState>(..., Func<TState, Exception, string> formatter)`),
-            // which erases to a null ClrType (FunctionTypeSymbol.BuildClrType
-            // bails when any parameter has no ClrType). Recurse structurally
-            // through the delegate's `Invoke` shape instead.
-            if candidate is FunctionTypeSymbol fn && openType.IsConstructedGenericType {
-                let invoke MethodInfo? = openType.GetMethodSafe("Invoke")
-                if invoke == nil {
-                    return false
-                }
-                let invokeParams = invoke.GetParameters()
-                if invokeParams.Length != fn.ParameterTypes.Length {
-                    return false
-                }
-                for var i = 0; i < invokeParams.Length; i++ {
-                    if !ClrParamTypeMatchesGenericMethodParam(
-                        fn.ParameterTypes[i],
-                        invokeParams[i].ParameterType,
-                        methodGenericParams,
-                        candidateTypeParams
-                    ) {
-                        return false
-                    }
-                }
-                if invoke.ReturnType.IsSameAs(typeof(Void)) {
-                    return FunctionTypeSymbol.IsVoidReturn(fn.ReturnType)
-                }
-                return ClrParamTypeMatchesGenericMethodParam(
-                    fn.ReturnType,
-                    invoke.ReturnType,
-                    methodGenericParams,
-                    candidateTypeParams
-                )
-            }
-            // Slow path: an array contract position nests the method's own type
-            // parameter (e.g. `TState[]` in `CopyTo<TState>(TState[] items)`).
-            // C#/CLR arrays aren't "generic types" in the reflection sense
-            // (`IsConstructedGenericType` is false), so they need their own
-            // element-wise recursion against the G# array-of-T shapes.
-            if openType.IsArray {
-                let openElementType = openType.GetElementType()
-                let (candidateElementType, candidateRank) = switch candidate {
-                    case arr is ArrayTypeSymbol: (arr.ElementType, 1)
-                    case slice is SliceTypeSymbol: (slice.ElementType, 1)
-                    case rectangular is RectangularArrayTypeSymbol: (rectangular.ElementType, rectangular.Rank)
-                    default: (nil, 0)
-                }
-                return candidateElementType != nil && candidateRank == openType.GetArrayRank() &&
-                    ClrParamTypeMatchesGenericMethodParam(
-                    candidateElementType,
-                    openElementType,
-                    methodGenericParams,
-                    candidateTypeParams
-                )
-            }
-            // Slow path: any other constructed generic contract position nests
-            // the method's own type parameter (e.g. `IEnumerable<TState>`,
-            // `IComparer<TState>`, `Nullable<TState>`, or a custom imported/
-            // source generic, at any nesting depth). Recurse positionally
-            // through the CLR open type's generic arguments against the G#
-            // symbol's own symbolic type arguments — the same pattern as the
-            // delegate-Invoke-shape branch above, generalized to any generic
-            // type rather than just delegates.
-            if openType.IsConstructedGenericType &&
-                TryGetSymbolicConstructedGenericShape(
-                candidate,
-                out var candidateOpenDefinition,
-                out var candidateTypeArguments
-            ) &&
-                ClrTypeUtilities
-                .AreSame(openType.GetGenericTypeDefinition(), candidateOpenDefinition) {
-                let openArgs = openType.GetGenericArguments()
-                if openArgs.Length != candidateTypeArguments.Length {
-                    return false
-                }
-                for var i = 0; i < openArgs.Length; i++ {
-                    if !ClrParamTypeMatchesGenericMethodParam(
-                        candidateTypeArguments[i],
-                        openArgs[i],
-                        methodGenericParams,
-                        candidateTypeParams
-                    ) {
-                        return false
-                    }
-                }
-                return true
-            }
-            return false
         }
 
         /// Issue #3695: folds an event declaration's `[Nullable]` metadata
