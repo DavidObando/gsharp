@@ -102,7 +102,7 @@ class Holder1611B[T] {
             var compileExit int32
             try {
                 compileExit = Program.Main(
-                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                    []string{"/out:" + outPath, "/target:library", "/targetframework:net10.0", srcPath}
                 )
             } finally {
                 Console.SetOut(prevOut)

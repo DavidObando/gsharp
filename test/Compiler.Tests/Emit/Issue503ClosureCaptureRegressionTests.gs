@@ -56,7 +56,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -100,7 +100,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -138,7 +138,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -172,7 +172,7 @@ class Probe {
     }
     func Bump() { Hits = Hits + 1 }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let probe = Activator.CreateInstance(probeType)!!
@@ -214,7 +214,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -251,7 +251,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         Assert.NotNull(assembly)
     }
 
@@ -275,7 +275,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         Assert.NotNull(assembly)
     }
 
@@ -347,7 +347,7 @@ class Probe {
         Replacement = c
     }
 }`)
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -395,7 +395,7 @@ class Probe {
         outer()
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
         let probe = Activator.CreateInstance(probeType)!!
@@ -435,7 +435,7 @@ class Probe {
         subscribe()
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -697,7 +697,7 @@ namespace Probe.CSharp
             del!!.DynamicInvoke(instance, EventArgs.Empty)
         }
 
-        private func CompileToAssembly(source string) Assembly {
+        private func CompileToAssembly(source string, library bool = false) Assembly {
             let tempDir = Directory.CreateTempSubdirectory("gs_503_").FullName
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -711,7 +711,16 @@ namespace Probe.CSharp
             var compileExit int32
             try {
                 compileExit = Program.Main(
-                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                    []string{
+                        "/out:" + outPath,
+                        if library {
+                            "/target:library"
+                        } else {
+                            "/target:exe"
+                        },
+                        "/targetframework:net10.0",
+                        srcPath
+                    }
                 )
             } finally {
                 Console.SetOut(prevOut)

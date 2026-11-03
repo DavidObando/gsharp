@@ -23,7 +23,7 @@ import System
 class MyButton {
     public event Click func(Object, EventArgs)
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let button = assembly.GetTypes().Single((t Type) -> t.Name == "MyButton")
         let ev EventInfo? = button.GetEvent("Click")
         Assert.NotNull(ev)
@@ -44,7 +44,7 @@ import System
 class MyButton {
     public event Click func(Object, EventArgs)
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let button = assembly.GetTypes().Single((t Type) -> t.Name == "MyButton")
         let backingField FieldInfo? = button.GetField("Click", BindingFlags.NonPublic | BindingFlags.Instance)
         Assert.NotNull(backingField)
@@ -63,7 +63,7 @@ import System
 class Notifier {
     public event Changed func()
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let notifierType = assembly.GetTypes().Single((t Type) -> t.Name == "Notifier")
         let instance = Activator.CreateInstance(notifierType)!!
         let ev = notifierType.GetEvent("Changed")!!
@@ -93,7 +93,7 @@ import System
 class Emitter {
     public event Ping func()
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let emitterType = assembly.GetTypes().Single((t Type) -> t.Name == "Emitter")
         let instance = Activator.CreateInstance(emitterType)!!
         let ev = emitterType.GetEvent("Ping")!!
@@ -117,7 +117,7 @@ class Emitter {
 interface IObservable {
     event Changed func()
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let iface = assembly.GetTypes().Single((t Type) -> t.Name == "IObservable")
         let ev EventInfo? = iface.GetEvent("Changed")
         Assert.NotNull(ev)
@@ -139,7 +139,7 @@ class Notifier {
         raise { }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let notifierType = assembly.GetTypes().Single((t Type) -> t.Name == "Notifier")
         let ev EventInfo? = notifierType.GetEvent("Changed")
         Assert.NotNull(ev)
@@ -160,7 +160,7 @@ class Emitter {
         raise { }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let emitterType = assembly.GetTypes().Single((t Type) -> t.Name == "Emitter")
         let ev EventInfo? = emitterType.GetEvent("Notify")
         Assert.NotNull(ev)
@@ -181,7 +181,7 @@ class EventBus {
         public event OnNotify func()
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let busType = assembly.GetTypes().Single((t Type) -> t.Name == "EventBus")
         let ev EventInfo? = busType.GetEvent("OnNotify")
         Assert.NotNull(ev)
@@ -201,7 +201,7 @@ class Bus {
         public event Ping func()
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let busType = assembly.GetTypes().Single((t Type) -> t.Name == "Bus")
         let ev = busType.GetEvent("Ping")!!
         var invoked = false
@@ -236,7 +236,7 @@ class Hub {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let hubType = assembly.GetTypes().Single((t Type) -> t.Name == "Hub")
         let ev EventInfo? = hubType.GetEvent("Alert")
         Assert.NotNull(ev)
@@ -265,7 +265,7 @@ class Source {
     public event Changed EventHandler
     init() { }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let instance = Activator.CreateInstance(sourceType)!!
         let ev = sourceType.GetEvent("Changed")!!
@@ -319,7 +319,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -359,7 +359,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let notifierType = assembly.GetTypes().Single((t Type) -> t.Name == "Notifier")
         let probe = Activator.CreateInstance(probeType)!!
@@ -402,7 +402,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -480,7 +480,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let innerType = assembly.GetTypes().Single((t Type) -> t.Name == "Inner")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -521,7 +521,7 @@ class Probe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let innerType = assembly.GetTypes().Single((t Type) -> t.Name == "Inner")
         let probe = Activator.CreateInstance(probeType)!!
@@ -576,7 +576,7 @@ class Probe {
         O.Inner.Changed -= Handler
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let innerType = assembly.GetTypes().Single((t Type) -> t.Name == "Inner")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "Counter")
@@ -623,7 +623,7 @@ class Probe {
         Hits = Hits + 1
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let probe = Activator.CreateInstance(probeType)!!
@@ -664,7 +664,7 @@ class Probe {
         Hits = Hits + 1
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let probe = Activator.CreateInstance(probeType)!!
@@ -706,7 +706,7 @@ class Probe {
         Hits = Hits + 1
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "Source")
         let probe = Activator.CreateInstance(probeType)!!
@@ -741,7 +741,7 @@ class Probe {
 
     func OnExit(sender object, e EventArgs) { }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "Probe")
         let probe = Activator.CreateInstance(probeType)!!
         try {
@@ -791,7 +791,7 @@ class A5InhProbe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "A5InhProbe")
         let baseType = assembly.GetTypes().Single((t Type) -> t.Name == "A5InhBase")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "A5InhCounter")
@@ -837,7 +837,7 @@ class A5ImmProbe {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let probeType = assembly.GetTypes().Single((t Type) -> t.Name == "A5ImmProbe")
         let sourceType = assembly.GetTypes().Single((t Type) -> t.Name == "A5ImmSource")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "A5ImmCounter")
@@ -880,7 +880,7 @@ class A5StatBus {
         }
     }
 }`
-        let assembly = CompileToAssembly(source)
+        let assembly = CompileToAssembly(source, library: true)
         let busType = assembly.GetTypes().Single((t Type) -> t.Name == "A5StatBus")
         let counterType = assembly.GetTypes().Single((t Type) -> t.Name == "A5StatCounter")
         let probe = Activator.CreateInstance(busType)!!
@@ -892,7 +892,7 @@ class A5StatBus {
     }
 
     shared {
-        private func CompileToAssembly(source string) Assembly {
+        private func CompileToAssembly(source string, library bool = false) Assembly {
             let tempDir = Directory.CreateTempSubdirectory("gs_event_emit_").FullName
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -906,7 +906,16 @@ class A5StatBus {
             var compileExit int32
             try {
                 compileExit = Program.Main(
-                    []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
+                    []string{
+                        "/out:" + outPath,
+                        if library {
+                            "/target:library"
+                        } else {
+                            "/target:exe"
+                        },
+                        "/targetframework:net10.0",
+                        srcPath
+                    }
                 )
             } finally {
                 Console.SetOut(prevOut)

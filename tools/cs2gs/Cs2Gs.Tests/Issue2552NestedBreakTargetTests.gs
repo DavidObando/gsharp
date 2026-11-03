@@ -29,7 +29,7 @@ open class Issue2552NestedBreakTargetTests {
 
     @Fact
     func Compiler_AcceptsBothNestedShapesWithoutGS0120() {
-        let output = Compile(TranslateAndValidate(Source), out _)
+        let output = Compile(TranslateAndValidate(Source), out _, library: true)
         Assert.DoesNotContain("GS0120", output, StringComparison.Ordinal)
     }
 
@@ -60,7 +60,7 @@ open class Issue2552NestedBreakTargetTests {
 
     @Fact
     func Compiler_AcceptsIteratorExitInsideAndOutsideNestedLoop() {
-        let output = Compile(TranslateAndValidate(IteratorSource), out _)
+        let output = Compile(TranslateAndValidate(IteratorSource), out _, library: true)
         Assert.DoesNotContain("GS0120", output, StringComparison.Ordinal)
     }
 
@@ -232,7 +232,8 @@ namespace Demo
             return output
         }
 
-        private func Compile(printed string, out dllPath string) string {
+        // A translated snippet without an entry point is a library (issue #5623).
+        private func Compile(printed string, out dllPath string, library bool = false) string {
             let compiler string? = FindCompiler()
             Assert.True(compiler != nil, "gsc.dll must be built before running this test.")
             let workDir = Path.Combine(AppContext.BaseDirectory, "issue-2552-e2e", Guid.NewGuid().ToString("N"))
@@ -240,7 +241,12 @@ namespace Demo
             let gsPath = Path.Combine(workDir, "Snippet.gs")
             dllPath = Path.Combine(workDir, "Snippet.dll")
             File.WriteAllText(gsPath, printed)
-            let (exit, output) = RunDotnet("\"$compiler\" /target:exe /out:\"$dllPath\" \"$gsPath\"")
+            let target = if library {
+                "library"
+            } else {
+                "exe"
+            }
+            let (exit, output) = RunDotnet("\"$compiler\" /target:$target /out:\"$dllPath\" \"$gsPath\"")
             Assert.True(exit == 0, output + Environment.NewLine + printed)
             return output
         }
