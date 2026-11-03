@@ -237,10 +237,11 @@ internal partial class StatementBinder {
 
     /// Binds a loop body while pushing the loop's break/continue labels (and
     /// optional ADR-0070 label name) onto (cref:BinderContext.LoopStack).
-    /// @remarks ADR-0213 section 6 (slice L1): when a fact is in force at the loop, the lower
-    /// bound of the loop is applied to the frames first (cref:ApplyLoopEntryLowerBound), and the
-    /// header and the body are bound once. A fact that survives holds on every iteration, so
-    /// nothing is bound a second time and no state is saved or restored.
+    /// @remarks ADR-0213 section 6 (slice L1): when a fact or an external callable alias is in force
+    /// at the loop, the lower bound of the loop is applied to the state first
+    /// (cref:ApplyLoopEntryLowerBound), and the header and the body are bound once. A fact or an
+    /// alias that survives holds on every iteration, so nothing is bound a second time and no
+    /// state is saved or restored.
     /// @param body The loop body statement.
     /// @param labelName The ADR-0070 label, or `null`.
     /// @param breakLabel The synthesized break label.
@@ -258,7 +259,9 @@ internal partial class StatementBinder {
         bindIteration(() -> BoundStatement)? = nil,
         iterationRunsUserCode bool = false
     ) BoundStatement {
-        if HasAnyActiveNarrowings() {
+        // ADR-0213 section 13 (#5461): the external callable aliases are part of the entry state.
+        // A loop that reassigns an alias must remove it even when no fact is in force.
+        if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
             ApplyLoopEntryLowerBound(body, iterationRunsUserCode)
         }
         binderCtx.LabelCounter++
