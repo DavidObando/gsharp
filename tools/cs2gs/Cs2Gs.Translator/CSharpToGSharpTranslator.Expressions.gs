@@ -2041,8 +2041,8 @@ partial class CSharpToGSharpTranslator {
                     destinationInterface.TypeArguments[0]
                 )
             }
-            if sourceType is not INamedTypeSymbol sourceNamed ||
-                destinationType is not INamedTypeSymbol destinationNamed {
+            if UnwrapNamedOrConstrainedClassType(sourceType) is not{} sourceNamed ||
+                UnwrapNamedOrConstrainedClassType(destinationType) is not{} destinationNamed {
                 return true
             }
             let matchingSource INamedTypeSymbol? = this.GetReceiverTypeHierarchy(sourceNamed).FirstOrDefault(
@@ -2283,14 +2283,23 @@ partial class CSharpToGSharpTranslator {
                 return this.GetEffectiveBaseType(enclosingBaseOwner)
             }
             if expression != nil &&
-                this
-                .context
-                .GetTypeInfo(expression)
-                .Type is INamedTypeSymbol natural &&
+                UnwrapNamedOrConstrainedClassType(this.context.GetTypeInfo(expression).Type) is {} natural &&
                 this.HasProjectedBaseType(natural) {
                 return natural
             }
             return nil
+        }
+
+        private func GetReceiverOwnerType(
+            receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) INamedTypeSymbol? {
+            if receiver == nil {
+                return nil
+            }
+            if Unparenthesize(receiver) is BaseExpressionSyntax baseReceiver {
+                return this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
+            }
+            return UnwrapNamedOrConstrainedClassType(this.context.GetTypeInfo(receiver).Type)
         }
 
         private func HasProjectedBaseType(typeSymbol INamedTypeSymbol?) bool {

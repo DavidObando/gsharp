@@ -7323,6 +7323,7 @@ public class Wrapper<TFirst, TSecond> {
 }
 public class Base<T> {
     private T stored;
+    public byte Flag;
     public T Value;
     public Box<T>? ValueBox;
     public Wrapper<T, ManagedRef<int>> Data = new();
@@ -7340,6 +7341,14 @@ public class Base<T> {
         set { this.stored = value; }
     }
 }
+public class ParamsIndexerBase<T> {
+    private T stored;
+    public T this[params T[] keys] {
+        get => this.stored;
+        set { this.stored = value; }
+    }
+}
+public class ParamsIndexerDerived : ParamsIndexerBase<ManagedRef<int>> { }
 public class Derived : Base<ManagedRef<int>> {
     public void BaseAdd(ManagedRef<int>[] items) => base.Add(items[0]);
     public int BaseRead() => base.Get().Borrow();
@@ -7357,14 +7366,19 @@ public class OpenDerived<U> : Base<ManagedRef<U>> { }
 public class TupleDerived<U> : Base<(ManagedRef<U> Reference, U Value)> { }
 public class Probe {
     private static ref int GetRef(int[] storage, object? ignored) => ref storage[0];
+    private static int ReadConstrained<U>(U item) where U : SubDerived => item.Get().Borrow();
 
     public static int Run() {
         var emptySource = new ManagedRef<int>[1];
         var derived = new Derived();
+        derived.Flag = 0;
         derived.BaseAdd(emptySource);
         derived.Data.UseFirst(emptySource[0]);
         derived[emptySource[0]] = emptySource[0];
         _ = derived[emptySource[0]];
+        var paramsDerived = new ParamsIndexerDerived();
+        paramsDerived[emptySource[0]] = emptySource[0];
+        _ = paramsDerived[emptySource[0]];
         new SubDerived().Add(emptySource[0]);
         new NestedCallDerived().Add(new NestedCallDerived().Id<int>(emptySource[0], 0));
         IMarker marker = new MarkerDerived();
@@ -7394,7 +7408,7 @@ public class Probe {
         var nestedConditional = nullablePopulated?.ValueBox?.Get().Borrow() ?? 0;
         var secondSource = new ManagedRef<int>[1];
         secondSource[0] = ManagedRef<int>.FromArray(values, 1);
-        return (populated.BaseRead() - nestedConditional) + populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
+        return (ReadConstrained(populated) - nestedConditional) + populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
     }
 }`
         let references = List[MetadataReference](
@@ -7410,6 +7424,11 @@ public class Probe {
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
         Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class ParamsIndexerDerived : ParamsIndexerBase[managed[int32]?]",
+            text,
+            StringComparison.Ordinal
+        )
         Assert.Contains("open class SubDerived : Derived", text, StringComparison.Ordinal)
         Assert.Contains("open class NestedCallDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class MarkerDerived : Base[managed[int32]?], IMarker", text, StringComparison.Ordinal)
@@ -7422,9 +7441,12 @@ public class Probe {
         )
         Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
         Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("item.Get()!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("derived.Data.UseFirst(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains("derived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
         Assert.Contains("_ = derived[emptySource[0]]", text, StringComparison.Ordinal)
+        Assert.Contains("paramsDerived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
+        Assert.Contains("_ = paramsDerived[emptySource[0]]", text, StringComparison.Ordinal)
         Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains(
             "NestedCallDerived().Add(NestedCallDerived().Id[int32](emptySource[0], 0))",
@@ -7476,6 +7498,13 @@ public class CollectionBase<T> : IEnumerable<Box<T>> {
     public void AddScalar(T value) { }
     public IEnumerator<Box<T>> GetEnumerator() => null!;
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => null!;
+}
+public class NamedIndexerBase<T> {
+    public void Add(T value) { }
+    public int this[int index, Box<T> key] => 0;
+}
+public static class BoxExtensions {
+    public static void Ignore<U>(this Box<ManagedRef<int>> box, U tag) { }
 }
 public class Base<T> {
     public T ScalarValue;
@@ -7542,12 +7571,18 @@ public class PartialWrapperDerived : Base<ManagedRef<int>> { }
 public class ChainedReadDerived : Base<ManagedRef<int>> { }
 public class CollectionExprDerived : CollectionBase<ManagedRef<int>> { }
 public class CoalesceAssignDerived : Base<ManagedRef<int>> { }
+public class ConstrainedDerived : Base<ManagedRef<int>> { }
+public class ForEachDerived : CollectionBase<ManagedRef<int>> { }
+public class NamedIndexerDerived : NamedIndexerBase<ManagedRef<int>> { }
+public class ValueAssignDerived : Base<ManagedRef<int>> { }
+public class GenericExtDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
     private static void AcceptBox(Box<ManagedRef<int>> value) { }
     private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
+    private static void ReadConstrainedBox<U>(U item) where U : ConstrainedDerived => AcceptBox(item.Value);
 
     public static void Run(
         bool flag,
@@ -7661,6 +7696,27 @@ public class Probe {
         var coalesceAssign = new CoalesceAssignDerived();
         coalesceAssign.Add(source[0]);
         coalesceAssign.NullableBox ??= FixedBox;
+
+        var constrained = new ConstrainedDerived();
+        ReadConstrainedBox(constrained);
+        constrained.Add(source[0]);
+
+        var forEachDerived = new ForEachDerived();
+        foreach (var box in forEachDerived) {
+            AcceptBox(box);
+        }
+        forEachDerived.AddScalar(source[0]);
+
+        var namedIndexer = new NamedIndexerDerived();
+        _ = namedIndexer[key: FixedBox, index: 0];
+        namedIndexer.Add(source[0]);
+
+        var valueAssign = new ValueAssignDerived();
+        AcceptBox(valueAssign.Value = new Box<ManagedRef<int>>(source));
+
+        var genericExt = new GenericExtDerived();
+        genericExt.Add(source[0]);
+        genericExt.Value.Ignore(0);
     }
 }`
         let references = List[MetadataReference](
@@ -7675,14 +7731,14 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            30,
+            34,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
             )
         )
         Assert.Equal(
-            1,
+            2,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed destination storage", StringComparison.Ordinal)
@@ -7733,6 +7789,15 @@ public class Probe {
             StringComparison.Ordinal
         )
         Assert.Contains("open class CoalesceAssignDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ConstrainedDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ForEachDerived : CollectionBase[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class NamedIndexerDerived : NamedIndexerBase[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class ValueAssignDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class GenericExtDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

@@ -4121,7 +4121,7 @@ partial class CSharpToGSharpTranslator {
                     return projectedCurrent.Type
                 }
             }
-            return GetEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
+            return this.GetProjectedEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
         }
 
         private func GetProjectedBindingType(
