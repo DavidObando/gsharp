@@ -425,6 +425,10 @@ public interface IRefTup<T> {
     int Concrete(System.Tuple<int, int> v);
     static abstract System.Tuple<T, int> MakeS(T x);
 }
+public interface IRefTupBase<T, U> {
+    int M((T, U) v);
+}
+public interface IRefTupDerived<T> : IRefTupBase<T, System.Tuple<int, int>> { }
 
 public static class Probe
 {
@@ -464,6 +468,9 @@ public static class Probe
     }
     public static int CallRefTup<T, TImpl>(IRefTup<T> i, T x) where TImpl : IRefTup<T> =>
         i.M(TImpl.MakeS(x)) + i.Concrete(System.Tuple.Create(3, 4));
+    public static System.Tuple<int, int> MakeRefTupPair(int a, int b) => System.Tuple.Create(a, b);
+    public static int CallRefTupDerived<T>(IRefTupDerived<T> i, T x) =>
+        i.M((x, MakeRefTupPair(5, 6)));
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -1401,6 +1408,15 @@ class BadNestedFixedEq : IEquatable[List[[3]int32]] {
     func Equals(other List[[]int32]) bool { return true }
 }
 Console.WriteLine("x")`, "GS0187", "'System.IEquatable[System.Collections.Generic.List[[3]int32]].Equals"}
+            yield[]object{"inherited-reference-tuple-slot-rejects-value-tuple", `package P
+import System
+import Clib
+
+class Shape { }
+class BadInheritedRefTup : IRefTupDerived[Shape] {
+    func M(v (Shape, (int32, int32))) int32 { return 1 }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IRefTupBase"}
         }
 
         /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
@@ -1514,8 +1530,12 @@ class RefTupImpl : IRefTup[Shape] {
     func M(v Tuple[Shape, int32]) int32 -> v.Item1.Tag + v.Item2
     func Concrete(v Tuple[int32, int32]) int32 -> v.Item1 + v.Item2
     shared {
-        func MakeS(x Shape) Tuple[Shape, int32] -> Tuple[Shape, int32](x, 10)
+        func MakeS(x Shape) Tuple[Shape, int32] -> Tuple.Create(x, 10)
     }
+}
+
+class InheritedRefTupImpl : IRefTupDerived[Shape] {
+    func M(v (Shape, Tuple[int32, int32])) int32 -> v.Item1.Tag + v.Item2.Item1 + v.Item2.Item2
 }
 
 let t1 = T1()
@@ -1539,7 +1559,10 @@ let cur = Probe.CallTupPropCurrent[Shape](tp)
 Console.WriteLine(Probe.CallTupPropIndex[Shape](tp, cur))
 let tf = Probe.CallTupFieldPropCurrent[Shape](TupFieldImpl())
 Console.WriteLine(tf.Item1.Tag + tf.Item2)
-Console.WriteLine(Probe.CallRefTup[Shape, RefTupImpl](RefTupImpl(), Shape{Tag: 60}))`), []string{
+Console.WriteLine(Probe.CallRefTup[Shape, RefTupImpl](RefTupImpl(), Shape{Tag: 60}))
+let nonGenericTup Tuple[int32, int32] = Probe.MakeRefTupPair(12, 34)
+let genericConcreteTup Tuple[int32, int32] = Tuple.Create(1, 2)
+Console.WriteLine(Probe.CallRefTupDerived[Shape](InheritedRefTupImpl(), Shape{Tag: 20}) + nonGenericTup.Item1 + nonGenericTup.Item2 + genericConcreteTup.Item2)`), []string{
                     "21",
                     "33",
                     "7:ok",
@@ -1549,7 +1572,8 @@ Console.WriteLine(Probe.CallRefTup[Shape, RefTupImpl](RefTupImpl(), Shape{Tag: 6
                     "24",
                     "42",
                     "53",
-                    "77"
+                    "77",
+                    "79"
                 }}
             yield[]object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
 import System

@@ -2152,7 +2152,7 @@ internal class MemberLookup {
             typeArguments ImmutableArray[TypeSymbol],
             openMethodDefinition MethodInfo?,
             methodTypeArguments ImmutableArray[TypeSymbol?],
-            preserveReferenceTupleIdentity bool = false
+            preserveReferenceTupleIdentity bool = true
         ) TypeSymbol {
             if openClr == nil {
                 return TypeSymbol.Error
@@ -5196,7 +5196,7 @@ internal class MemberLookup {
             openMethodDefinition MethodInfo?,
             methodTypeArguments ImmutableArray[TypeSymbol?],
             reason NullabilityFreeReason,
-            preserveReferenceTupleIdentity bool = false
+            preserveReferenceTupleIdentity bool = true
         ) TypeSymbol {
             return MapOpenClrTypeToSymbolic(
                 openClr,
