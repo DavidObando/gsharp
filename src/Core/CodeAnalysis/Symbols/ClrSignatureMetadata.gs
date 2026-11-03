@@ -65,13 +65,11 @@ internal shared class ClrSignatureMetadata {
         derivedInterface Type,
         slotOwner Type,
         slot MethodInfo,
+        matchesSlotOwner(Type) -> bool,
         out isAbstract bool
     ) bool {
         isAbstract = false
-        if ClrTypeUtilities.AreSame(derivedInterface, slotOwner) || !ClrTypeUtilities.ImplementsInterfaceByName(
-            derivedInterface,
-            slotOwner
-        ) {
+        if !ClrTypeUtilities.ImplementsInterfaceByName(derivedInterface, slotOwner) {
             return false
         }
         using let image = ReferenceResolver.OpenAssemblyImage(derivedInterface.Assembly)
@@ -108,7 +106,8 @@ internal shared class ClrSignatureMetadata {
                 case HandleKind.MethodDefinition {
                     matchesSlot = derivedInterface.Module == slot.Module && MetadataTokens.GetToken(
                         impl.MethodDeclaration
-                    ) == slot.MetadataToken
+                    ) == slot.MetadataToken &&
+                        matchesSlotOwner(slotOwner)
                 }
                 case HandleKind.MemberReference {
                     let memberRef = reader.GetMemberReference(cast[MemberReferenceHandle](impl.MethodDeclaration))
@@ -116,10 +115,10 @@ internal shared class ClrSignatureMetadata {
                         continue
                     }
                     let matchedIface = TryMatch(reader, memberRef.Parent, ifaceMatcher, candidates)
-                    if matchedIface == nil || !ClrTypeUtilities.AreSame(matchedIface, slotOwner) {
+                    if matchedIface == nil || !matchesSlotOwner(matchedIface) {
                         continue
                     }
-                    let sig = memberRef.DecodeMethodSignature(SignatureMatcher(matchedIface, slot), default(object))
+                    let sig = memberRef.DecodeMethodSignature(SignatureMatcher(slotOwner, slot), default(object))
                     if sig.GenericParameterCount != slotGenericArity ||
                         sig
                         .ParameterTypes
@@ -390,10 +389,17 @@ internal shared class ClrSignatureMetadata {
         }
 
         func GetGenericTypeParameter(context object, index int32) Func[Type, bool] ->
-        (actual Type) -> index < typeArguments.Length && ClrTypeUtilities.AreSame(actual, typeArguments[index])
+        (actual Type) -> index < typeArguments.Length && SameTypeOrParameter(actual, typeArguments[index])
 
         func GetGenericMethodParameter(context object, index int32) Func[Type, bool] ->
-        (actual Type) -> index < methodArguments.Length && ClrTypeUtilities.AreSame(actual, methodArguments[index])
+        (actual Type) -> index < methodArguments.Length && SameTypeOrParameter(actual, methodArguments[index])
+
+        private func SameTypeOrParameter(actual Type, expected Type) bool ->
+        if actual.IsGenericParameter || expected.IsGenericParameter {
+            actual == expected
+        } else {
+            ClrTypeUtilities.AreSame(actual, expected)
+        }
 
         func GetPrimitiveType(code PrimitiveTypeCode) Func[Type, bool] ->
         (actual Type) -> actual.FullName == "System." + code.ToString()

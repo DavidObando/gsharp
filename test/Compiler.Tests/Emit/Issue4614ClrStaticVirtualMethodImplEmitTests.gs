@@ -189,6 +189,10 @@ public interface IInst<T> { int N<U>(T x, U y); }
 public interface IMA<T> { static abstract int M<U>(U[] us, T x); }
 public interface IArr<T> { int A(T[] xs); int B<U>(U[] us, T x); }
 public interface IDefaultedByDerived : IS { static int IS.Z() => 100; }
+public interface IDefaultedGeneric<T> : IH<T> { static int IH<T>.H(T x) => 200; }
+public interface IGenOverload { static abstract int Pick<T, U>(T x); static abstract int Pick<T, U>(U x); }
+public interface IDefaultedFirstOverload : IGenOverload { static int IGenOverload.Pick<T, U>(T x) => 300; }
+public class MultiConstraint<T, U> where T : System.IComparable<T>, System.IComparable<U> { public static int Touch(T? x) => 0; }
 public interface IAsync<T> { static abstract System.Threading.Tasks.Task<T> Load(T x); }
 
 public static class Probe
@@ -677,6 +681,25 @@ class DPriv2 : BPriv, IS2 {
 
 Console.WriteLine(Probe.Z[DPriv]())
 Console.WriteLine(Probe.Z[DPriv2]())`, []string{"31", "31"}}
+            yield[]object{"generic-static-method-with-renamed-type-parameter-in-slice", `package P
+import System
+import Clib
+
+interface IGsGenSlice {
+    shared {
+        func M[T](xs []T) int32;
+    }
+}
+open class BGsGenSlice {
+    shared {
+        func M[U](xs []U) int32 { return xs.Length }
+    }
+}
+class DGsGenSlice : BGsGenSlice, IGsGenSlice {
+}
+
+let m = typeof(DGsGenSlice).GetInterfaceMap(typeof(IGsGenSlice)).TargetMethods[0].MakeGenericMethod(typeof(string))
+Console.WriteLine(m.Invoke(nil, []object?{[]string{"a", "b", "c"}}))`, []string{"3"}}
         }
 
         /// Issue #4618: missing or mismatched implementations of imported
@@ -793,6 +816,41 @@ open class BRef {
 class DRef : BRef, IGsRef {
 }
 Console.WriteLine("x")`, "GS0331", "'IGsRef.Z'"}
+            yield[]object{"mismatched-return-ref-kind-on-gsharp-interface-static-property", `package P
+import System
+import Clib
+
+interface IGsPropRef {
+    shared {
+        prop P int32 { get }
+    }
+}
+open class BPropRef {
+    shared {
+        var slot int32 = 5
+        prop P ref int32 { get { return ref slot } }
+    }
+}
+class DPropRef : BPropRef, IGsPropRef {
+}
+Console.WriteLine("x")`, "GS0397", "'IGsPropRef.P' (missing static property)"}
+            yield[]object{"symbolic-derived-default-does-not-satisfy-distinct-instantiation", `package P
+import System
+import Clib
+
+class Shape { }
+class Other { }
+struct S : IDefaultedGeneric[Shape], IH[Other] {
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IH[Other].H(T)'"}
+            yield[]object{"multi-parameter-derived-default-leaves-second-parameter-abstract", `package P
+import System
+import Clib
+
+struct S : IDefaultedFirstOverload {
+}
+let _ = MultiConstraint[int32, int32].Touch(0)
+Console.WriteLine("x")`, "GS0331", "'Clib.IGenOverload.Pick(U)'"}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {

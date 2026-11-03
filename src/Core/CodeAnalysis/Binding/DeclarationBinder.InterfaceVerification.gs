@@ -1377,7 +1377,7 @@ internal partial class DeclarationBinder {
                     )
                     continue
                 }
-                if !IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slot) || satisfiedByBase {
+                if !IsClrInterfaceSlotAbstractInClosure(closure, slotOwnerSymbol, slotOwner, slot) || satisfiedByBase {
                     continue
                 }
                 var reportedNonStatic = false
@@ -1421,9 +1421,19 @@ internal partial class DeclarationBinder {
                 if slotGetter == nil && slotSetter == nil {
                     continue
                 }
-                let requiresGetter = IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotGetter) &&
+                let requiresGetter = IsClrInterfaceSlotAbstractInClosure(
+                    closure,
+                    slotOwnerSymbol,
+                    slotOwner,
+                    slotGetter
+                ) &&
                     !satisfiedByBase
-                let requiresSetter = IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotSetter) &&
+                let requiresSetter = IsClrInterfaceSlotAbstractInClosure(
+                    closure,
+                    slotOwnerSymbol,
+                    slotOwner,
+                    slotSetter
+                ) &&
                     !satisfiedByBase
                 if !TryFindClrStaticVirtualPropertyImplementation(
                     structSymbol,
@@ -1507,8 +1517,8 @@ internal partial class DeclarationBinder {
                     continue
                 }
                 let isRequired = (
-                    IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotAdd) ||
-                        IsClrInterfaceSlotAbstractInClosure(closure, slotOwner, slotRemove)
+                    IsClrInterfaceSlotAbstractInClosure(closure, slotOwnerSymbol, slotOwner, slotAdd) ||
+                        IsClrInterfaceSlotAbstractInClosure(closure, slotOwnerSymbol, slotOwner, slotRemove)
                 ) &&
                     !satisfiedByBase
                 if !isRequired {
@@ -2377,40 +2387,18 @@ internal partial class DeclarationBinder {
         /// implicit `this`, so all parameters are direct and compared by
         /// type identity and ref-kind.
         internal func StaticVirtualSignaturesMatch(iface FunctionSymbol, impl FunctionSymbol) bool {
-            // ADR-0186: exact identity, or conformance — which reads through a
-            // platform position at any depth (`List[Item!]?` against
-            // `List[Item]?`) and is otherwise the ordinary signature comparison.
-            let StaticVirtualTypesMatch = func (a TypeSymbol, b TypeSymbol) bool {
-                return EqualityComparer[TypeSymbol].Default.Equals(a, b) ||
-                    (
-                    a is TypeParameterSymbol tpA &&
-                        b is TypeParameterSymbol tpB &&
-                        tpA.IsMethodTypeParameter &&
-                        tpB.IsMethodTypeParameter &&
-                        tpA.Ordinal == tpB.Ordinal
-                ) ||
-                    ConformanceSignaturesEquivalent(a, b)
-            }
-            if iface
-                .TypeParameters
-                .Length != impl
-                .TypeParameters
-                .Length ||
-                iface
-                .Parameters
-                .Length != impl
-                .Parameters
-                .Length {
+            let typeParamMap = TryBuildMethodTypeParameterMap(iface, impl)
+            if typeParamMap == nil || iface.Parameters.Length != impl.Parameters.Length {
                 return false
             }
-            if !StaticVirtualTypesMatch(iface.Type, impl.Type) {
+            if !ConformanceSignaturesEquivalent(iface.Type, impl.Type, typeParamMap) {
                 return false
             }
             if iface.ReturnRefKind != impl.ReturnRefKind {
                 return false
             }
             for var i = 0; i < iface.Parameters.Length; i++ {
-                if !StaticVirtualTypesMatch(iface.Parameters[i].Type, impl.Parameters[i].Type) {
+                if !ConformanceSignaturesEquivalent(iface.Parameters[i].Type, impl.Parameters[i].Type, typeParamMap) {
                     return false
                 }
                 if iface.Parameters[i].RefKind != impl.Parameters[i].RefKind {
@@ -2462,13 +2450,14 @@ internal partial class DeclarationBinder {
 
         private func IsClrInterfaceSlotAbstractInClosure(
             closure IReadOnlyList[(Symbolic TypeSymbol?, Concrete Type?)],
+            slotOwnerSymbol TypeSymbol,
             slotOwner Type,
             slot MethodInfo?
         ) bool {
             if slot == nil {
                 return false
             }
-            var currentOwner = slotOwner
+            var currentOwnerSymbol = slotOwnerSymbol
             var isAbstract = slot.IsAbstract
             for (symbolicIface, concreteIface) in closure {
                 let candidateOwner Type? = if symbolicIface != nil {
@@ -2476,20 +2465,48 @@ internal partial class DeclarationBinder {
                 } else {
                     concreteIface
                 }
-                if candidateOwner == nil || ClrTypeUtilities.AreSame(candidateOwner, slotOwner) {
+                if candidateOwner == nil {
                     continue
                 }
-                if ClrSignatureMetadata.TryGetInterfaceSlotOverrideIsAbstract(
+                let candidateOwnerSymbol = symbolicIface ?? TypeSymbol.FromClrTypeWithoutNullability(
                     candidateOwner,
+                    NullabilityFreeReason.TypeStructure
+                )
+                if ExactInterfaceTypeMatches(candidateOwnerSymbol, slotOwnerSymbol) ||
+                    !ClrTypeImplementsInterface(candidateOwnerSymbol, slotOwnerSymbol) {
+                    continue
+                }
+                var inspectInterface = candidateOwner
+                var matchesSlotOwner = (matchedIface Type) -> ClrTypeUtilities.AreSame(matchedIface, slotOwner)
+                if symbolicIface != nil {
+                    if MemberLookup.TryGetSymbolicClrGenericInterface(
+                        symbolicIface,
+                        out var openCandidate,
+                        out var candidateSymbolicArgs
+                    ) {
+                        let openCandidateType Type = openCandidate
+                        inspectInterface = openCandidateType
+                        matchesSlotOwner = (matchedIface Type) -> ExactInterfaceTypeMatches(
+                            MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                                matchedIface,
+                                openCandidateType,
+                                candidateSymbolicArgs,
+                                NullabilityFreeReason.TypeStructure
+                            ),
+                            slotOwnerSymbol
+                        )
+                    }
+                }
+                if ClrSignatureMetadata.TryGetInterfaceSlotOverrideIsAbstract(
+                    inspectInterface,
                     slotOwner,
                     slot,
+                    matchesSlotOwner,
                     out var overrideIsAbstract
                 ) {
-                    if ClrTypeUtilities.AreSame(currentOwner, slotOwner) || ClrTypeUtilities.ImplementsInterfaceByName(
-                        candidateOwner,
-                        currentOwner
-                    ) {
-                        currentOwner = candidateOwner
+                    if ExactInterfaceTypeMatches(currentOwnerSymbol, slotOwnerSymbol) ||
+                        ClrTypeImplementsInterface(candidateOwnerSymbol, currentOwnerSymbol) {
+                        currentOwnerSymbol = candidateOwnerSymbol
                         isAbstract = overrideIsAbstract
                     }
                 }
@@ -2613,9 +2630,9 @@ internal partial class DeclarationBinder {
             let typeParameterMap = BuildInterfaceTypeParameterMap(iface)
             for current in structSymbol.GetHierarchy() {
                 for candidate in current.StaticProperties {
-                    if candidate.Name == slotProp.Name && MemberLookup.IsImplicitInterfaceImplementationCandidate(
-                        candidate
-                    ) &&
+                    if candidate.Name == slotProp.Name &&
+                        candidate.ReturnRefKind == slotProp.ReturnRefKind &&
+                        MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate) &&
                         (
                         object.ReferenceEquals(current, structSymbol) || candidate.Accessibility == Accessibility.Public
                     ) &&
