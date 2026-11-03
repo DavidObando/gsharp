@@ -1183,7 +1183,7 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
-        // Issue #4316: a `nil` from a block, a conditional or a switch converts at each result (see
+        // Issue #4316: a `nil` from a block, a conditional, a switch or `??` converts at each result (see
         // `TryConvertEachResult`), so the effects before the `nil` still run.
         if expression.Type == TypeSymbol.Null &&
             TryConvertEachResult(diagnosticLocation, expression, type!!, allowExplicit) is {} convertedResults {
@@ -3596,9 +3596,10 @@ internal class ConversionClassifier {
     /// Issue #4316: `nil` and a tuple with a `nil` element (`(nil, int32)`) have no runtime
     /// representation, so no temp, result local or slot may take that type. A source of such a type
     /// that has several possible values converts each of them instead: a block's trailing value,
-    /// both conditional arms and every switch result. The block statements, the condition, the
-    /// discriminant and the guards stay where they are and run once; each result goes back through
-    /// `BindConversion`, so nested forms recurse down to the `nil` literals.
+    /// both conditional arms, every switch result and a `nil ?? rhs` fallback. The block statements,
+    /// the condition, the discriminant, the guards and a `nil`-typed left operand stay where they
+    /// are and run once; each result goes back through `BindConversion`, so nested forms recurse
+    /// down to the `nil` literals.
     /// @param diagnosticLocation The conversion site.
     /// @param expression The source, typed `nil` or a tuple with a `nil` element.
     /// @param type The target type.
@@ -3645,6 +3646,34 @@ internal class ConversionClassifier {
                     arms.MoveToImmutable(),
                     type
                 )
+            }
+            case coalesce is BoundBinaryExpression when coalesce
+                .Op
+                .Kind == BoundBinaryOperatorKind.NullCoalesce &&
+                coalesce
+                .Left
+                .Type == TypeSymbol
+                .Null {
+                let right = BindConversion(diagnosticLocation, coalesce.Right, type, allowExplicit)
+                return if StatementBinder.IsNilLiteral(coalesce.Left) {
+                    right
+                } else {
+                    BoundBlockExpression(
+                        coalesce.Syntax,
+                        ImmutableArray.Create[BoundStatement](
+                            BoundExpressionStatement(
+                                coalesce.Left.Syntax,
+                                BindConversion(
+                                    diagnosticLocation,
+                                    coalesce.Left,
+                                    NullableTypeSymbol.Get(TypeSymbol.Object),
+                                    allowExplicit
+                                )
+                            )
+                        ),
+                        right
+                    )
+                }
             }
             default {
                 return nil

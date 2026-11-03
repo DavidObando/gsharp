@@ -83,6 +83,22 @@ func SwitchElement(ctr Ctr, c bool, i int32) (int32?, int32) {
     return t
 }
 
+func CoalesceElement(ctr Ctr, c bool, i int32) (int32?, int32) {
+    let t = c ? (1, 1) : (nil ?? (switch Count(ctr, i) {
+        default: nil
+    }), 2)
+    return t
+}
+
+func CoalesceEffects(ctr Ctr, c bool, i int32, j int32) (int32?, int32) {
+    let t = c ? (1, 1) : ((switch Count(ctr, i) {
+        default: nil
+    }) ?? (switch Count(ctr, j) {
+        default: (nil, 2)
+    }))
+    return t
+}
+
 func Main() {
     let ctr = Ctr()
     let a = Nested(ctr, false, 0)
@@ -102,6 +118,12 @@ func Main() {
     ctr.n = 0
     let m = SwitchElement(ctr, false, 4)
     Console.WriteLine("switch ${m.Item1 == nil} ${m.Item2} ticks=${ctr.n}")
+    ctr.n = 0
+    let p = CoalesceElement(ctr, false, 4)
+    Console.WriteLine("coalesce ${p.Item1 == nil} ${p.Item2} ticks=${ctr.n}")
+    ctr.n = 0
+    let q = CoalesceEffects(ctr, false, 4, 7)
+    Console.WriteLine("coalesce-effects ${q.Item1 == nil} ${q.Item2} ticks=${ctr.n}")
 }
 `)
         Assert.Contains("nested True 2 x 1 3 ticks=5", output)
@@ -109,6 +131,8 @@ func Main() {
         Assert.Contains("targeted True 2 ticks=1", output)
         Assert.Contains("untargeted True 2 ticks=1", output)
         Assert.Contains("switch True 2 ticks=1", output)
+        Assert.Contains("coalesce True 2 ticks=1", output)
+        Assert.Contains("coalesce-effects True 2 ticks=2", output)
     }
 
     shared {
