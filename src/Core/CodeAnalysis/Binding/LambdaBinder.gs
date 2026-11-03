@@ -2250,9 +2250,10 @@ internal class LambdaBinder {
                 return true
             }
             if current.ClassConstraint is {} classConstraint &&
+                classConstraint != TypeSymbol.Object &&
                 classConstraint
                 .ClrType
-                ?.FullName is not("System.Enum" or "System.ValueType") {
+                ?.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
                 return true
             }
             let next = current.TypeParameterBound

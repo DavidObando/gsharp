@@ -218,6 +218,10 @@ func MakeEnumIdentity[T Enum](value T) () -> Task[T] -> value.DelayIdentityAsync
 
 func MakeDependentEnumSave[T Enum, U T](value U) () -> Task -> value.SaveAsync
 
+func MakeObjectIdentity[T System.Object](value T) () -> Task[T] -> value.DelayIdentityAsync
+
+func MakeDependentObjectSave[T System.Object, U T](value U) () -> Task -> value.SaveAsync
+
 func MakeSave[T](value T) () -> Task -> value.SaveAsync
 
 func RunTask[T](step () -> Task[T]) T -> step().GetAwaiter().GetResult()
@@ -239,6 +243,8 @@ let openGenericRef = MakeIdentity("open")
 let openGenericVal = MakeIdentity(21)
 let enumGenericVal = MakeEnumIdentity(DayOfWeek.Friday)
 let dependentEnumSave = MakeDependentEnumSave[DayOfWeek, DayOfWeek](DayOfWeek.Monday)
+let objectBoundVal = MakeObjectIdentity(31)
+let dependentObjectSave = MakeDependentObjectSave[int32, int32](32)
 let saveFromInt = MakeSave(1)
 let overloadZero async () -> int32 = "four".ComputeAsync
 let overloadOne async (int32) -> int32 = "four".ComputeAsync
@@ -262,6 +268,8 @@ Console.WriteLine(openGenericRef().GetAwaiter().GetResult())
 Console.WriteLine(openGenericVal().GetAwaiter().GetResult())
 Console.WriteLine(enumGenericVal().GetAwaiter().GetResult())
 dependentEnumSave().GetAwaiter().GetResult()
+Console.WriteLine(objectBoundVal().GetAwaiter().GetResult())
+dependentObjectSave().GetAwaiter().GetResult()
 saveFromInt().GetAwaiter().GetResult()
 Console.WriteLine(overloadZero().GetAwaiter().GetResult())
 Console.WriteLine(overloadOne(3).GetAwaiter().GetResult())
@@ -298,6 +306,8 @@ Console.WriteLine(Task.Run(Payload(77).DelayIdentityAsync).GetAwaiter().GetResul
                 "21",
                 "Friday",
                 "saved:Monday",
+                "31",
+                "saved:32",
                 "saved:1",
                 "4",
                 "7",
