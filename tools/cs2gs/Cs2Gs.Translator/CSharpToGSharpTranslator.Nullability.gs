@@ -28,6 +28,11 @@ partial class CSharpToGSharpTranslator {
             SymbolEqualityComparer.Default
         )
 
+        private let nonParamsTypeParameterBounds Dictionary[
+            (Call SyntaxNode, ParameterName string, TypeParameterOrdinal int32),
+            bool
+        ] = Dictionary[(Call SyntaxNode, ParameterName string, TypeParameterOrdinal int32), bool]()
+
         private var repositoryCompilationsByIdentity Dictionary[AssemblyIdentity, CSharpCompilation]?
         private var repositorySharedDocumentPaths HashSet[string]?
 
@@ -1261,6 +1266,10 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             typeParameter ITypeParameterSymbol
         ) bool {
+            if parameter.ContainingSymbol is IMethodSymbol{Parameters: {Length: 1}, ReducedFrom: nil} ||
+                parameter.ContainingSymbol is IPropertySymbol{Parameters: {Length: 1}} {
+                return false
+            }
             let enclosingArgument ArgumentSyntax? = if callSite == nil {
                 default(ArgumentSyntax?)
             } else {
@@ -1270,6 +1279,28 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let callNode = argumentList.Parent!!
+            let cacheKey = (callNode, parameter.Name, typeParameter.Ordinal)
+            if this.nonParamsTypeParameterBounds.TryGetValue(cacheKey, out var cached) {
+                return cached
+            }
+            let computed = this.ComputeOtherArgumentFixesTypeParameterToNonNull(
+                callNode,
+                argumentList,
+                enclosingArgument,
+                parameter,
+                typeParameter
+            )
+            this.nonParamsTypeParameterBounds[cacheKey] = computed
+            return computed
+        }
+
+        private func ComputeOtherArgumentFixesTypeParameterToNonNull(
+            callNode SyntaxNode,
+            argumentList BaseArgumentListSyntax,
+            enclosingArgument ArgumentSyntax?,
+            parameter IParameterSymbol,
+            typeParameter ITypeParameterSymbol
+        ) bool {
             let receiverExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch callNode {
                 case InvocationExpressionSyntax{
                     Expression: MemberAccessExpressionSyntax memberAccess
@@ -1307,8 +1338,9 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
             }
-            for otherArgument in argumentList.Arguments {
-                if otherArgument == enclosingArgument {
+            for var i = 0; i < argumentList.Arguments.Count; i++ {
+                let otherArgument = argumentList.Arguments[i]
+                if otherArgument == enclosingArgument || (otherArgument.NameColon == nil && i >= parameter.Ordinal) {
                     continue
                 }
                 let otherParameter IParameterSymbol? = this.GetArgumentParameter(otherArgument)
@@ -1391,7 +1423,14 @@ partial class CSharpToGSharpTranslator {
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
             if symbol is IMethodSymbol callableMethod &&
-                (unwrapped is AnonymousFunctionExpressionSyntax || !(unwrapped is InvocationExpressionSyntax)) {
+                (
+                unwrapped is AnonymousFunctionExpressionSyntax ||
+                    (
+                    callableMethod.MethodKind != MethodKind.Constructor &&
+                        !(unwrapped is InvocationExpressionSyntax) &&
+                        !(unwrapped is BaseObjectCreationExpressionSyntax)
+                )
+            ) {
                 return this.ProjectCallableNullablePositions(unwrapped, callableMethod)
             }
             var result ObliviousPositionSet? = nil
@@ -1448,13 +1487,24 @@ partial class CSharpToGSharpTranslator {
             for var i = 0; i < invokeDefinition.Parameters.Length; i++ {
                 let parameterSymbol = callableMethod.Parameters[i]
                 let parameterPositions = this.GetCallableSymbolNullablePositions(parameterSymbol)
+                let parameterVariance = if invokeDefinition.Parameters[i].RefKind != RefKind.None {
+                    VarianceKind.None
+                } else {
+                    VarianceKind.In
+                }
                 MergeCallableSlotPositions(
                     invokeDefinition.Parameters[i].Type,
                     parameterSymbol.Type,
                     parameterPositions,
+                    parameterVariance,
                     bindings,
                     boundParameters
                 )
+            }
+            let returnVariance = if invokeDefinition.ReturnsByRef || invokeDefinition.ReturnsByRefReadonly {
+                VarianceKind.None
+            } else {
+                VarianceKind.Out
             }
             if !(unwrapped is AnonymousFunctionExpressionSyntax) && !invokeDefinition.ReturnsVoid {
                 let returnPositions = this.GetCallableSymbolNullablePositions(callableMethod)
@@ -1462,6 +1512,7 @@ partial class CSharpToGSharpTranslator {
                     invokeDefinition.ReturnType,
                     callableMethod.ReturnType,
                     returnPositions,
+                    returnVariance,
                     bindings,
                     boundParameters
                 )
@@ -1483,6 +1534,7 @@ partial class CSharpToGSharpTranslator {
                     invokeDefinition.ReturnType,
                     callableMethod.ReturnType,
                     returnPositions,
+                    returnVariance,
                     bindings,
                     boundParameters
                 )
@@ -1668,9 +1720,15 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         parameterSymbol.Type
                     }
+                    let parameterVariance = if invokeDefinition.Parameters[i].RefKind != RefKind.None {
+                        VarianceKind.None
+                    } else {
+                        VarianceKind.In
+                    }
                     BindCallableTypeParameters(
                         invokeDefinition.Parameters[i].Type,
                         parameterType,
+                        parameterVariance,
                         bindings,
                         this.context.Compilation
                     )
@@ -1685,9 +1743,15 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         callableMethod.ReturnType
                     }
+                    let returnVariance = if invokeDefinition.ReturnsByRef || invokeDefinition.ReturnsByRefReadonly {
+                        VarianceKind.None
+                    } else {
+                        VarianceKind.Out
+                    }
                     BindCallableTypeParameters(
                         invokeDefinition.ReturnType,
                         returnType,
+                        returnVariance,
                         bindings,
                         this.context.Compilation
                     )
@@ -2662,6 +2726,7 @@ partial class CSharpToGSharpTranslator {
                 slotPattern ITypeSymbol,
                 slotActual ITypeSymbol?,
                 slotPositions ObliviousPositionSet?,
+                slotVariance VarianceKind,
                 bindings Dictionary[ITypeParameterSymbol, ObliviousPositionSet],
                 boundParameters HashSet[ITypeParameterSymbol]
             ) {
@@ -2680,13 +2745,26 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         ObliviousPositionSet()
                     }
+                    let covariantTopLevel = slotVariance == VarianceKind.Out && SymbolEqualityComparer.Default.Equals(
+                        slotPattern,
+                        typeParameter
+                    ) &&
+                        slotActual?.IsReferenceType == true
                     if boundParameters.Add(typeParameter) {
                         let copy = ObliviousPositionSet()
                         copy.UnionWith(incoming)
                         bindings[typeParameter] = copy
                     } else if bindings.TryGetValue(typeParameter, out var existing) {
+                        let keepTopNullable = covariantTopLevel && existing.Nullable.Contains("")
+                        let keepTopPlatform = covariantTopLevel && existing.Platform.Contains("")
                         existing.Nullable.IntersectWith(incoming.Nullable)
                         existing.Platform.IntersectWith(incoming.Platform)
+                        if keepTopNullable {
+                            existing.Nullable.Add("")
+                        }
+                        if keepTopPlatform {
+                            existing.Platform.Add("")
+                        }
                     }
                 }
             }
@@ -2711,6 +2789,7 @@ partial class CSharpToGSharpTranslator {
             private func BindCallableTypeParameters(
                 patternType ITypeSymbol?,
                 actualType ITypeSymbol?,
+                variance VarianceKind,
                 bindings Dictionary[ITypeParameterSymbol, ITypeSymbol],
                 compilation Compilation
             ) {
@@ -2718,15 +2797,22 @@ partial class CSharpToGSharpTranslator {
                     return
                 }
                 if patternType is ITypeParameterSymbol typeParameter {
+                    let boundActual = ToCallableBoundType(actualType, variance, compilation)
                     if bindings.TryGetValue(typeParameter, out var existing) {
-                        bindings[typeParameter] = ReconcileCallableBoundType(existing, actualType, compilation)
+                        bindings[typeParameter] = ReconcileCallableBoundType(existing, boundActual, compilation)
                     } else {
-                        bindings[typeParameter] = actualType
+                        bindings[typeParameter] = boundActual
                     }
                     return
                 }
                 if patternType is IArrayTypeSymbol patternArray && actualType is IArrayTypeSymbol actualArray {
-                    BindCallableTypeParameters(patternArray.ElementType, actualArray.ElementType, bindings, compilation)
+                    BindCallableTypeParameters(
+                        patternArray.ElementType,
+                        actualArray.ElementType,
+                        VarianceKind.None,
+                        bindings,
+                        compilation
+                    )
                     return
                 }
                 if patternType is INamedTypeSymbol patternNamed && FlatTypeArguments(patternNamed).Count > 0 {
@@ -2748,10 +2834,87 @@ partial class CSharpToGSharpTranslator {
                     if matchingActual != nil {
                         let patternArgs = FlatTypeArguments(effectivePattern)
                         let actualArgs = FlatTypeArguments(matchingActual)
+                        let containingOffset = if effectivePattern.ContainingType != nil {
+                            FlatTypeArguments(effectivePattern.ContainingType).Count
+                        } else {
+                            0
+                        }
                         for var i = 0; i < patternArgs.Count && i < actualArgs.Count; i++ {
-                            BindCallableTypeParameters(patternArgs[i], actualArgs[i], bindings, compilation)
+                            let parameterVariance = if i < containingOffset {
+                                VarianceKind.None
+                            } else if effectivePattern.IsTupleType {
+                                VarianceKind.Out
+                            } else {
+                                effectivePattern.TypeParameters[i - containingOffset].Variance
+                            }
+                            let composedVariance = if variance == VarianceKind.None ||
+                                parameterVariance == VarianceKind.None {
+                                VarianceKind.None
+                            } else if variance == parameterVariance {
+                                VarianceKind.Out
+                            } else {
+                                VarianceKind.In
+                            }
+                            BindCallableTypeParameters(
+                                patternArgs[i],
+                                actualArgs[i],
+                                composedVariance,
+                                bindings,
+                                compilation
+                            )
                         }
                     }
+                }
+            }
+
+            private func ToCallableBoundType(
+                actualType ITypeSymbol,
+                variance VarianceKind,
+                compilation Compilation
+            ) ITypeSymbol {
+                var result = actualType
+                if result is IArrayTypeSymbol arrayType {
+                    let element = ToCallableBoundType(arrayType.ElementType, VarianceKind.None, compilation)
+                    result = compilation.CreateArrayTypeSymbol(element, arrayType.Rank).WithNullableAnnotation(
+                        arrayType.NullableAnnotation
+                    )
+                } else if result is INamedTypeSymbol{IsGenericType: true} namedType &&
+                    namedType
+                    .TypeArguments
+                    .Length == namedType
+                    .TypeParameters
+                    .Length &&
+                    namedType
+                    .TypeArguments
+                    .Length > 0 {
+                    let typeArguments = List[ITypeSymbol](namedType.TypeArguments.Length)
+                    for var i = 0; i < namedType.TypeArguments.Length; i++ {
+                        let parameterVariance = if namedType.IsTupleType {
+                            VarianceKind.Out
+                        } else {
+                            namedType.TypeParameters[i].Variance
+                        }
+                        let composedVariance = if variance == VarianceKind.None ||
+                            parameterVariance == VarianceKind.None {
+                            VarianceKind.None
+                        } else if variance == parameterVariance {
+                            VarianceKind.Out
+                        } else {
+                            VarianceKind.In
+                        }
+                        typeArguments.Add(
+                            ToCallableBoundType(namedType.TypeArguments[i], composedVariance, compilation)
+                        )
+                    }
+                    result = namedType
+                        .OriginalDefinition
+                        .Construct(typeArguments.ToArray())
+                        .WithNullableAnnotation(namedType.NullableAnnotation)
+                }
+                return if variance == VarianceKind.Out && result.IsReferenceType {
+                    result.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                } else {
+                    result
                 }
             }
 

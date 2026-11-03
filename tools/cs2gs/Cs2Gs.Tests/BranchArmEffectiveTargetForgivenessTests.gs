@@ -274,6 +274,29 @@ namespace App
             return TakeFromAsyncGetterParams(async () => { await System.Threading.Tasks.Task.Yield(); return lines; }, i > 0 ? argument.Value : argument.Name, "tail");
         }
 
+        public static string PromotedDirectConstructionArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return FixedByListOrNullParams(new System.Collections.Generic.List<string>(lines), i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedDirectConstructionReceiverAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return new System.Collections.Generic.List<string>(lines).PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public delegate T MapDelegate<T>(T x);
+
+        public static T MapParams<T>(MapDelegate<T> f, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string Normalize(string? x) => x ?? "";
+
+        public static string MapWithNullableParameterAllowsInference(Model.Arg argument, int i) =>
+            MapParams(Normalize, i > 0 ? argument.Value : argument.Name, "tail");
+
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
 
@@ -463,6 +486,10 @@ namespace App
 
         public static T FixedByJaggedPairConsumerParams<T>(JaggedPairConsumer<T> consume, params System.ReadOnlySpan<T> values) => values[0];
 
+        public delegate T MapDelegate<T>(T x);
+
+        public static T FixedByMapParams<T>(MapDelegate<T> f, params System.ReadOnlySpan<T> values) => values[0];
+
         public static void Consume(string s) { }
 
         public static void Consume(int n) { }
@@ -471,6 +498,8 @@ namespace App
         public static void ConsumePair(string? first, string second) { }
 
         public static void ConsumeJaggedPair(string?[][] first, string[][] second) { }
+
+        public static string? BadMap(string x) => null;
 #nullable restore
 
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
@@ -536,6 +565,9 @@ namespace App
         public static string FixedByReconciledJaggedMethodGroupParamsCall(Model.Arg argument, int i) =>
             FixedByJaggedPairConsumerParams(ConsumeJaggedPair, i > 21 ? "u" : argument.Name, "tail");
 
+        public static string FixedByNonNullInputMapParamsCall(Model.Arg argument, int i) =>
+            FixedByMapParams(BadMap, i > 22 ? "v" : argument.Name, "tail");
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
         public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
@@ -585,6 +617,7 @@ namespace App
         Assert.Contains("if i > 19 { \"s\" } else { argument.Name!! }", printed)
         Assert.Contains("if i > 20 { \"t\" } else { argument.Name!! }", printed)
         Assert.Contains("if i > 21 { \"u\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 22 { \"v\" } else { argument.Name!! }", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
