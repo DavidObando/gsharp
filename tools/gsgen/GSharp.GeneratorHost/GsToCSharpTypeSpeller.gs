@@ -61,6 +61,15 @@ class GsToCSharpTypeSpeller {
                     SpellCore(nullable.UnderlyingType, eraseReferenceNullability: true, recordFallback)
                 }
             }
+            case _ when eraseReferenceNullability && TupleTypeSymbol.TryGetTupleShape(type, out var tupleElements) {
+                return "(" + string.Join(
+                    ", ",
+                    tupleElements.Select(
+                        (element TypeSymbol) -> SpellCore(element, eraseReferenceNullability: true, recordFallback)
+                    )
+                ) +
+                    ")"
+            }
             case tp is TypeParameterSymbol {
                 return tp.Name
             }

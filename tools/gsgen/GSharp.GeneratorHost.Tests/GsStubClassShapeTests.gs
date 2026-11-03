@@ -554,6 +554,13 @@ class Plain {
         "Protected(Base);Public();Public(Base)",
         "Protected(Target);Public()"
     )
+    @InlineData(
+        "open class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target[V] : Base[(V, int32), System.ValueTuple[V, int32]] {}",
+        "App.Target`1",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
     func ClassFallbackCopyConstructor_DoesNotDuplicateExplicitCopyConstructorAcrossPartialDeclarations(
         firstPart string,
         secondPart string,
