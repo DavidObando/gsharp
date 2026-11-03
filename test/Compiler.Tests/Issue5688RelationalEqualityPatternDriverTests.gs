@@ -261,12 +261,15 @@ public struct Token {
     public int Value;
     public static bool operator ==(Token left, int right) { Hook?.Invoke(); return left.Value == right; }
     public static bool operator !=(Token left, int right) { Hook?.Invoke(); return left.Value != right; }
+    public static bool operator ==(Token left, object? right) { Hook?.Invoke(); return right == null; }
+    public static bool operator !=(Token left, object? right) { Hook?.Invoke(); return right != null; }
     public override bool Equals(object? other) => false;
     public override int GetHashCode() => 0;
 }
 }`, "LoopEquality", reference)
+        // Each pattern and its expression form must give the same single diagnostic.
         let diagnostics = System.Collections.Generic.List[string]()
-        for test in[]string{"t is == 0", "t == 0"} {
+        for test in[]string{"t is == 0", "t == 0", "t is == nil", "t == nil"} {
             let source = `import System
 import LoopEquality
 func Run(ref text string?, t Token) int32 {
@@ -306,12 +309,34 @@ Console.WriteLine(Run(ref g, Token()))
                 stdout.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries),
                 (line string) -> line.Contains(": error GS")
             )
-            Assert.NotEqual(0, code)
-            Assert.Single(errors)
+            Assert.True(code != 0, test + " must not compile")
+            Assert.True(errors.Length == 1, test + ": " + stdout.ToString())
             diagnostics.Add(errors[0].Substring(errors[0].IndexOf("Program.gs(", StringComparison.Ordinal)))
         }
-        Assert.Equal(diagnostics[1], diagnostics[0])
-        Assert.Contains("Program.gs(6,16,6,22): error GS0158:", diagnostics[0])
+        Assert.Equal(4, diagnostics.Count)
+        Assert.All(
+            diagnostics,
+            (diagnostic string) -> Assert.Contains("Program.gs(6,16,6,22): error GS0158:", diagnostic)
+        )
+    }
+
+    @Fact
+    func BuiltInOperatorSubjectInALoop_KeepsAByReferenceFactAsTheExpressionDoes() {
+        for test in[]string{"(n + k) is == 0", "(n + k) == 0"} {
+            let source = `func Run(ref text string?, n int32) int32 {
+    if text == nil { return 0 }
+    var k = 0
+    while text.Length > 0 && k < 3 {
+        k++
+        if ` + test + ` { }
+    }
+    return k
+}
+var g string? = "ab"
+System.Console.Write(Run(ref g, 1))
+`
+            Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "3", "5688")
+        }
     }
 
     @Fact

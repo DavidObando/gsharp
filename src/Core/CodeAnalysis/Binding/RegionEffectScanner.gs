@@ -34,6 +34,8 @@ internal sealed class RegionEffectScanner {
     private var pendingReceiverPath RegionReceiverPath? = nil
     // The path of the value that the pattern being visited tests, or `nil` when the walker cannot follow it.
     private var patternSubject RegionReceiverPath? = nil
+    // Whether the tested value is a built-in operator expression, such as `(n + 1) is == 0`.
+    private var patternSubjectIsOperatorForm bool = false
     // The depth of name-shaped patterns being visited: their names are types or constants, which no getter reads.
     private var constantPatternDepth int32 = 0
 
@@ -365,9 +367,12 @@ internal sealed class RegionEffectScanner {
                 RecordMemberRead()
                 RecordRead(nil, nil)
                 let outer = patternSubject
+                let outerIsOperatorForm = patternSubjectIsOperatorForm
                 patternSubject = nil
+                patternSubjectIsOperatorForm = false
                 VisitChildren(node)
                 patternSubject = outer
+                patternSubjectIsOperatorForm = outerIsOperatorForm
             }
             case SyntaxKind.ConstantPattern {
                 RecordPatternTest(cast[ConstantPatternSyntax](node).Expression, nil)
@@ -380,22 +385,42 @@ internal sealed class RegionEffectScanner {
                     current.ContainsConversionCandidate = true
                     current.Conversions.Add(RegionConversion(nil, nil, false))
                 }
-                // Issue #5688: `== value` and `!= value` bind as the binary operation `subject op value`, so they are
-                // operator candidates as that expression is, with a literal value too. Equality with `nil` is a null
-                // test.
+                // Issue #5688: `== value` and `!= value` bind as the binary operation `subject op value`.
+                // Record them as operator candidates, including a literal value.
                 let operatorKind = relational.OperatorToken.Kind
                 if Active() &&
-                    (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken) &&
-                    !IsNilLiteral(relational.Expression) {
-                    current.ContainsOperatorCandidate = true
-                    RecordOperatorOperand(relational.Expression)
-                    let operands = List[RegionReceiverPath?]()
-                    let operatorForms = List[bool]()
-                    operands.Add(patternSubject)
-                    operatorForms.Add(false)
-                    operands.Add(BuildPath(relational.Expression))
-                    operatorForms.Add(IsOperatorForm(relational.Expression))
-                    current.Operators.Add(RegionOperator(operatorKind, operands, operatorForms))
+                    (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken) {
+                    if IsNilLiteral(relational.Expression) {
+                        // A `nil` comparison is a null test unless the subject type defines `==`, which the consumer checks.
+                        if patternSubject is {
+                            RootName: {} rootName,
+                            RootIsCall: false,
+                            RootType: nil,
+                            RootLiteralType: nil,
+                            Steps: {IsEmpty: true}
+                        } &&
+                            !IsDeclared(rootName) {
+                            if !current.NilCompareOperandNames.Contains(rootName) {
+                                current.NilCompareOperandNames.Add(rootName)
+                            }
+                        } else {
+                            if patternSubject is not{Steps: {IsEmpty: false}} {
+                                current.ContainsOperatorCandidate = true
+                                current.OperatorHasUnresolvedOperand = true
+                            }
+                            current.NilCompareOperandPaths.Add(patternSubject)
+                        }
+                    } else {
+                        current.ContainsOperatorCandidate = true
+                        RecordOperatorOperand(relational.Expression)
+                        let operands = List[RegionReceiverPath?]()
+                        let operatorForms = List[bool]()
+                        operands.Add(patternSubject)
+                        operatorForms.Add(patternSubject == nil && patternSubjectIsOperatorForm)
+                        operands.Add(BuildPath(relational.Expression))
+                        operatorForms.Add(IsOperatorForm(relational.Expression))
+                        current.Operators.Add(RegionOperator(operatorKind, operands, operatorForms))
+                    }
                 }
                 VisitChildren(node)
             }
@@ -516,6 +541,8 @@ internal sealed class RegionEffectScanner {
                 // Each field of the pattern reads a member of the subject (rule W5), and its pattern tests that
                 // member. `{ }` is a null test.
                 let subject = patternSubject
+                let subjectIsOperatorForm = patternSubjectIsOperatorForm
+                patternSubjectIsOperatorForm = false
                 for field in pattern.Fields {
                     RecordMemberRead()
                     let name = field.Identifier.ValueText
@@ -524,6 +551,7 @@ internal sealed class RegionEffectScanner {
                     Visit(field.Pattern)
                 }
                 patternSubject = subject
+                patternSubjectIsOperatorForm = subjectIsOperatorForm
             }
             case SyntaxKind.SlicePattern {
                 let pattern = cast[SlicePatternSyntax](node)
@@ -538,9 +566,12 @@ internal sealed class RegionEffectScanner {
                 RecordTypeTests(isExpression.Expression, isExpression.Pattern)
                 Visit(isExpression.Expression)
                 let outer = patternSubject
+                let outerIsOperatorForm = patternSubjectIsOperatorForm
                 patternSubject = BuildPath(isExpression.Expression)
+                patternSubjectIsOperatorForm = IsOperatorForm(isExpression.Expression)
                 Visit(isExpression.Pattern)
                 patternSubject = outer
+                patternSubjectIsOperatorForm = outerIsOperatorForm
             }
             case SyntaxKind.SwitchStatement {
                 let switchStatement = cast[SwitchStatementSyntax](node)
@@ -549,9 +580,12 @@ internal sealed class RegionEffectScanner {
                     RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     Push()
                     let outer = patternSubject
+                    let outerIsOperatorForm = patternSubjectIsOperatorForm
                     patternSubject = BuildPath(switchStatement.Expression)
+                    patternSubjectIsOperatorForm = IsOperatorForm(switchStatement.Expression)
                     Visit(switchCase.Value)
                     patternSubject = outer
+                    patternSubjectIsOperatorForm = outerIsOperatorForm
                     VisitCondition(switchCase.Guard)
                     Visit(switchCase.Body)
                     Pop()
@@ -565,9 +599,12 @@ internal sealed class RegionEffectScanner {
                     RecordTypeTests(switchExpression.Expression, arm.Value)
                     Push()
                     let outer = patternSubject
+                    let outerIsOperatorForm = patternSubjectIsOperatorForm
                     patternSubject = BuildPath(switchExpression.Expression)
+                    patternSubjectIsOperatorForm = IsOperatorForm(switchExpression.Expression)
                     Visit(arm.Value)
                     patternSubject = outer
+                    patternSubjectIsOperatorForm = outerIsOperatorForm
                     VisitCondition(arm.Guard)
                     Visit(arm.Result)
                     Pop()
