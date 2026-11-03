@@ -362,21 +362,15 @@ partial class CSharpToGSharpTranslator {
                 this.GetGSharpPatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) == nil
         }
 
-        // gsc reads a simple name in a boolean `is` pattern as a type first (ADR-0162). A constant that a type of the
-        // same name can shadow keeps the lowered equality, as does a constant that is not a literal or a member.
+        // gsc reads a simple name in a boolean `is` pattern as a type first (ADR-0162), and the emitted name can
+        // differ from the C# name or be a pattern keyword (`@not`). Only a literal or a member access keeps its
+        // meaning in the native form; another constant keeps the lowered equality.
         private func HasOnlyUnambiguousNativeConstants(pattern PatternSyntax) bool -> pattern
             .DescendantNodesAndSelf()
             .OfType[ConstantPatternSyntax]()
             .All(
-            (constant ConstantPatternSyntax) -> switch constant.Expression {
-                case LiteralExpressionSyntax, MemberAccessExpressionSyntax: true
-                case name is IdentifierNameSyntax: this
-                    .context
-                    .SemanticModel
-                    .LookupNamespacesAndTypes(name.SpanStart, name: name.Identifier.ValueText)
-                    .IsEmpty
-                default: false
-            }
+            (constant ConstantPatternSyntax) -> constant.Expression is LiteralExpressionSyntax ||
+                constant.Expression is MemberAccessExpressionSyntax
         )
 
         /// Whether gsc narrows the scrutinee of [`isPattern`](paramref) to non-null where the test is

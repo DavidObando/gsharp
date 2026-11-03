@@ -29,8 +29,8 @@ import Xunit
 /// unasserted, the `&&` row of `DateTime?` does not compile (GS0158). With `left ?? right` for `and`, the merge row
 /// does not compile (GS0159). Without the type-test rule, the `object` and `Base` arm rows do not compile (GS0158).
 /// With a `s!!` subject counted as the switched local, the suppressed row does not compile (GS0158). With the native
-/// form for any reference input, the interface row does not compile (GS0171). Without the shadowing check, the
-/// shadowed-constant row tests the type `Key` and does not compile (GS0158).
+/// form for any reference input, the interface row does not compile (GS0171). With a simple-name constant in the
+/// native form, the shadowed-constant row tests the type `Key` and does not compile (GS0158).
 open class Issue5626ConstantPatternNarrowingTests {
     /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
     @Fact
@@ -204,7 +204,7 @@ namespace Demo
     }
 
     /// Control: gsc cannot bind every constant pattern natively. A string constant on an interface input and a
-    /// constant that a type of the same name shadows (gsc reads a name in a boolean `is` as a type first) keep the
+    /// simple-name constant (gsc reads a name in a boolean `is` as a type first, here the type `Key`) keep the
     /// lowered test, and the read keeps its assertion.
     @Fact
     func AConstantPatternThatGscCannotBindNatively_KeepsTheLoweredForm() {
