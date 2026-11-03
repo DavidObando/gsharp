@@ -30,6 +30,14 @@ shared class SemanticLookup {
             Accessors = List[AccessorExpressionSyntax]()
             FieldAssignments = List[FieldAssignmentExpressionSyntax]()
             TypeAliasDeclarations = List[TypeAliasDeclarationSyntax]()
+            TopLevelFunctions = List[FunctionDeclarationSyntax]()
+            VariableIdentifiers = List[SyntaxToken]()
+            StructDeclarations = List[StructDeclarationSyntax]()
+            InterfaceDeclarations = List[InterfaceDeclarationSyntax]()
+            EnumDeclarations = List[EnumDeclarationSyntax]()
+            DelegateDeclarations = List[DelegateDeclarationSyntax]()
+            Imports = List[ImportSyntax]()
+            Packages = List[PackageSyntax]()
         }
 
         prop Accessors List[AccessorExpressionSyntax] {
@@ -41,6 +49,38 @@ shared class SemanticLookup {
         }
 
         prop TypeAliasDeclarations List[TypeAliasDeclarationSyntax] {
+            get;
+        }
+
+        prop TopLevelFunctions List[FunctionDeclarationSyntax] {
+            get;
+        }
+
+        prop VariableIdentifiers List[SyntaxToken] {
+            get;
+        }
+
+        prop StructDeclarations List[StructDeclarationSyntax] {
+            get;
+        }
+
+        prop InterfaceDeclarations List[InterfaceDeclarationSyntax] {
+            get;
+        }
+
+        prop EnumDeclarations List[EnumDeclarationSyntax] {
+            get;
+        }
+
+        prop DelegateDeclarations List[DelegateDeclarationSyntax] {
+            get;
+        }
+
+        prop Imports List[ImportSyntax] {
+            get;
+        }
+
+        prop Packages List[PackageSyntax] {
             get;
         }
     }
@@ -684,23 +724,7 @@ shared class SemanticLookup {
             return
         }
         let model = BuildModel(compilation)
-        // Force the references index to be built. We don't care about the
-        // result, only the side effect of populating the cache. Use a sentinel
-        // global symbol so the call short-circuits on Symbol.null without
-        // walking trees needlessly when the index is already built.
-        for function in compilation.GlobalScope.Functions {
-            let _ = model.GetReferences(function)
-            break
-        }
-        // If the project has no functions at all, fall back to any struct so
-        // the index gets built. (BuildReferencesIndex is invoked on the first
-        // GetReferences call regardless of which symbol is queried.)
-        if compilation.GlobalScope.Functions.Length == 0 {
-            for s in compilation.GlobalScope.Structs {
-                let _ = model.GetReferences(s)
-                break
-            }
-        }
+        let _ = model.GetReferences(TypeSymbol.Void)
     }
 
     /// Resolves a bare type name (e.g. `Console`) to a CLR (cref:Type)
@@ -912,6 +936,22 @@ shared class SemanticLookup {
     /// @param useIncrementalCaches Whether to read/write the instance-keyed memo caches.
     /// @param ct Token observed between per-file/per-struct build steps.
     /// @returns The semantic model.
+    private let ImportSymbolCache ConditionalWeakTable[ImportSyntax, ImportSymbol] = ConditionalWeakTable[
+        ImportSyntax,
+        ImportSymbol
+    ]()
+
+    private let PackageSymbolCache ConditionalWeakTable[PackageSyntax, PackageSymbol] = ConditionalWeakTable[
+        PackageSyntax,
+        PackageSymbol
+    ]()
+
+    private func CreateImportSymbol(importSyntax ImportSyntax) ImportSymbol {
+        let targetPath = string.Concat(importSyntax.IdentifiersWithDots.Select((i SyntaxToken) -> i.ValueText))
+        let localName = importSyntax.AliasIdentifier?.ValueText ?? targetPath
+        return ImportSymbol(localName, targetPath, importSyntax)
+    }
+
     private func BuildModelUncached(
         compilation Compilation,
         useIncrementalCaches bool,
@@ -926,186 +966,279 @@ shared class SemanticLookup {
             ct.ThrowIfCancellationRequested()
             bucketsByTree[tree] = GetNodeBuckets(tree, useIncrementalCaches)
         }
-        let declarations = Dictionary[SyntaxToken, Symbol]()
-        let globals = Dictionary[string, Symbol](StringComparer.Ordinal)
-        for variable in compilation.GlobalScope.Variables {
-            globals[variable.Name] = variable
-        }
-        for function in compilation.GlobalScope.Functions {
-            globals[function.Name] = function
-            if function.Declaration != nil {
-                declarations[function.Declaration!!.Identifier] = function
-                MapParameters(function.Declaration!!.Parameters.ToArray(), function.Parameters, declarations)
-                // ADR-0182: an extension function's receiver clause is
-                // source-visible too, but ExplicitReceiverParameter is only
-                // populated for a true instance method (it also drives the
-                // emitter's by-ref `this` handling, which does not apply to
-                // an extension's by-value parameter zero) — fall back to the
-                // always-present Parameters[0] so `r` in `func (r T) M()`
-                // resolves for an extension exactly as it does for a method.
-                let receiverParameter ParameterSymbol? = function.ExplicitReceiverParameter ??
-                    (
-                    if function.Declaration!!.Receiver != nil && function.Parameters.Length > 0 {
-                        function.Parameters[0]
-                    } else {
-                        default(ParameterSymbol?)
-                    }
-                )
-                if receiverParameter != nil && function.Declaration!!.Receiver != nil {
-                    // ADR-0185: a receiver clause never comes from the
-                    // destructured arrow-lambda path.
-                    declarations[function.Declaration!!.Receiver!!.Identifier!!] = receiverParameter
-                }
+        // Hover on a declaration reads facts the body binder infers (a suspending function), so the
+        // bodies are bound before the model answers its first query, as every request expects.
+        try {
+            let _ = compilation.GetDiagnostics(ct)
+        } catch (InvalidOperationException) { }
+        let coreModels = Dictionary[SyntaxTree, GSharp.Core.CodeAnalysis.SemanticModel](trees.Length)
+        for tree in trees {
+            if BoundSemantics.GetModel(compilation, tree) is {} coreModel {
+                coreModels[tree] = coreModel
             }
         }
-        for variable in compilation.GlobalScope.Variables {
-            for declaringSyntax in variable.DeclaringSyntaxNodes {
-                if declaringSyntax is SyntaxToken identifier {
+        let declarations = Dictionary[SyntaxToken, Symbol]()
+        let globals = Dictionary[string, Symbol](StringComparer.Ordinal)
+        let packagesByName = Dictionary[string, PackageSymbol](StringComparer.Ordinal)
+        for tree in trees {
+            if !coreModels.TryGetValue(tree, out var coreModel) {
+                continue
+            }
+            for identifier in bucketsByTree[tree].VariableIdentifiers {
+                if coreModel.GetDeclaredSymbol(identifier, ct) is GlobalVariableSymbol variable {
+                    globals[variable.Name] = variable
                     declarations[identifier] = variable
                 }
             }
         }
-        for aggregate in compilation.GlobalScope.Structs {
-            // Per-struct member mapping below is O(members); check between structs
-            // so cancellation lands within one cold build instead of after it.
-            ct.ThrowIfCancellationRequested()
-            globals[aggregate.Name] = aggregate
-            if aggregate.Declaration != nil {
-                declarations[aggregate.Declaration!!.Identifier] = aggregate
-                for var i = 0; i < aggregate.Declaration!!.Fields.Length && i < aggregate.Fields.Length; i++ {
-                    declarations[aggregate.Declaration!!.Fields[i].Identifier] = aggregate.Fields[i]
+        for isExtension in[]bool{false, true} {
+            for tree in trees {
+                if !coreModels.TryGetValue(tree, out var coreModel) {
+                    continue
                 }
-                var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
-                    (p PropertyDeclarationSyntax) -> p.Identifier
-                )
-                var allEventIdentifiers = aggregate.Declaration!!.Events.Select(
-                    (e EventDeclarationSyntax) -> e.Identifier
-                )
-                var allMethodIdentifiers = aggregate.Declaration!!.Methods.Select(
-                    (m FunctionDeclarationSyntax) -> m.Identifier
-                )
-                if aggregate.Declaration!!.SharedBlock != nil {
-                    allPropertyIdentifiers = allPropertyIdentifiers.Concat(
-                        aggregate.Declaration!!.SharedBlock!!.Properties.Select(
-                            (p PropertyDeclarationSyntax) -> p.Identifier
-                        )
-                    )
-                    allEventIdentifiers = allEventIdentifiers.Concat(
-                        aggregate.Declaration!!.SharedBlock!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
-                    )
-                    allMethodIdentifiers = allMethodIdentifiers.Concat(
-                        aggregate.Declaration!!.SharedBlock!!.Methods.Select(
-                            (m FunctionDeclarationSyntax) -> m.Identifier
-                        )
-                    )
-                    if !aggregate.StaticFields.IsDefaultOrEmpty {
-                        for var si = 0;
-                            si < aggregate.Declaration!!.SharedBlock!!
-                            .Fields
-                            .Length &&
-                            si < aggregate
-                            .StaticFields
-                            .Length;
-                            si++ {
-                            let fieldId SyntaxToken? = aggregate.Declaration!!.SharedBlock!!.Fields[si].Identifier
-                            if fieldId != nil {
-                                declarations[fieldId] = aggregate.StaticFields[si]
+                for fnSyntax in bucketsByTree[tree].TopLevelFunctions {
+                    if fnSyntax.IsExtension != isExtension {
+                        continue
+                    }
+                    if coreModel.GetDeclaredSymbol(fnSyntax, ct) is FunctionSymbol function &&
+                        (function.IsExtension || (function.ReceiverType == nil && function.StaticOwnerType == nil)) {
+                        globals[function.Name] = function
+                        if function.Package is {Declaration: not nil} fnPackage {
+                            packagesByName.TryAdd(fnPackage.Name, fnPackage)
+                        }
+                        if function.Declaration != nil {
+                            declarations[function.Declaration!!.Identifier] = function
+                            MapParameters(
+                                function.Declaration!!.Parameters.ToArray(),
+                                function.Parameters,
+                                declarations
+                            )
+                            // ADR-0182: an extension function's receiver clause is
+                            // source-visible too, but ExplicitReceiverParameter is only
+                            // populated for a true instance method (it also drives the
+                            // emitter's by-ref `this` handling, which does not apply to
+                            // an extension's by-value parameter zero) — fall back to the
+                            // always-present Parameters[0] so `r` in `func (r T) M()`
+                            // resolves for an extension exactly as it does for a method.
+                            let receiverParameter ParameterSymbol? = function.ExplicitReceiverParameter ??
+                                (
+                                if function.Declaration!!.Receiver != nil && function.Parameters.Length > 0 {
+                                    function.Parameters[0]
+                                } else {
+                                    default(ParameterSymbol?)
+                                }
+                            )
+                            if receiverParameter != nil && function.Declaration!!.Receiver != nil {
+                                // ADR-0185: a receiver clause never comes from the
+                                // destructured arrow-lambda path.
+                                declarations[function.Declaration!!.Receiver!!.Identifier!!] = receiverParameter
                             }
                         }
                     }
                 }
-                MapMembersByName(
-                    declarations,
-                    allPropertyIdentifiers,
-                    aggregate.Properties.Concat(aggregate.StaticProperties)
-                )
-                MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
-                MapMembersByName(declarations, allMethodIdentifiers, aggregate.Methods.Concat(aggregate.StaticMethods))
-                // Register the parameter declarations of struct/class methods so that hover,
-                // go-to-definition, etc. work on them.
-                for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
-                    if method.Declaration != nil {
-                        MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
-                    }
-                }
-                // Issue #894: the same for user-defined `init(...)` constructors.
-                for constructor in aggregate.ExplicitConstructors {
-                    if constructor.Declaration != nil {
-                        MapParameters(
-                            constructor.Declaration!!.Parameters.ToArray(),
-                            constructor.Parameters,
-                            declarations
-                        )
-                    }
-                }
             }
         }
-        for iface in compilation.GlobalScope.Interfaces {
-            globals[iface.Name] = iface
-            if iface.Declaration != nil {
-                declarations[iface.Declaration.Identifier] = iface
-                MapMembersByName(
-                    declarations,
-                    iface.Declaration.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier),
-                    iface.Methods
-                )
-                MapMembersByName(
-                    declarations,
-                    iface.Declaration.Properties.Select((p PropertyDeclarationSyntax) -> p.Identifier),
-                    iface.Properties
-                )
-                MapMembersByName(
-                    declarations,
-                    iface.Declaration.Events.Select((e EventDeclarationSyntax) -> e.Identifier),
-                    iface.Events
-                )
-            }
-        }
-        for import_ in compilation.GlobalScope.Imports {
-            if import_.Declaration?.AliasIdentifier is {} aliasIdentifier {
-                declarations[aliasIdentifier] = import_
-            }
-        }
-        for package_ in compilation.GlobalScope.Packages {
-            if package_.Declaration == nil {
+        let seenStructs = HashSet[StructSymbol](ReferenceEqualityComparer.Instance)
+        for tree in trees {
+            if !coreModels.TryGetValue(tree, out var coreModel) {
                 continue
             }
-            for identifier in package_.Declaration!!.Identifiers {
-                declarations[identifier] = package_
-            }
-        }
-        for pair in compilation.GlobalScope.TypeAliases {
-            globals[pair.Key] = pair.Value
-            if pair.Value is EnumSymbol enumSymbol {
-                declarations[enumSymbol.Declaration.Identifier] = enumSymbol
-                let members = enumSymbol.Declaration.Members.ToArray()
-                for var i = 0; i < members.Length && i < enumSymbol.Members.Length; i++ {
-                    declarations[members[i].Identifier] = enumSymbol.Members[i]
-                    globals[members[i].Identifier.Text] = enumSymbol.Members[i]
+            for structSyntax in bucketsByTree[tree].StructDeclarations {
+                if coreModel.GetDeclaredSymbol(structSyntax, ct) is not StructSymbol aggregate {
+                    continue
+                }
+                if !structSyntax.Identifier.IsMissing {
+                    declarations[structSyntax.Identifier] = aggregate
+                }
+                if !seenStructs.Add(aggregate) {
+                    continue
+                }
+                // Per-struct member mapping below is O(members); check between structs
+                // so cancellation lands within one cold build instead of after it.
+                ct.ThrowIfCancellationRequested()
+                globals[aggregate.Name] = aggregate
+                if aggregate.Declaration != nil {
+                    declarations[aggregate.Declaration!!.Identifier] = aggregate
+                    for var i = 0; i < aggregate.Declaration!!.Fields.Length && i < aggregate.Fields.Length; i++ {
+                        declarations[aggregate.Declaration!!.Fields[i].Identifier] = aggregate.Fields[i]
+                    }
+                    var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
+                        (p PropertyDeclarationSyntax) -> p.Identifier
+                    )
+                    var allEventIdentifiers = aggregate.Declaration!!.Events.Select(
+                        (e EventDeclarationSyntax) -> e.Identifier
+                    )
+                    var allMethodIdentifiers = aggregate.Declaration!!.Methods.Select(
+                        (m FunctionDeclarationSyntax) -> m.Identifier
+                    )
+                    if aggregate.Declaration!!.SharedBlock != nil {
+                        allPropertyIdentifiers = allPropertyIdentifiers.Concat(
+                            aggregate.Declaration!!.SharedBlock!!.Properties.Select(
+                                (p PropertyDeclarationSyntax) -> p.Identifier
+                            )
+                        )
+                        allEventIdentifiers = allEventIdentifiers.Concat(
+                            aggregate.Declaration!!.SharedBlock!!.Events.Select(
+                                (e EventDeclarationSyntax) -> e.Identifier
+                            )
+                        )
+                        allMethodIdentifiers = allMethodIdentifiers.Concat(
+                            aggregate.Declaration!!.SharedBlock!!.Methods.Select(
+                                (m FunctionDeclarationSyntax) -> m.Identifier
+                            )
+                        )
+                        if !aggregate.StaticFields.IsDefaultOrEmpty {
+                            for var si = 0;
+                                si < aggregate.Declaration!!.SharedBlock!!
+                                .Fields
+                                .Length &&
+                                si < aggregate
+                                .StaticFields
+                                .Length;
+                                si++ {
+                                let fieldId SyntaxToken? = aggregate.Declaration!!.SharedBlock!!.Fields[si].Identifier
+                                if fieldId != nil {
+                                    declarations[fieldId] = aggregate.StaticFields[si]
+                                }
+                            }
+                        }
+                    }
+                    MapMembersByName(
+                        declarations,
+                        allPropertyIdentifiers,
+                        aggregate.Properties.Concat(aggregate.StaticProperties)
+                    )
+                    MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
+                    MapMembersByName(
+                        declarations,
+                        allMethodIdentifiers,
+                        aggregate.Methods.Concat(aggregate.StaticMethods)
+                    )
+                    // Register the parameter declarations of struct/class methods so that hover,
+                    // go-to-definition, etc. work on them.
+                    for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
+                        if method.Declaration != nil {
+                            MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
+                        }
+                    }
+                    // Issue #894: the same for user-defined `init(...)` constructors.
+                    for constructor in aggregate.ExplicitConstructors {
+                        if constructor.Declaration != nil {
+                            MapParameters(
+                                constructor.Declaration!!.Parameters.ToArray(),
+                                constructor.Parameters,
+                                declarations
+                            )
+                        }
+                    }
                 }
             }
         }
-        // Register type alias declaration identifiers so code lenses can resolve them.
-        for typeAliasSyntax in bucketsByTree.Values.SelectMany(
-            func (b NodeBuckets) IEnumerable[TypeAliasDeclarationSyntax] {
-                return b.TypeAliasDeclarations
+        let seenInterfaces = HashSet[InterfaceSymbol](ReferenceEqualityComparer.Instance)
+        for tree in trees {
+            if !coreModels.TryGetValue(tree, out var coreModel) {
+                continue
             }
-        ) {
-            let aliasId SyntaxToken? = typeAliasSyntax.Identifier
-            if aliasId != nil &&
-                !aliasId.IsMissing &&
-                compilation
-                .GlobalScope
-                .TypeAliases
-                .TryGetValue(aliasId.Text, out var aliasedType) {
-                declarations[aliasId] = aliasedType
+            for ifaceSyntax in bucketsByTree[tree].InterfaceDeclarations {
+                if coreModel.GetDeclaredSymbol(ifaceSyntax, ct) is not InterfaceSymbol iface {
+                    continue
+                }
+                if !ifaceSyntax.Identifier.IsMissing {
+                    declarations[ifaceSyntax.Identifier] = iface
+                }
+                if !seenInterfaces.Add(iface) {
+                    continue
+                }
+                globals[iface.Name] = iface
+                if iface.Declaration != nil {
+                    declarations[iface.Declaration.Identifier] = iface
+                    MapMembersByName(
+                        declarations,
+                        iface.Declaration.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier),
+                        iface.Methods
+                    )
+                    MapMembersByName(
+                        declarations,
+                        iface.Declaration.Properties.Select((p PropertyDeclarationSyntax) -> p.Identifier),
+                        iface.Properties
+                    )
+                    MapMembersByName(
+                        declarations,
+                        iface.Declaration.Events.Select((e EventDeclarationSyntax) -> e.Identifier),
+                        iface.Events
+                    )
+                }
             }
         }
-        // Hover on a declaration reads facts the body binder infers (a suspending function), so the
-        // bodies are bound before the model answers its first query, as every request expects.
-        try {
-            let _ = compilation.BoundProgram
-        } catch (InvalidOperationException) { }
+        for tree in trees {
+            for importSyntax in bucketsByTree[tree].Imports {
+                if importSyntax.AliasIdentifier is {} aliasIdentifier && !aliasIdentifier.IsMissing {
+                    declarations[aliasIdentifier] = ImportSymbolCache.GetValue(
+                        importSyntax,
+                        (syntax ImportSyntax) -> CreateImportSymbol(syntax)
+                    )
+                }
+            }
+        }
+        let seenPackages = HashSet[string](StringComparer.Ordinal)
+        for tree in trees {
+            let packageSyntax PackageSyntax? = bucketsByTree[tree].Packages.FirstOrDefault()
+            if packageSyntax == nil {
+                continue
+            }
+            let packageName = string.Join(".", packageSyntax.Identifiers.Select((i SyntaxToken) -> i.ValueText))
+            if string.IsNullOrEmpty(packageName) || !seenPackages.Add(packageName) {
+                continue
+            }
+            if !packagesByName.TryGetValue(packageName, out var package_) {
+                package_ = PackageSymbolCache.GetValue(
+                    packageSyntax,
+                    (syntax PackageSyntax) -> PackageSymbol(packageName, syntax)
+                )
+            }
+            if package_.Declaration != nil {
+                for identifier in package_.Declaration!!.Identifiers {
+                    declarations[identifier] = package_
+                }
+            }
+        }
+        for tree in trees {
+            if !coreModels.TryGetValue(tree, out var coreModel) {
+                continue
+            }
+            for delegateSyntax in bucketsByTree[tree].DelegateDeclarations {
+                if coreModel.GetDeclaredSymbol(delegateSyntax, ct) is DelegateTypeSymbol delegateSymbol {
+                    globals[delegateSymbol.Name] = delegateSymbol
+                }
+            }
+            for enumSyntax in bucketsByTree[tree].EnumDeclarations {
+                if coreModel.GetDeclaredSymbol(enumSyntax, ct) is EnumSymbol enumSymbol {
+                    declarations[enumSymbol.Declaration.Identifier] = enumSymbol
+                    let isTopLevel = enumSyntax.Parent is CompilationUnitSyntax
+                    if isTopLevel {
+                        globals[enumSymbol.Name] = enumSymbol
+                    }
+                    let members = enumSymbol.Declaration.Members.ToArray()
+                    for var i = 0; i < members.Length && i < enumSymbol.Members.Length; i++ {
+                        declarations[members[i].Identifier] = enumSymbol.Members[i]
+                        if isTopLevel {
+                            globals[members[i].Identifier.Text] = enumSymbol.Members[i]
+                        }
+                    }
+                }
+            }
+            for typeAliasSyntax in bucketsByTree[tree].TypeAliasDeclarations {
+                let aliasId SyntaxToken? = typeAliasSyntax.Identifier
+                if aliasId == nil || aliasId.IsMissing {
+                    continue
+                }
+                let matches = coreModel.LookupSymbols(-1, aliasId.ValueText, ct)
+                if !matches.IsDefaultOrEmpty && matches[0] is TypeSymbol aliasedType {
+                    globals[aliasId.ValueText] = aliasedType
+                    declarations[aliasId] = aliasedType
+                }
+            }
+        }
         return SemanticModel(compilation, declarations, globals, bucketsByTree)
     }
 
@@ -1178,6 +1311,49 @@ shared class SemanticLookup {
             }
             case ta is TypeAliasDeclarationSyntax {
                 buckets.TypeAliasDeclarations.Add(ta)
+            }
+            case fn is FunctionDeclarationSyntax when node.Parent is CompilationUnitSyntax {
+                buckets.TopLevelFunctions.Add(fn)
+            }
+            case vd is VariableDeclarationSyntax {
+                if !vd.Identifier.IsMissing {
+                    buckets.VariableIdentifiers.Add(vd.Identifier)
+                }
+            }
+            case td is TupleDeconstructionStatementSyntax {
+                for id in td.Identifiers {
+                    if !id.IsMissing {
+                        buckets.VariableIdentifiers.Add(id)
+                    }
+                }
+            }
+            case nd is NamedDeconstructionFieldSyntax {
+                if !nd.LocalIdentifier.IsMissing {
+                    buckets.VariableIdentifiers.Add(nd.LocalIdentifier)
+                }
+            }
+            case il is IfLetBindingClauseSyntax {
+                if !il.Identifier.IsMissing {
+                    buckets.VariableIdentifiers.Add(il.Identifier)
+                }
+            }
+            case s is StructDeclarationSyntax {
+                buckets.StructDeclarations.Add(s)
+            }
+            case i is InterfaceDeclarationSyntax {
+                buckets.InterfaceDeclarations.Add(i)
+            }
+            case e is EnumDeclarationSyntax {
+                buckets.EnumDeclarations.Add(e)
+            }
+            case d is DelegateDeclarationSyntax {
+                buckets.DelegateDeclarations.Add(d)
+            }
+            case imp is ImportSyntax {
+                buckets.Imports.Add(imp)
+            }
+            case pkg is PackageSyntax {
+                buckets.Packages.Add(pkg)
             }
         }
         for child in node.GetChildren() {

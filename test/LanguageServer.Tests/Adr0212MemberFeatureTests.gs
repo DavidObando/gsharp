@@ -4,11 +4,13 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
 import System
 import System.Collections.Generic
 import System.Linq
+import System.Threading
 import Xunit
 
 /// ADR-0212 slice S4: the features that moved onto `SemanticModel.LookupMembers` and
@@ -101,6 +103,40 @@ open class Adr0212MemberFeatureTests {
         let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(Source, "WriteLine", 0))
         Assert.NotNull(hover)
         Assert.Contains("overloads", hover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Hover_OnATopLevelFunctionDeclaration_CountsOverloadsAcrossFiles() {
+        let sourceA = "package Members\nfunc Pick(a int32) int32 { return a }\n"
+        let sourceB = "package Members\nfunc Pick(a string) int32 { return 0 }\n"
+        let project = ProjectState("/test/project.gsproj")
+        project.UpdateFile("/test/a.gs", sourceA)
+        project.UpdateFile("/test/b.gs", sourceB)
+        Assert.True(project.TryGetSyntaxTree("/test/a.gs", out var treeA))
+        let content = DocumentContent(treeA, List[int32](), project)
+        let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(sourceA, "Pick"))
+        Assert.NotNull(hover)
+        Assert.Contains("*(+ 1 overload)*", hover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func WarmUp_BuildsReferenceIndexAndResolvesTypeAliasDeclaration() {
+        let source = "package Members\ntype IntAlias = int32\nfunc Use(x IntAlias) IntAlias { return x }\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        SemanticLookup.WarmUp(compilation)
+        let staleContent = LanguageServerTestHelpers.Content(source)
+        let aliasOffset = SemanticLookup.ToOffset(
+            staleContent,
+            LanguageServerTestHelpers.PositionOf(source, "IntAlias =")
+        )
+        let aliasToken = SemanticLookup.FindTokenAt(staleContent.SyntaxTree, aliasOffset)
+        let aliasSymbol = Assert.IsType[TypeSymbol](SemanticLookup.ResolveSymbol(compilation, aliasToken))
+        Assert.Same(TypeSymbol.Int32, aliasSymbol)
+        using let cts = CancellationTokenSource()
+        cts.Cancel()
+        let references = SemanticLookup.FindReferences(compilation, aliasSymbol, cts.Token).ToArray()
+        Assert.Equal(4, references.Length)
     }
 
     shared {
