@@ -626,7 +626,7 @@ internal partial class MethodBodyEmitter {
 
     // Issue #5681: a relational pattern on a value-type `T?` input has the lifted operator result.
     // Ordering fails when an operand is nil. `==` matches two nils. `!=` matches when exactly one operand is nil.
-    // When the binder gives the value type `T`, only the input can be nil.
+    // Both operands are evaluated once, in source order, before the `HasValue` tests. A literal value stays inline.
     private func EmitNullableRelationalPattern(
         rp BoundRelationalPattern,
         inputVariable LocalVariableSymbol,
@@ -638,6 +638,8 @@ internal partial class MethodBodyEmitter {
         let getValue = this.GetNullableValueRef(nullableInput)
         let kind = rp.Op.Kind
         let isEquality = kind == BoundBinaryOperatorKind.Equals || kind == BoundBinaryOperatorKind.NotEquals
+        // The binder gives the value the type `T` when only the input can be nil.
+        let valueIsNullable = rp.Value.Type != nullableInput.UnderlyingType
         let matchLabel = this.il.DefineLabel()
         let inputSlot = this.locals[inputVariable]
         loadValue()
@@ -647,9 +649,11 @@ internal partial class MethodBodyEmitter {
             valueSlot = this.locals[valueVariable]
             this.EmitExpression(rp.Value)
             this.il.StoreLocal(valueSlot)
-            this.il.LoadLocalAddress(inputSlot)
-            this.il.OpCode(ILOpCode.Call)
-            this.il.Token(getHasValue)
+        }
+        this.il.LoadLocalAddress(inputSlot)
+        this.il.OpCode(ILOpCode.Call)
+        this.il.Token(getHasValue)
+        if valueIsNullable {
             this.il.LoadLocalAddress(valueSlot)
             this.il.OpCode(ILOpCode.Call)
             this.il.Token(getHasValue)
@@ -678,9 +682,6 @@ internal partial class MethodBodyEmitter {
                 this.il.Branch(ILOpCode.Brfalse, failLabel)
             }
         } else {
-            this.il.LoadLocalAddress(inputSlot)
-            this.il.OpCode(ILOpCode.Call)
-            this.il.Token(getHasValue)
             this.il.Branch(
                 ILOpCode.Brfalse,
                 if kind == BoundBinaryOperatorKind.NotEquals {
@@ -693,10 +694,12 @@ internal partial class MethodBodyEmitter {
         this.il.LoadLocalAddress(inputSlot)
         this.il.OpCode(ILOpCode.Call)
         this.il.Token(getValue)
-        if valueSlot >= 0 {
+        if valueIsNullable {
             this.il.LoadLocalAddress(valueSlot)
             this.il.OpCode(ILOpCode.Call)
             this.il.Token(getValue)
+        } else if valueSlot >= 0 {
+            this.il.LoadLocal(valueSlot)
         } else {
             this.EmitExpression(rp.Value)
         }

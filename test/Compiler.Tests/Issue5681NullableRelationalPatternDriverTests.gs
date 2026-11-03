@@ -134,6 +134,29 @@ System.Console.Write(Bit(Unequal(2, 2)) + Bit(Unequal(2, 1)) + Bit(Unequal(nil, 
     }
 
     @Fact
+    func NilInput_StillEvaluatesTheValueOnceInSourceOrder() {
+        const source = `class Trace {
+    shared {
+        var Events string = ""
+    }
+}
+func Bit(value bool) string -> if value { "1" } else { "0" }
+func Input(n int32?) int32? {
+    Trace.Events += "i"
+    return n
+}
+func Next() int32 {
+    Trace.Events += "v"
+    return 0
+}
+func Above(n int32?) bool -> Input(n) is > Next()
+func Different(n int32?) bool -> Input(n) is != Next()
+System.Console.Write(Bit(Above(1)) + Bit(Above(nil)) + Bit(Different(nil)) + Bit(Different(0)) + "|" + Trace.Events)
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "1010|iviviviv", "5681")
+    }
+
+    @Fact
     func DecimalInput_CallsTheDecimalOperators() {
         const source = `func Bit(value bool) string -> if value { "1" } else { "0" }
 func Above(n decimal) bool -> n is > 1.5m

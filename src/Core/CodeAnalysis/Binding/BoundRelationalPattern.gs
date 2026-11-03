@@ -18,10 +18,11 @@ class BoundRelationalPattern : BoundPattern {
         Op = op
         Value = value
         // Issue #5681: the emitter reads `HasValue` through an address, so a value-type `T?` operand needs a local.
+        // The emitter evaluates a value that is not a literal before the `HasValue` test, as the lifted operator does.
         if type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) {
             InputVariable = LocalVariableSymbol("<relational-pattern-input>", isReadOnly: true, type)
-            if value.Type != nullable.UnderlyingType {
-                ValueVariable = LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, type)
+            if value.Type != nullable.UnderlyingType || value !is BoundLiteralExpression {
+                ValueVariable = LocalVariableSymbol("<relational-pattern-value>", isReadOnly: true, value.Type)
             }
         }
     }
@@ -47,7 +48,7 @@ class BoundRelationalPattern : BoundPattern {
         get;
     }
 
-    /// Gets the temporary that holds a `T?` value for a value-type `T?` input.
+    /// Gets the temporary that holds a value that is not a literal, or a `T?` value, for a value-type `T?` input.
     internal prop ValueVariable LocalVariableSymbol? {
         get;
     }
