@@ -3314,15 +3314,16 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let capture = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol
-            if capture == nil ||
-                (
-                this
-                    .state
-                    .PatternBindings
-                    .TryGetValue(capture, out var replacement) &&
-                    !(replacement is IdentifierExpression)
-            ) {
+            if capture == nil {
                 return nil
+            }
+            if this.state.PatternBindings.TryGetValue(capture, out var replacement) {
+                if this.state.StoredPatternCaptures.Contains(replacement) {
+                    return false
+                }
+                if !(replacement is IdentifierExpression) {
+                    return nil
+                }
             }
             return if this.TryGetVarCaptureStaticNonNull(capture, out var inputIsNonNull) {
                 inputIsNonNull
@@ -4500,7 +4501,20 @@ partial class CSharpToGSharpTranslator {
             if symbol is not ILocalSymbol{Type: {IsReferenceType: true}} local {
                 return false
             }
-            if this.state.HoistedNullableGuardLocals.Contains(local) {
+            if this
+                .state
+                .HoistedNullableGuardLocals
+                .Contains(local) ||
+                (
+                this
+                    .state
+                    .PatternBindings
+                    .TryGetValue(local, out var boundReplacement) &&
+                    this
+                    .state
+                    .StoredPatternCaptures
+                    .Contains(boundReplacement)
+            ) {
                 return true
             }
             let isPatternLocal = local.DeclaringSyntaxReferences.Any(
