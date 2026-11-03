@@ -1244,29 +1244,28 @@ internal partial class StatementBinder {
         }
         if NeedsLocationProbe(rebuilt) {
             prefix.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, rebuilt)))
+        } else if TryGetStaticFieldRoot(rebuilt) is {} staticRoot {
+            prefix.Add(BoundExpressionStatement(nil, staticRoot))
         }
-        if rebuilt is not BoundVariableExpression {
-            return GSharp
-                .Core
-                .CodeAnalysis
-                .Lowering
-                .SideEffectSpiller
-                .CaptureRuntimeGenericStorageReceiver(
-                rebuilt,
-                receiver.Syntax,
-                prefix,
-                func (role string, isReadOnly bool, storageType TypeSymbol) LocalVariableSymbol {
-                    let local = LocalVariableSymbol(
-                        "$$go$$$role$$${binderCtx.GoArgumentCounter++}",
-                        isReadOnly,
-                        storageType
-                    )
-                    $scope.TryDeclareVariable(local)
-                    return local
-                }
-            )
-        }
-        return rebuilt
+        return GSharp
+            .Core
+            .CodeAnalysis
+            .Lowering
+            .SideEffectSpiller
+            .CaptureRuntimeGenericStorageReceiver(
+            rebuilt,
+            receiver.Syntax,
+            prefix,
+            func (role string, isReadOnly bool, storageType TypeSymbol) LocalVariableSymbol {
+                let local = LocalVariableSymbol(
+                    "$$go$$$role$$${binderCtx.GoArgumentCounter++}",
+                    isReadOnly,
+                    storageType
+                )
+                $scope.TryDeclareVariable(local)
+                return local
+            }
+        )
     }
 
     private func CaptureGoReceiverCore(
@@ -1420,10 +1419,42 @@ internal partial class StatementBinder {
         default: false
     }
 
+    private func TryGetStaticFieldRoot(receiver BoundExpression?) BoundExpression? -> switch receiver {
+        case BoundFieldAccessExpression{Receiver: nil, Field: {IsConst: false}} staticField: staticField
+        case BoundClrPropertyAccessExpression{
+            Receiver: nil,
+            Member: FieldInfo{IsLiteral: false}
+        } staticClrField: staticClrField
+        case BoundFieldAccessExpression{Receiver: {} owner}: TryGetStaticFieldRoot(owner)
+        case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: {} owner}: TryGetStaticFieldRoot(owner)
+        case BoundTupleElementAccessExpression{Receiver: var owner}: TryGetStaticFieldRoot(owner)
+        default: default(BoundExpression?)
+    }
+
     private func CaptureGoOperand(
         operand BoundExpression,
         prefix ImmutableArray[BoundStatement].Builder
     ) BoundExpression {
+        if operand is BoundAddressOfExpression{
+            Operand: BoundDereferenceExpression{Operand: BoundBlockExpression block}
+        } {
+            HoistArgumentBlockStatements(block.Statements, prefix)
+            return CaptureGoOperand(block.Expression, prefix)
+        }
+        if operand is BoundAddressOfExpression{Operand: BoundBlockExpression block} addressBlock &&
+            !ReadsUncapturableVariable(addressBlock) {
+            HoistArgumentBlockStatements(block.Statements, prefix)
+            return BoundAddressOfExpression(
+                addressBlock.Syntax,
+                block.Expression,
+                addressBlock.IsUnmanaged,
+                addressBlock.IsReadOnly
+            )
+        }
+        if operand is BoundBlockExpression plainBlock && !ReadsUncapturableVariable(plainBlock) {
+            HoistArgumentBlockStatements(plainBlock.Statements, prefix)
+            return CaptureGoOperand(plainBlock.Expression, prefix)
+        }
         // A constant and `this` cannot change before the child runs, and a
         // function literal only allocates a closure over shared variables, so
         // these stay in place. A local is not one of them: a local that a
@@ -1447,6 +1478,18 @@ internal partial class StatementBinder {
             return operand
         }
         return SpillToReadOnlyLocal(operand, "$$go$$arg$$${binderCtx.GoArgumentCounter++}", prefix)
+    }
+
+    private func HoistArgumentBlockStatements(
+        statements ImmutableArray[BoundStatement],
+        prefix ImmutableArray[BoundStatement].Builder
+    ) {
+        for statement in statements {
+            if statement is BoundVariableDeclaration declaration {
+                $scope.TryDeclareVariable(declaration.Variable)
+            }
+            prefix.Add(statement)
+        }
     }
 
     private func ReadsUncapturableVariable(operand BoundExpression) bool {

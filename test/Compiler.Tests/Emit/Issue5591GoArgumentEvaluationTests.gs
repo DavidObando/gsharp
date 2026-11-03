@@ -129,6 +129,7 @@ class Spawner : Base {
     }
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
+    func PairIn(in a int32, b int32) { Log.Add("named-in a=" + a.ToString() + " b=" + b.ToString()) }
     func Show[T](tag string, value T) { Log.Add(tag + " " + value.ToString()) }
     async func Later(v int32) {
         await Task.Yield()
@@ -146,6 +147,7 @@ class Spawner : Base {
             go handler(count)
             go Three(Next("a"), Next("b"), Next("c"))
             go Pair(b: Next("d"), a: Next("e"))
+            go PairIn(b: Next("f"), a: Next("g"))
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -177,7 +179,8 @@ inferred old
 interface A 41
 method first 41
 named a=5 b=4
-order abcde|
+named-in a=7 b=6
+order abcdefg|
 positional 123
 suspending 7
 `)
@@ -197,6 +200,7 @@ struct Counter : IDisposable {
     var n int32
     func Bump() { n++ }
     func Add(delta int32) { n += delta }
+    func Read(delta int32) { Log.Add("static-ro " + (n + delta).ToString()) }
     func Dispose() { n++ }
 }
 class DisposableBox : IDisposable {
@@ -211,13 +215,43 @@ class GenericHolder[T] {
     var item T
     init(item T) { this.item = item }
 }
+class InitLog {
+    shared {
+        var order string = ""
+        func Step(tag string) int32 {
+            order += tag
+            return 1
+        }
+    }
+}
+class StaticStore {
+    shared {
+        var counter Counter
+        let readonlyCounter Counter = Counter{n: 5}
+        init {
+            InitLog.order += "cctor;"
+        }
+    }
+}
+class StaticReadonlyStore {
+    shared {
+        let readonlyCounter Counter = Counter{n: 5}
+        init {
+            InitLog.order += "ro-cctor;"
+        }
+    }
+}
 
 func RunConstrained[T IDisposable](items []T, holder GenericHolder[T], replacement T, release ManualResetEventSlim) {
+    var current T = items[0]
+    let replace = func() { current = replacement }
     scope {
         go items[0].Dispose()
         go holder.item.Dispose()
+        go current.Dispose()
         items[0] = replacement
         holder.item = replacement
+        replace()
         release.Set()
     }
 }
@@ -289,6 +323,8 @@ class Spawner {
             go genericStructHolder.item.Dispose()
             go genericClasses[0].Dispose()
             go genericClassHolder.item.Dispose()
+            go StaticStore.counter.Add(InitLog.Step("arg;"))
+            go StaticReadonlyStore.readonlyCounter.Read(InitLog.Step("ro;"))
             choose = false
             holder = Holder()
             altHolder = Holder()
@@ -309,6 +345,7 @@ class Spawner {
         Log.Add("items original=" + originalItems[0].n.ToString() + originalItems[1].n.ToString() + " replacement=" + items[0].n.ToString() + items[1].n.ToString())
         Log.Add("pairs original=" + originalPairs[0].Item1.n.ToString() + originalPairs[1].Item1.n.ToString() + " replacement=" + pairs[0].Item1.n.ToString() + pairs[1].Item1.n.ToString())
         Log.Add("probed " + probed)
+        Log.Add("static " + InitLog.order + StaticStore.counter.n.ToString())
         Log.Add("tuple original=" + originalHolder.pair.Item1.n.ToString() + " replacement=" + holder.pair.Item1.n.ToString())
     }
 }
@@ -335,9 +372,11 @@ holder original=2 replacement=0
 items original=01 replacement=00
 pairs original=01 replacement=00
 probed index-threw;holder-threw;box-threw;first;
+static cctor;arg;ro-cctor;ro;1
+static-ro 6
 tuple original=1 replacement=0
 constrained struct array=11 field=11
-constrained class original=2 replacement=0
+constrained class original=3 replacement=0
 `)
     }
 
