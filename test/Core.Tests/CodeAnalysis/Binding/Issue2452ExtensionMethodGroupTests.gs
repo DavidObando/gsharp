@@ -127,7 +127,23 @@ Console.WriteLine(conditional)`
     func AsyncExtensionMethodGroups_ConvertToTaskAndValueTaskDelegatesAndRun() {
         let source = `package Repro
 import System
+import System.Collections.Generic
+import System.Linq
 import System.Threading.Tasks
+
+data class Payload(Tag int32)
+
+class Box[T] {
+    var Value T
+    init(value T) {
+        Value = value
+    }
+
+    async func Get() T {
+        await Task.Yield()
+        return Value
+    }
+}
 
 async func (value string) LengthAsync() int32 {
     await Task.Yield()
@@ -164,6 +180,26 @@ async func (value T) DelayIdentityAsync[T]() T {
     return value
 }
 
+async func (value object) SaveAsync() {
+    await Task.Yield()
+    Console.WriteLine("saved:" + value.ToString())
+}
+
+async func (value string) MakePayloadAsync() Payload {
+    await Task.Yield()
+    return Payload(value.Length)
+}
+
+async func Seq(value int32) IAsyncEnumerable[int32] {
+    await Task.Yield()
+    yield value
+}
+
+async func Iter(value int32) IAsyncEnumerator[int32] {
+    await Task.Yield()
+    yield value + 1
+}
+
 async func (value string) ComputeAsync() int32 {
     await Task.Yield()
     return value.Length
@@ -178,11 +214,14 @@ delegate AsyncInt() Task[int32];
 
 func MakeIdentity[T](value T) () -> Task[T] -> value.DelayIdentityAsync
 
+func MakeSave[T](value T) () -> Task -> value.SaveAsync
+
 func RunTask[T](step () -> Task[T]) T -> step().GetAwaiter().GetResult()
 
 let lengthAsync async () -> int32 = "four".LengthAsync
 let explicitTask () -> Task[int32] = "seven".LengthAsync
 let clrFunc Func[Task[int32]] = "three".LengthAsync
+let clrPayloadFunc Func[Task[Payload]] = "four".MakePayloadAsync
 let namedDelegate AsyncInt = "four".LengthAsync
 let inferred = "eight".LengthAsync
 let delayAsync async () -> void = "later".DelayTextAsync
@@ -194,12 +233,16 @@ let genericRef async () -> string = "echo".DelayIdentityAsync
 let genericVal async () -> int32 = (6).DelayIdentityAsync
 let openGenericRef = MakeIdentity("open")
 let openGenericVal = MakeIdentity(21)
+let saveFromInt = MakeSave(1)
 let overloadZero async () -> int32 = "four".ComputeAsync
 let overloadOne async (int32) -> int32 = "four".ComputeAsync
+let box = Box[IAsyncEnumerable[int32]](Seq(33))
+let getSeq = box.Get
 
 Console.WriteLine(lengthAsync().GetAwaiter().GetResult())
 Console.WriteLine(explicitTask().GetAwaiter().GetResult())
 Console.WriteLine(clrFunc().GetAwaiter().GetResult())
+Console.WriteLine(clrPayloadFunc().GetAwaiter().GetResult().Tag)
 Console.WriteLine(namedDelegate().GetAwaiter().GetResult())
 Console.WriteLine(inferred().GetAwaiter().GetResult())
 delayAsync().GetAwaiter().GetResult()
@@ -211,12 +254,20 @@ Console.WriteLine(genericRef().GetAwaiter().GetResult())
 Console.WriteLine(genericVal().GetAwaiter().GetResult())
 Console.WriteLine(openGenericRef().GetAwaiter().GetResult())
 Console.WriteLine(openGenericVal().GetAwaiter().GetResult())
+saveFromInt().GetAwaiter().GetResult()
 Console.WriteLine(overloadZero().GetAwaiter().GetResult())
 Console.WriteLine(overloadOne(3).GetAwaiter().GetResult())
+let seqEnumerator = getSeq().GetAwaiter().GetResult().GetAsyncEnumerator()
+let _ = seqEnumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult()
+Console.WriteLine(seqEnumerator.Current)
+let iterEnumerator = Enumerable.Select([]int32{40}, Iter).Single()
+let _ = iterEnumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult()
+Console.WriteLine(iterEnumerator.Current)
 Console.WriteLine(RunTask("six".LengthAsync))
 Console.WriteLine(RunTask((12).DelayIdentityAsync))
 Console.WriteLine(Task.Run("nine".LengthAsync).GetAwaiter().GetResult())
-Console.WriteLine(Task.Run((15).DelayIdentityAsync).GetAwaiter().GetResult())`
+Console.WriteLine(Task.Run((15).DelayIdentityAsync).GetAwaiter().GetResult())
+Console.WriteLine(Task.Run(Payload(77).DelayIdentityAsync).GetAwaiter().GetResult().Tag)`
         let result = EmittedOracle.Evaluate(source)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(
@@ -225,6 +276,7 @@ Console.WriteLine(Task.Run((15).DelayIdentityAsync).GetAwaiter().GetResult())`
                 "4",
                 "5",
                 "5",
+                "4",
                 "4",
                 "5",
                 "later",
@@ -236,12 +288,16 @@ Console.WriteLine(Task.Run((15).DelayIdentityAsync).GetAwaiter().GetResult())`
                 "6",
                 "open",
                 "21",
+                "saved:1",
                 "4",
                 "7",
+                "33",
+                "41",
                 "3",
                 "12",
                 "4",
-                "15"
+                "15",
+                "77"
             ) +
                 Environment.NewLine,
             result.Output

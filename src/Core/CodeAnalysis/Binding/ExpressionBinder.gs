@@ -3083,7 +3083,9 @@ internal partial class ExpressionBinder {
             projectType(TypeSymbol) -> Type?
         ) Type? {
             let returnSymbol = declaredReturn ?? TypeSymbol.Void
-            if !candidate.IsAsyncOrSuspending || candidate.IsAsyncVoid {
+            if !candidate.IsAsyncOrSuspending ||
+                candidate.IsAsyncVoid ||
+                AsyncIteratorDetection.IsAsyncIteratorReturnType(candidate.Type) {
                 return projectType(returnSymbol)
             }
             if returnSymbol == TypeSymbol.Void {
@@ -3096,10 +3098,6 @@ internal partial class ExpressionBinder {
             let projected Type? = projectType(returnSymbol)
             if projected == nil {
                 return nil
-            }
-            if projected.IsGenericType && projected.GetGenericTypeDefinition()
-                .FullName == "System.Collections.Generic.IAsyncEnumerable`1" {
-                return projected
             }
             let openTask = if candidate.AsyncReturnsValueTask || candidate.IsSuspending {
                 typeof(System.Threading.Tasks.ValueTask[object]).GetGenericTypeDefinition()
@@ -3341,7 +3339,6 @@ internal partial class ExpressionBinder {
                 }
             }
             var candidate FunctionSymbol? = nil
-            var userParameterOffset = 0
             for possibleCandidate in userGroup.Candidates {
                 let candidateOffset = if possibleCandidate.IsExtension && userGroup.Receiver != nil {
                     1
@@ -3355,40 +3352,34 @@ internal partial class ExpressionBinder {
                     return nil
                 }
                 candidate = possibleCandidate
-                userParameterOffset = candidateOffset
             }
-            if candidate == nil || candidate.IsGeneric {
+            if candidate == nil {
                 return nil
             }
-            var candidateOwner StructSymbol? = if userGroup.StaticOwnerType != nil &&
+            let candidateOwner = if userGroup.StaticOwnerType != nil &&
                 candidate.StaticOwnerType is StructSymbol declaredOwner {
                 TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
             } else {
                 default(StructSymbol?)
             }
-            if candidateOwner == nil &&
-                !candidate.IsExtension &&
-                userGroup
-                .Receiver
-                ?.Type is StructSymbol receiverStruct &&
-                candidate.ReceiverType is StructSymbol declaredReceiver {
-                candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver)
+            if !TryCloseMethodGroupCandidate(
+                candidate,
+                userGroup.Receiver,
+                candidateOwner,
+                delegateArity,
+                out var closedParameters,
+                out var closedReturn
+            ) {
+                return nil
             }
             let projectedParameters = [delegateArity]Type
             for var i = 0; i < projectedParameters.Length; i++ {
-                let parameter = candidateOwner?.SubstituteMemberType(
-                    candidate.Parameters[i + userParameterOffset].Type
-                ) ??
-                    candidate
-                    .Parameters[i + userParameterOffset]
-                    .Type
-                if projectType(parameter) is not{} projected {
+                if projectType(closedParameters[i]) is not{} projected {
                     return nil
                 }
                 projectedParameters[i] = projected
             }
-            let returnType = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void
-            return if ProjectMethodGroupReturnClrType(candidate, returnType, projectType) is {} projectedReturn {
+            return if ProjectMethodGroupReturnClrType(candidate, closedReturn, projectType) is {} projectedReturn {
                 (projectedParameters, projectedReturn)
             } else {
                 nil
@@ -3399,7 +3390,45 @@ internal partial class ExpressionBinder {
             candidate FunctionSymbol,
             receiver BoundExpression?,
             candidateOwner StructSymbol?,
+            delegateArity int32,
+            @NotNullWhen(true) out closedParameters[]?TypeSymbol,
+            @NotNullWhen(true) out closedReturn TypeSymbol?
+        ) bool -> TryCloseMethodGroupCandidateCore(
+            candidate,
+            receiver,
+            candidateOwner,
+            targetParameterTypes: nil,
+            delegateArity,
+            out closedParameters,
+            out closedReturn,
+            out _
+        )
+
+        internal func TryCloseMethodGroupCandidate(
+            candidate FunctionSymbol,
+            receiver BoundExpression?,
+            candidateOwner StructSymbol?,
             targetParameterTypes IReadOnlyList[TypeSymbol],
+            @NotNullWhen(true) out closedParameters[]?TypeSymbol,
+            @NotNullWhen(true) out closedReturn TypeSymbol?,
+            out methodTypeArguments ImmutableArray[TypeSymbol]
+        ) bool -> TryCloseMethodGroupCandidateCore(
+            candidate,
+            receiver,
+            candidateOwner,
+            targetParameterTypes,
+            targetParameterTypes.Count,
+            out closedParameters,
+            out closedReturn,
+            out methodTypeArguments
+        )
+
+        private func TryCloseMethodGroupCandidateCore(
+            candidate FunctionSymbol,
+            receiver BoundExpression?,
+            candidateOwner StructSymbol?,
+            targetParameterTypes IReadOnlyList[TypeSymbol]?,
+            delegateArity int32,
             @NotNullWhen(true) out closedParameters[]?TypeSymbol,
             @NotNullWhen(true) out closedReturn TypeSymbol?,
             out methodTypeArguments ImmutableArray[TypeSymbol]
@@ -3413,7 +3442,7 @@ internal partial class ExpressionBinder {
             } else {
                 0
             }
-            if candidate.Parameters.Length - parameterOffset != targetParameterTypes.Count {
+            if candidate.Parameters.Length - parameterOffset != delegateArity {
                 return false
             }
             // Issue #3248: an instance method group's candidates come from the
@@ -3450,14 +3479,16 @@ internal partial class ExpressionBinder {
                     // parameterOffset is 1 only when `candidate.IsExtension && receiver != null` held above.
                     Binder.InferTypeArguments(receiverParameter, receiver!!.Type, substitution)
                 }
-                for var i = 0; i < targetParameterTypes.Count; i++ {
-                    let parameter = candidateOwner?.SubstituteMemberType(
-                        candidate.Parameters[i + parameterOffset].Type
-                    ) ??
-                        candidate
-                        .Parameters[i + parameterOffset]
-                        .Type
-                    Binder.InferTypeArguments(parameter, targetParameterTypes[i], substitution)
+                if targetParameterTypes != nil {
+                    for var i = 0; i < targetParameterTypes.Count; i++ {
+                        let parameter = candidateOwner?.SubstituteMemberType(
+                            candidate.Parameters[i + parameterOffset].Type
+                        ) ??
+                            candidate
+                            .Parameters[i + parameterOffset]
+                            .Type
+                        Binder.InferTypeArguments(parameter, targetParameterTypes[i], substitution)
+                    }
                 }
                 let typeArguments = ImmutableArray.CreateBuilder[TypeSymbol](candidate.TypeParameters.Length)
                 for typeParameter in candidate.TypeParameters {
@@ -3472,7 +3503,7 @@ internal partial class ExpressionBinder {
                 }
                 methodTypeArguments = typeArguments.MoveToImmutable()
             }
-            closedParameters = [targetParameterTypes.Count]TypeSymbol
+            closedParameters = [delegateArity]TypeSymbol
             for var i = 0; i < closedParameters!!.Length; i++ {
                 let parameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type) ??
                     candidate

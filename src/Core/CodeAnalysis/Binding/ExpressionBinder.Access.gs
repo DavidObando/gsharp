@@ -95,7 +95,7 @@ internal partial class ExpressionBinder {
         declaredOrSubstituted TypeSymbol?
     ) TypeSymbol {
         let declared = declaredOrSubstituted ?? TypeSymbol.Void
-        if function.IsAsyncOrSuspending && !function.IsAsyncVoid && !isAsyncIteratorReturnType(declared) {
+        if function.IsAsyncOrSuspending && !function.IsAsyncVoid && !isAsyncIteratorReturnType(function.Type) {
             return lambdas.WrapAsTask(declared, function.AsyncReturnsValueTask)
         }
         return declared

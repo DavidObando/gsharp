@@ -39,7 +39,8 @@ internal partial class MethodBodyEmitter {
         source BoundExpression,
         sourceFn FunctionTypeSymbol,
         targetDelegateHostType Type,
-        symbolicTargetCtorRef EntityHandle? = nil
+        symbolicTargetCtorRef EntityHandle? = nil,
+        symbolicTargetTypeRef EntityHandle? = nil
     ) {
         // Issue #1502: when the SOURCE function type carries a source-defined
         // user type (Struct/Class/Interface/Enum/Delegate) or a type parameter
@@ -130,6 +131,12 @@ internal partial class MethodBodyEmitter {
         // target delegate type.
         if source is BoundMethodGroupExpression methodGroup {
             if (symbolicTargetCtorRef != nil) {
+                if symbolicTargetTypeRef is {} targetTypeHandle && this.TryEmitClosedExtensionMethodGroup(
+                    methodGroup,
+                    targetTypeHandle
+                ) {
+                    return
+                }
                 this.EmitMethodGroupToNamedDelegate(methodGroup, symbolicTargetCtorRef)
                 return
             }

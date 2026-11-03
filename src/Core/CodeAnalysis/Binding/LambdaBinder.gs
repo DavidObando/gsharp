@@ -2112,7 +2112,42 @@ internal class LambdaBinder {
             )
         )
         if function.IsExtension && adapterReceiver != nil {
-            arguments.Add(adapterReceiver)
+            var receiverArgument BoundExpression = adapterReceiver
+            if !function.Parameters.IsDefaultOrEmpty {
+                var receiverParameterType = if group.StaticOwnerType != nil &&
+                    function.StaticOwnerType is StructSymbol declaredOwner {
+                    TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+                        ?.SubstituteMemberType(function.Parameters[0].Type) ?? function.Parameters[0].Type
+                } else {
+                    function.Parameters[0].Type
+                }
+                if function.IsGeneric &&
+                    !group
+                    .MethodTypeArguments
+                    .IsDefaultOrEmpty &&
+                    group
+                    .MethodTypeArguments
+                    .Length == function
+                    .TypeParameters
+                    .Length {
+                    let substitution = Dictionary[TypeParameterSymbol, TypeSymbol](function.TypeParameters.Length)
+                    for var i = 0; i < function.TypeParameters.Length; i++ {
+                        substitution[function.TypeParameters[i]] = group.MethodTypeArguments[i]
+                    }
+                    receiverParameterType = Binder.SubstituteType(receiverParameterType, substitution)
+                }
+                if function.Parameters[0].RefKind != RefKind.None {
+                    receiverArgument = BoundAddressOfExpression(
+                        nil,
+                        receiverArgument,
+                        unmanaged: false,
+                        isReadOnly: function.Parameters[0].RefKind == RefKind.In
+                    )
+                } else if !object.ReferenceEquals(receiverArgument.Type, receiverParameterType) {
+                    receiverArgument = BoundConversionExpression(nil, receiverParameterType, receiverArgument)
+                }
+            }
+            arguments.Add(receiverArgument)
         }
         for var i = 0; i < functionType.ParameterTypes.Length; i++ {
             let sourceParameterIndex = i +
