@@ -2266,21 +2266,10 @@ partial class CSharpToGSharpTranslator {
             }
             field = nil
             property = nil
-            if !node.Modifiers.Any(SyntaxKind.StaticKeyword) || node.Initializer == nil {
-                return false
-            }
-            // Auto-property: body-less, all accessors body-less, no expression body.
-            if node.ExpressionBody != nil || node.AccessorList == nil {
+            if !IsInitializedStaticAutoProperty(node) {
                 return false
             }
             let accessors IReadOnlyList[AccessorDeclarationSyntax] = node.AccessorList!!.Accessors
-            if accessors.Any((a AccessorDeclarationSyntax) -> a.Body != nil || a.ExpressionBody != nil) {
-                return false
-            }
-            let hasGet = accessors.Any((a AccessorDeclarationSyntax) -> a.IsKind(SyntaxKind.GetAccessorDeclaration))
-            if !hasGet {
-                return false
-            }
             let hasSet = accessors.Any((a AccessorDeclarationSyntax) -> a.IsKind(SyntaxKind.SetAccessorDeclaration))
             let symbol IPropertySymbol? = this.context.GetDeclaredSymbol(node) as IPropertySymbol
             if symbol == nil {
@@ -2345,13 +2334,75 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
+        /// Whether the translator emits the C# auto property [`node`](paramref) as a private backing field and
+        /// computed accessors instead of a G# auto property. The same decision serves the declaration and the
+        /// narrowing mirror (cref:IsEmittedAsAutoProperty), because gsc counts a computed accessor as user code
+        /// (ADR-0208 R14).
+        private func LowersAutoPropertyToBackingField(node PropertyDeclarationSyntax, symbol IPropertySymbol?) bool {
+            if symbol != nil && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol) {
+                return true
+            }
+            let isExplicitPositionalAutoProperty = IsExplicitPositionalAutoProperty(node, symbol)
+            return symbol?.IsStatic != true &&
+                (node.Initializer != nil || isExplicitPositionalAutoProperty) &&
+                (
+                !IsGetOnlyAutoProperty(node) || symbol?.ContainingType?.IsRecord == true || symbol?.IsOverride == true
+            ) &&
+                (
+                isExplicitPositionalAutoProperty ||
+                    node.Initializer == nil ||
+                    !IsNullOrSuppressedNull(node.Initializer!!.Value)
+            )
+        }
+
+        /// ADR-0208 R14 (#5617): whether the source property [`property`](paramref) is a G# auto property after
+        /// translation. A C# property with an accessor body, an expression body, an abstract or interface slot, an
+        /// indexer, an initialized static auto property and an auto property that
+        /// (cref:LowersAutoPropertyToBackingField) lowers become computed G# properties. A positional record
+        /// parameter becomes a parameter of the G# data class.
+        private func IsEmittedAsAutoProperty(property IPropertySymbol) bool {
+            if property.IsAbstract || property.IsIndexer || property.ContainingType?.TypeKind == TypeKind.Interface {
+                return false
+            }
+            let references = property.DeclaringSyntaxReferences.AddRange(
+                property.PartialImplementationPart?.DeclaringSyntaxReferences ?? ImmutableArray[SyntaxReference].Empty
+            )
+            if references.IsEmpty {
+                return false
+            }
+            for reference in references {
+                switch reference.GetSyntax() {
+                    case ParameterSyntax {
+                        continue
+                    }
+                    case declaration is PropertyDeclarationSyntax {
+                        if declaration.ExpressionBody != nil ||
+                            declaration.AccessorList == nil ||
+                            declaration.AccessorList!!
+                            .Accessors
+                            .Any(
+                            (accessor AccessorDeclarationSyntax) -> accessor.Body != nil ||
+                                accessor.ExpressionBody != nil
+                        ) ||
+                            IsInitializedStaticAutoProperty(declaration) ||
+                            this.LowersAutoPropertyToBackingField(declaration, property) {
+                            return false
+                        }
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
         private func TranslateProperty(
             node PropertyDeclarationSyntax,
             attributes List[AttributeUse],
             primaryCtorParamNames IReadOnlyCollection[string]? = nil
         )(Member GMember?, IsStatic bool, BackingField GMember?) {
             let symbol IPropertySymbol? = this.context.GetDeclaredSymbol(node) as IPropertySymbol
-            let isExplicitPositionalAutoProperty = IsExplicitPositionalAutoProperty(node, symbol)
             // Issue #3879 (ADR-0060 amendment): a C# `ref` PROPERTY now HAS a
             // canonical G# form — `prop P ref T { get { return ref lvalue } }`
             // and its arrow sugar `prop P ref T -> lvalue`. gsc restricts it to
@@ -2492,19 +2543,7 @@ partial class CSharpToGSharpTranslator {
                 out var fieldKeywordBackingSymbol
             )
             let lowersToBackingField = symbol != nil && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol)
-            if fieldKeywordBackingName == nil && lowersToBackingField {
-                fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(symbol, primaryCtorParamNames)
-            } else if fieldKeywordBackingName == nil &&
-                !isStatic &&
-                (node.Initializer != nil || isExplicitPositionalAutoProperty) &&
-                (
-                !IsGetOnlyAutoProperty(node) || symbol?.ContainingType?.IsRecord == true || symbol?.IsOverride == true
-            ) &&
-                (
-                isExplicitPositionalAutoProperty ||
-                    node.Initializer == nil ||
-                    !IsNullOrSuppressedNull(node.Initializer!!.Value)
-            ) {
+            if fieldKeywordBackingName == nil && this.LowersAutoPropertyToBackingField(node, symbol) {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(symbol, primaryCtorParamNames)
             }
             // Issue #1907 / #1072: the backing field can be used as nullable
@@ -3141,6 +3180,21 @@ partial class CSharpToGSharpTranslator {
                 kind == SyntaxKind.LessThanLessThanEqualsToken ||
                 kind == SyntaxKind.GreaterThanGreaterThanEqualsToken ||
                 kind == SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken
+
+            /// Issue #2665: a static auto property with an initializer and a getter, which
+            /// (cref:TryTranslateStaticInitializedAutoProperty) lowers to an initialized backing field and computed
+            /// accessors.
+            private func IsInitializedStaticAutoProperty(node PropertyDeclarationSyntax) bool {
+                if !node.Modifiers.Any(SyntaxKind.StaticKeyword) ||
+                    node.Initializer == nil ||
+                    node.ExpressionBody != nil ||
+                    node.AccessorList == nil {
+                    return false
+                }
+                let accessors IReadOnlyList[AccessorDeclarationSyntax] = node.AccessorList!!.Accessors
+                return !accessors.Any((a AccessorDeclarationSyntax) -> a.Body != nil || a.ExpressionBody != nil) &&
+                    accessors.Any((a AccessorDeclarationSyntax) -> a.IsKind(SyntaxKind.GetAccessorDeclaration))
+            }
 
             private func IsExplicitPositionalAutoProperty(
                 node PropertyDeclarationSyntax,
