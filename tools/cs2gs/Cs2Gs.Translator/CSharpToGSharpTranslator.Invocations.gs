@@ -1976,12 +1976,30 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            let sourceType = this.context.GetTypeInfo(argument.Expression)
-            if SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter!!.Type) ||
-                SymbolEqualityComparer
-                .Default
-                .Equals(sourceType.ConvertedType, parameter!!.Type) {
-                return false
+            let callArguments = switch this.context.SemanticModel.GetOperation(argumentList.Parent!!) {
+                case invocation is IInvocationOperation: invocation.Arguments
+                case creation is IObjectCreationOperation: creation.Arguments
+                case propertyReference is IPropertyReferenceOperation: propertyReference.Arguments
+                default: default(ImmutableArray[IArgumentOperation])
+            }
+            if !callArguments.IsDefaultOrEmpty && callArguments.FirstOrDefault(
+                (candidate IArgumentOperation) -> candidate.Parameter?.Ordinal == parameter!!.Ordinal
+            ) is {} paramsArgument {
+                if paramsArgument.ArgumentKind is not(ArgumentKind.ParamArray or ArgumentKind.ParamCollection) {
+                    return false
+                }
+                elementType = candidateElementType
+                paramsParameter = parameter
+                return true
+            }
+            if argumentList.Arguments.Count == parameter!!.Ordinal + 1 {
+                let sourceType = this.context.GetTypeInfo(argument.Expression)
+                if SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter!!.Type) ||
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(sourceType.ConvertedType, parameter!!.Type) {
+                    return false
+                }
             }
             elementType = candidateElementType
             paramsParameter = parameter

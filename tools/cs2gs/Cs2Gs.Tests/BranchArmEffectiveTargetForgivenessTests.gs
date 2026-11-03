@@ -142,6 +142,12 @@ namespace App
         public static void ParamsSwitch(Model.Arg argument, int i) => Params("head", i switch { 0 => argument.Value, _ => argument.Name });
 
         public static void ParamsNested(Model.Arg argument, int i) => Params(i >= 0 ? (i > 1 ? argument.Value : argument.Name) : "x");
+
+        public static void ObjectParams(params object[] values) { }
+
+        public static void ObjectParamsSeed() => ObjectParams("head", null);
+
+        public static void ObjectParamsConditional(Model.Arg a, Model.Arg b, bool flag) => ObjectParams(flag ? a.Objects : b.Objects, "tail");
     }
 }`
         let printed = TranslateCrossProject(app)
@@ -239,18 +245,25 @@ namespace App
 
         public static string ParamsJoined(Arg a, int i) =>
             JoinParams(i == 0 ? a.Name : a.Value, i switch { 0 => a.Name, _ => a.Value });
+
+        public static string JoinObjects(params object?[] values) => (values[0] == null ? "0" : "1") + ":" + values[1];
+
+        public static string ObjectsJoined(Arg a, Arg b, bool flag) =>
+            JoinObjects(flag ? a.Objects : b.Objects, "tail");
 #nullable restore
 
         public static string Run()
         {
             var a = new Arg("v");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true);
         }
     }
 }`
         let (library, consumer) = TranslateBothProjects(app)
         Assert.DoesNotContain("a.Name!!", consumer)
-        Assert.Equal("[]<>nonenull{}N0:1", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
+        Assert.DoesNotContain("a.Objects!!", consumer)
+        Assert.DoesNotContain("b.Objects!!", consumer)
+        Assert.Equal("[]<>nonenull{}N0:10:tail", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
     }
 
     /// Precision: an arm whose whole-expression target is a non-null
@@ -267,6 +280,8 @@ namespace App
 
 #nullable enable
         public static int ParamsIndex(params string[] names) => names[0] == "x" ? 0 : -1;
+
+        public static int ObjectParamsCount(params object?[] values) => values.Length;
 #nullable restore
 
         public static int Conditional(Model.Arg argument, int i) => Index(i > 0 ? argument.Name : "x");
@@ -276,6 +291,8 @@ namespace App
         public static int ParamsConditional(Model.Arg argument, int i) => ParamsIndex(i > 0 ? argument.Name : "x");
 
         public static int ParamsSwitch(Model.Arg argument, int i) => ParamsIndex("head", i switch { 1 => argument.Name, _ => "y" });
+
+        public static int ObjectParamsDirect(Model.Arg a, Model.Arg b, bool flag) => ObjectParamsCount(flag ? a.Objects : b.Objects);
 
         public static T Id<T>(T value) => value;
 
@@ -303,6 +320,7 @@ namespace App
         Assert.Contains("case 0: argument.Name!!", printed)
         Assert.Contains("ParamsIndex(if i > 0 { argument.Name!! } else { \"x\" })", printed)
         Assert.Contains("case 1: argument.Name!!", printed)
+        Assert.Contains("ObjectParamsCount(if flag { a.Objects!! } else { b.Objects!! })", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("else { argument.Name!! })", printed)
@@ -352,9 +370,10 @@ namespace Model
 {
     public sealed class Arg
     {
-        public Arg(string value, string name = null) { Value = value; Name = name; }
+        public Arg(string value, string name = null, object[] objects = null) { Value = value; Name = name; Objects = objects; }
         public string Name { get; }
         public string Value { get; }
+        public object[] Objects { get; }
     }
 
     public static class Printer
