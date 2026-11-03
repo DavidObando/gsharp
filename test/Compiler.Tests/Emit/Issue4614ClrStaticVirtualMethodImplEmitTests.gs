@@ -291,6 +291,47 @@ Console.WriteLine("x")`, mismatchPath, "/target:exe", "/reference:" + libPath)
                 "Projected rank-1 non-SZ arrays with different element types must not unify. Log:\n" + mismatchLog
             )
             Assert.Contains(" error GS", mismatchLog, StringComparison.Ordinal)
+
+            let nullableMismatchPath = Path.Combine(tempDir, "NullableMismatch.dll")
+            let nullableMismatchLog = Compile(tempDir, "NullableMismatch.gs", `package P
+import System
+import NonSzLib
+
+func CheckNullable(x INonSz[int32?], y INonSz[int32]) int32 {
+    let ok = x.M(x.R())
+    return ok + x.M(y.R())
+}
+Console.WriteLine("x")`, nullableMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(nullableMismatchPath),
+                "Projected rank-1 non-SZ array over int32? must not unify with int32[*]. Log:\n" + nullableMismatchLog
+            )
+            Assert.Contains(" error GS", nullableMismatchLog, StringComparison.Ordinal)
+
+            let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
+            let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
+import System
+import NonSzLib
+
+public class Shape { }
+public func Forward(x INonSz[Shape]) int32 {
+    let arr = x.R()
+    return x.M(arr)
+}
+public func ForwardNullable(x INonSz[int32?]) int32 {
+    let arr = x.R()
+    return x.M(arr)
+}
+Console.WriteLine("ok")`, validPath, "/target:exe", "/reference:" + libPath)
+            Assert.DoesNotContain(" error ", validLog, StringComparison.Ordinal)
+            Assert.True(
+                File.Exists(validPath),
+                "Valid rank-1 non-SZ array local and call must compile. Log:\n" + validLog
+            )
+            IlVerifier.Verify(validPath, []string{libPath})
+            let (exit, output) = RunDotnet(validPath)
+            Assert.True(exit == 0, "ValidNonSz must run. Output:\n" + output)
+            Assert.Equal("ok", output.Trim())
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }

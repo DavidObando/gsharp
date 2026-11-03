@@ -2278,29 +2278,13 @@ internal class MemberLookup {
                     methodTypeArguments,
                     preserveReferenceTupleIdentity
                 )
-                if TypeSymbol.RequiresSymbolicProjection(mappedElement) || TypeSymbol.ContainsFixedLengthArray(
-                    mappedElement
-                ) ||
-                    (preserveReferenceTupleIdentity && ContainsReferenceTuple(mappedElement)) ||
-                    ContainsRankOneNonSzArray(mappedElement) ||
-                    ClrNullability
-                    .ContainsFunctionPointer(openClr) {
-                    let elementClr = if !TypeSymbol.RequiresSymbolicProjection(mappedElement) &&
-                        mappedElement.ClrType is {ContainsGenericParameters: false} concreteElementClr {
-                        concreteElementClr
-                    } else {
-                        ResolveErasedObjectInContext(openDefinition ?? openClr)
-                    }
-                    return ImportedTypeSymbol.GetConstructed(
-                        elementClr.MakeArrayType(1),
-                        openDefinition: nil,
-                        ImmutableArray.Create(mappedElement)
-                    )
-                }
-                if mappedElement.ClrType is {ContainsGenericParameters: false} elementClr {
-                    return ImportedTypeSymbol.Get(elementClr.MakeArrayType(1))
-                }
-                return TypeSymbol.FromClrType(currentOpenClr)
+                let contextObject = ResolveErasedObjectInContext(openDefinition ?? openClr)
+                let elementClr = ProjectSymbolicArgToErasedClr(mappedElement, contextObject) ?? contextObject
+                return ImportedTypeSymbol.GetConstructed(
+                    elementClr.MakeArrayType(1),
+                    openDefinition: nil,
+                    ImmutableArray.Create(mappedElement)
+                )
             }
             // Issue #794: an open generic type's instance member can return an
             // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
