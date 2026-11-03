@@ -2115,11 +2115,27 @@ class Program {
     }
 }
 `, "CS1503", line: 5, column: 24, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var a = [1, 1](int32, (int32, int32)){(1, (2, 3))}
+    Console.Write(S.RTGrid[int32](&a))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var a = new (int, (int, int))[1, 1] { { (1, (2, 3)) } };
+        Console.Write(S.RTGrid<int>(ref a));
+    }
+}
+`, "CS1503", line: 5, column: 35, length: 2, diagnostic: "GS0154")
         Check(fixture, `import System
 import System.Collections.Generic
 import FunctionControl
 enum E { A = 1, B = 2 }
 class A {}
+class MyD : B {}
 func Main() {
     var h int64 = 3
     var f () -> int64 = () -> 4
@@ -2131,6 +2147,11 @@ func Main() {
     var fixedArr = [3]int32{7, 8, 9}
     var es = List[E]{E.B}
     var vt = (5, 6)
+    var pairRt = (System.Tuple[int32, int32](1, 2), 3)
+    var rt8 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32](8))
+    var rt9 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32, int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32, int32](8, 9))
+    var ds = List[MyD]{MyD()}
+    var d = MyD()
     Console.Write(S.R(&h))
     Console.Write(S.I(&h))
     Console.Write(S.I(in h))
@@ -2145,12 +2166,17 @@ func Main() {
     Console.Write(S.ReadG[int32](&fixedArr))
     Console.Write(int32(es.ReadExt[E](&next)))
     Console.Write(S.VT(&vt))
+    Console.Write(S.RTPair(&pairRt))
+    Console.Write(S.RT8(&rt8))
+    Console.Write(S.RT9(&rt9))
+    Console.Write(ds.ReadExt(&d) == ds[0] ? 1 : 0)
 }
 `, `using System;
 using System.Collections.Generic;
 using FunctionControl;
 enum E { A = 1, B = 2 }
 class A {}
+class MyD : B {}
 class Program {
     static void Main() {
         long h = 3;
@@ -2163,6 +2189,11 @@ class Program {
         var fixedArr = new int[] { 7, 8, 9 };
         var es = new List<E> { E.B };
         var vt = (5, 6);
+        var pairRt = (new Tuple<int, int>(1, 2), 3);
+        var rt8 = new Tuple<int, int, int, int, int, int, int, Tuple<int>>(1, 2, 3, 4, 5, 6, 7, new Tuple<int>(8));
+        var rt9 = new Tuple<int, int, int, int, int, int, int, Tuple<int, int>>(1, 2, 3, 4, 5, 6, 7, new Tuple<int, int>(8, 9));
+        var ds = new List<MyD> { new MyD() };
+        var d = new MyD();
         Console.Write(S.R(ref h));
         Console.Write(S.I(in h));
         Console.Write(S.I(in h));
@@ -2177,9 +2208,13 @@ class Program {
         Console.Write(S.ReadG<int>(ref fixedArr));
         Console.Write((int)es.ReadExt<E>(ref next));
         Console.Write(S.VT(ref vt));
+        Console.Write(S.RTPair(ref pairRt));
+        Console.Write(S.RT8(ref rt8));
+        Console.Write(S.RT9(ref rt9));
+        Console.Write(ds.ReadExt(ref d) == ds[0] ? 1 : 0);
     }
 }
-`, "33344221117725")
+`, "333442211177254891")
     }
 
     /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
@@ -3137,6 +3172,10 @@ namespace FunctionControl {
         public static long F(in System.Func<long> f) => f();
         public static string B(in B b) => "B";
         public static int RT(ref System.Tuple<int, int> x) => x.Item1;
+        public static int RTPair(ref (System.Tuple<int, int>, int) x) => x.Item1.Item1 + x.Item2;
+        public static int RTGrid<T>(ref (T, System.Tuple<int, int>)[,] x) => x[0, 0].Item2.Item1;
+        public static int RT8(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int>> x) => x.Rest.Item1;
+        public static int RT9(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int, int>> x) => x.Rest.Item2;
         public static int VT(ref (int, int) x) => x.Item1;
         public static int Read(ref int[] a) => a[0];
         public static T ReadG<T>(ref T[] a) => a[0];

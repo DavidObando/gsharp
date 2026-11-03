@@ -316,19 +316,28 @@ internal shared class ByRefStorageMatching {
                 clrType.GetGenericTypeDefinition()
             }
             if openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true &&
-                typeSymbol is TupleTypeSymbol tuple {
-                let clrArgs = clrType.GetGenericArguments()
-                if clrArgs.Length == tuple.ElementTypes.Length {
-                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
-                    for var i = 0; i < clrArgs.Length; i++ {
-                        builder.Add(PreserveNominalClrTypeCore(clrArgs[i], tuple.ElementTypes[i]))
+                typeSymbol is TupleTypeSymbol tuple &&
+                ReconstructReferenceTupleFromFlattenedElements(clrType, tuple.ElementTypes, 0) is {} reconstructed {
+                return reconstructed
+            }
+            if openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true &&
+                typeSymbol is TupleTypeSymbol valueTuple {
+                let clrElements = ImmutableArray.CreateBuilder[Type]()
+                if TryCollectFlattenedValueTupleClrElements(clrType, clrElements) &&
+                    clrElements.Count == valueTuple
+                    .ElementTypes
+                    .Length {
+                    let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrElements.Count)
+                    var changed = false
+                    for var i = 0; i < clrElements.Count; i++ {
+                        let updated = PreserveNominalClrTypeCore(clrElements[i], valueTuple.ElementTypes[i])
+                        changed |= !object.ReferenceEquals(updated, valueTuple.ElementTypes[i])
+                        builder.Add(updated)
                     }
-                    let closedOrOpen = if clrType.ContainsGenericParameters {
-                        openDef
-                    } else {
-                        clrType
+                    if changed {
+                        return TupleTypeSymbol.Get(builder.MoveToImmutable(), valueTuple.ElementNames)
                     }
-                    return ImportedTypeSymbol.GetConstructed(closedOrOpen, openDef, builder.MoveToImmutable())
+                    return typeSymbol
                 }
             }
             if !clrType.IsGenericTypeDefinition && typeSymbol is ImportedTypeSymbol imported {
@@ -352,6 +361,17 @@ internal shared class ByRefStorageMatching {
                 }
             }
         }
+        if clrType.IsArray &&
+            !clrType.IsSZArray &&
+            typeSymbol is RectangularArrayTypeSymbol rectangular &&
+            clrType.GetElementType() is {} rectElemClr {
+            let updatedRectElem = PreserveNominalClrTypeCore(rectElemClr, rectangular.ElementType)
+            return if object.ReferenceEquals(updatedRectElem, rectangular.ElementType) {
+                typeSymbol
+            } else {
+                RectangularArrayTypeSymbol.Get(updatedRectElem, rectangular.Rank)
+            }
+        }
         if clrType.IsSZArray && typeSymbol is SliceTypeSymbol slice && clrType.GetElementType() is {} elemClr {
             let updatedElem = PreserveNominalClrTypeCore(elemClr, slice.ElementType)
             if !HasErasedRuntimeShape(updatedElem) && NullableLifting.GetEffectiveClrType(
@@ -369,6 +389,139 @@ internal shared class ByRefStorageMatching {
             )
         }
         return typeSymbol
+    }
+
+    private func ReconstructReferenceTupleFromFlattenedElements(
+        clrType Type,
+        elements ImmutableArray[TypeSymbol],
+        offset int32
+    ) TypeSymbol? {
+        if !clrType.IsGenericType {
+            return nil
+        }
+        let openDef = if clrType.IsGenericTypeDefinition {
+            clrType
+        } else {
+            clrType.GetGenericTypeDefinition()
+        }
+        if openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) != true {
+            return nil
+        }
+        let clrArgs = clrType.GetGenericArguments()
+        let remaining = elements.Length - offset
+        let closedOrOpen = if clrType.ContainsGenericParameters {
+            openDef
+        } else {
+            clrType
+        }
+        if clrArgs.Length == 8 && remaining >= 8 && IsTupleRestClrType(clrArgs[7]) {
+            let restSymbol = ReconstructTupleRestFromFlattenedElements(clrArgs[7], elements, offset + 7)
+            if restSymbol == nil {
+                return nil
+            }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](8)
+            for var i = 0; i < 7; i++ {
+                builder.Add(PreserveNominalClrTypeCore(clrArgs[i], elements[offset + i]))
+            }
+            builder.Add(restSymbol)
+            return ImportedTypeSymbol.GetConstructed(closedOrOpen, openDef, builder.MoveToImmutable())
+        }
+        if clrArgs.Length != remaining {
+            return nil
+        }
+        let directBuilder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
+        for var i = 0; i < clrArgs.Length; i++ {
+            directBuilder.Add(PreserveNominalClrTypeCore(clrArgs[i], elements[offset + i]))
+        }
+        return ImportedTypeSymbol.GetConstructed(closedOrOpen, openDef, directBuilder.MoveToImmutable())
+    }
+
+    private func ReconstructTupleRestFromFlattenedElements(
+        restClrType Type,
+        elements ImmutableArray[TypeSymbol],
+        offset int32
+    ) TypeSymbol? {
+        if !restClrType.IsGenericType {
+            return nil
+        }
+        let openDef = if restClrType.IsGenericTypeDefinition {
+            restClrType
+        } else {
+            restClrType.GetGenericTypeDefinition()
+        }
+        if openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true {
+            return ReconstructReferenceTupleFromFlattenedElements(restClrType, elements, offset)
+        }
+        if openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
+            let remaining = elements.Length - offset
+            if remaining == 1 && restClrType.GetGenericArguments() is {Length: 1} singleRestArgs {
+                let closedOrOpen = if restClrType.ContainsGenericParameters {
+                    openDef
+                } else {
+                    restClrType
+                }
+                return ImportedTypeSymbol.GetConstructed(
+                    closedOrOpen,
+                    openDef,
+                    ImmutableArray.Create(PreserveNominalClrTypeCore(singleRestArgs[0], elements[offset]))
+                )
+            }
+            if remaining >= 2 {
+                let subBuilder = ImmutableArray.CreateBuilder[TypeSymbol](remaining)
+                for var i = offset; i < elements.Length; i++ {
+                    subBuilder.Add(elements[i])
+                }
+                return PreserveNominalClrTypeCore(restClrType, TupleTypeSymbol.Get(subBuilder.MoveToImmutable()))
+            }
+        }
+        return nil
+    }
+
+    private func IsTupleRestClrType(clrType Type) bool {
+        if !clrType.IsGenericType {
+            return false
+        }
+        let openDef = if clrType.IsGenericTypeDefinition {
+            clrType
+        } else {
+            clrType.GetGenericTypeDefinition()
+        }
+        return openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true ||
+            openDef
+            .FullName
+            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
+    }
+
+    private func TryCollectFlattenedValueTupleClrElements(clrType Type, sink ImmutableArray[Type].Builder) bool {
+        if !clrType.IsGenericType {
+            return false
+        }
+        let openDef = if clrType.IsGenericTypeDefinition {
+            clrType
+        } else {
+            clrType.GetGenericTypeDefinition()
+        }
+        if openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true {
+            return false
+        }
+        let clrArgs = clrType.GetGenericArguments()
+        if clrArgs.Length == 8 && IsTupleRestClrType(clrArgs[7]) {
+            for var i = 0; i < 7; i++ {
+                sink.Add(clrArgs[i])
+            }
+            return if clrArgs[7]
+                .GetGenericTypeDefinition()
+                .FullName
+                ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
+                TryCollectFlattenedValueTupleClrElements(clrArgs[7], sink)
+            } else {
+                false
+            }
+        }
+        for arg in clrArgs {
+            sink.Add(arg)
+        }
+        return true
     }
 
     private func TryGetMultiDimensionalArrayShape(type TypeSymbol, out elementType TypeSymbol?, out rank int32) bool {

@@ -2121,7 +2121,10 @@ internal partial class ExpressionBinder {
         } else if openGenericDefinition != nil && !symbolicTypeArgs.IsDefaultOrEmpty {
             resultType = ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs)
         } else {
-            resultType = TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            resultType = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                clrType,
+                TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            )
         }
         let ctorCall BoundExpression = BoundClrConstructorCallExpression(
             syntax,

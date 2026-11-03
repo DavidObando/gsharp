@@ -351,6 +351,7 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         "value"
     )
     @InlineData("var x = (1, 2)\nConsole.Write(S.RT(&x))", "x")
+    @InlineData("var a = [1, 1](int32, (int32, int32)){(1, (2, 3))}\nConsole.Write(S.RTGrid[int32](&a))", "x")
     func ClrCallee_DifferentStorageTypeAtByRefParameter_IsGS0154(body string, parameterName string) {
         using let fixture = CSharpFixture(`namespace Storage {
     public static class S {
@@ -360,6 +361,7 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
         public static int RT(ref System.Tuple<int, int> x) => x.Item1;
+        public static int RTGrid<T>(ref (T, System.Tuple<int, int>)[,] x) => x[0, 0].Item2.Item1;
     }
     public class Holder<T> {
         public T Value;
@@ -375,9 +377,13 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
     @Fact
     func ClrGenericConstructor_WithSourceEnumByRefStorage_CompilesAndRuns() {
         using let fixture = CSharpFixture(`namespace Storage {
+    public class B { }
     public static class S {
         public static int Read(ref int[] a) => a[0];
         public static T ReadG<T>(ref T[] a) => a[0];
+        public static int RTPair(ref (System.Tuple<int, int>, int) x) => x.Item1.Item1 + x.Item2;
+        public static int RT8(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int>> x) => x.Rest.Item1;
+        public static int RT9(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int, int>> x) => x.Rest.Item2;
         public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
     }
     public class Holder<T> {
@@ -389,16 +395,22 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
 import System.Collections.Generic
 import Storage
 enum E { A = 1, B = 2 }
+class D : B {}
 var e = E.B
 let h = Holder[E](&e)
 var a = [3]int32{7, 8, 9}
 var xs = List[E]{E.B}
 var next = E.A
-Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${S.ReadG[int32](&a)} ${int32(xs.ReadExt[E](&next))}")`, []string{
+var pairRt = (System.Tuple[int32, int32](1, 2), 3)
+var rt8 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32](8))
+var rt9 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32, int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32, int32](8, 9))
+var ds = List[D]{D()}
+var d = D()
+Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${S.ReadG[int32](&a)} ${int32(xs.ReadExt[E](&next))} ${S.RTPair(&pairRt)} ${S.RT8(&rt8)} ${S.RT9(&rt9)} ${ds.ReadExt(&d) == ds[0]}")`, []string{
                 fixture.AssemblyPath
             })
         Assert.Empty(result.Diagnostics)
-        Assert.Equal("2 7 7 2", result.Output.Trim())
+        Assert.Equal("2 7 7 2 4 8 9 True", result.Output.Trim())
     }
 
     shared {

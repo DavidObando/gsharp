@@ -3817,7 +3817,7 @@ internal partial class ExpressionBinder {
             openGenericDefinition Type? = nil,
             symbolicTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
             explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
-        )((int32, Type, ParameterInfo) -> ClrOverloadResolution.ImplicitConversionKind?)? {
+        )((int32, Type, ParameterInfo, ImmutableArray[TypeSymbol?]) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             let DeclaresImplicitOperator = func (type TypeSymbol) bool {
                 var type = type
                 while type is NullableTypeSymbol nullable {
@@ -3833,7 +3833,12 @@ internal partial class ExpressionBinder {
             if boundArguments == nil {
                 return nil
             }
-            return (index int32, clrParameterType Type?, parameter ParameterInfo) -> {
+            return (
+                index int32,
+                clrParameterType Type?,
+                parameter ParameterInfo,
+                inferredMethodTypeArguments ImmutableArray[TypeSymbol?]
+            ) -> {
                 let argIndex = index - argumentOffset
                 if argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == nil {
                     return nil
@@ -3850,7 +3855,8 @@ internal partial class ExpressionBinder {
                         receiverType,
                         openGenericDefinition,
                         symbolicTypeArguments,
-                        explicitMethodTypeArguments
+                        explicitMethodTypeArguments,
+                        inferredMethodTypeArguments
                     )
                     if symbolicPointee == nil || symbolicPointee == TypeSymbol.Error {
                         return nil
@@ -3934,7 +3940,8 @@ internal partial class ExpressionBinder {
             receiverType TypeSymbol?,
             openGenericDefinition Type? = nil,
             symbolicTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
-            explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+            explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+            inferredMethodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol? {
             var openDef = openGenericDefinition
             var declaringTypeArgs = symbolicTypeArguments
@@ -3966,10 +3973,10 @@ internal partial class ExpressionBinder {
             if parameter.Member is not MethodInfo method {
                 return nil
             }
-            let nullableMethodTypeArgs = if explicitMethodTypeArguments.IsDefaultOrEmpty {
-                default(ImmutableArray[TypeSymbol?])
-            } else {
+            let nullableMethodTypeArgs = if !explicitMethodTypeArguments.IsDefaultOrEmpty {
                 ImmutableArray.CreateRange[TypeSymbol?](explicitMethodTypeArguments)
+            } else {
+                inferredMethodTypeArguments
             }
             if openDef != nil && !declaringTypeArgs.IsDefaultOrEmpty {
                 var openMethod MethodInfo? = nil
@@ -3994,8 +4001,10 @@ internal partial class ExpressionBinder {
                     .ContainsGenericParameters {
                     return nil
                 }
-                if nullableMethodTypeArgs.IsDefaultOrEmpty &&
-                    MentionsMethodGenericParameter(openParams[parameter.Position].ParameterType) {
+                if MentionsUnresolvedMethodGenericParameter(
+                    openParams[parameter.Position].ParameterType,
+                    nullableMethodTypeArgs
+                ) {
                     return nil
                 }
                 if !nullableMethodTypeArgs.IsDefaultOrEmpty && openMethod.GetGenericArguments()
@@ -4033,7 +4042,11 @@ internal partial class ExpressionBinder {
                     .IsByRef ||
                     !openParams[parameter.Position]
                     .ParameterType
-                    .ContainsGenericParameters {
+                    .ContainsGenericParameters ||
+                    MentionsUnresolvedMethodGenericParameter(
+                    openParams[parameter.Position].ParameterType,
+                    nullableMethodTypeArgs
+                ) {
                     return nil
                 }
                 return ByRefStorageMatching.PreserveNominalClrPointeeType(
@@ -4050,19 +4063,28 @@ internal partial class ExpressionBinder {
             return nil
         }
 
-        private func MentionsMethodGenericParameter(type Type?) bool {
+        private func MentionsUnresolvedMethodGenericParameter(
+            type Type?,
+            methodTypeArguments ImmutableArray[TypeSymbol?]
+        ) bool {
             if type == nil {
                 return false
             }
             if type.IsGenericParameter {
-                return type.DeclaringMethod != nil
+                if type.DeclaringMethod == nil {
+                    return false
+                }
+                let position = type.GenericParameterPosition
+                return methodTypeArguments.IsDefaultOrEmpty ||
+                    uint32(position) >= uint32(methodTypeArguments.Length) ||
+                    methodTypeArguments[position] == nil
             }
             if type.HasElementType {
-                return MentionsMethodGenericParameter(type.GetElementType())
+                return MentionsUnresolvedMethodGenericParameter(type.GetElementType(), methodTypeArguments)
             }
             if type.IsGenericType {
                 for argument in type.GetGenericArguments() {
-                    if MentionsMethodGenericParameter(argument) {
+                    if MentionsUnresolvedMethodGenericParameter(argument, methodTypeArguments) {
                         return true
                     }
                 }
