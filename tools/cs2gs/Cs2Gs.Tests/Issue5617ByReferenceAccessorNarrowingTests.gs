@@ -736,6 +736,7 @@ public class Demo
         foreach (var (a, b) in pairs) n += s.Length;
         foreach ((Wrapper w, int m) in pairs) n += 1;
         foreach (var (_, _) in points) n += 1;
+        foreach ((Wrapper _, int _) in points) n += 1;
         return s.Length + n + (int)sum;
     }
     public static int InnerWhile(ref string? s, int[] items)

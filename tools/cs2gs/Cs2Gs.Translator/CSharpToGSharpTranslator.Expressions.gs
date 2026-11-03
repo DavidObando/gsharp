@@ -5166,53 +5166,27 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if forEach is ForEachVariableStatementSyntax deconstructing {
-                // cs2gs emits only the names (`for (a, b) in items`), so gsc reads the elements of a tuple without a
-                // conversion, whatever the C# target types are.
-                if this
-                    .context
-                    .SemanticModel
-                    .GetForEachStatementInfo(deconstructing)
-                    .ElementType is INamedTypeSymbol{IsTupleType: true} {
-                    return false
-                }
-                return this.DeconstructionCallsMember(
-                    this.context.SemanticModel.GetDeconstructionInfo(deconstructing),
-                    deconstructing.Variable
-                )
+                return this.DeconstructingForEachRunsUserCode(deconstructing)
             }
             return false
         }
 
-        /// Whether the deconstruction [`info`](paramref) of [`target`](paramref) runs code in gsc. An imported
-        /// `Deconstruct` is a call. gsc deconstructs a record of this compilation (a G# `data` type) through its data
-        /// members and skips a discard, so it reads nothing when every element is a discard.
-        private func DeconstructionCallsMember(
-            info DeconstructionInfo,
-            target Microsoft.CodeAnalysis.SyntaxNode?
-        ) bool {
-            let elements = this.DeconstructionElements(target)
-            if info.Method is {} method &&
-                (
-                !(method.ContainingType.IsRecord && this.IsSourceSymbol(method.ContainingType)) ||
-                    elements == nil ||
-                    elements.Any((element Microsoft.CodeAnalysis.SyntaxNode) -> !this.IsDiscardTarget(element))
-            ) {
-                return true
+        /// cs2gs emits only the names of a deconstructing loop (`for (a, b) in items`; the target types are dropped,
+        /// #5700), so its prelude is what gsc does for the element type. gsc reads the elements of a tuple without
+        /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
+        /// properties) except a discard, and calls an imported `Deconstruct`.
+        private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
+            let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
+            if element is INamedTypeSymbol{IsTupleType: true} {
+                return false
             }
-            if info.Conversion?.IsUserDefined == true {
-                return true
+            if element is INamedTypeSymbol{IsRecord: true} record && this.IsSourceSymbol(record) {
+                let elements = this.DeconstructionElements(forEach.Variable)
+                return elements == nil || elements.Any(
+                    (target Microsoft.CodeAnalysis.SyntaxNode) -> !this.IsDiscardTarget(target)
+                )
             }
-            for var i = 0; i < info.Nested.Length; i++ {
-                let nestedTarget Microsoft.CodeAnalysis.SyntaxNode? = if elements != nil && i < elements.Count {
-                    elements[i]
-                } else {
-                    nil
-                }
-                if this.DeconstructionCallsMember(info.Nested[i], nestedTarget) {
-                    return true
-                }
-            }
-            return false
+            return true
         }
 
         private func DeconstructionElements(target Microsoft.CodeAnalysis.SyntaxNode?) IReadOnlyList[
