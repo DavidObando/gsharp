@@ -518,7 +518,8 @@ internal partial class DeclarationBinder {
                 iprop,
                 typeParameterMap,
                 out var implProp,
-                out var typeMismatch
+                out var typeMismatch,
+                out var refKindMismatch
             )
             if !found &&
                 TryFindMatchingImportedBaseProperty(
@@ -653,6 +654,21 @@ internal partial class DeclarationBinder {
                 // satisfied by inheritance, exactly like a
                 // default-interface method — no GS0187 needed.
                 if PropertyHasDefaultBody(iprop) {
+                    continue
+                }
+                if refKindMismatch != nil {
+                    for var i = 0; i < iprop.Parameters.Length; i++ {
+                        if iprop.Parameters[i].RefKind != refKindMismatch.Parameters[i].RefKind {
+                            Diagnostics.ReportOverrideRefKindMismatch(
+                                syntax.Identifier.Location,
+                                iprop.Name,
+                                iprop.Parameters[i].Name,
+                                refKindToString(iprop.Parameters[i].RefKind),
+                                refKindToString(refKindMismatch.Parameters[i].RefKind)
+                            )
+                            break
+                        }
+                    }
                     continue
                 }
                 if typeMismatch != nil {
@@ -1897,34 +1913,39 @@ internal partial class DeclarationBinder {
             structSymbol StructSymbol,
             iface InterfaceSymbol,
             interfaceProperty PropertySymbol
-        ) PropertySymbol? -> TryResolveExplicitInterfacePropertyImplementation(
-            structSymbol,
-            iface,
-            interfaceProperty,
-            out _
-        ) ??
-            (
+        ) PropertySymbol? {
+            let explicitImplementation = TryResolveExplicitInterfacePropertyImplementation(
+                structSymbol,
+                iface,
+                interfaceProperty,
+                out _
+            )
+            if explicitImplementation != nil {
+                return explicitImplementation
+            }
             if TryGetConstructedInterfacePropertyImplementation(
                 structSymbol,
                 interfaceProperty,
                 BuildInterfaceTypeParameterMap(iface),
                 out var implementation,
+                out _,
                 out _
             ) {
-                implementation
-            } else {
-                default(PropertySymbol?)
+                return implementation
             }
-        )
+            return nil
+        }
 
         private func TryGetConstructedInterfacePropertyImplementation(
             structSymbol StructSymbol,
             interfaceProperty PropertySymbol,
             typeParameterMap Dictionary[TypeParameterSymbol, TypeSymbol]?,
             out implementation PropertySymbol?,
-            out typeMismatch PropertySymbol?
+            out typeMismatch PropertySymbol?,
+            out refKindMismatch PropertySymbol?
         ) bool {
             typeMismatch = nil
+            refKindMismatch = nil
             for current in structSymbol.GetHierarchy() {
                 for candidate in current.Properties {
                     if !MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate) ||
@@ -1941,18 +1962,22 @@ internal partial class DeclarationBinder {
                         .Length {
                         continue
                     }
-                    var parametersMatch = true
+                    var parameterTypesMatch = true
+                    var parameterRefKindsMatch = true
                     for var i = 0; i < interfaceProperty.Parameters.Length; i++ {
                         if !ConformanceSignaturesEquivalent(
                             interfaceProperty.Parameters[i].Type,
                             candidate.Parameters[i].Type,
                             typeParameterMap
                         ) {
-                            parametersMatch = false
+                            parameterTypesMatch = false
                             break
                         }
+                        if interfaceProperty.Parameters[i].RefKind != candidate.Parameters[i].RefKind {
+                            parameterRefKindsMatch = false
+                        }
                     }
-                    if !parametersMatch {
+                    if !parameterTypesMatch {
                         continue
                     }
                     if !IsInterfacePropertyTypeCompatible(
@@ -1961,7 +1986,13 @@ internal partial class DeclarationBinder {
                         interfaceProperty.HasSetter,
                         typeParameterMap
                     ) {
-                        typeMismatch ??= candidate
+                        if parameterRefKindsMatch {
+                            typeMismatch ??= candidate
+                        }
+                        continue
+                    }
+                    if !parameterRefKindsMatch {
+                        refKindMismatch ??= candidate
                         continue
                     }
                     implementation = candidate
@@ -2011,12 +2042,20 @@ internal partial class DeclarationBinder {
                 }
                 var parametersMatch = true
                 for var i = 0; i < interfaceProperty.Parameters.Length; i++ {
+                    var candidateParameterType = MemberLookup.GetIndexerParameterTypeSymbol(
+                        importedBase!!,
+                        candidate,
+                        i
+                    )
+                    if candidateParameterType is ByRefTypeSymbol candidateParameterByRef {
+                        candidateParameterType = candidateParameterByRef.PointeeType
+                    }
                     if RefCapabilities.GetParameterRefKind(candidateParameters[i]) != interfaceProperty
                         .Parameters[i]
                         .RefKind ||
                         !ConformanceSignaturesEquivalent(
                         interfaceProperty.Parameters[i].Type,
-                        MemberLookup.GetIndexerParameterTypeSymbol(importedBase!!, candidate, i),
+                        candidateParameterType,
                         typeParameterMap
                     ) {
                         parametersMatch = false

@@ -158,7 +158,12 @@ internal class MemberDefEmitter {
                     (returnType ReturnTypeEncoder) -> this.EncodePropertyType(returnType, prop),
                     (parameters ParametersEncoder) -> {
                         for indexParam in indexParams {
-                            this.encodeTypeSymbol(parameters.AddParameter().Type(), indexParam.Type)
+                            TypeDefEmitter.EncodeParameterSignature(
+                                parameters,
+                                indexParam,
+                                this.encodeTypeSymbol,
+                                this.wellKnown
+                            )
                         }
                     }
                 )
@@ -243,6 +248,10 @@ internal class MemberDefEmitter {
         if property.ReturnRefKind != RefKind.RefReadOnly {
             return
         }
+        this.EmitIsReadOnlyAttribute(handle)
+    }
+
+    private func EmitIsReadOnlyAttribute(handle EntityHandle) {
         let value = BlobBuilder()
         value.WriteUInt16(1)
         value.WriteUInt16(0)
@@ -292,6 +301,9 @@ internal class MemberDefEmitter {
     /// @param rows The rows minted for it.
     private func StampAccessor(handle MethodDefinitionHandle, rows SignatureRows, owner FunctionSymbol?) {
         for var i = 0; i < rows.Rows.Length; i++ {
+            if rows.Parameters[i].RefKind == RefKind.In {
+                this.EmitIsReadOnlyAttribute(rows.Rows[i])
+            }
             this.emitUserAttributes(rows.Rows[i], rows.Parameters[i], AttributeTargetKind.Param)
         }
         this.emitMethodNullability(handle, rows.Nullability, rows.ReturnRow, rows.Rows)
@@ -469,7 +481,7 @@ internal class MemberDefEmitter {
                     return
                 }
                 for indexParam in prop.Parameters {
-                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                 }
             }
         )
@@ -591,7 +603,7 @@ internal class MemberDefEmitter {
                 // parameters ahead of the value parameter.
                 if !prop.Parameters.IsDefaultOrEmpty {
                     for indexParam in prop.Parameters {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                     }
                 }
                 this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -686,7 +698,7 @@ internal class MemberDefEmitter {
             },
             (ps ParametersEncoder) -> {
                 for indexParam in prop.Parameters {
-                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                 }
                 if !isGetter {
                     this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -1658,7 +1670,12 @@ internal class MemberDefEmitter {
                     (returnType ReturnTypeEncoder) -> this.EncodePropertyType(returnType, prop),
                     (parameters ParametersEncoder) -> {
                         for indexParam in indexParams {
-                            this.encodeTypeSymbol(parameters.AddParameter().Type(), indexParam.Type)
+                            TypeDefEmitter.EncodeParameterSignature(
+                                parameters,
+                                indexParam,
+                                this.encodeTypeSymbol,
+                                this.wellKnown
+                            )
                         }
                     }
                 )
@@ -1733,7 +1750,7 @@ internal class MemberDefEmitter {
                     // parameters ahead of the return type, exactly
                     // like a struct/class indexer getter.
                     for indexParam in prop.Parameters {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                     }
                 }
             )
@@ -1790,7 +1807,7 @@ internal class MemberDefEmitter {
                     // parameter, exactly like a struct/class
                     // indexer setter.
                     for indexParam in prop.Parameters {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                     }
                     this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
                 }
@@ -2026,17 +2043,22 @@ internal class MemberDefEmitter {
                         }
                         var parametersMatch = true
                         for var i = 0; i < indexParameters.Length; i++ {
-                            if !DeclarationBinder.ConformanceSignaturesEquivalent(
+                            var clrParameterType = MemberLookup.GetIndexerParameterTypeSymbol(
+                                Invariant.Required(
+                                    ifaceSym,
+                                    "a CLR interface entry has a type symbol",
+                                    expression: "ifaceSym"
+                                ),
+                                clrProp,
+                                i
+                            )
+                            if clrParameterType is ByRefTypeSymbol clrParameterByRef {
+                                clrParameterType = clrParameterByRef.PointeeType
+                            }
+                            if prop.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(indexParameters[i]) ||
+                                !DeclarationBinder.ConformanceSignaturesEquivalent(
                                 prop.Parameters[i].Type,
-                                MemberLookup.GetIndexerParameterTypeSymbol(
-                                    Invariant.Required(
-                                        ifaceSym,
-                                        "a CLR interface entry has a type symbol",
-                                        expression: "ifaceSym"
-                                    ),
-                                    clrProp,
-                                    i
-                                )
+                                clrParameterType
                             ) {
                                 parametersMatch = false
                                 break
@@ -2075,7 +2097,13 @@ internal class MemberDefEmitter {
                 return false
             }
             for var i = 0; i < property.Parameters.Length; i++ {
-                if !DeclarationBinder.ConformanceSignaturesEquivalent(
+                if interfaceProperty
+                    .Parameters[i]
+                    .RefKind != property
+                    .Parameters[i]
+                    .RefKind ||
+                    !DeclarationBinder
+                    .ConformanceSignaturesEquivalent(
                     interfaceProperty.Parameters[i].Type,
                     property.Parameters[i].Type,
                     typeParameterMap

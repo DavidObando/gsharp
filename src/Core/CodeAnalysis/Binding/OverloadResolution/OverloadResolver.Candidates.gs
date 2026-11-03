@@ -636,6 +636,12 @@ internal partial class OverloadResolver {
                 if cand
                     .Parameters[slot + parameterOffset]
                     .RefKind != RefKind.None &&
+                    (
+                    cand
+                        .Parameters[slot + parameterOffset]
+                        .RefKind != RefKind.In ||
+                        boundArguments[i]?.Type is ByRefTypeSymbol
+                ) &&
                     ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} byRefStorage &&
                     !TypeSymbol
                     .ContainsTypeParameter(paramType) {
@@ -756,11 +762,114 @@ internal partial class OverloadResolver {
         if pool.Count > 1 {
             pool = PreferTaskShapedDelegateForTaskLambda(pool, boundArguments)
         }
+        // Issue #4421: when candidates remain tied and an argument omits `in`,
+        // prefer the candidate whose corresponding parameter is passed by value
+        // (`RefKind.None`) over one that takes `in` (`RefKind.In`), matching C#
+        // §12.6.4.3.
+        if pool.Count > 1 {
+            pool = PreferByValueForOmittedInArguments(pool, argumentNames, boundArguments)
+        }
         if pool.Count == 1 {
             return pool[0].Candidate
         }
         ambiguous = true
         return nil
+    }
+
+    private func PreferByValueForOmittedInArguments(
+        pool List[UserCandidateRankData],
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder
+    ) List[UserCandidateRankData] {
+        let survivors = List[UserCandidateRankData](pool.Count)
+        for c in pool {
+            var dominated = false
+            for o in pool {
+                if object.ReferenceEquals(c.Candidate, o.Candidate) {
+                    continue
+                }
+                if IsBetterOmittedInPassingMode(o, c, argumentNames, boundArguments) {
+                    dominated = true
+                    break
+                }
+            }
+            if !dominated {
+                survivors.Add(c)
+            }
+        }
+        return if survivors.Count > 0 {
+            survivors
+        } else {
+            pool
+        }
+    }
+
+    private func IsBetterOmittedInPassingMode(
+        candidateRank UserCandidateRankData,
+        otherRank UserCandidateRankData,
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder
+    ) bool {
+        let candidate = candidateRank.Candidate
+        let other = otherRank.Candidate
+        let candidateOffset = if candidate.ExplicitReceiverParameter == nil {
+            0
+        } else {
+            1
+        }
+        let otherOffset = if other.ExplicitReceiverParameter == nil {
+            0
+        } else {
+            1
+        }
+        let candidateParamLen = candidate.Parameters.Length - candidateOffset
+        let otherParamLen = other.Parameters.Length - otherOffset
+        let candidateFixed = if candidateParamLen > 0 &&
+            candidate
+            .Parameters[candidate.Parameters.Length - 1]
+            .IsVariadic {
+            candidateParamLen - 1
+        } else {
+            candidateParamLen
+        }
+        let otherFixed = if otherParamLen > 0 && other.Parameters[other.Parameters.Length - 1].IsVariadic {
+            otherParamLen - 1
+        } else {
+            otherParamLen
+        }
+        var hasBetter = false
+        for var i = 0; i < boundArguments.Count; i++ {
+            if candidateRank.IsTailSlot[i] != otherRank.IsTailSlot[i] ||
+                candidateRank.Kinds[i] != otherRank.Kinds[i] ||
+                candidateRank.ParamTypes[i] == nil ||
+                otherRank.ParamTypes[i] == nil ||
+                !DeclarationBinder.TypeSignaturesEquivalent(candidateRank.ParamTypes[i], otherRank.ParamTypes[i]) {
+                return false
+            }
+            if boundArguments[i]?.Type is ByRefTypeSymbol || candidateRank.IsTailSlot[i] {
+                continue
+            }
+            let candidateSlot = MapArgumentIndexToParameterSlot(
+                candidate,
+                argumentNames,
+                i,
+                candidateOffset,
+                candidateParamLen
+            )
+            let otherSlot = MapArgumentIndexToParameterSlot(other, argumentNames, i, otherOffset, otherParamLen)
+            if candidateSlot < 0 || otherSlot < 0 || candidateSlot >= candidateFixed || otherSlot >= otherFixed {
+                continue
+            }
+            let candidateByValue = candidate.Parameters[candidateSlot + candidateOffset].RefKind == RefKind.None
+            let otherByValue = other.Parameters[otherSlot + otherOffset].RefKind == RefKind.None
+            if candidateByValue != otherByValue {
+                if !candidateByValue {
+                    return false
+                }
+                hasBetter = true
+            }
+        }
+        return hasBetter
     }
 
     /// Per-candidate data accumulated during Phase 2 user-overload ranking
@@ -943,8 +1052,12 @@ internal partial class OverloadResolver {
             // #4422: apply them here too, so a candidate whose storage type
             // the by-ref gate would reject is not selected over one it
             // accepts (`ref int32` versus `ref int32?` for `int32?` storage).
+            // Issue #4421: when an `in` parameter is given a plain value (omitted
+            // `in`), it converts by value first, so fall through to the ordinary
+            // convertibility check below.
             if parameter.RefKind != RefKind.None {
-                if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
+                if (parameter.RefKind != RefKind.In || boundArguments[i]?.Type is ByRefTypeSymbol) &&
+                    ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
                     let byRefParameterType = if substitution != nil {
                         GSharp.Core.CodeAnalysis.Binding.Binder.SubstituteType(parameter.Type, substitution)
                     } else {
@@ -954,8 +1067,13 @@ internal partial class OverloadResolver {
                         ByRefStorageMatching.IsExactStorageMatch(storageType, byRefParameterType) == nil {
                         return false
                     }
+                    continue
                 }
-                continue
+                if parameter.RefKind != RefKind.In {
+                    continue
+                }
+            } else if boundArguments[i]?.Type is ByRefTypeSymbol {
+                return false
             }
             let argType TypeSymbol? = boundArguments[i]?.Type
             var paramType TypeSymbol? = parameter.Type
