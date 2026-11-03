@@ -347,16 +347,37 @@ partial class CSharpToGSharpTranslator {
             if whenTrue && pattern is BinaryPatternSyntax binary && binary.IsKind(SyntaxKind.OrPattern) {
                 return true
             }
-            // A nullable value stays lowered: its native narrowing changes the G# type of later reads to the
-            // underlying type, which changes overload resolution and rejects `HasValue` (`!= nil`).
+            // Only a `string?` input takes the native form here. A nullable value stays lowered: its native
+            // narrowing changes the G# type of later reads to the underlying type, which changes overload
+            // resolution and rejects `HasValue` (`!= nil`). gsc binds no string constant on an interface input.
             let underlyingType = this.GetPatternScrutineeUnderlyingType(isPattern.Expression)
-            return declaredType?.IsReferenceType == true && this.GetNativePatternNarrowedType(
+            return underlyingType?.SpecialType == SpecialType.System_String && this.IsTestOnlyPattern(
+                isPattern.Pattern
+            ) &&
+                this.HasOnlyUnambiguousNativeConstants(isPattern.Pattern) && this.GetNativePatternNarrowedType(
                 isPattern.Pattern,
                 underlyingType,
                 whenTrue
             ) != nil &&
                 this.GetGSharpPatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) == nil
         }
+
+        // gsc reads a simple name in a boolean `is` pattern as a type first (ADR-0162). A constant that a type of the
+        // same name can shadow keeps the lowered equality, as does a constant that is not a literal or a member.
+        private func HasOnlyUnambiguousNativeConstants(pattern PatternSyntax) bool -> pattern
+            .DescendantNodesAndSelf()
+            .OfType[ConstantPatternSyntax]()
+            .All(
+            (constant ConstantPatternSyntax) -> switch constant.Expression {
+                case LiteralExpressionSyntax, MemberAccessExpressionSyntax: true
+                case name is IdentifierNameSyntax: this
+                    .context
+                    .SemanticModel
+                    .LookupNamespacesAndTypes(name.SpanStart, name: name.Identifier.ValueText)
+                    .IsEmpty
+                default: false
+            }
+        )
 
         /// Whether gsc narrows the scrutinee of [`isPattern`](paramref) to non-null where the test is
         /// [`whenTrue`](paramref). The answer is for the form that (cref:TranslateIsPattern) emits.
@@ -536,8 +557,10 @@ partial class CSharpToGSharpTranslator {
             underlyingType
         )
 
-        // gsc does not narrow an input by a test of a proper supertype of its type (`string? s` tested against
-        // `object` or an interface that `string` implements; SmartCastStability.IsTypeTestNarrowing).
+        // The mirror of gsc's SmartCastStability.IsTypeTestNarrowing: a type test narrows its input to the tested
+        // type when that type is the input type without `?`, or converts implicitly to the input type. It narrows to
+        // an interface that the input does not implement when the input is a type parameter, an interface or a class
+        // that is not sealed. A test of a supertype (`object` for a `string?`) does not narrow.
         private func TypeTestNarrowing(candidate ITypeSymbol?, underlyingType ITypeSymbol?) ITypeSymbol? {
             if candidate == nil || underlyingType == nil {
                 return candidate
@@ -546,11 +569,23 @@ partial class CSharpToGSharpTranslator {
             if SymbolEqualityComparer.Default.Equals(tested, underlyingType) {
                 return candidate
             }
-            let widening = this.context.Compilation.ClassifyConversion(underlyingType, tested)
-            return if widening.IsImplicit && (widening.IsReference || widening.IsBoxing) {
-                default(ITypeSymbol?)
-            } else {
+            let toInput = this.context.Compilation.ClassifyConversion(tested, underlyingType)
+            if toInput.IsImplicit && !toInput.IsUserDefined {
+                return candidate
+            }
+            let openInput = underlyingType.TypeKind == TypeKind.TypeParameter ||
+                underlyingType.TypeKind == TypeKind.Interface ||
+                (underlyingType.TypeKind == TypeKind.Class && !underlyingType.IsSealed)
+            return if tested.TypeKind == TypeKind.Interface &&
+                openInput &&
+                !this
+                .context
+                .Compilation
+                .ClassifyConversion(underlyingType, tested)
+                .IsImplicit {
                 candidate
+            } else {
+                default(ITypeSymbol?)
             }
         }
 

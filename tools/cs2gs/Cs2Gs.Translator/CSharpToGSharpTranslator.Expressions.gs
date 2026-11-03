@@ -4295,10 +4295,11 @@ partial class CSharpToGSharpTranslator {
             symbol ISymbol?,
             $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
-            if this.IsClosureAssignedVariable(symbol) || this.IsByReferenceVariable(symbol) {
-                return false
-            }
             let underlyingType ITypeSymbol? = this.GetPatternScrutineeUnderlyingType(expression)
+            // gsc narrows only a bare local or parameter subject, not `s!!` (from `switch (s!)`) or a member.
+            let IsSwitchedLocal = func (governing Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) bool {
+                return governing is IdentifierNameSyntax && this.BindsTo(governing, symbol)
+            }
             let Narrows = func (pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) bool {
                 return this.IsTestOnlyPattern(pattern) && this.GetNativePatternNarrowedType(
                     pattern,
@@ -4340,8 +4341,7 @@ partial class CSharpToGSharpTranslator {
                             .CSharp
                             .Syntax
                             .SwitchStatementSyntax switchStatement &&
-                            this
-                            .BindsToGuardSymbol(switchStatement.Expression, symbol) {
+                            IsSwitchedLocal(switchStatement.Expression) {
                             let label = section.Labels.FirstOrDefault(
                                 (candidate Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> candidate
                                     .Span
@@ -4366,7 +4366,7 @@ partial class CSharpToGSharpTranslator {
                             .CSharp
                             .Syntax
                             .SwitchExpressionSyntax switchExpression &&
-                            this.BindsToGuardSymbol(switchExpression.GoverningExpression, symbol) &&
+                            IsSwitchedLocal(switchExpression.GoverningExpression) &&
                             !arm
                             .Pattern
                             .Span
@@ -4378,14 +4378,16 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 // A write after the switched value (also in an earlier case's guard) makes the case test another value.
+                // The closure scan runs only for a read that a case narrows.
                 if guard_ != nil && governing != nil && !this.SymbolIsWrittenBetween(
                     symbol,
                     governing,
                     expression,
                     $scope
                 ) &&
-                    !this.HasLoopCarriedWrite(expression, symbol, $scope, guard_) {
-                    return true
+                    !this
+                    .HasLoopCarriedWrite(expression, symbol, $scope, guard_) {
+                    return !this.IsClosureAssignedVariable(symbol) && !this.IsByReferenceVariable(symbol)
                 }
             }
             return false

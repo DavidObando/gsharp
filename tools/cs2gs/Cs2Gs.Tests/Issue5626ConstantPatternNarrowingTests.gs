@@ -15,9 +15,9 @@ import Xunit
 /// Issue #5626: gsc narrows a nullable local by the native form of a constant pattern (`x is "a"`), but not by
 /// the equality (`x == "a"`) that cs2gs lowered it to, while the translator still read the local as narrowed. The
 /// translated read failed with GS0158. Now one decision gives the form of a boolean `is` test and the narrowing
-/// that the translator assumes for it: a test of a nullable reference keeps its native form where only that form
-/// narrows. The same model of gsc's native narrowing decides the case of a switch section and a switch arm. Each
-/// row runs the C# and its translation and compares the output.
+/// that the translator assumes for it: a test of a `string?` keeps its native form where only that form narrows.
+/// The same model of gsc's native narrowing decides the case of a switch section and a switch arm. Each row runs
+/// the C# and its translation and compares the output.
 /// @remarks Mutation witnesses (ADR-0154): on 1da01cc5d (before this fix) the `is` and combination rows do not
 /// compile (GS0158) and the switch rows contain `!!`. With the native form refused
 /// (`RequiresNativePatternNarrowing` false), the `is` and combination rows keep the lowered form. With the
@@ -27,7 +27,10 @@ import Xunit
 /// switch rows contain `!!`. Without its closure check, the closure row does not compile (GS0158). With the native
 /// form for a nullable value, the `HasValue` row does not compile (GS0129). With `.Value` of a narrowed local
 /// unasserted, the `&&` row of `DateTime?` does not compile (GS0158). With `left ?? right` for `and`, the merge row
-/// does not compile (GS0159). Without the supertype rule, the `object` arm row does not compile (GS0158).
+/// does not compile (GS0159). Without the type-test rule, the `object` and `Base` arm rows do not compile (GS0158).
+/// With a `s!!` subject counted as the switched local, the suppressed row does not compile (GS0158). With the native
+/// form for any reference input, the interface row does not compile (GS0171). Without the shadowing check, the
+/// shadowed-constant row tests the type `Key` and does not compile (GS0158).
 open class Issue5626ConstantPatternNarrowingTests {
     /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
     @Fact
@@ -159,22 +162,76 @@ namespace Demo
     }
 
     /// Control: gsc narrows an `and` pattern to the type of its right side, and a type test of a proper supertype
-    /// (`object` for a `string?`) does not narrow. Such a switch arm keeps the assertion on the read.
+    /// (`object` for a `string?`) or of a class that does not implement the input interface does not narrow. gsc
+    /// does not narrow the local of a `s!!` subject either. Such a switch arm or section keeps the assertion on the
+    /// read.
     @Fact
     func ASwitchArmThatGscDoesNotNarrow_KeepsTheAssertion() {
         let printed = AssertRunsLikeCSharp(`
 #nullable enable
+using System.Diagnostics.CodeAnalysis;
 namespace Demo
 {
+    public interface IValue { int Value { get; } }
+    public class Base { }
+    public class Derived : Base, IValue { public int Value => 7; }
     public static class P
     {
         static string Merge(object? current) => current switch { (1 and int) or 2 => current.ToString()!, _ => "none" };
         static int Supertype(string? current) => current switch { object => current.Length, _ => 0 };
-        public static string Run() => Merge(1) + " " + Merge(2) + " " + Merge(null) + " " + Supertype("ab") + " " + Supertype(null);
+        static int Unrelated(IValue? current) => current switch { Base => current.Value, _ => 0 };
+        static bool TryGet(string? value, [NotNullWhen(true)] out string? result) { result = value; return value != null; }
+        static int Suppressed(string? input)
+        {
+            if (TryGet(input, out var current) && current.Length > 0)
+            {
+                switch (current!) { case "a": return current.Length; default: return 0; }
+            }
+            return 0;
+        }
+        public static string Run() =>
+            Merge(1) + " " + Merge(2) + " " + Merge(null) + " " + Supertype("ab") + " " + Supertype(null) + " " +
+            Unrelated(new Derived()) + " " + Unrelated(null) + " " + Suppressed("a");
     }
 }`)
         Assert.Contains("current!!.ToString()", printed)
-        Assert.Contains("current!!.Length", printed)
+        Assert.Contains("case _ is object: current!!.Length", printed)
+        Assert.Contains("case _ is Base: current!!.Value", printed)
+        Assert.Contains(
+            "switch current!! {\n                case \"a\" {\n                    return current!!.Length\n",
+            printed
+        )
+    }
+
+    /// Control: gsc cannot bind every constant pattern natively. A string constant on an interface input and a
+    /// constant that a type of the same name shadows (gsc reads a name in a boolean `is` as a type first) keep the
+    /// lowered test, and the read keeps its assertion.
+    @Fact
+    func AConstantPatternThatGscCannotBindNatively_KeepsTheLoweredForm() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Key { }
+    public static class P
+    {
+        static bool Interface(IComparable? current) => current is "a";
+        static int Shadowed(string? current)
+        {
+            const string Key = "a";
+            if (current is not Key) { return 0; }
+            return current.Length;
+        }
+        public static string Run() =>
+            Interface("a") + " " + Interface(null) + " " + Shadowed("a") + " " + Shadowed("b");
+    }
+}`)
+        Assert.DoesNotContain("current is \"a\"\n", printed)
+        Assert.Contains(
+            "if current != Key {\n            return 0\n        }\n        return current!!.Length\n",
+            printed
+        )
     }
 
     /// Control: a closure can clear a local when a call runs between the case and the read, and gsc does not narrow
