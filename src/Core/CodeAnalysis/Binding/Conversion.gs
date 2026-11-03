@@ -1020,8 +1020,11 @@ class Conversion {
                     // actual `null` reference and a `HasValue == true` source boxes
                     // its underlying value. `BindConversion` materialises this as a
                     // `BoundConversionExpression` so emit inserts the box.
-                    if fromNullable.UnderlyingType?.ClrType is {IsValueType: true} {
-                        let boxedConversion = Classify(fromUnderlying, toUnderlying)
+                    if (
+                        NullableLifting.IsAnyValueTypeNullable(fromNullable) || fromUnderlying is TypeParameterSymbol
+                    ) &&
+                        IsReferenceLikeTarget(toUnderlying) {
+                        let boxedConversion = ClassifyNonStructural(fromUnderlying, toUnderlying)
                         if boxedConversion.Exists && boxedConversion.IsImplicit {
                             return Conversion.Implicit
                         }
@@ -1143,6 +1146,18 @@ class Conversion {
                         return Conversion.Implicit
                     }
                 }
+            }
+            // Issue #4735: an explicit conversion from a value-type `Nullable<S>`
+            // (`S?`, including `[T struct]` and `[T unmanaged]`) to `S` or any
+            // non-nullable value target `T` with a non-structural `S -> T`
+            // conversion extracts `.Value` before converting (#2732 / #5400).
+            if from is NullableTypeSymbol fromValueNullable && NullableLifting.IsAnyValueTypeNullable(
+                fromValueNullable
+            ) &&
+                !(to is NullableTypeSymbol) &&
+                !IsReferenceLikeTarget(to) &&
+                ClassifyNonStructural(fromValueNullable.UnderlyingType, to).Exists {
+                return Conversion.Explicit
             }
             // Phase 3.C.2 (generalized by issue #2354 follow-up): nil literal is
             // never assignable to a non-nullable VALUE type — a struct/value-kind

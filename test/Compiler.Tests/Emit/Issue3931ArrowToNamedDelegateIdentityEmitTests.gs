@@ -145,6 +145,43 @@ Console.WriteLine("signalled: " + signalled.ToString())`
         Assert.Equal("signalled: True${Environment.NewLine}", stdout)
     }
 
+    /// Issue #4723: returning `default(...)` or an oblivious null delegate as a
+    /// nullable function or delegate type must return `nil` without throwing
+    /// `ArgumentException("Delegate to an instance method cannot have null 'this'")`.
+    @Fact
+    func TypedNullDelegate_ReturnedAsNullableFunctionOrDelegate_ReturnsNullWithoutThrowing() {
+        let source = `package Issue4723Pkg
+import System
+import System.Threading
+
+delegate CustomAction() void;
+
+class Obj {
+    shared {
+        func MissingAction() (() -> void)? -> default(Action)
+        func MissingFunc() ((int32) -> string?)? -> default(Func[int32, string?])
+        func MissingThreadStart() (() -> void)? -> cast[(() -> void)?](default(ThreadStart))
+        func MissingPredicate() ((int32) -> bool)? -> cast[((int32) -> bool)?](default(Predicate[int32]))
+        func MissingToCustom() CustomAction? -> default(() -> void)
+        func MissingToThreadStart() ThreadStart? -> default(() -> void)
+    }
+}
+
+Console.WriteLine((Obj.MissingAction() == nil).ToString())
+Console.WriteLine((Obj.MissingFunc() == nil).ToString())
+Console.WriteLine((Obj.MissingThreadStart() == nil).ToString())
+Console.WriteLine((Obj.MissingPredicate() == nil).ToString())
+Console.WriteLine((Obj.MissingToCustom() == nil).ToString())
+Console.WriteLine((Obj.MissingToThreadStart() == nil).ToString())`
+        let (exitCode, stdout, stderr) = CompileAndRun(source)
+        Assert.Equal(string.Empty, stderr)
+        Assert.Equal(0, exitCode)
+        Assert.Equal(
+            "True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            stdout
+        )
+    }
+
     shared {
         private func CompileAndRun(source string)(ExitCode int32, Stdout string, Stderr string) {
             let tempDir = Path.Combine(AppContext.BaseDirectory, "Issue3931_" + Guid.NewGuid().ToString("N"))

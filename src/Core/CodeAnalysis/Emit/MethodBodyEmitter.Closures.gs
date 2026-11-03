@@ -236,6 +236,9 @@ internal partial class MethodBodyEmitter {
         ctorRef EntityHandle
     ) {
         this.EmitExpression(source)
+        if IsAlwaysNullDelegateSource(source) {
+            return
+        }
         if !IsKnownLegitimateNullDelegateSource(source) {
             // Plain fail-fast sequence: no null check. If the source is
             // unexpectedly null at runtime, `newobj` throws
@@ -1150,11 +1153,26 @@ internal partial class MethodBodyEmitter {
         /// before the first subscription despite its non-nullable declared type).
         /// Smart-cast narrowing changes the effective type, so a guarded nullable
         /// source remains on the branch-free non-null path.
+        private func IsAlwaysNullDelegateSource(source BoundExpression) bool -> switch source {
+            case BoundDefaultExpression: true
+            case _ when source.Type == TypeSymbol.Null: true
+            case conversion is BoundConversionExpression: IsAlwaysNullDelegateSource(conversion.Expression)
+            case block is BoundBlockExpression: IsAlwaysNullDelegateSource(block.Expression)
+            default: false
+        }
+
         private func IsKnownLegitimateNullDelegateSource(source BoundExpression) bool {
-            if source.Type is NullableTypeSymbol {
+            if source.Type is NullableTypeSymbol || source.Type is PlatformTypeSymbol {
                 return true
             }
             return switch source {
+                case BoundDefaultExpression: true
+                case conversion is BoundConversionExpression: IsKnownLegitimateNullDelegateSource(conversion.Expression)
+                case block is BoundBlockExpression: IsKnownLegitimateNullDelegateSource(block.Expression)
+                case conditional is BoundConditionalExpression: IsKnownLegitimateNullDelegateSource(
+                    conditional.WhenTrue
+                ) ||
+                    IsKnownLegitimateNullDelegateSource(conditional.WhenFalse)
                 case fieldAccess is BoundFieldAccessExpression: fieldAccess.Field?.IsEventBackingField == true
                 case BoundVariableExpression{Variable: ImplicitFieldVariableSymbol implicitField}: implicitField
                     .Field
