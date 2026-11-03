@@ -3921,14 +3921,19 @@ partial class CSharpToGSharpTranslator {
             this.GenericResultInfersNilableThroughWidenedByRefArgument(expression)
 
         // Issue #5582: a generic call whose result is its own method type parameter, without explicit type
-        // arguments, with a by-reference argument for that parameter whose storage cs2gs widens (an
-        // `[AllowNull]` field, for example). G# infers the type argument from the emitted `T?` storage, so
-        // the result is `T?`, although C# infers it from the declared non-null type. Other generic flows are
-        // not projected; a capture over them keeps its previous translation (#5656).
+        // arguments, with an argument for a bare `T` parameter that passes storage cs2gs widens (an
+        // `[AllowNull]` field, for example) with no `!!`: a by-reference argument, or an implicit argument at
+        // a source-declared `in` parameter (`PassesArgumentStorageUnasserted`). G# infers the type argument
+        // from the emitted `T?` storage, so the result is `T?`, although C# infers it from the declared
+        // non-null type. Other generic flows are not projected; a capture over them keeps its previous
+        // translation (#5656).
         private func GenericResultInfersNilableThroughWidenedByRefArgument(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
             if Unparenthesize(expression) is not InvocationExpressionSyntax invocation ||
+                invocation.Expression is GenericNameSyntax or
+                (MemberAccessExpressionSyntax and {Name: GenericNameSyntax}) or
+                (MemberBindingExpressionSyntax and {Name: GenericNameSyntax}) ||
                 this
                 .context
                 .GetSymbolInfo(invocation)
@@ -3941,9 +3946,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             for argument in invocation.ArgumentList.Arguments {
-                if argument
-                    .RefKindKeyword
-                    .RawKind == 0 ||
+                if !this.PassesArgumentStorageUnasserted(argument) ||
                     this
                     .context
                     .GetSymbolInfo(argument.Expression)
@@ -3951,15 +3954,22 @@ partial class CSharpToGSharpTranslator {
                     !this.IsTranslatorWidenedDeclaration(storage) {
                     continue
                 }
+                // A `T?` parameter (`ref T? location`) takes the widened storage with `T` inferred from its
+                // non-null part, so only a bare `T` parameter carries the storage's `?` to the result.
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
                 if parameter != nil &&
                     parameter.Ordinal < method
                     .OriginalDefinition
                     .Parameters
                     .Length &&
+                    method
+                    .OriginalDefinition
+                    .Parameters[parameter.Ordinal]
+                    .Type is ITypeParameterSymbol parameterType &&
+                    parameterType.NullableAnnotation != NullableAnnotation.Annotated &&
                     SymbolEqualityComparer
                     .Default
-                    .Equals(method.OriginalDefinition.Parameters[parameter.Ordinal].Type, returnParameter) {
+                    .Equals(parameterType, returnParameter) {
                     return true
                 }
             }

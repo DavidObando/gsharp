@@ -601,6 +601,7 @@ namespace Demo
     public class Holder { [AllowNull] public Node Value = new Node(); }
     public static class P
     {
+        static T Read<T>(in T value) => value;
         static string Arm(Holder h) => Volatile.Read(ref h.Value) switch { var c => c.Name };
         static string Case(Holder h)
         {
@@ -609,13 +610,62 @@ namespace Demo
                 case var d: return d.Name;
             }
         }
-        public static string Run() => Arm(new Holder()) + " " + Case(new Holder());
+        static string InArm(Holder h) => Read(h.Value) switch { var e => e.Name };
+        static string InCase(Holder h)
+        {
+            switch (Read(h.Value))
+            {
+                case var f: return f.Name;
+            }
+        }
+        static string InIs(Holder h) => Read(h.Value) is var g ? g.Name : "";
+        public static string Run() => Arm(new Holder()) + " " + Case(new Holder()) + " " + InArm(new Holder()) +
+            " " + InCase(new Holder()) + " " + InIs(new Holder());
     }
 }`)
         Assert.Contains("var Value Node?", printed)
         Assert.Contains("case var c: c!!.Name", printed)
         Assert.Contains("return d!!.Name", printed)
-        RunsAs(printed, "node node")
+        Assert.Contains("case var e: e!!.Name", printed)
+        Assert.Contains("return f!!.Name", printed)
+        Assert.Contains("g!!.Name", printed)
+        RunsAs(printed, "node node node node node")
+    }
+
+    /// A by-reference argument at a `T?` parameter (`ref T? ignored`) does not carry its widened storage's
+    /// `?` to a `T` result: G# infers `T` from the storage's non-null part, so the capture of the result
+    /// follows the other argument and passes the null on in every form, as C# does.
+    @Fact
+    func AByRefArgumentAtANullableParameter_DoesNotMakeTheResultNilable() {
+        let printed = Translate(`
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Node { }
+    public class Holder { [AllowNull] public Node Value = new Node(); }
+    public static class P
+    {
+        static T Pick<T>(ref T? ignored, T value) where T : class => value;
+        static string Take(Node n) => "taken";
+        static string Is(Holder h, Node node) => Pick(ref h.Value, node) is var c ? Take(c) : "";
+        static string Arm(Holder h, Node node) => Pick(ref h.Value, node) switch { var d => Take(d) };
+        static string Case(Holder h, Node node)
+        {
+            switch (Pick(ref h.Value, node))
+            {
+                case var e: return Take(e);
+            }
+        }
+        public static string Run() => Is(new Holder(), null!) + " " + Arm(new Holder(), null!) + " " +
+            Case(new Holder(), null!);
+    }
+}`)
+        Assert.Contains("var Value Node?", printed)
+        Assert.DoesNotContain("Take(c!!)", printed)
+        Assert.DoesNotContain("Take(d!!)", printed)
+        Assert.DoesNotContain("Take(e!!)", printed)
+        RunsAs(printed, "taken taken taken")
     }
 
     /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
