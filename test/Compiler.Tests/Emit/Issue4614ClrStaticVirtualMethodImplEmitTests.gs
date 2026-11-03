@@ -245,6 +245,44 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 -1,
                 MetadataTokens.ParameterHandle(1)
             )
+            let encodeNestedRankOneNonSzArray = (typeEncoder SignatureTypeEncoder) -> {
+                typeEncoder.Array(
+                    (outer SignatureTypeEncoder) -> encodeRankOneNonSzArray(outer),
+                    (shape ArrayShapeEncoder) -> shape.Shape(
+                        1,
+                        ImmutableArray[int32].Empty,
+                        ImmutableArray[int32].Empty
+                    )
+                )
+            }
+            let nestedInstanceSig = BlobBuilder()
+            BlobEncoder(nestedInstanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                1,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> encodeNestedRankOneNonSzArray(pars.AddParameter().Type())
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MNested"),
+                metadata.GetOrAddBlob(nestedInstanceSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let nestedReturnSig = BlobBuilder()
+            BlobEncoder(nestedReturnSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> encodeNestedRankOneNonSzArray(ret.Type()),
+                (pars ParametersEncoder) -> { }
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNested"),
+                metadata.GetOrAddBlob(nestedReturnSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
             let peBlob = BlobBuilder()
             ManagedPEBuilder(
                 PEHeaderBuilder.CreateLibraryHeader(),
@@ -341,6 +379,45 @@ Console.WriteLine("x")`, sliceMismatchPath, "/target:exe", "/reference:" + libPa
             )
             Assert.Contains(" error GS", sliceMismatchLog, StringComparison.Ordinal)
 
+            let nestedUserMismatchPath = Path.Combine(tempDir, "NestedUserMismatch.dll")
+            let nestedUserMismatchLog = Compile(tempDir, "NestedUserMismatch.gs", `package P
+import System
+import NonSzLib
+
+class ShapeA { }
+class ShapeB { }
+func CheckNestedUser(x INonSz[ShapeA], y INonSz[ShapeB]) int32 {
+    let ok = x.MNested(x.RNested())
+    return ok + x.MNested(y.RNested())
+}
+Console.WriteLine("x")`, nestedUserMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(nestedUserMismatchPath),
+                "Nested rank-1 non-SZ arrays T[*][*] over distinct user types must not convert. Log:\n" +
+                    nestedUserMismatchLog
+            )
+            Assert.Contains(" error GS", nestedUserMismatchLog, StringComparison.Ordinal)
+
+            let listUserMismatchPath = Path.Combine(tempDir, "ListUserMismatch.dll")
+            let listUserMismatchLog = Compile(tempDir, "ListUserMismatch.gs", `package P
+import System
+import System.Collections.Generic
+import NonSzLib
+
+class ShapeA { }
+class ShapeB { }
+func CheckListUser(x INonSz[ShapeA], y INonSz[ShapeB]) int32 {
+    var xs = List(){x.R()}
+    xs = List(){y.R()}
+    return xs.Count
+}
+Console.WriteLine("x")`, listUserMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(listUserMismatchPath),
+                "List<T[*]> over distinct user types must not convert. Log:\n" + listUserMismatchLog
+            )
+            Assert.Contains(" error GS", listUserMismatchLog, StringComparison.Ordinal)
+
             let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
             let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
 import System
@@ -350,6 +427,10 @@ public class Shape { }
 public func Forward(x INonSz[Shape]) int32 {
     let arr = x.R()
     return x.M(arr)
+}
+public func ForwardNested(x INonSz[Shape]) int32 {
+    let arr = x.RNested()
+    return x.MNested(arr)
 }
 public func ForwardNullable(x INonSz[int32?]) int32 {
     let arr = x.R()

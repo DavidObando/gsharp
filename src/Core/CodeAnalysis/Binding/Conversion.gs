@@ -2780,7 +2780,8 @@ class Conversion {
                 ClassifyCore(from, to, allowStructuralProjection: false, allowExplicitReference: false).IsImplicit {
                 return true
             }
-            if from.ClrType is {} fromClr &&
+            if !(RequiresSymbolicTypeArgumentIdentity(from) || RequiresSymbolicTypeArgumentIdentity(to)) &&
+                from.ClrType is {} fromClr &&
                 to.ClrType is {} toClr &&
                 !fromClr.IsValueType &&
                 !toClr.IsValueType &&
@@ -5075,6 +5076,15 @@ class Conversion {
             // and annotation carriers instead of comparing erased CLR envelopes.
             if TryGetConstructedGenericShape(a, out _, out _) && TryGetConstructedGenericShape(b, out _, out _) {
                 return AreConstructedGenericsIdentical(a, b)
+            }
+            let aIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(a, out var aNonSzElement)
+            let bIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(b, out var bNonSzElement)
+            if aIsNonSzRankOne || bIsNonSzRankOne {
+                return aIsNonSzRankOne && bIsNonSzRankOne && AreTypeArgumentsEquivalent(aNonSzElement, bNonSzElement)
+            }
+            if (a is ImportedTypeSymbol{OpenDefinition: nil, TypeArguments: {IsDefaultOrEmpty: false}}) ||
+                (b is ImportedTypeSymbol{OpenDefinition: nil, TypeArguments: {IsDefaultOrEmpty: false}}) {
+                return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b)
             }
             // Issue #3962: a fixed-length array `[N]T` is backed by the plain
             // SZ-array `T[]` — the SAME CLR type as `[]T` and as every other
