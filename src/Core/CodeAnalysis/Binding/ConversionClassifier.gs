@@ -4995,12 +4995,21 @@ internal class ConversionClassifier {
             ) &&
                 (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(target)) &&
                 !TypeSymbol.IsByRefLike(source) && !TypeSymbol.IsByRefLike(target) &&
+                (
                 TryResolveUserDefinedSymbolConversion(
-                source.UnderlyingType,
-                targetUnderlying,
-                allowExplicit,
-                out method,
-                out methodOwner
+                    source.UnderlyingType,
+                    targetUnderlying,
+                    allowExplicit,
+                    out method,
+                    out methodOwner
+                ) ||
+                    TryResolveUserDefinedSymbolConversion(
+                    source.UnderlyingType,
+                    target,
+                    allowExplicit,
+                    out method,
+                    out methodOwner
+                )
             ) &&
                 methodOwner != nil &&
                 methodOwner.ClrType == nil &&
@@ -5017,10 +5026,15 @@ internal class ConversionClassifier {
                 methodOwner.SubstituteMemberType(method!!.Parameters[0].Type)!!
             )
                 .IsIdentity &&
-                TypeSymbol
-                .AreRuntimeEquivalentIgnoringReferenceNullability(
-                methodOwner.SubstituteMemberType(method!!.Type),
-                targetUnderlying
+                (
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    methodOwner.SubstituteMemberType(method!!.Type),
+                    targetUnderlying
+                ) ||
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    methodOwner.SubstituteMemberType(method!!.Type),
+                    target
+                )
             )
         }
 
@@ -5866,7 +5880,7 @@ internal class ConversionClassifier {
             return false
         }
 
-        private func NeedsSymbolicConversion(type TypeSymbol) bool {
+        internal func NeedsSymbolicConversion(type TypeSymbol) bool {
             if type is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
                 imported
                 .TypeArguments

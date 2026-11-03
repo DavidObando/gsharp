@@ -248,6 +248,182 @@ static T? OpenConvert<T>(RefWrapper<T>? value) where T : class => (T?)value;
 static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(present));`)
     }
 
+    @Theory
+    @InlineData(
+        "int32",
+        "int32(Probe.Read[NullAwareValueToken](present))",
+        "int",
+        "(int)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "cast[int32](Probe.Read[NullAwareValueToken](present))",
+        "int",
+        "(int)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[NullAwareValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "cast[int32?](Probe.Read[NullAwareValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "int32(Probe.ReadValue[NullAwareValueToken]())",
+        "int",
+        "(int)Probe.ReadValue<NullAwareValueToken>()",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "Probe.Read[NullAwareImplicitValueToken](present)",
+        "int",
+        "Probe.Read<NullAwareImplicitValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[NullAwareImplicitValueToken](present)",
+        "int?",
+        "Probe.Read<NullAwareImplicitValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.ReadValue[OpaqueValueToken]())",
+        "int?",
+        "(int?)Probe.ReadValue<OpaqueValueToken>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "cast[int32?](Probe.ReadValue[OpaqueValueToken]())",
+        "int?",
+        "(int?)Probe.ReadValue<OpaqueValueToken>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.ReadValue[OpaqueImplicitValueToken]()",
+        "int?",
+        "Probe.ReadValue<OpaqueImplicitValueToken>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[OpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[OpaqueImplicitValueToken](present)",
+        "int?",
+        "Probe.Read<OpaqueImplicitValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[NullAwareOpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareOpaqueValueToken>(present)",
+        "111,119"
+    )
+    @InlineData(
+        "int32?",
+        "cast[int32?](Probe.Read[NullAwareOpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareOpaqueValueToken>(present)",
+        "111,119"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[NullAwareImplicitOpaqueValueToken](present)",
+        "int?",
+        "Probe.Read<NullAwareImplicitOpaqueValueToken>(present)",
+        "111,119"
+    )
+    @InlineData(
+        "int32",
+        "Probe.Read[DualNullableValueToken](present)",
+        "int",
+        "Probe.Read<DualNullableValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[DualNullableValueToken](present)",
+        "int?",
+        "Probe.Read<DualNullableValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "int32(Probe.ReadValue[DualReturnValueToken]())",
+        "int",
+        "(int)Probe.ReadValue<DualReturnValueToken>()",
+        "117,117"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.ReadValue[DualReturnValueToken]())",
+        "int?",
+        "(int?)Probe.ReadValue<DualReturnValueToken>()",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "OpenNullAware[LocalItem](Probe.Read[GenericNullAwareValueToken[LocalItem]](present))",
+        "int",
+        "(int)Probe.Read<GenericNullAwareValueToken<int>>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "OpenOpaque[LocalItem](Probe.ReadValue[GenericOpaqueValueToken[LocalItem]]())",
+        "int?",
+        "(int?)Probe.ReadValue<GenericOpaqueValueToken<int>>()",
+        "111,111"
+    )
+    func ImportedNullableValueSignature_MatchesRoslynAndVerifies(
+        gsharpResult string,
+        gsharpBody string,
+        csharpResult string,
+        csharpBody string,
+        expectedOutput string
+    ) {
+        RunValuePair((`struct LocalItem {}
+func OpenNullAware[T](value GenericNullAwareValueToken[T]?) int32 -> int32(value)
+func OpenOpaque[T](value GenericOpaqueValueToken[T]) int32? -> int32?(value)
+func Raw(present bool) ` + "$gsharpResult" + ` -> ` + "$gsharpBody" + `
+func Convert(present bool) int32? -> Raw(present)`), (
+                `static ` + "$csharpResult" + ` Raw(bool present) => ` + "$csharpBody" + `;
+static int? Convert(bool present) => Raw(present);`
+            ), expectedOutput)
+    }
+
+    @Theory
+    @InlineData("int32(Probe.ReadValue[OpaqueValueToken]())")
+    @InlineData("Probe.ReadValue[OpaqueImplicitValueToken]()")
+    @InlineData("int32(Probe.Read[NullAwareOpaqueValueToken](present))")
+    @InlineData("Probe.Read[NullAwareImplicitOpaqueValueToken](present)")
+    @InlineData("int32(Probe.Read[NumericToken](present))")
+    func ImportedNullableValueSignature_RejectsNonNullableValueTarget(gsharpBody string) {
+        RunValuePair((`func Raw(present bool) int32 -> ` + "$gsharpBody" + `
+func Convert(present bool) int32? -> Raw(present)`), `static int? Convert(bool present) => null;`, expectedOutput: "1,1", expectedDiagnostic: "GS0155")
+    }
+
     @Fact
     func UnconstrainedNullableResult_IsNotMisclassifiedAsAReferenceLift() {
         const result = "T?"
@@ -361,12 +537,54 @@ public struct NullableReturningImplicitInputToken {
         return value.HasValue ? new Box() : null;
     }
 }
+public struct NullAwareValueToken {
+    public static explicit operator int(NullAwareValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct NullAwareImplicitValueToken {
+    public static implicit operator int(NullAwareImplicitValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct OpaqueValueToken {
+    public static explicit operator int?(OpaqueValueToken value) { Probe.Calls++; return null; }
+}
+public struct OpaqueImplicitValueToken {
+    public static implicit operator int?(OpaqueImplicitValueToken value) { Probe.Calls++; return null; }
+}
+public struct NullAwareOpaqueValueToken {
+    public static explicit operator int?(NullAwareOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct NullAwareImplicitOpaqueValueToken {
+    public static implicit operator int?(NullAwareImplicitOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct DualNullableValueToken {
+    public static implicit operator int(DualNullableValueToken value) { Probe.Calls++; return 7; }
+    public static implicit operator int(DualNullableValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct DualReturnValueToken {
+    public static explicit operator int(DualReturnValueToken value) { Probe.Calls++; return 7; }
+    public static explicit operator int?(DualReturnValueToken value) { Probe.Calls++; return 9; }
+}
+public struct GenericNullAwareValueToken<T> {
+    public static explicit operator int(GenericNullAwareValueToken<T>? value) { Probe.Calls++; return 9; }
+}
+public struct GenericOpaqueValueToken<T> {
+    public static explicit operator int?(GenericOpaqueValueToken<T> value) { Probe.Calls++; return null; }
+}
 public static class Probe {
     public static int Calls;
     public static int Reads;
     public static T? Read<T>(bool present) where T : struct {
         Reads++;
         return present ? new T() : null;
+    }
+    public static T ReadValue<T>() where T : struct {
+        Reads++;
+        return new T();
     }
     public static void Reset() { Calls = 0; Reads = 0; }
 }
@@ -454,6 +672,133 @@ func Run() string {
     let aware = AwareBox(emptyAware)
     let f = (if aware == nil { 1 } else { 0 }) + 10 * Probe.Calls
     return a.ToString() + "," + b.ToString() + "," + c.ToString() + "," + d.ToString() + "," + e.ToString() + "," + f.ToString()
+}`)
+                let sourcePath = Path.Combine(directory, "App.gs")
+                let assemblyPath = Path.Combine(directory, "App.dll")
+                File.WriteAllText(sourcePath, source)
+                let compilation = CompileGSharp(sourcePath, assemblyPath, fixturePath)
+                if expectedDiagnostic != nil {
+                    Assert.NotEqual(0, compilation.Exit)
+                    Assert.True(
+                        compilation.Diagnostics.Contains(expectedDiagnostic, StringComparison.Ordinal),
+                        compilation.Diagnostics
+                    )
+                    return
+                }
+                Assert.True(compilation.Exit == 0, compilation.Diagnostics)
+                let assembly = EmittedFixture.Load(assemblyPath)
+                let program = assembly.GetTypes().Single(
+                    (type Type) -> type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != nil
+                )
+                let actual object? = program.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(
+                    nil,
+                    nil
+                )
+                Assert.Equal(expected, actual)
+                IlVerifier.Verify(assemblyPath, []string{fixturePath})
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
+        }
+
+        private func RunValuePair(
+            gsharpConversion string,
+            csharpConversion string,
+            expectedOutput string,
+            expectedDiagnostic string? = nil
+        ) {
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue4741-fixtures", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            try {
+                let fixturePath = Path.Combine(directory, "Fixture4737.dll")
+                let fixtureSource = (`#nullable enable
+namespace Fixture4741;
+public struct NumericToken {
+    public static explicit operator int(NumericToken value) { Probe.Calls++; return 7; }
+}
+public struct NullAwareValueToken {
+    public static explicit operator int(NullAwareValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct NullAwareImplicitValueToken {
+    public static implicit operator int(NullAwareImplicitValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct OpaqueValueToken {
+    public static explicit operator int?(OpaqueValueToken value) { Probe.Calls++; return null; }
+}
+public struct OpaqueImplicitValueToken {
+    public static implicit operator int?(OpaqueImplicitValueToken value) { Probe.Calls++; return null; }
+}
+public struct NullAwareOpaqueValueToken {
+    public static explicit operator int?(NullAwareOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct NullAwareImplicitOpaqueValueToken {
+    public static implicit operator int?(NullAwareImplicitOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct DualNullableValueToken {
+    public static implicit operator int(DualNullableValueToken value) { Probe.Calls++; return 7; }
+    public static implicit operator int(DualNullableValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct DualReturnValueToken {
+    public static explicit operator int(DualReturnValueToken value) { Probe.Calls++; return 7; }
+    public static explicit operator int?(DualReturnValueToken value) { Probe.Calls++; return 9; }
+}
+public struct GenericNullAwareValueToken<T> {
+    public static explicit operator int(GenericNullAwareValueToken<T>? value) { Probe.Calls++; return 9; }
+}
+public struct GenericOpaqueValueToken<T> {
+    public static explicit operator int?(GenericOpaqueValueToken<T> value) { Probe.Calls++; return null; }
+}
+public static class Probe {
+    public static int Calls;
+    public static int Reads;
+    public static T? Read<T>(bool present) where T : struct {
+        Reads++;
+        return present ? new T() : null;
+    }
+    public static T ReadValue<T>() where T : struct {
+        Reads++;
+        return new T();
+    }
+    public static void Reset() { Calls = 0; Reads = 0; }
+}
+public static class Oracle {
+    ` + "$csharpConversion" + `
+    public static string Run() {
+        Probe.Reset();
+        var missing = Convert(false);
+        var a = (missing == null ? 1 : missing.Value) + 10 * Probe.Calls + 100 * Probe.Reads;
+        Probe.Reset();
+        var present = Convert(true);
+        var b = (present == null ? 1 : present.Value) + 10 * Probe.Calls + 100 * Probe.Reads;
+        return $"{a},{b}";
+    }
+}`)
+                EmitCSharp(fixtureSource, fixturePath)
+                let oracle = EmittedFixture.Load(fixturePath).GetType("Fixture4741.Oracle", throwOnError: true) ??
+                    throw InvalidOperationException("Roslyn oracle type missing.")
+                let expected object? = oracle.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(
+                    nil,
+                    nil
+                )
+                Assert.Equal(expectedOutput, expected)
+                let source = (`package Test4737
+import System
+import Fixture4741
+` + "$gsharpConversion" + `
+func Run() string {
+    Probe.Reset()
+    let missing = Convert(false)
+    let a = (missing ?? 1) + 10 * Probe.Calls + 100 * Probe.Reads
+    Probe.Reset()
+    let present = Convert(true)
+    let b = (present ?? 1) + 10 * Probe.Calls + 100 * Probe.Reads
+    return a.ToString() + "," + b.ToString()
 }`)
                 let sourcePath = Path.Combine(directory, "App.gs")
                 let assemblyPath = Path.Combine(directory, "App.dll")

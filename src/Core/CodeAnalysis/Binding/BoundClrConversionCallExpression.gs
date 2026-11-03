@@ -106,10 +106,8 @@ class BoundClrConversionCallExpression : BoundExpression {
             if isLifted {
                 return NullableTypeSymbol.Get(target)
             }
-            if source is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
-                method?.GetParameters() is {Length: 1} parameters && ClrTypeUtilities.AreSame(
-                parameters[0].ParameterType,
-                NullableLifting.GetEffectiveClrType(source)
+            if method?.GetParameters() is {Length: 1} parameters && NullableLifting.IsValueTypeNullableClr(
+                parameters[0].ParameterType
             ) {
                 let declaredResult = ClrNullability.GetReturnTypeSymbol(method!!)
                 if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(declaredResult, target) &&
@@ -154,7 +152,10 @@ class BoundClrConversionCallExpression : BoundExpression {
                 let resultType = functionOwnerType?.SubstituteMemberType(function.Type) ?? function.Type
                 return Conversion.ClassifyNonStructural(source.UnderlyingType, parameterType)
                     .IsIdentity &&
-                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target)
+                    (
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target) ||
+                        TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, conversionType)
+                )
             }
             let parameters = method?.GetParameters()
             return parameters != nil &&
@@ -167,7 +168,12 @@ class BoundClrConversionCallExpression : BoundExpression {
                 .ReturnType
                 .IsByRef == false &&
                 ClrTypeUtilities.AreSame(parameters[0].ParameterType, source.UnderlyingType.ClrType) &&
-                ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType)
+                (
+                ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType) || ClrTypeUtilities.AreSame(
+                    method.ReturnType,
+                    NullableLifting.GetEffectiveClrType(conversionType)
+                )
+            )
         }
     }
 }
