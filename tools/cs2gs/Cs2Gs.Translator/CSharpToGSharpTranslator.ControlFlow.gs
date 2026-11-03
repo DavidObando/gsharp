@@ -1558,8 +1558,11 @@ partial class CSharpToGSharpTranslator {
                         incrementorStatements
                     )
                 }
-                if incrementorStatements.Count > 0 && translatedBody!!.Statements.Any(
-                    (s GStatement) -> s is LocalDeclarationStatement{IsUsing: true}
+                if incrementorStatements.Count > 0 &&
+                    (
+                    forHasPredeclaredOut || translatedBody!!.Statements.Any(
+                        (s GStatement) -> s is LocalDeclarationStatement
+                    )
                 ) {
                     bodyStatements.Add(translatedBody!!)
                 } else {
@@ -1716,6 +1719,47 @@ partial class CSharpToGSharpTranslator {
                         return SwitchStatement(switchStatement.Subject, cases)
                     }
                 }
+                case ifLetStatement is IfLetStatement {
+                    {
+                        let elseBranch GStatement? = if ifLetStatement.Else == nil {
+                            default(GStatement?)
+                        } else {
+                            this.RewriteOwnLoopContinue(
+                                forStatement,
+                                ifLetStatement.Else,
+                                incrementorStatements,
+                                replacement
+                            )
+                        }
+                        return IfLetStatement(
+                            ifLetStatement.Bindings,
+                            cast[BlockStatement](
+                                this.RewriteOwnLoopContinue(
+                                    forStatement,
+                                    ifLetStatement.Then,
+                                    incrementorStatements,
+                                    replacement
+                                )
+                            ),
+                            elseBranch
+                        )
+                    }
+                }
+                case lockStatement is LockStatement {
+                    {
+                        return LockStatement(
+                            lockStatement.Target,
+                            cast[BlockStatement](
+                                this.RewriteOwnLoopContinue(
+                                    forStatement,
+                                    lockStatement.Body,
+                                    incrementorStatements,
+                                    replacement
+                                )
+                            )
+                        )
+                    }
+                }
                 case fixedStatement is FixedStatement {
                     {
                         return FixedStatement(
@@ -1751,6 +1795,7 @@ partial class CSharpToGSharpTranslator {
                 ForStatement,
                 DoWhileStatement,
                 ForInStatement,
+                ForTupleInStatement,
                 LocalFunctionStatement {
                     return statement
                 }
@@ -1894,7 +1939,9 @@ partial class CSharpToGSharpTranslator {
                         ancestor != nil;
                         ancestor = ancestor!!
                         .Parent {
-                        if ancestor is TryStatementSyntax || ancestor is UsingStatementSyntax {
+                        if ancestor is TryStatementSyntax ||
+                            ancestor is UsingStatementSyntax ||
+                            ancestor is LockStatementSyntax {
                             return true
                         }
                         if ancestor is BlockSyntax block &&
@@ -2220,6 +2267,13 @@ partial class CSharpToGSharpTranslator {
                         }
                         return false
                     }
+                    case ifLetStatement is IfLetStatement {
+                        return ContainsOwnLoopContinue(ifLetStatement.Then) ||
+                            (ifLetStatement.Else != nil && ContainsOwnLoopContinue(ifLetStatement.Else))
+                    }
+                    case lockStatement is LockStatement {
+                        return ContainsOwnLoopContinue(lockStatement.Body)
+                    }
                     case fixedStatement is FixedStatement {
                         return ContainsOwnLoopContinue(fixedStatement.Body)
                     }
@@ -2231,6 +2285,7 @@ partial class CSharpToGSharpTranslator {
                     ForStatement,
                     DoWhileStatement,
                     ForInStatement,
+                    ForTupleInStatement,
                     LocalFunctionStatement {
                         return false
                     }

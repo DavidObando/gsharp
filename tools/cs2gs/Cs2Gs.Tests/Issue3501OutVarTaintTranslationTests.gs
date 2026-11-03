@@ -616,7 +616,11 @@ namespace Demo
 
         public sealed class Box
         {
+            private int reads;
             public string Name { get; set; }
+            public object Value { get; set; }
+            public int ReadCount => this.reads;
+            public string ComputedName => "n" + (++this.reads);
         }
 
         public static string NestedPropertyPatternInHoistedLoop(Box box)
@@ -629,6 +633,75 @@ namespace Demo
             }
 
             return "no-match";
+        }
+
+        public static string BoxedValuePropertyPatternInHoistedLoop(Box box)
+        {
+            step = 0;
+            while (Next(out string x) && box is { Value: int n })
+            {
+                x = null;
+                return n + ":" + (x ?? "nil");
+            }
+
+            return "no-int";
+        }
+
+        public static string ComputedPropertyPatternEvaluatedOnce()
+        {
+            step = 0;
+            var box = new Box();
+            while (Next(out string x) && box is { ComputedName: string name })
+            {
+                x = null;
+                return RequireNonNull(name) + ":" + box.ReadCount;
+            }
+
+            return "none";
+        }
+
+        public static string DoAndForContinueInsideLock()
+        {
+            object gate = new object();
+            step = 0;
+            int doRuns = 0;
+            do
+            {
+                doRuns++;
+                lock (gate)
+                {
+                    continue;
+                }
+            } while (Next(out string x) && (x = null) == null);
+
+            step = 0;
+            int forIncs = 0;
+            for (; Next(out string x); forIncs++)
+            {
+                x = null;
+                lock (gate)
+                {
+                    continue;
+                }
+            }
+
+            return doRuns + ":" + step + "/" + forIncs;
+        }
+
+        private static int index;
+
+        public static string ForBodyLocalShadowsStaticIncrementorTarget()
+        {
+            step = 0;
+            index = 0;
+            for (; Next(out string value); index++)
+            {
+                int index = 40;
+                index++;
+                value = (value = null) ?? index.ToString();
+            }
+
+            return index.ToString();
         }
 
         private static void ThrowIncrementor() => throw new InvalidOperationException("inc");
@@ -701,13 +774,18 @@ namespace Demo
             ForContinueTryCatchDoesNotCatchIncrementorException() + "|" +
             ForContinueUsingDisposesBeforeIncrementor() + "|" +
             GenericTypeParameterPatternInHoistedLoop<string>(null) + ":" +
-            GenericTypeParameterPatternInHoistedLoop<string>("hi");
+            GenericTypeParameterPatternInHoistedLoop<string>("hi") + "|" +
+            BoxedValuePropertyPatternInHoistedLoop(new Box { Value = 42 }) + ":" +
+            BoxedValuePropertyPatternInHoistedLoop(new Box { Value = "nope" }) + "|" +
+            ComputedPropertyPatternEvaluatedOnce() + "|" +
+            DoAndForContinueInsideLock() + "|" +
+            ForBodyLocalShadowsStaticIncrementorTarget();
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:no-int|N1:1|2:2/1|1"
         )
     }
 

@@ -1177,7 +1177,8 @@ partial class CSharpToGSharpTranslator {
                 receiverType != nil &&
                 !receiverType.IsValueType &&
                 this.ContainsBareRecursivePattern(pattern)
-            return (nullableMember || guardedNonNullMember) && CountReads(pattern) > 1
+            let designatedUnstableMember = !stableMember && PatternIntroducesBinding(pattern)
+            return (nullableMember || guardedNonNullMember || designatedUnstableMember) && CountReads(pattern) > 1
         }
 
         private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
@@ -1613,7 +1614,8 @@ partial class CSharpToGSharpTranslator {
                             this.state.PatternBindings[boundSymbol] = this.BuildPatternNarrowingReplacement(
                                 receiver,
                                 receiverSyntax,
-                                declaration.Type
+                                declaration.Type,
+                                receiverType
                             )!!
                         }
                     }
@@ -2113,7 +2115,8 @@ partial class CSharpToGSharpTranslator {
                     this.state.PatternBindings[recBound] = this.BuildPatternNarrowingReplacement(
                         receiver,
                         receiverSyntax,
-                        recursive.Type
+                        recursive.Type,
+                        receiverType
                     )!!
                 }
             }
@@ -2943,7 +2946,8 @@ partial class CSharpToGSharpTranslator {
         private func BuildPatternNarrowingReplacement(
             receiver GExpression?,
             receiverSyntax ExpressionSyntax?,
-            narrowedTypeSyntax TypeSyntax?
+            narrowedTypeSyntax TypeSyntax?,
+            receiverType ITypeSymbol? = nil
         ) GExpression? {
             if narrowedTypeSyntax == nil &&
                 receiverSyntax != nil &&
@@ -2974,6 +2978,32 @@ partial class CSharpToGSharpTranslator {
             }
             let narrowedType ITypeSymbol? = this.context.GetTypeInfo(narrowedTypeSyntax).Type
             if narrowedType != nil && narrowedType.IsValueType {
+                let effectiveReceiverType ITypeSymbol? = receiverType ??
+                    (
+                    if receiverSyntax != nil {
+                        this.context.GetTypeInfo(receiverSyntax).Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                )
+                if effectiveReceiverType != nil &&
+                    (
+                    effectiveReceiverType
+                        .OriginalDefinition
+                        .SpecialType == SpecialType.System_Nullable_T ||
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(effectiveReceiverType, narrowedType)
+                ) {
+                    return NonNullAssertionExpression(receiver)
+                }
+                if this.MapTypeSyntax(narrowedTypeSyntax) is NamedTypeReference namedTarget {
+                    return InvocationExpression(
+                        BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
+                        []GExpression{NonNullAssertionExpression(receiver)},
+                        namedTarget.TypeArguments
+                    )
+                }
                 return NonNullAssertionExpression(receiver)
             }
             return NonNullAssertionExpression(
