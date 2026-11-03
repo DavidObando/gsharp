@@ -104,6 +104,19 @@ Console.WriteLine(x)`)
         Assert.Contains("hot", output)
     }
 
+    @Fact
+    func RelationalPattern_NullableInput_ComparesPresentValueAndRejectsNil() {
+        // Issue #5681: a nil `int32?` input does not match `> 0`, and `not > 0` matches it.
+        let output = RunSubmission(`let present int32? = 5
+let missing int32? = nil
+let a = switch present { case > 0: "pos" default: "other" }
+let b = switch missing { case > 0: "pos" default: "other" }
+let c = if missing is not > 0 { "not" } else { "gt" }
+Console.WriteLine(a + "|" + b + "|" + c)`)
+        Assert.DoesNotContain("error GS", output)
+        Assert.Equal("pos|other|not${Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine))
+    }
+
     shared {
         private func RunSubmission(text string) string {
             using let outWriter = StringWriter()
