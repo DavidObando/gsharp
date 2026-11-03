@@ -172,7 +172,7 @@ shared class AsyncBoundTreeQueries {
     /// `await` expression, traversing through implicit suspending completions.
     /// @param expression The bound expression to inspect.
     /// @returns Whether the subtree contains an explicit `await`.
-    func HasExplicitAwait(expression BoundExpression?) bool {
+    internal func HasExplicitAwait(expression BoundExpression?) bool {
         if expression == nil {
             return false
         }
