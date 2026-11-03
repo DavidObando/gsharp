@@ -235,25 +235,76 @@ partial class CSharpToGSharpTranslator {
             symbol
         )
 
-        // Whether a `foreach` variable has nested oblivious container positions and a
-        // non-null top level, so the loop variable is emitted as a non-null container
-        // whose elements are nullable.
+        // Whether a `foreach` variable has nested oblivious container positions and an
+        // emitted non-null top level, so the loop variable is emitted as a non-null
+        // container whose elements are nullable.
         private func ForEachBindingHasObliviousContainerElements(symbol ISymbol?) bool {
             let flow = this.ObliviousContainerFlowState()
-            if symbol == nil || !flow.HasNullable {
+            if symbol is not ILocalSymbol local ||
+                !flow.HasNullable ||
+                !local
+                .Type
+                .IsReferenceType ||
+                this.ShouldPromoteToNullableReference(local) || this.IsTranslatorWidenedDeclaration(local) {
                 return false
             }
-            let declared = DeclaredPositions(flow, symbol)
-            if declared != nil && declared.Count > 0 && !declared.Contains("") {
-                return true
+            var forEachSyntax ForEachStatementSyntax? = nil
+            for reference in local.DeclaringSyntaxReferences {
+                if reference.GetSyntax() is ForEachStatementSyntax forEach && SymbolEqualityComparer.Default.Equals(
+                    this.context.GetDeclaredSymbol(forEach),
+                    local
+                ) {
+                    forEachSyntax = forEach
+                    break
+                }
             }
-            return flow.Inferred.TryGetValue(symbol.OriginalDefinition, out var inferred) &&
-                inferred
-                .Nullable
-                .Count > 0 &&
-                !inferred
-                .Nullable
-                .Contains("")
+            if forEachSyntax == nil {
+                return false
+            }
+            if !forEachSyntax
+                .Type
+                .IsVar &&
+                local
+                .Type
+                .NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return false
+            }
+            let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEachSyntax)
+            if this.ArrayExpressionHasNullableReferenceLikeElement(forEachSyntax.Expression) ||
+                this.ForEachIteratesPromotedSourceIteratorElement(forEachSyntax, forEachInfo) {
+                return false
+            }
+            let collectionExpression ExpressionSyntax = if this
+                .context
+                .GetSymbolInfo(forEachSyntax.Expression)
+                .Symbol is ILocalSymbol collectionLocal &&
+                IsImplicitlyTypedLocal(collectionLocal) &&
+                collectionLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} collectionInitializer}} {
+                collectionInitializer
+            } else {
+                forEachSyntax.Expression
+            }
+            let collectionType ITypeSymbol? = this.context.GetTypeInfo(collectionExpression).Type
+            let elementAnnotation = if collectionType is IArrayTypeSymbol arrayCollection {
+                arrayCollection.ElementNullableAnnotation
+            } else {
+                forEachInfo.ElementType?.NullableAnnotation ?? Microsoft.CodeAnalysis.NullableAnnotation.None
+            }
+            if elementAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                return false
+            }
+            let declared = DeclaredPositions(flow, local)
+            let hasInferred = flow.Inferred.TryGetValue(local.OriginalDefinition, out var inferred)
+            if declared?.Contains("") == true || (hasInferred && inferred.Nullable.Contains("")) {
+                return false
+            }
+            return (declared != nil && declared.Count > 0) || (hasInferred && inferred.Nullable.Count > 0)
         }
 
         /// Issue #5537: makes the recorded nested positions of a storage declaration
@@ -267,7 +318,18 @@ partial class CSharpToGSharpTranslator {
             if type == nil || positions == nil {
                 return type
             }
-            let promoted = PromoteNestedPositions(type, StorageType(symbol!!.OriginalDefinition), positions, "")
+            var promoted = PromoteNestedPositions(type, StorageType(symbol!!.OriginalDefinition), positions, "")
+            if promoted is ArrayTypeReference arrayType &&
+                !arrayType
+                .ElementType
+                .IsNullable &&
+                symbol is ILocalSymbol arrayLocal &&
+                this
+                .IsWidenedArrayElementLocal(arrayLocal) {
+                promoted = ArrayTypeReference(MakeNullable(arrayType.ElementType)!!, arrayType.Rank){
+                    IsNullable = arrayType.IsNullable
+                }
+            }
             return if positions.Contains("") && !promoted!!.IsNullable {
                 MakeNullable(promoted)
             } else {

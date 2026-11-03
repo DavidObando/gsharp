@@ -1014,6 +1014,50 @@ public static class Use
             })
     }
 
+    /// Review of 98fce67c7 (#5571): nested nullable positions on a local or `foreach`
+    /// variable do not make a nullable top-level container non-null, so `lines!.Length`
+    /// on `string[]? lines` and dereferences of nullable `foreach` bindings with
+    /// promoted elements keep their top-level `!!`.
+    @Fact
+    func Nullable_Containers_And_ForEach_Bindings_With_Promoted_Elements_Keep_Top_Level_Assertions() {
+        this.Check("Review29", `using System.Collections.Generic;
+using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int Local(string p) { bool flag = p.Length > 0; string[]? lines = flag ? Node.Holes(p) : null; return lines!.Length; }
+    public static int LocalElement(string p) { bool flag = p.Length > 0; string[]? lines = flag ? Node.Holes(p) : null; return lines![0].Length; }
+    public static int LocalThrows(string p) { bool flag = p.Length == 0; string[]? lines = flag ? Node.Holes(p) : null; try { return lines!.Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int ForEachAnnotated(string p) { string[] lines; lines = Node.Holes(p); var rows = new string[]?[] { lines }; int n = 0; foreach (string[]? row in rows) { n += row![0].Length; } foreach (var row in rows) { n += row!.Length; } foreach (IEnumerable<string>? seq in rows) { n += seq!.First().Length; } return n; }
+    public static int ForEachAnnotatedThrows(string p) { string[] lines; lines = Node.Holes(p); var rows = new string[]?[] { null, lines }; try { foreach (var row in rows) { return row!.Length; } return 0; } catch (System.NullReferenceException) { return -1; } }
+    public static int ForEachWidenedArray(string p) { string[] lines; lines = Node.Holes(p); var rows = new string[2][]; rows[0] = lines; rows[1] = null!; foreach (var row in rows) { if (p.Length == 0) { lines = row; } return row[0].Length; } return 0; }
+    public static int ForEachJagged(string p) { string[][] j; j = Node.Jagged(p); int n = 0; foreach (var row in j) { n += row[0].Length; } return n; }
+}`, []string{
+                "return lines!!.Length",
+                "return lines!![0]!!.Length",
+                "n += row!![0]!!.Length",
+                "n += row!!.Length",
+                "n += seq!!.First()!!.Length",
+                "return row!![0]!!.Length"
+            }, []string{
+                "Local",
+                "2",
+                "LocalElement",
+                "2",
+                "LocalThrows",
+                "-1",
+                "ForEachAnnotated",
+                "6",
+                "ForEachAnnotatedThrows",
+                "-1",
+                "ForEachWidenedArray",
+                "2",
+                "ForEachJagged",
+                "2"
+            })
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
