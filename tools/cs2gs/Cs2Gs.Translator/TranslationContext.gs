@@ -100,6 +100,9 @@ class TranslationContext {
         )
     }
 
+    /// Gets the root C# compilation this context was created for.
+    prop RootCompilation CSharpCompilation -> this.rootCompilation
+
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
         get;

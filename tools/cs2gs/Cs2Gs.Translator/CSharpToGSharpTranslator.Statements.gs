@@ -4944,6 +4944,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if this.TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {
+                    this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
                             TupleDeconstructionStatement(binding, names, this.TranslateExpression(assignment.Right))
@@ -4972,6 +4973,7 @@ partial class CSharpToGSharpTranslator {
                 // RHS by `LowerTupleAssignment`, preserving issue #2234 order.
                 if assignment.Left is DeclarationExpressionSyntax nestedDeclarationExpression &&
                     nestedDeclarationExpression.Designation is ParenthesizedVariableDesignationSyntax nestedDeclaration {
+                    this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return this.LowerTupleDeclaration(
                         nestedDeclaration,
                         assignment.Right,
@@ -4979,6 +4981,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if assignment.Left is TupleExpressionSyntax leftTuple {
+                    this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return this.LowerTupleAssignment(leftTuple, assignment.Right)
                 }
             }

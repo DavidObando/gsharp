@@ -147,11 +147,347 @@ partial class CSharpToGSharpTranslator {
                 case parenthesized is ParenthesizedPatternSyntax {
                     this.RegisterProjectedNativePatternBindings(parenthesized.Pattern, receiverType)
                 }
+                case unary is UnaryPatternSyntax {
+                    this.RegisterProjectedNativePatternBindings(unary.Pattern, receiverType, mappedListElementType)
+                }
                 case binary is BinaryPatternSyntax {
                     this.RegisterProjectedNativePatternBindings(binary.Left, receiverType)
                     this.RegisterProjectedNativePatternBindings(binary.Right, receiverType)
                 }
             }
+        }
+
+        private func FindProjectedPatternBindingType(
+            pattern PatternSyntax?,
+            targetDesignation SingleVariableDesignationSyntax,
+            receiverType ITypeSymbol?,
+            mappedListElementType ITypeSymbol? = nil
+        ) ITypeSymbol? {
+            if pattern == nil || !pattern.Span.Contains(targetDesignation.Span) {
+                return nil
+            }
+            switch pattern {
+                case VarPatternSyntax{Designation: SingleVariableDesignationSyntax variable} {
+                    return if variable == targetDesignation {
+                        receiverType
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                }
+                case declaration is DeclarationPatternSyntax {
+                    return if declaration.Designation == targetDesignation {
+                        receiverType
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                }
+                case list is ListPatternSyntax {
+                    let elementType ITypeSymbol? = mappedListElementType ??
+                        (
+                        if receiverType is IArrayTypeSymbol array {
+                            array.ElementType
+                        } else {
+                            this.GetListPatternElementType(list, receiverType)
+                        }
+                    )
+                    for element in list.Patterns {
+                        if !element.Span.Contains(targetDesignation.Span) {
+                            continue
+                        }
+                        if element is SlicePatternSyntax slice {
+                            return if slice.Pattern == nil {
+                                default(ITypeSymbol?)
+                            } else {
+                                this.FindProjectedPatternBindingType(
+                                    slice.Pattern,
+                                    targetDesignation,
+                                    this.GetProjectedSlicePatternType(slice, receiverType, mappedListElementType)
+                                )
+                            }
+                        }
+                        return this.FindProjectedPatternBindingType(element, targetDesignation, elementType)
+                    }
+                }
+                case recursive is RecursivePatternSyntax {
+                    if recursive.Designation == targetDesignation {
+                        var designationType ITypeSymbol? = receiverType
+                        if recursive.Type != nil &&
+                            receiverType is INamedTypeSymbol projectedReceiver &&
+                            this
+                            .context
+                            .GetTypeInfo(recursive.Type)
+                            .Type is INamedTypeSymbol narrowedType {
+                            designationType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
+                                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                    candidate.OriginalDefinition,
+                                    narrowedType.OriginalDefinition
+                                )
+                            ) ??
+                                narrowedType
+                        }
+                        return designationType
+                    }
+                    if recursive.PropertyPatternClause != nil {
+                        for subpattern in recursive.PropertyPatternClause!!.Subpatterns {
+                            if !subpattern.Span.Contains(targetDesignation.Span) {
+                                continue
+                            }
+                            let memberType ITypeSymbol? = if subpattern.NameColon != nil {
+                                this.GetProjectedPatternMemberType(receiverType, subpattern.NameColon!!.Name)
+                            } else {
+                                this.GetProjectedPatternMemberPathType(
+                                    receiverType,
+                                    subpattern.ExpressionColon?.Expression
+                                )
+                            }
+                            return this.FindProjectedPatternBindingType(
+                                subpattern.Pattern,
+                                targetDesignation,
+                                memberType
+                            )
+                        }
+                    }
+                    if recursive.PositionalPatternClause != nil &&
+                        receiverType is INamedTypeSymbol{IsTupleType: true} tuple &&
+                        recursive.PositionalPatternClause!!
+                        .Subpatterns
+                        .Count == tuple
+                        .TupleElements
+                        .Length {
+                        for var i = 0; i < recursive.PositionalPatternClause!!.Subpatterns.Count; i++ {
+                            if !recursive.PositionalPatternClause!!
+                                .Subpatterns[i]
+                                .Span
+                                .Contains(targetDesignation.Span) {
+                                continue
+                            }
+                            return this.FindProjectedPatternBindingType(
+                                recursive.PositionalPatternClause!!.Subpatterns[i].Pattern,
+                                targetDesignation,
+                                GetEffectiveTupleElementType(tuple, i)
+                            )
+                        }
+                    }
+                }
+                case parenthesized is ParenthesizedPatternSyntax {
+                    return this.FindProjectedPatternBindingType(
+                        parenthesized.Pattern,
+                        targetDesignation,
+                        receiverType,
+                        mappedListElementType
+                    )
+                }
+                case unary is UnaryPatternSyntax {
+                    return this.FindProjectedPatternBindingType(
+                        unary.Pattern,
+                        targetDesignation,
+                        receiverType,
+                        mappedListElementType
+                    )
+                }
+                case binary is BinaryPatternSyntax {
+                    return this.FindProjectedPatternBindingType(
+                        binary.Left,
+                        targetDesignation,
+                        receiverType,
+                        mappedListElementType
+                    ) ??
+                        this.FindProjectedPatternBindingType(
+                        binary.Right,
+                        targetDesignation,
+                        receiverType,
+                        mappedListElementType
+                    )
+                }
+            }
+            return nil
+        }
+
+        private func FindProjectedDeconstructionBindingType(
+            target SyntaxNode?,
+            targetDesignation SingleVariableDesignationSyntax,
+            rightExpression ExpressionSyntax?,
+            projectedRightType ITypeSymbol?
+        ) ITypeSymbol? {
+            if target == nil || !target.Span.Contains(targetDesignation.Span) {
+                return nil
+            }
+            let unwrappedRight = if rightExpression == nil {
+                default(ExpressionSyntax?)
+            } else {
+                Unparenthesize(rightExpression)
+            }
+            switch target {
+                case single is SingleVariableDesignationSyntax {
+                    if single != targetDesignation {
+                        return nil
+                    }
+                    return projectedRightType ??
+                        (
+                        if unwrappedRight == nil {
+                            default(ITypeSymbol?)
+                        } else {
+                            this.GetManagedReferenceArrayProjectedExpressionType(unwrappedRight)
+                        }
+                    )
+                }
+                case declaration is DeclarationExpressionSyntax {
+                    return this.FindProjectedDeconstructionBindingType(
+                        declaration.Designation,
+                        targetDesignation,
+                        unwrappedRight,
+                        projectedRightType
+                    )
+                }
+                case parenthesized is ParenthesizedVariableDesignationSyntax {
+                    let projectedTuple = projectedRightType as INamedTypeSymbol
+                    let rightTuple = unwrappedRight as TupleExpressionSyntax
+                    for var i = 0; i < parenthesized.Variables.Count; i++ {
+                        if !parenthesized.Variables[i].Span.Contains(targetDesignation.Span) {
+                            continue
+                        }
+                        let elementType ITypeSymbol? = if projectedTuple != nil &&
+                            projectedTuple.IsTupleType &&
+                            i < projectedTuple
+                            .TupleElements
+                            .Length {
+                            GetEffectiveTupleElementType(projectedTuple, i)
+                        } else {
+                            default(ITypeSymbol?)
+                        }
+                        let elementExpr ExpressionSyntax? = if rightTuple != nil && i < rightTuple.Arguments.Count {
+                            rightTuple.Arguments[i].Expression
+                        } else {
+                            default(ExpressionSyntax?)
+                        }
+                        return this.FindProjectedDeconstructionBindingType(
+                            parenthesized.Variables[i],
+                            targetDesignation,
+                            elementExpr,
+                            elementType
+                        )
+                    }
+                }
+                case tuple is TupleExpressionSyntax {
+                    let projectedTuple = projectedRightType as INamedTypeSymbol
+                    let rightTuple = unwrappedRight as TupleExpressionSyntax
+                    for var i = 0; i < tuple.Arguments.Count; i++ {
+                        if !tuple.Arguments[i].Span.Contains(targetDesignation.Span) {
+                            continue
+                        }
+                        let elementType ITypeSymbol? = if projectedTuple != nil &&
+                            projectedTuple.IsTupleType &&
+                            i < projectedTuple
+                            .TupleElements
+                            .Length {
+                            GetEffectiveTupleElementType(projectedTuple, i)
+                        } else {
+                            default(ITypeSymbol?)
+                        }
+                        let elementExpr ExpressionSyntax? = if rightTuple != nil && i < rightTuple.Arguments.Count {
+                            rightTuple.Arguments[i].Expression
+                        } else {
+                            default(ExpressionSyntax?)
+                        }
+                        return this.FindProjectedDeconstructionBindingType(
+                            tuple.Arguments[i].Expression,
+                            targetDesignation,
+                            elementExpr,
+                            elementType
+                        )
+                    }
+                }
+            }
+            return nil
+        }
+
+        private func RegisterProjectedDeconstructionBindings(left ExpressionSyntax?, right ExpressionSyntax?) {
+            if left == nil || right == nil {
+                return
+            }
+            let projectedRightType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(right)
+            for single in left.DescendantNodesAndSelf().OfType[SingleVariableDesignationSyntax]() {
+                if this.context.GetDeclaredSymbol(single) is not ILocalSymbol local || !IsImplicitlyTypedLocal(local) {
+                    continue
+                }
+                if this.FindProjectedDeconstructionBindingType(
+                    left,
+                    single,
+                    right,
+                    projectedRightType
+                ) is {} projectedElementType &&
+                    CSharpToGSharpTranslator
+                    .TypeContainsRecognizedManagedReferenceConsumer(projectedElementType, this.context.Compilation) {
+                    this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType[local] = projectedElementType
+                }
+            }
+        }
+
+        private func TryGetProjectedSingleDesignationType(
+            local ILocalSymbol,
+            designation SingleVariableDesignationSyntax
+        ) ITypeSymbol? {
+            if designation.Ancestors().OfType[PatternSyntax]().LastOrDefault() is {} rootPattern {
+                let patternInput ExpressionSyntax? = switch rootPattern.Parent {
+                    case isPattern is IsPatternExpressionSyntax: isPattern.Expression
+                    case CasePatternSwitchLabelSyntax{
+                        Parent: SwitchSectionSyntax{Parent: SwitchStatementSyntax switchStatement}
+                    }: switchStatement.Expression
+                    case SwitchExpressionArmSyntax{
+                        Parent: SwitchExpressionSyntax switchExpression
+                    }: switchExpression.GoverningExpression
+                    default: default(ExpressionSyntax?)
+                }
+                if patternInput != nil {
+                    let receiverType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
+                        patternInput
+                    ) ??
+                        this.GetProjectedReceiverType(patternInput) ?? this.context.GetTypeInfo(patternInput).Type
+                    return this.FindProjectedPatternBindingType(
+                        rootPattern,
+                        designation,
+                        receiverType,
+                        this.GetMappedArrayElementType(patternInput)
+                    )
+                }
+            }
+            if !IsImplicitlyTypedLocal(local) {
+                return nil
+            }
+            if designation
+                .Ancestors()
+                .OfType[AssignmentExpressionSyntax]()
+                .FirstOrDefault() is {Left: {} left, Right: {} right} &&
+                left
+                .Span
+                .Contains(designation.Span) {
+                return this.FindProjectedDeconstructionBindingType(
+                    left,
+                    designation,
+                    right,
+                    this.GetManagedReferenceArrayProjectedExpressionType(right)
+                )
+            }
+            if designation
+                .Ancestors()
+                .OfType[ForEachVariableStatementSyntax]()
+                .FirstOrDefault() is {} variableForEach &&
+                variableForEach
+                .Variable
+                .Span
+                .Contains(designation.Span) {
+                let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(variableForEach)
+                return this.FindProjectedDeconstructionBindingType(
+                    variableForEach.Variable,
+                    designation,
+                    nil,
+                    this.GetProjectedForEachElementType(variableForEach, forEachInfo)
+                )
+            }
+            return nil
         }
 
         private func RegisterProjectedSwitchPatternBindings(pattern PatternSyntax, receiver ExpressionSyntax) {

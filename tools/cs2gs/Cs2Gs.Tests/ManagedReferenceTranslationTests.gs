@@ -7326,12 +7326,15 @@ public class Base<T> {
     public byte Flag;
     public T Value;
     public Box<T>? ValueBox;
+    public Func<Box<T>> Factory = () => new Box<T>();
     public Wrapper<T, ManagedRef<int>> Data = new();
     public void Add(T value) {
         this.stored = value;
         this.ValueBox = new Box<T>(new[] { value });
     }
     public T Get() => this.stored;
+    public Box<T> GetBox() => this.ValueBox!;
+    public (Box<T>, int) Pair() => (this.ValueBox!, 7);
     public void UseConstrained<U>(U box) where U : Box<T> { }
     public string Describe() => "ok";
     public void AcceptObject(object value) { }
@@ -7350,6 +7353,10 @@ public class ParamsIndexerBase<T> {
     }
 }
 public class ParamsIndexerDerived : ParamsIndexerBase<ManagedRef<int>> { }
+public class PatternBeforeCallerDerived : Base<ManagedRef<int>> { }
+public class InferredDeconstructDerived : Base<ManagedRef<int>> { }
+public class InferredDeconstructConsumerDerived : Base<ManagedRef<int>> { }
+public class MethodGroupAssignDerived : Base<ManagedRef<int>> { }
 public class Derived : Base<ManagedRef<int>> {
     public void BaseAdd(ManagedRef<int>[] items) => base.Add(items[0]);
     public int BaseRead() => base.Get().Borrow();
@@ -7371,6 +7378,9 @@ public class Probe {
 
     public static int Run() {
         var emptySource = new ManagedRef<int>[1];
+        if (emptySource is [var patternItem]) {
+            new PatternBeforeCallerDerived().Add(patternItem);
+        }
         var derived = new Derived();
         derived.Flag = 0;
         derived.BaseAdd(emptySource);
@@ -7408,6 +7418,17 @@ public class Probe {
         _ = alias;
         SubDerived? nullablePopulated = populated;
         var nestedConditional = nullablePopulated?.ValueBox?.Get().Borrow() ?? 0;
+        _ = (nullablePopulated?.Pair()).HasValue;
+        _ = (nullablePopulated?.Pair()).Value.Item1.Get().Borrow();
+        var inferredDeconstruct = new InferredDeconstructDerived();
+        inferredDeconstruct.Add(populatedSource[0]);
+        var (inferredBox, _) = inferredDeconstruct.Pair();
+        _ = inferredBox.Get().Borrow();
+        new InferredDeconstructConsumerDerived().UseConstrained(inferredBox);
+        var mgAssign = new MethodGroupAssignDerived();
+        mgAssign.Factory = mgAssign.GetBox;
+        mgAssign.Add(populatedSource[0]);
+        _ = mgAssign.Factory().Get().Borrow();
         var secondSource = new ManagedRef<int>[1];
         secondSource[0] = ManagedRef<int>.FromArray(values, 1);
         return (ReadConstrained(populated) - nestedConditional) + populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
@@ -7426,6 +7447,14 @@ public class Probe {
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
         Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class PatternBeforeCallerDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class InferredDeconstructDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class InferredDeconstructConsumerDerived : Base[managed[int32]?]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class MethodGroupAssignDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains(
             "open class ParamsIndexerDerived : ParamsIndexerBase[managed[int32]?]",
             text,
@@ -7603,15 +7632,27 @@ public class CoalesceValueDerived : Base<ManagedRef<int>> { }
 public class ConstrainedPairDerived : ConstrainedPairBase<ManagedRef<int>, Box<ManagedRef<int>>> { }
 public class NestedConditionalDerived : Base<ManagedRef<int>> { }
 public class DeconstructDerived : Base<ManagedRef<int>> { }
+public class LiftedTupleDerived : Base<ManagedRef<int>> { }
+public class InferredDeconstructFixedDerived : Base<ManagedRef<int>> { }
+public class UnderscoreLocalDeconstructDerived : Base<ManagedRef<int>> { }
+public class FixedMethodGroupTargetDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
+    private static Box<ManagedRef<int>> FixedGetBox() => FixedBox;
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
     private static void AcceptBox(Box<ManagedRef<int>> value) { }
     private static void RequireBase<T>() where T : Base<ManagedRef<int>> { }
     private static void RequireBaseEnumerable<U>() where U : IEnumerable<Base<ManagedRef<int>>> { }
     private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
     private static void ReadConstrainedBox<U>(U item) where U : ConstrainedDerived => AcceptBox(item.Value);
+
+    private static void RunUnderscoreDeconstruct(ManagedRef<int>[] source, Box<ManagedRef<int>> _) {
+        var underscoreDeconstruct = new UnderscoreLocalDeconstructDerived();
+        int ignoredCount;
+        (_, ignoredCount) = underscoreDeconstruct.Pair();
+        underscoreDeconstruct.Add(source[0]);
+    }
 
     private static async Task RunAsync(ManagedRef<int>[] source) {
         var awaitDerived = new AwaitDerived();
@@ -7803,6 +7844,21 @@ public class Probe {
         Box<ManagedRef<int>> deconstructedBox;
         (deconstructedBox, _) = deconstructDerived.Pair();
         deconstructDerived.Add(source[0]);
+
+        LiftedTupleDerived? liftedTupleDerived = new();
+        AcceptBox((liftedTupleDerived?.Pair())!.Value.Item1);
+        liftedTupleDerived.Add(source[0]);
+
+        var inferredDeconstructFixed = new InferredDeconstructFixedDerived();
+        var (inferredFixedBox, _) = inferredDeconstructFixed.Pair();
+        AcceptBox(inferredFixedBox);
+        inferredDeconstructFixed.Add(source[0]);
+
+        RunUnderscoreDeconstruct(source, FixedBox);
+
+        var fixedMgTarget = new FixedMethodGroupTargetDerived();
+        fixedMgTarget.Factory = FixedGetBox;
+        fixedMgTarget.Add(source[0]);
     }
 }`
         const benignConsumerSource = `using ManagedArrayInheritedGenericBaseFixedDestination;
@@ -7824,7 +7880,10 @@ public class ConsumerProbe {
             references
         )
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
-        let consumerReferences = List[MetadataReference](references){project.Compilation.ToMetadataReference()}
+        using let peStream = System.IO.MemoryStream()
+        Assert.True(project.Compilation.Emit(peStream).Success)
+        let consumerReferences = List[MetadataReference](references)
+        consumerReferences.Add(MetadataReference.CreateFromImage(peStream.ToArray()))
         let benignConsumerProject = CSharpProjectLoader.LoadInMemory(
             [](string, source string){("BenignConsumer.cs", benignConsumerSource)},
             consumerReferences,
@@ -7868,7 +7927,7 @@ public class ConsumerProbe {
         }
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            47,
+            51,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7960,6 +8019,22 @@ public class ConsumerProbe {
         )
         Assert.Contains("open class NestedConditionalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class DeconstructDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class LiftedTupleDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class InferredDeconstructFixedDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "open class UnderscoreLocalDeconstructDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "open class FixedMethodGroupTargetDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
     }
 
     shared {

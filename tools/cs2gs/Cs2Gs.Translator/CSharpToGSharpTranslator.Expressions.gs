@@ -1487,27 +1487,56 @@ partial class CSharpToGSharpTranslator {
                             }
                         }
                     }
-                    if this
+                    if !this
                         .state
-                        .ManagedReferenceArrayNullable
-                        .ProjectedBaseTypesInProgress
-                        .Count > 0 &&
+                        .ManagedReferenceArrayProjectedLocalTypeInProgress
+                        .Contains(local) &&
                         local
                         .DeclaringSyntaxReferences
                         .FirstOrDefault()
                         ?.GetSyntax() is ForEachStatementSyntax forEach {
-                        let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
-                        if (forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity) &&
-                            this.GetProjectedForEachElementType(forEach, forEachInfo) is {} forEachElement &&
-                            this.GetProjectedBindingType(
-                            forEachElement,
-                            local.Type,
-                            forEachInfo.ElementConversion
-                        ) is {} projectedForEachType &&
-                            !SymbolEqualityComparer
-                            .IncludeNullability
-                            .Equals(local.Type, projectedForEachType) {
-                            return projectedForEachType
+                        this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Add(local)
+                        try {
+                            let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
+                            if (forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity) &&
+                                this.GetProjectedForEachElementType(forEach, forEachInfo) is {} forEachElement &&
+                                this.GetProjectedBindingType(
+                                forEachElement,
+                                local.Type,
+                                forEachInfo.ElementConversion
+                            ) is {} projectedForEachType &&
+                                !SymbolEqualityComparer
+                                .IncludeNullability
+                                .Equals(local.Type, projectedForEachType) {
+                                return projectedForEachType
+                            }
+                        } finally {
+                            this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Remove(local)
+                        }
+                    }
+                    if !this
+                        .state
+                        .ManagedReferenceArrayProjectedLocalTypeInProgress
+                        .Contains(local) &&
+                        local
+                        .DeclaringSyntaxReferences
+                        .FirstOrDefault()
+                        ?.GetSyntax() is SingleVariableDesignationSyntax designation {
+                        this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Add(local)
+                        try {
+                            if this.TryGetProjectedSingleDesignationType(
+                                local,
+                                designation
+                            ) is {} projectedDesignationType &&
+                                CSharpToGSharpTranslator
+                                .TypeContainsRecognizedManagedReferenceConsumer(
+                                projectedDesignationType,
+                                this.context.Compilation
+                            ) {
+                                return projectedDesignationType
+                            }
+                        } finally {
+                            this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Remove(local)
                         }
                     }
                 }
@@ -1720,11 +1749,7 @@ partial class CSharpToGSharpTranslator {
                 this.GetManagedReferenceArrayProjectedExpressionType(
                 conditionalAccess.WhenNotNull
             ) is {} projectedWhenNotNull {
-                return if this.IsReferenceLikeOrManagedReference(projectedWhenNotNull) {
-                    projectedWhenNotNull.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
-                } else {
-                    projectedWhenNotNull
-                }
+                return this.LiftConditionalAccessProjectedType(projectedWhenNotNull)
             }
             var receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
             var memberSymbol ISymbol?
@@ -1756,7 +1781,6 @@ partial class CSharpToGSharpTranslator {
             let projectedMemberType ITypeSymbol? = switch this.GetProjectedMember(receiverType, memberSymbol) {
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
-                case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
             }
             let substitutedMemberType ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
@@ -1771,6 +1795,16 @@ partial class CSharpToGSharpTranslator {
             } else {
                 default(ITypeSymbol?)
             }
+        }
+
+        private func LiftConditionalAccessProjectedType(type ITypeSymbol) ITypeSymbol {
+            if this.IsReferenceLikeOrManagedReference(type) {
+                return type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+            }
+            if type.IsValueType && type.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T {
+                return this.context.Compilation.GetSpecialType(SpecialType.System_Nullable_T).Construct(type)
+            }
+            return type
         }
 
         private func SubstituteProjectedContainingTypeParameter(
@@ -2345,6 +2379,13 @@ partial class CSharpToGSharpTranslator {
                     if SymbolEqualityComparer.Default.Equals(
                         candidate.OriginalDefinition,
                         memberSymbol!!.OriginalDefinition
+                    ) ||
+                        (
+                        candidate is IFieldSymbol{CorrespondingTupleField: {} candidateTupleField} &&
+                            memberSymbol is IFieldSymbol{CorrespondingTupleField: {} memberTupleField} &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(candidateTupleField.OriginalDefinition, memberTupleField.OriginalDefinition)
                     ) ||
                         (
                         SameTypeDefinition(candidate.ContainingType, memberSymbol!!.ContainingType) &&
@@ -9567,12 +9608,20 @@ partial class CSharpToGSharpTranslator {
             // Whether `local` is declared `var` (its G# type is inferred from its
             // initializer rather than spelled).
             private func IsImplicitlyTypedLocal(local ILocalSymbol?) bool -> local!!.DeclaringSyntaxReferences.Any(
-                (reference SyntaxReference) -> (
-                    reference.GetSyntax() is VariableDeclaratorSyntax and
-                        {
-                        Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax and {Type: {IsVar: true}}
-                    }
-                )
+                (reference SyntaxReference) -> switch reference.GetSyntax() {
+                    case VariableDeclaratorSyntax{
+                        Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax{Type: {IsVar: true}}
+                    }: true
+                    case SingleVariableDesignationSyntax designation: designation
+                        .Ancestors()
+                        .OfType[DeclarationExpressionSyntax]()
+                        .FirstOrDefault() is {Type: {IsVar: true}} declaration &&
+                        (
+                        declaration.Designation is ParenthesizedVariableDesignationSyntax ||
+                            declaration.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax}
+                    )
+                    default: false
+                }
             )
 
             // Whether `value` is (through parentheses) an arm of a conditional or a
