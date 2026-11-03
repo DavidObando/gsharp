@@ -2072,7 +2072,10 @@ internal class LambdaBinder {
         )
         let needsValueTypeExtensionAdapter = function.IsExtension &&
             group.Receiver != nil &&
-            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type)
+            (
+            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type) ||
+                (group.Receiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
+        )
         if function.HiddenContextParameter == nil &&
             function.SuspendingKind != SuspendingKind.Inferred &&
             !needsValueTypeExtensionAdapter {
@@ -2102,7 +2105,42 @@ internal class LambdaBinder {
             )
         )
         if function.IsExtension && adapterReceiver != nil {
-            arguments.Add(adapterReceiver)
+            var receiverArgument BoundExpression = adapterReceiver
+            if !function.Parameters.IsDefaultOrEmpty {
+                var receiverParameterType = if group.StaticOwnerType != nil &&
+                    function.StaticOwnerType is StructSymbol declaredOwner {
+                    TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+                        ?.SubstituteMemberType(function.Parameters[0].Type) ?? function.Parameters[0].Type
+                } else {
+                    function.Parameters[0].Type
+                }
+                if function.IsGeneric &&
+                    !group
+                    .MethodTypeArguments
+                    .IsDefaultOrEmpty &&
+                    group
+                    .MethodTypeArguments
+                    .Length == function
+                    .TypeParameters
+                    .Length {
+                    let substitution = Dictionary[TypeParameterSymbol, TypeSymbol](function.TypeParameters.Length)
+                    for var i = 0; i < function.TypeParameters.Length; i++ {
+                        substitution[function.TypeParameters[i]] = group.MethodTypeArguments[i]
+                    }
+                    receiverParameterType = Binder.SubstituteType(receiverParameterType, substitution)
+                }
+                if function.Parameters[0].RefKind != RefKind.None {
+                    receiverArgument = BoundAddressOfExpression(
+                        nil,
+                        receiverArgument,
+                        unmanaged: false,
+                        isReadOnly: function.Parameters[0].RefKind == RefKind.In
+                    )
+                } else if !object.ReferenceEquals(receiverArgument.Type, receiverParameterType) {
+                    receiverArgument = BoundConversionExpression(nil, receiverParameterType, receiverArgument)
+                }
+            }
+            arguments.Add(receiverArgument)
         }
         for var i = 0; i < functionType.ParameterTypes.Length; i++ {
             let sourceParameterIndex = i +
@@ -2202,6 +2240,33 @@ internal class LambdaBinder {
                 )
             )
         }
+    }
+
+    private func IsKnownReferenceTypeParameter(typeParameter TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = typeParameter
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasReferenceTypeConstraint {
+                return true
+            }
+            if current.ClassConstraint is {} classConstraint &&
+                classConstraint != TypeSymbol.Object &&
+                classConstraint
+                .ClrType
+                ?.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
+                return true
+            }
+            let next = current.TypeParameterBound
+            if next == nil {
+                return false
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                return false
+            }
+            current = next
+        }
+        return false
     }
 
     /// For an async lambda's declared return type, computes the
