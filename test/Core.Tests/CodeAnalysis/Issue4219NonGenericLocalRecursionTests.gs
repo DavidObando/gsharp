@@ -419,9 +419,32 @@ class PlainBox {
             return fp(1)
         }
     }
+    func RunParentChildDelegate[U]() string {
+        let First = func(k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func(k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Parent[P] = func(p P, n int32) string {
+            let Child[V] = func(v V) string {
+                let fn (int32) -> string = First
+                return fn(n)
+            }
+            return Child(p)
+        }
+        return Parent(0, 1)
+    }
+    func RunCapturingIterator[U](prefix string) string {
+        let First = func(k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func(k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Iter = func() sequence[string] {
+            yield prefix + First(1)
+        }
+        for s in Iter() {
+            return s
+        }
+        return ""
+    }
 }
-"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}:${Box[string]().RunCapturingCallerOfPromotedDelegate[int32](1)}:${PlainBox().RunFunctionPointer[int32]()}"`)
+"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}:${Box[string]().RunCapturingCallerOfPromotedDelegate[int32](1)}:${PlainBox().RunFunctionPointer[int32]()}:${PlainBox().RunParentChildDelegate[string]()}:${PlainBox().RunCapturingIterator[string]("iter:")}"`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
-        Assert.Equal("42:String:Int32:Int32", result.Value)
+        Assert.Equal("42:String:Int32:Int32:String:iter:String", result.Value)
     }
 }

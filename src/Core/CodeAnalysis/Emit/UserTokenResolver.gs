@@ -213,7 +213,7 @@ internal class UserTokenResolver {
         for ownTp in ownTypeParameters {
             TypeSymbol.CollectReferencedTypeParameters(ownTp.ConstraintReferenceType, referenced)
         }
-        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedExtras)
+        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedOrClosureExtras)
         // Only an ENCLOSING type parameter gets cloned/promoted here — the
         // function's own declared type parameters (if any) already have a
         // valid MVar slot on this very method.
@@ -290,6 +290,13 @@ internal class UserTokenResolver {
         extras
     } else {
         ImmutableArray[TypeParameterSymbol].Empty
+    }
+
+    internal func GetPromotedOrClosureExtras(fn FunctionSymbol) ImmutableArray[TypeParameterSymbol] {
+        if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var extras) && !extras.IsDefaultOrEmpty {
+            return extras
+        }
+        return this.outer.closures.GetClosureReifiedTypeParameters(fn)
     }
 
     /// Issue #2118: resolves the `ldftn` target token for a non-capturing

@@ -108,6 +108,7 @@ internal class ClosureEmitter {
         lambdaBodies Dictionary[FunctionSymbol, BoundBlockStatement]
     ) {
         ClosureInfos = Dictionary[BoundFunctionLiteralExpression, ClosureInfo]()
+        ClosureInfosByFunction = Dictionary[FunctionSymbol, ClosureInfo](ReferenceEqualityComparer.Instance)
         GenericLocalClosures = Dictionary[FunctionSymbol, (Literal BoundFunctionLiteralExpression, Info ClosureInfo)]()
         GoClosureInfos = Dictionary[BoundGoStatement, ClosureInfo]()
         GoClosureInfosBySyntax = Dictionary[SyntaxNode, ClosureInfo](ReferenceEqualityComparer.Instance)
@@ -126,6 +127,10 @@ internal class ClosureEmitter {
     /// `enclosingClosure`) and by `BodyEmitter` itself (for the
     /// `EmitFunctionLiteral` path).
     prop ClosureInfos Dictionary[BoundFunctionLiteralExpression, ClosureInfo] {
+        get;
+    }
+
+    internal prop ClosureInfosByFunction Dictionary[FunctionSymbol, ClosureInfo] {
         get;
     }
 
@@ -317,6 +322,7 @@ internal class ClosureEmitter {
                     requiredTypeParameters: requiredTypeParameters
                 )
                 this.ClosureInfos[literal] = hostInfo
+                this.ClosureInfosByFunction[literal.Function] = hostInfo
                 if hostInfo.ClassSym.ContainingType == nil {
                     hostInfo.ClassSym.SetContainingType(zeroCaptureEnclosing)
                 }
@@ -359,6 +365,7 @@ internal class ClosureEmitter {
                 // Transfer the generic local's type parameters to the Invoke method
                 genericInfo.InvokeMethod.TypeParameters = literal.Function.TypeParameters
                 this.ClosureInfos[literal] = genericInfo
+                this.ClosureInfosByFunction[literal.Function] = genericInfo
                 this.GenericLocalClosures[literal.Function] = (literal, genericInfo)
                 // Nest inside enclosing type if accessible
                 if literal
@@ -393,6 +400,7 @@ internal class ClosureEmitter {
                 requiredTypeParameters: requiredClosureTypeParameters
             )
             this.ClosureInfos[literal] = info
+            this.ClosureInfosByFunction[literal.Function] = info
             // Issue #1335: a closure declared inside a member of a user type must
             // be able to reach that type's `protected`/`private` members (matching
             // C#, which nests display classes inside the containing type). Emitting
@@ -618,30 +626,35 @@ internal class ClosureEmitter {
         return info
     }
 
+    internal func GetClosureReifiedTypeParameters(fn FunctionSymbol) ImmutableArray[TypeParameterSymbol] {
+        if this.GenericLocalClosures.TryGetValue(fn, out var genericLocal) &&
+            !genericLocal
+            .Info
+            .ClassSym
+            .ReifiedFromTypeParameters
+            .IsDefaultOrEmpty {
+            return genericLocal.Info.ClassSym.ReifiedFromTypeParameters
+        }
+        if this.ClosureInfosByFunction.TryGetValue(fn, out var info) &&
+            !info
+            .ClassSym
+            .ReifiedFromTypeParameters
+            .IsDefaultOrEmpty {
+            return info.ClassSym.ReifiedFromTypeParameters
+        }
+        return ImmutableArray[TypeParameterSymbol].Empty
+    }
+
     internal func ReconcileClosureTypeParameters(
         getPromotedExtras(FunctionSymbol) -> ImmutableArray[TypeParameterSymbol]
-    ) {
+    ) bool {
         let allClosures = List[ClosureInfo](this.ClosureInfos.Count + this.GoClosureInfos.Count)
         allClosures.AddRange(this.ClosureInfos.Values)
         allClosures.AddRange(this.GoClosureInfos.Values)
         if allClosures.Count == 0 {
-            return
+            return false
         }
-        let getClosureAndPromotedExtras = (fn FunctionSymbol) -> {
-            let promoted = getPromotedExtras(fn)
-            if !promoted.IsDefaultOrEmpty {
-                return promoted
-            }
-            if this.GenericLocalClosures.TryGetValue(fn, out var genericLocal) &&
-                !genericLocal
-                .Info
-                .ClassSym
-                .ReifiedFromTypeParameters
-                .IsDefaultOrEmpty {
-                return genericLocal.Info.ClassSym.ReifiedFromTypeParameters
-            }
-            return ImmutableArray[TypeParameterSymbol].Empty
-        }
+        var anyChanged = false
         let maxPasses = Math.Max(4, allClosures.Count + 1)
         for var pass = 0; pass < maxPasses; pass++ {
             var changed = false
@@ -656,7 +669,7 @@ internal class ClosureEmitter {
                     originalBody,
                     info.RequiredTypeParameters,
                     info.ExcludedTypeParameters,
-                    getClosureAndPromotedExtras
+                    getPromotedExtras
                 )
                 let currentTPs = info.ClassSym.ReifiedFromTypeParameters
                 let currentCount = if currentTPs.IsDefault {
@@ -685,11 +698,13 @@ internal class ClosureEmitter {
                 let rewrittenBody = cast[BoundBlockStatement](rewriter.RewriteStatement(originalBody))
                 this.lambdaBodies[info.InvokeMethod] = cast[BoundBlockStatement](Lowerer.Lower(rewrittenBody))
                 changed = true
+                anyChanged = true
             }
             if !changed {
                 break
             }
         }
+        return anyChanged
     }
 
     private func CollectDisplayClassTypeParameters(

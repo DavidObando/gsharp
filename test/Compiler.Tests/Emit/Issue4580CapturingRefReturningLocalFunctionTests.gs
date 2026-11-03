@@ -239,6 +239,11 @@ class Box[T] {
         }
         return Caller()
     }
+    func RunCapturingFirstCallingPromotedSecond[U](prefix string) string {
+        let First = func () string { return prefix + Second() }
+        let Second = func () string { return typeof(U).Name }
+        return First()
+    }
 }
 
 class PlainBox {
@@ -249,6 +254,29 @@ class PlainBox {
             let fp = &First
             return cast[nint](fp) != 0 ? First(1) : ""
         }
+    }
+    func RunParentChildDelegate[U]() string {
+        let First = func (k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func (k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Parent[P] = func (p P, n int32) string {
+            let Child[V] = func (v V) string {
+                let fn (int32) -> string = First
+                return fn(n)
+            }
+            return Child(p)
+        }
+        return Parent(0, 1)
+    }
+    func RunCapturingIterator[U](prefix string) string {
+        let First = func (k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func (k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Iter = func () sequence[string] {
+            yield prefix + First(1)
+        }
+        for s in Iter() {
+            return s
+        }
+        return ""
     }
 }
 
@@ -275,10 +303,27 @@ Console.WriteLine(b.RunGenericRefAndDelegate([]string{"old"}, "new"))
 Console.WriteLine(b.RunCapturingRefWithNestedLambda([]int32{1}))
 Console.WriteLine(b.RunFunctionPointerToPromotedLocal())
 Console.WriteLine(b.RunCapturingCallerOfPromotedDelegate[int32](1))
+Console.WriteLine(b.RunCapturingFirstCallingPromotedSecond[int32]("p:"))
 Console.WriteLine(pb.RunFunctionPointer[int32]())
+Console.WriteLine(pb.RunParentChildDelegate[string]())
+Console.WriteLine(pb.RunCapturingIterator[string]("iter:"))
 Console.WriteLine(sb.RunGroup(4))
 Console.WriteLine(sb.RunRef([]int32{1}))`
-        let expected = string.Join(Environment.NewLine, "1", "35", "new", "77", "String", "Int32", "Int32", "1", "35") +
+        let expected = string.Join(
+            Environment.NewLine,
+            "1",
+            "35",
+            "new",
+            "77",
+            "String",
+            "Int32",
+            "p:Int32",
+            "Int32",
+            "String",
+            "iter:String",
+            "1",
+            "35"
+        ) +
             Environment.NewLine
         Assert.Equal(expected, CompileVerifyAndRun(Source))
     }
