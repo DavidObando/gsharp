@@ -1325,9 +1325,10 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   The walker does not model overload resolution. A call or an index access keeps a `ref` or `out` fact only when, for
   every candidate of the name with as many parameters as arguments, on every type the receiver can have (with the
   receiver's type arguments substituted), every by-value argument reaches the parameter at its position without a
-  conversion operator; which candidate the binder selects does not matter. An argument passed by reference, an
-  inline declaration (typed or not) and a function literal convert nothing, and a value does not bind a `ref` or `out`
-  parameter. A parameter that names a type parameter counts, since the walker does not infer type arguments. A callee
+  conversion operator; which candidate the binder selects does not matter. An argument passed by reference and an
+  inline declaration (typed or not) convert nothing, a function literal converts nothing only into a delegate or
+  function type (any other parameter type can take it through a conversion operator, #5663), and a value does not bind
+  a `ref` or `out` parameter. A parameter that names a type parameter counts, since the walker does not infer type arguments. A callee
   whose candidates the walker cannot list (a receiver that it does not resolve, an imported base interface with a
   method of the name, a method that only an extension can supply), a variadic or `params` candidate (its expanded
   form converts each argument to the element type, at any arity), a candidate with an optional parameter at another
