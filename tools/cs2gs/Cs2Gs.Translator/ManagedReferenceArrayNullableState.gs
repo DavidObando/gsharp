@@ -59,6 +59,7 @@ internal class ProjectedBaseCompilationIndex {
     init() {
         MemberConsumersByCandidate = Dictionary[INamedTypeSymbol, List[SyntaxNode]](SymbolEqualityComparer.Default)
         ConversionsByCandidate = Dictionary[INamedTypeSymbol, List[ExpressionSyntax]](SymbolEqualityComparer.Default)
+        DerivedTypesByCandidate = Dictionary[INamedTypeSymbol, List[INamedTypeSymbol]](SymbolEqualityComparer.Default)
         ReplacementsByType = Dictionary[INamedTypeSymbol, IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]?](
             SymbolEqualityComparer.Default
         )
@@ -69,6 +70,10 @@ internal class ProjectedBaseCompilationIndex {
     }
 
     prop ConversionsByCandidate Dictionary[INamedTypeSymbol, List[ExpressionSyntax]] {
+        get;
+    }
+
+    prop DerivedTypesByCandidate Dictionary[INamedTypeSymbol, List[INamedTypeSymbol]] {
         get;
     }
 

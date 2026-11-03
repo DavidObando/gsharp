@@ -7314,12 +7314,14 @@ public class Base<T> {
     public void Add(T value) { this.stored = value; }
     public T Get() => this.stored;
     public U Echo<U>(U value) => value;
+    public T Id<U>(T value, U tag) => value;
 }
 public class Derived : Base<ManagedRef<int>> {
     public void BaseAdd(ManagedRef<int>[] items) => base.Add(items[0]);
     public int BaseRead() => base.Get().Borrow();
 }
 public class SubDerived : Derived { }
+public class NestedCallDerived : Base<ManagedRef<int>> { }
 public class GenericDerived<T> : Base<T> { }
 public class OpenDerived<U> : Base<ManagedRef<U>> { }
 public class TupleDerived<U> : Base<(ManagedRef<U> Reference, U Value)> { }
@@ -7328,6 +7330,7 @@ public class Probe {
         var emptySource = new ManagedRef<int>[1];
         new Derived().BaseAdd(emptySource);
         new SubDerived().Add(emptySource[0]);
+        new NestedCallDerived().Add(new NestedCallDerived().Id<int>(emptySource[0], 0));
         new GenericDerived<ManagedRef<int>>().Add(emptySource[0]);
         var genericLocal = new GenericDerived<ManagedRef<int>>();
         genericLocal.Add(emptySource[0]);
@@ -7361,6 +7364,7 @@ public class Probe {
         Assert.Empty(context.Diagnostics)
         Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class SubDerived : Derived", text, StringComparison.Ordinal)
+        Assert.Contains("open class NestedCallDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class OpenDerived[U] : Base[managed[U]?]", text, StringComparison.Ordinal)
         Assert.Contains(
             "open class TupleDerived[U] : Base[(Reference managed[U]?, Value U)]",
@@ -7370,6 +7374,11 @@ public class Probe {
         Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
         Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "NestedCallDerived().Add(NestedCallDerived().Id[int32](emptySource[0], 0))",
+            text,
+            StringComparison.Ordinal
+        )
         Assert.Contains("GenericDerived[managed[int32]?]().Add(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains("OpenDerived[int32]().Add(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains("OpenDerived[int64]().Add(emptyLongSource[0])", text, StringComparison.Ordinal)
@@ -7390,11 +7399,14 @@ public class Probe {
         const source = `using System.Collections.Generic;
 using Gsharp.Values;
 namespace ManagedArrayInheritedGenericBaseFixedDestination;
-public class Box<T> { }
+public class Box<T> {
+    public Box() { }
+    public Box(T[] items) { }
+}
 public class Base<T> {
     public Base() { }
     public Base(ref T value) { }
-    public void Add(T value) { }
+    public virtual void Add(T value) { }
     public void Use(Box<T> box) { }
 }
 public class Derived : Base<ManagedRef<int>> { }
@@ -7407,11 +7419,25 @@ public class ByRefCtorDerived : Base<ManagedRef<int>> {
 public class PrimaryByRefCtorDerived(ref ManagedRef<int> value) : Base<ManagedRef<int>>(ref value);
 public class ListCovariantDerived : Base<ManagedRef<int>> { }
 public class ArrayCovariantDerived : Base<ManagedRef<int>> { }
+public class OwnGenericDerived<U> : Base<ManagedRef<int>> {
+    public void Own(U value) { }
+}
+public class FixedMemberDerived : Base<ManagedRef<int>> {
+    public Box<ManagedRef<int>> Fixed = new();
+}
+public class OverrideParentDerived : Base<ManagedRef<int>> { }
+public class OverrideChildDerived : OverrideParentDerived {
+    public override void Add(ManagedRef<int> value) { }
+}
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
 
-    public static void Run(bool flag, ref ManagedRef<int> nonNullRef) {
+    public static void Run(
+        bool flag,
+        ref ManagedRef<int> nonNullRef,
+        OwnGenericDerived<ManagedRef<int>> ownDerived
+    ) {
         var source = new ManagedRef<int>[1];
         var derived = new Derived();
         AcceptFixed(derived);
@@ -7443,6 +7469,15 @@ public class Probe {
 
         Base<ManagedRef<int>>[] arrayView = new ArrayCovariantDerived[1];
         new ArrayCovariantDerived().Add(source[0]);
+
+        ownDerived.Add(source[0]);
+        ownDerived.Own(source[0]);
+
+        var fixedMember = new FixedMemberDerived();
+        fixedMember.Add(source[0]);
+        fixedMember.Fixed = new Box<ManagedRef<int>>(source);
+
+        new OverrideParentDerived().Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7457,10 +7492,17 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            8,
+            10,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
+            )
+        )
+        Assert.Equal(
+            1,
+            context.Diagnostics.Count(
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
+                    diagnostic.Message!!.Contains("fixed destination storage", StringComparison.Ordinal)
             )
         )
         Assert.Contains("open class Derived : Base[managed[int32]]", text, StringComparison.Ordinal)
@@ -7475,6 +7517,9 @@ public class Probe {
         )
         Assert.Contains("open class ListCovariantDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class ArrayCovariantDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class OwnGenericDerived[U] : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class FixedMemberDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class OverrideParentDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

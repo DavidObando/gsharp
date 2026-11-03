@@ -28,6 +28,8 @@ class TranslationContext {
         (Id string?, Tree SyntaxTree?, Start int32, Length int32, Discriminator string?, Message string?)
     ] = HashSet[(Id string?, Tree SyntaxTree?, Start int32, Length int32, Discriminator string?, Message string?)]()
 
+    private var suppressDiagnosticsDepth int32
+
     // Issue #1910: a partial type's other declarations live in different
     // `SyntaxTree`s than the one this context was created for, so resolving a
     // symbol on one of their members requires a `SemanticModel` bound to THAT
@@ -188,6 +190,9 @@ class TranslationContext {
         if diagnostic == nil {
             throw ArgumentNullException("diagnostic")
         }
+        if this.suppressDiagnosticsDepth > 0 {
+            return
+        }
         let location Location? = diagnostic.Location
         if location?.SourceTree == nil || diagnostic.DiagnosticId == nil {
             this.diagnostics.Add(diagnostic)
@@ -216,6 +221,9 @@ class TranslationContext {
         if diagnostic == nil {
             throw ArgumentNullException("diagnostic")
         }
+        if this.suppressDiagnosticsDepth > 0 {
+            return
+        }
         this.diagnostics.Add(diagnostic)
     }
 
@@ -230,6 +238,9 @@ class TranslationContext {
     func ReportUnsupported(node SyntaxNode?, message string?, diagnosticId string? = nil) {
         if node == nil {
             throw ArgumentNullException("node")
+        }
+        if this.suppressDiagnosticsDepth > 0 {
+            return
         }
         // The exhaustiveness choke point (ADR-0138): a kind registered in
         // UnsupportedByDesign is a recorded design decision; anything else is
@@ -247,6 +258,27 @@ class TranslationContext {
             diagnostic.Rationale = rationale
         }
         this.diagnostics.Add(diagnostic)
+    }
+
+    internal func SuspendDiagnostics() IDisposable {
+        this.suppressDiagnosticsDepth++
+        return RestoreDiagnosticsScope(this)
+    }
+
+    private class RestoreDiagnosticsScope : IDisposable {
+        private let owner TranslationContext
+        private var disposed bool
+
+        init(owner TranslationContext) {
+            this.owner = owner
+        }
+
+        func Dispose() {
+            if !this.disposed {
+                this.disposed = true
+                this.owner.suppressDiagnosticsDepth--
+            }
+        }
     }
 
     private class RestoreModelScope : IDisposable {
