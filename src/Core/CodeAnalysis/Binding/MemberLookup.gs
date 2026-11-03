@@ -195,7 +195,10 @@ internal class MemberLookup {
                 let parameterTypes = ImmutableArray.CreateBuilder[TypeSymbol](boundArguments.Length)
                 var candidateApplicable = true
                 for var i = 0; i < boundArguments.Length; i++ {
-                    let parameterType = GetIndexerParameterTypeSymbol(targetType, property, i)
+                    var parameterType = GetIndexerParameterTypeSymbol(targetType, property, i)
+                    if TypeSymbol.TryGetPointeeType(parameterType, out var pointeeType) {
+                        parameterType = pointeeType
+                    }
                     parameterTypes.Add(parameterType)
                     let conversion = ClassifySymbolicIndexerConversion(boundArguments[i], parameterType)
                     if !conversion.IsImplicit {
@@ -5083,11 +5086,12 @@ internal class MemberLookup {
                 return false
             }
             for var i = 0; i < clrParameters.Length; i++ {
+                var slotParameterType = GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)
+                if slotParameterType is ByRefTypeSymbol slotParameterByRef {
+                    slotParameterType = slotParameterByRef.PointeeType
+                }
                 if property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i]) ||
-                    !SameTypeSymbol(
-                    property.Parameters[i].Type,
-                    GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)
-                ) {
+                    !SameTypeSymbol(property.Parameters[i].Type, slotParameterType) {
                     return false
                 }
             }
@@ -7064,7 +7068,10 @@ internal class MemberLookup {
                 return false
             }
             for var i = 0; i < firstParameters.Length; i++ {
-                if !SameTypeSymbol(
+                if RefCapabilities.GetParameterRefKind(firstParameters[i]) != RefCapabilities.GetParameterRefKind(
+                    secondParameters[i]
+                ) ||
+                    !SameTypeSymbol(
                     GetIndexerParameterTypeSymbol(targetType, first, i),
                     GetIndexerParameterTypeSymbol(targetType, second, i)
                 ) {
@@ -7119,7 +7126,11 @@ internal class MemberLookup {
             IsImplicit bool,
             IsIdentity bool
         ) {
-            let conversion = ClassifySymbolicIndexerConversion(source.Type, target)
+            var sourceType = source.Type
+            if TypeSymbol.TryGetPointeeType(sourceType, out var pointeeType) {
+                sourceType = pointeeType
+            }
+            let conversion = ClassifySymbolicIndexerConversion(sourceType, target)
             return if !conversion.IsImplicit && ExpressionBinder.IsImplicitConstantNarrowingArgument(source, target) {
                 (true, false)
             } else {

@@ -943,6 +943,9 @@ internal partial class OverloadResolver {
             // #4422: apply them here too, so a candidate whose storage type
             // the by-ref gate would reject is not selected over one it
             // accepts (`ref int32` versus `ref int32?` for `int32?` storage).
+            // Issue #4421: when an `in` parameter is given a plain value (omitted
+            // `in`), it converts by value first, so fall through to the ordinary
+            // convertibility check below.
             if parameter.RefKind != RefKind.None {
                 if ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
                     let byRefParameterType = if substitution != nil {
@@ -954,8 +957,11 @@ internal partial class OverloadResolver {
                         ByRefStorageMatching.IsExactStorageMatch(storageType, byRefParameterType) == nil {
                         return false
                     }
+                    continue
                 }
-                continue
+                if parameter.RefKind != RefKind.In {
+                    continue
+                }
             }
             let argType TypeSymbol? = boundArguments[i]?.Type
             var paramType TypeSymbol? = parameter.Type

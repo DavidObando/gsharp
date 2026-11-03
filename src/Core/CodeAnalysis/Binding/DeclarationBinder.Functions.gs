@@ -18,6 +18,57 @@ import GSharp.Core.CodeAnalysis
 import System.Threading
 
 internal partial class DeclarationBinder {
+    private func BindIndexerParameters(propSyntax PropertyDeclarationSyntax) ImmutableArray[ParameterSymbol] {
+        let indexerParamBuilder = ImmutableArray.CreateBuilder[ParameterSymbol]()
+        let seenIndexParamNames = HashSet[string]()
+        for indexParamSyntax in propSyntax.Parameters {
+            // ADR-0185: an indexer's parameters never come from
+            // the destructured arrow-lambda path.
+            let indexParamName = indexParamSyntax.Identifier!!.ValueText
+            let indexParamType = if indexParamSyntax.Type is {} indexParamTypeSyntax {
+                bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
+            } else {
+                TypeSymbol.Error
+            }
+            // Issue #4421: validate ref-kind modifiers on indexer parameters.
+            // C# permits `in` on indexer parameters and rejects `ref` and `out` (CS0631).
+            var indexParamRefKind = conversions.BindAndValidateParameterRefKind(
+                indexParamSyntax,
+                indexParamName,
+                indexParamType,
+                isVariadic: indexParamSyntax.IsVariadic,
+                asyncOrIteratorKind: nil
+            )
+            if indexParamRefKind == RefKind.Ref || indexParamRefKind == RefKind.Out {
+                Diagnostics.ReportRefOrOutOnIndexerParameter(
+                    indexParamSyntax.RefKindModifier?.Location ?? indexParamSyntax.Location,
+                    refKindToString(indexParamRefKind),
+                    indexParamName
+                )
+                indexParamRefKind = RefKind.None
+            }
+            if !seenIndexParamNames.Add(indexParamName) {
+                Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName)
+            }
+            let indexerParam = ParameterSymbol(
+                indexParamName,
+                indexParamType,
+                declaringSyntax: indexParamSyntax.Identifier,
+                isScoped: indexParamSyntax.IsScoped,
+                refKind: indexParamRefKind
+            )
+            // Issue #1913: indexer parameters can carry `@Attr`
+            // annotations same as any other parameter list.
+            BindAndAttachParameterAttributes(indexParamSyntax, indexerParam)
+            // Issue #4350 (review): an indexer parameter may declare
+            // a default (`this[row int32, column int32 = 0]`), which
+            // was previously dropped silently.
+            conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
+            indexerParamBuilder.Add(indexerParam)
+        }
+        return indexerParamBuilder.ToImmutable()
+    }
+
     internal func BindFunctionDeclaration(syntax FunctionDeclarationSyntax, $package PackageSymbol) {
         // ADR-0122 / issue #1014: an `unsafe func` is bound entirely within an
         // unsafe context so its parameter / return types may be unmanaged raw
@@ -2676,7 +2727,12 @@ internal partial class DeclarationBinder {
                 }
                 var parametersMatch = true
                 for var i = 0; i < iprop.Parameters.Length; i++ {
-                    if !ConformanceSignaturesEquivalent(
+                    if iprop
+                        .Parameters[i]
+                        .RefKind != candidate
+                        .Parameters[i]
+                        .RefKind ||
+                        !ConformanceSignaturesEquivalent(
                         iprop.Parameters[i].Type,
                         candidate.Parameters[i].Type,
                         typeParamMap
@@ -2968,9 +3024,32 @@ internal partial class DeclarationBinder {
                     }
                 }
             }
+            for level in baseClass.GetHierarchy() {
+                for candidate in level.Properties {
+                    if candidate.IsIndexer && HaveSameIndexerParameterTypes(candidate.Parameters, indexerParameters) {
+                        baseProperty = candidate
+                        return true
+                    }
+                }
+            }
             // Keep the historical name-based answer so a signature mismatch still
             // reports the override-signature diagnostic instead of "no base".
             return TypeMemberModel.TryGetProperty(baseClass, propName, out baseProperty)
+        }
+
+        private func HaveSameIndexerParameterTypes(
+            left ImmutableArray[ParameterSymbol],
+            right ImmutableArray[ParameterSymbol]
+        ) bool {
+            if left.Length != right.Length {
+                return false
+            }
+            for var i = 0; i < left.Length; i++ {
+                if !TypeSignaturesEquivalent(left[i].Type, right[i].Type) {
+                    return false
+                }
+            }
+            return true
         }
 
         /// Issue #4481: whether an override property's type conforms to the base

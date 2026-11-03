@@ -325,6 +325,113 @@ Take(in x)
         Assert.Equal(6, result.Value)
     }
 
+    @Fact
+    func UserIndexer_InParameter_BindsExplicitAndOmittedInForGetSetAndCompound() {
+        let result = Evaluate(`
+interface IGrid {
+    prop this[in i int32] int32 { get; set; }
+}
+
+class Grid : IGrid {
+    var cells []int32 = []int32{10, 20, 30}
+
+    prop this[in i int32] int32 {
+        get { return cells[i] }
+        set { cells[i] = value }
+    }
+
+    prop this[in row int32, col int32 = 1] int32 {
+        get { return cells[row + col] }
+        set { cells[row + col] = value }
+    }
+}
+
+let g = Grid()
+let ig IGrid = g
+var idx = 0
+g[in idx] = 15
+g[idx] += 5
+let a = g[in idx] + ig[idx] + g[1]
+g[in idx, 2] = 40
+g[idx, 2] += 2
+let b = g[in idx, 2] + g[1, 1]
+a * 100 + b
+`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        // a = 20 + 20 + 20 = 60; b = 42 + 42 = 84 -> 6084
+        Assert.Equal(6084, result.Value)
+    }
+
+    @Fact
+    func UserIndexer_InParameterIsReadOnlyInAccessorBody_ReportsGS0237() {
+        let result = Evaluate(`
+class Idx {
+    prop this[in i int32] int32 {
+        get {
+            i = 1
+            return i
+        }
+    }
+}
+0
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0237")
+    }
+
+    @Fact
+    func UserIndexer_RefAndOutParameters_ReportGS0633() {
+        let sources = []string{`
+class Idx {
+    prop this[ref i int32] int32 -> i
+}
+0
+`, `
+struct SIdx {
+    prop this[out i int32] int32 {
+        get { return 0 }
+    }
+}
+0
+`, `
+interface IIdx {
+    prop this[ref i int32] int32 { get; }
+}
+0
+`}
+        for source in sources {
+            let result = Evaluate(source)
+            let diag = Assert.Single(result.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0633"))
+            Assert.True(diag.Location.Span.Length == 3)
+        }
+    }
+
+    @Fact
+    func UserIndexer_OverrideAndInterfaceRefKindMismatch_ReportsGS0240() {
+        let overrideMismatch = Evaluate(`
+open class Base {
+    open prop this[in i int32] int32 -> i
+}
+
+class Derived : Base {
+    override prop this[i int32] int32 -> i
+}
+0
+`)
+        Assert.Contains(overrideMismatch.Diagnostics, (d Diagnostic) -> d.Id == "GS0240")
+
+        let ifaceMismatch = Evaluate(`
+interface IIdx {
+    prop this[in i int32] int32 { get; }
+}
+
+class Impl : IIdx {
+    prop this[i int32] int32 -> i
+}
+0
+`)
+        Assert.Contains(ifaceMismatch.Diagnostics, (d Diagnostic) -> d.Id == "GS0240")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

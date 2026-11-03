@@ -1564,7 +1564,7 @@ internal partial class ExpressionBinder {
             let BindAll = func () ImmutableArray[BoundExpression] {
                 let bound = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
                 for indexSyntax in indexSyntaxes {
-                    bound.Add(BindExpression(indexSyntax))
+                    bound.Add(BindIndexArgumentExpression(indexSyntax))
                 }
                 return bound.MoveToImmutable()
             }
@@ -1583,11 +1583,14 @@ internal partial class ExpressionBinder {
                     ViewIndexerReceiver(target, multiView, targetLocation),
                     multiIndexer!!,
                     multiSubstitution,
-                    (i int32, parameterType TypeSymbol) -> if multiArguments.IsDefault {
-                        conversions.BindConversion(indexSyntaxes[i], parameterType)
-                    } else {
-                        conversions.BindConversion(indexSyntaxes[i].Location, multiArguments[i], parameterType)
-                    },
+                    (i int32, parameterType TypeSymbol) -> BindUserIndexerArgument(
+                        indexSyntaxes[i],
+                        multiArguments,
+                        nil,
+                        multiIndexer!!.Parameters[i],
+                        parameterType,
+                        i
+                    ),
                     targetLocation,
                     indexSyntaxes.Count
                 )
@@ -1607,7 +1610,7 @@ internal partial class ExpressionBinder {
             // overload resolution as a single index.
             let multiClrArguments = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
             for indexSyntax in indexSyntaxes {
-                multiClrArguments.Add(BindExpression(indexSyntax))
+                multiClrArguments.Add(BindIndexArgumentExpression(indexSyntax))
             }
             let multiOutcome = this.memberLookup.TryResolveClrIndexer(
                 target.Type,
@@ -1631,7 +1634,8 @@ internal partial class ExpressionBinder {
                     target.Type,
                     multiClrIndexer,
                     multiResolvedArguments,
-                    targetLocation
+                    targetLocation,
+                    indexSyntaxes
                 )
                 return ConversionClassifier.AutoDereferenceRefReturn(
                     BoundClrIndexExpression(nil, target, multiClrIndexer, convertedArguments, elementType)
@@ -1804,7 +1808,7 @@ internal partial class ExpressionBinder {
         if boundIndex == nil &&
             !(indexSyntax is DefaultExpressionSyntax) &&
             !(indexSyntax is InterpolatedStringExpressionSyntax) {
-            boundIndex = BindExpression(indexSyntax)
+            boundIndex = BindIndexArgumentExpression(indexSyntax)
             if boundIndex is BoundErrorExpression {
                 return boundIndex
             }
@@ -1823,7 +1827,7 @@ internal partial class ExpressionBinder {
             }
         }
         let BoundIndexArg = func () BoundExpression {
-            return boundIndex ?? BindExpression(indexSyntax)
+            return boundIndex ?? BindIndexArgumentExpression(indexSyntax)
         }
         // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
         // The Go convention "zero value if missing" applies at evaluation;
@@ -1895,7 +1899,8 @@ internal partial class ExpressionBinder {
                         clrIndexConstraint,
                         idxProp!!,
                         resolvedIdxArgs,
-                        indexSyntax.Location
+                        indexSyntax.Location,
+                        singleIndexSyntax: indexSyntax
                     )
                     return ConversionClassifier.AutoDereferenceRefReturn(
                         BoundClrIndexExpression(
@@ -1937,7 +1942,8 @@ internal partial class ExpressionBinder {
                     target.Type,
                     idxPropAnnot!!,
                     resolvedIdxArgsAnnot,
-                    indexSyntax.Location
+                    indexSyntax.Location,
+                    singleIndexSyntax: indexSyntax
                 )
                 return ConversionClassifier.AutoDereferenceRefReturn(
                     BoundClrIndexExpression(nil, target, idxPropAnnot!!, convertedIdxArgsAnnot, elemTypeAnnot)
@@ -1973,7 +1979,8 @@ internal partial class ExpressionBinder {
                     target.Type,
                     idxProp!!,
                     resolvedIdxArgs,
-                    indexSyntax.Location
+                    indexSyntax.Location,
+                    singleIndexSyntax: indexSyntax
                 )
                 return ConversionClassifier.AutoDereferenceRefReturn(
                     BoundClrIndexExpression(nil, target, idxProp!!, convertedIdxArgs, elementType)
@@ -2025,11 +2032,14 @@ internal partial class ExpressionBinder {
                     ViewIndexerReceiver(target, readView, targetLocation),
                     readIndexer!!,
                     readSubstitution,
-                    (_ int32, parameterType TypeSymbol) -> if readArguments.IsDefault {
-                        ConvertIndex(parameterType)
-                    } else {
-                        conversions.BindConversion(indexSyntax.Location, readArguments[0], parameterType)
-                    },
+                    (i int32, parameterType TypeSymbol) -> BindUserIndexerArgument(
+                        indexSyntax,
+                        readArguments,
+                        boundIndex,
+                        readIndexer!!.Parameters[i],
+                        parameterType,
+                        i
+                    ),
                     targetLocation,
                     writtenArgumentCount: 1
                 )
@@ -2319,7 +2329,7 @@ internal partial class ExpressionBinder {
             } else if sharedIndex == nil &&
                 !(indexSyntax is DefaultExpressionSyntax) &&
                 !(indexSyntax is RangeExpressionSyntax) {
-                let boundIndex = BindExpression(indexSyntax)
+                let boundIndex = BindIndexArgumentExpression(indexSyntax)
                 if boundIndex is BoundErrorExpression {
                     return boundIndex
                 }
@@ -2552,8 +2562,7 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out capturedIndex BoundExpression?
     ) bool {
         let Capture = func (argument BoundExpression) BoundExpression {
-            let indexLocal = DeclareRangeTemp("index", argument.Type, argument, statements)
-            return BoundVariableExpression(nil, indexLocal)
+            return CaptureUserIndexerArgument(argument, statements)
         }
         switch indexRead {
             case clrIndex is BoundClrIndexExpression when clrIndex.Arguments.Length == 1 {
@@ -2588,13 +2597,13 @@ internal partial class ExpressionBinder {
                 indexRead = BoundIndexExpression(nil, builtInIndex.Target, capturedIndex!!, builtInIndex.Type)
                 return true
             }
-            case userIndex is BoundUserInstanceCallExpression when userIndex.Arguments.Length == 1 {
+            case userIndex is BoundUserInstanceCallExpression when userIndex.Arguments.Length >= 1 {
                 capturedIndex = Capture(userIndex.Arguments[0])
                 indexRead = BoundUserInstanceCallExpression(
                     nil,
                     userIndex.Receiver,
                     userIndex.Method,
-                    ImmutableArray.Create(capturedIndex!!),
+                    userIndex.Arguments.SetItem(0, capturedIndex!!),
                     userIndex.Type,
                     userIndex.ConstrainedReceiverTypeParameter,
                     userIndex.ConstrainedInterfaceType
@@ -2770,13 +2779,11 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
                 return BoundErrorExpression(indexSyntax)
             }
-            let indexName = "<idxAsnIndex${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-            let capturedIndex = LocalVariableSymbol(indexName, isReadOnly: true, index.Type)
-            $scope.TryDeclareVariable(capturedIndex)
+            let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+            let indexRead = CaptureUserIndexerArgument(index, statements)
             let resultName = "<idxAsnValue${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let result = LocalVariableSymbol(resultName, isReadOnly: true, elementType)
             $scope.TryDeclareVariable(result)
-            let indexRead = BoundVariableExpression(nil, capturedIndex)
             let resultRead = BoundVariableExpression(nil, result)
             let call = BoundUserInstanceCallExpression(
                 nil,
@@ -2784,15 +2791,9 @@ internal partial class ExpressionBinder {
                 setter,
                 trailingDefaults.Insert(0, indexRead).Add(resultRead)
             )
-            return BoundBlockExpression(
-                nil,
-                ImmutableArray.Create[BoundStatement](
-                    BoundVariableDeclaration(nil, capturedIndex, index),
-                    BoundVariableDeclaration(nil, result, value),
-                    BoundExpressionStatement(nil, call)
-                ),
-                resultRead
-            )
+            statements.Add(BoundVariableDeclaration(nil, result, value))
+            statements.Add(BoundExpressionStatement(nil, call))
+            return BoundBlockExpression(nil, statements.ToImmutable(), resultRead)
         }
         let BindValue = func (elementType TypeSymbol) BoundExpression {
             if boundValueOverride != nil {
@@ -2837,7 +2838,7 @@ internal partial class ExpressionBinder {
             )
         }
         let BindIndexValue = func () BoundExpression {
-            return boundIndexOverride ?? BindExpression(indexSyntax)
+            return boundIndexOverride ?? BindIndexArgumentExpression(indexSyntax)
         }
         let ConvertIndexValue = func (targetType TypeSymbol) BoundExpression {
             return if boundIndexOverride != nil {
@@ -2918,7 +2919,8 @@ internal partial class ExpressionBinder {
                         clrIndexConstraint,
                         idxProp!!,
                         resolvedIdxArgs,
-                        indexSyntax.Location
+                        indexSyntax.Location,
+                        singleIndexSyntax: indexSyntax
                     )
                     return MakeClrIndexAssignment(
                         idxProp!!,
@@ -2955,7 +2957,8 @@ internal partial class ExpressionBinder {
                     targetType,
                     idxPropAnnotWr!!,
                     resolvedIdxArgsAnnotWr,
-                    indexSyntax.Location
+                    indexSyntax.Location,
+                    singleIndexSyntax: indexSyntax
                 )
                 return MakeClrIndexAssignment(
                     idxPropAnnotWr!!,
@@ -2983,7 +2986,8 @@ internal partial class ExpressionBinder {
                     targetType,
                     idxProp!!,
                     resolvedIdxArgs,
-                    indexSyntax.Location
+                    indexSyntax.Location,
+                    singleIndexSyntax: indexSyntax
                 )
                 // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
                 // indexer is a `ref T`-returning getter and writes go through that
@@ -3102,11 +3106,21 @@ internal partial class ExpressionBinder {
                 let selectedIndexer = writeIndexer
                 let paramType = SubstituteIndexerType(selectedIndexer!!.Parameters[0].Type, writeSubstitution)
                 let ConvertWriteIndex = func () BoundExpression {
-                    return if writeArguments.IsDefault {
-                        ConvertIndexValue(paramType)
-                    } else {
-                        conversions.BindConversion(indexSyntax.Location, writeArguments[0], paramType)
+                    if boundIndexOverride != nil &&
+                        selectedIndexer!!
+                        .Parameters[0]
+                        .RefKind == RefKind.In &&
+                        boundIndexOverride is BoundAddressOfExpression {
+                        return boundIndexOverride
                     }
+                    return BindUserIndexerArgument(
+                        indexSyntax,
+                        writeArguments,
+                        boundIndexOverride,
+                        selectedIndexer!!.Parameters[0],
+                        paramType,
+                        argumentIndex: 0
+                    )
                 }
                 if selectedIndexer!!.SetterSymbol == nil {
                     // Issue #4224: a writable-ref-returning indexer getter (no
@@ -3201,36 +3215,78 @@ internal partial class ExpressionBinder {
         targetType TypeSymbol,
         indexer PropertyInfo,
         arguments ImmutableArray[BoundExpression],
-        diagnosticLocation TextLocation
+        diagnosticLocation TextLocation,
+        indexSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax]? = nil,
+        singleIndexSyntax ExpressionSyntax? = nil
     ) ImmutableArray[BoundExpression] {
         let converted = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
+        let indexParameters = indexer.GetIndexParameters()
         for var i = 0; i < arguments.Length; i++ {
+            var syntax ExpressionSyntax? = nil
+            if indexSyntaxes != nil && i < indexSyntaxes.Count {
+                syntax = indexSyntaxes[i]
+            } else if i == 0 {
+                syntax = singleIndexSyntax
+            }
+            let location = syntax?.Location ?? diagnosticLocation
             let parameterType = MemberLookup.GetIndexerParameterTypeSymbol(targetType, indexer, i)
-            // Issue #4400: an `in` index parameter takes a readonly reference;
+            let expectedRefKind = if i < indexParameters.Length {
+                RefCapabilities.GetParameterRefKind(indexParameters[i])
+            } else {
+                RefKind.None
+            }
+            if syntax is RefArgumentExpressionSyntax refArgument {
+                let argumentRefKind = Binder.GetRefKindFromModifier(refArgument.RefKindModifier)
+                if argumentRefKind != expectedRefKind {
+                    let parameterName = if i < indexParameters.Length {
+                        indexParameters[i].Name ?? "index"
+                    } else {
+                        "index"
+                    }
+                    Diagnostics.ReportRefKindMismatch(
+                        location,
+                        i + 1,
+                        parameterName,
+                        Binder.RefKindToString(expectedRefKind),
+                        Binder.RefKindToString(argumentRefKind)
+                    )
+                    converted.Add(BoundErrorExpression(syntax))
+                    continue
+                }
+            }
+            // Issue #4400 / #4421: an `in` index parameter takes a readonly reference;
             // the plain index argument is converted to the pointee and passed
-            // by address (an lvalue's own, or a spilled temp's), as in C#.
-            let indexParameters = indexer.GetIndexParameters()
-            if i < indexParameters.Length && ConversionClassifier.IsImplicitInClrArgument(
-                arguments[i],
-                indexParameters[i]
-            ) {
+            // by address (an lvalue's own, or a spilled temp's), as in C#, and
+            // an explicit `in x` / `&x` address argument is validated against the
+            // pointee storage type and kept as an address.
+            if i < indexParameters.Length && indexParameters[i].ParameterType.IsByRef {
                 let inPointee = if TypeSymbol.TryGetPointeeType(parameterType, out var substitutedPointee) {
                     substitutedPointee!!
                 } else {
-                    ConversionClassifier.GetImplicitInClrPointeeType(
-                        indexParameters[i],
-                        i,
-                        method: nil,
-                        receiverType: nil,
-                        symbolicMethodTypeArgs: default(ImmutableArray[TypeSymbol?])
-                    )
+                    parameterType
                 }
-                converted.Add(
-                    conversions.BindImplicitInArgument(diagnosticLocation, arguments[i], inPointee, parameter: nil)
-                )
-                continue
+                if ConversionClassifier.IsImplicitInClrArgument(arguments[i], indexParameters[i]) {
+                    converted.Add(conversions.BindImplicitInArgument(location, arguments[i], inPointee, parameter: nil))
+                    continue
+                }
+                if ByRefStorageMatching.TryGetStorageType(arguments[i]) is {} storageType {
+                    let parameter = RefCapabilities.CreateParameterSymbol(
+                        indexParameters[i],
+                        inPointee,
+                        indexParameters[i].Name ?? "index"
+                    )
+                    if storageType == TypeSymbol.Error ||
+                        inPointee == TypeSymbol.Error ||
+                        conversions.CheckByRefArgumentStorage(location, parameter, storageType, inPointee) {
+                        converted.Add(arguments[i])
+                    } else {
+                        conversions.ReportByRefStorageMismatch(location, parameter.Name, inPointee, storageType)
+                        converted.Add(BoundErrorExpression(arguments[i].Syntax))
+                    }
+                    continue
+                }
             }
-            converted.Add(conversions.BindConversion(diagnosticLocation, arguments[i], parameterType))
+            converted.Add(conversions.BindConversion(location, arguments[i], parameterType))
         }
         return converted.MoveToImmutable()
     }
@@ -3313,6 +3369,10 @@ internal partial class ExpressionBinder {
             )
             return true
         }
+        if syntax is RefArgumentExpressionSyntax {
+            indexValue = nil
+            return false
+        }
         let bound = BindExpression(syntax)
         if !(bound is BoundErrorExpression) && ClrTypeUtilities.AreSame(bound.Type.ClrType, typeof(Index)) {
             indexValue = bound
@@ -3382,10 +3442,12 @@ internal partial class ExpressionBinder {
                 ViewIndexerReceiver(target, indexView, targetLocation),
                 userIndexer!!,
                 substitution,
-                (_ int32, parameterType TypeSymbol) -> conversions.BindConversion(
+                (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
                     targetLocation,
                     indexValue,
-                    parameterType
+                    parameterType,
+                    userIndexer!!.Parameters[i],
+                    i + 1
                 ),
                 targetLocation
             )
@@ -3487,7 +3549,13 @@ internal partial class ExpressionBinder {
                     return BoundErrorExpression(nil)
                 }
                 let valueType = SubstituteIndexerType(userIndexer!!.Type, substitution)
-                let convertedIndex = conversions.BindConversion(diagnosticLocation, indexValue, parameterType)
+                let convertedIndex = conversions.BindCallArgumentWithRefKind(
+                    diagnosticLocation,
+                    indexValue,
+                    parameterType,
+                    userIndexer!!.Parameters[0],
+                    1
+                )
                 let value = bindValue(valueType)
                 if !CheckUserIndexerAccessibility(
                     userIndexer!!,
@@ -3510,7 +3578,13 @@ internal partial class ExpressionBinder {
                     return BoundErrorExpression(nil)
                 }
                 let refElementType = SubstituteIndexerType(refGetter.Type, substitution)
-                let convertedIndex = conversions.BindConversion(diagnosticLocation, indexValue, parameterType)
+                let convertedIndex = conversions.BindCallArgumentWithRefKind(
+                    diagnosticLocation,
+                    indexValue,
+                    parameterType,
+                    userIndexer!!.Parameters[0],
+                    1
+                )
                 let value = bindValue(refElementType)
                 if !CheckUserIndexerAccessibility(
                     userIndexer!!,

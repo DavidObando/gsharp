@@ -3116,9 +3116,7 @@ partial class Binder {
             nil,
             receiver,
             sourceMethod,
-            parameters.Select(
-                (parameter ParameterSymbol) -> cast[BoundExpression](BoundVariableExpression(nil, parameter))
-            )
+            parameters.Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil))
                 .ToImmutableArray(),
             contract.Type
         ){MethodTypeArguments = method.TypeParameters.Cast[TypeSymbol]().ToImmutableArray()}
@@ -3359,9 +3357,7 @@ partial class Binder {
                             expression: "sourceProperty.GetterSymbol"
                         ),
                         indexParameters.Select(
-                            (parameter ParameterSymbol) -> cast[BoundExpression](
-                                BoundVariableExpression(nil, parameter)
-                            )
+                            (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                         )
                             .ToImmutableArray(),
                         contract.Type
@@ -3406,11 +3402,7 @@ partial class Binder {
                             expression: "sourceProperty.SetterSymbol"
                         ),
                         indexParameters
-                            .Select(
-                            (parameter ParameterSymbol) -> cast[BoundExpression](
-                                BoundVariableExpression(nil, parameter)
-                            )
-                        )
+                            .Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil))
                             .Append(BoundVariableExpression(nil, value))
                             .ToImmutableArray(),
                         TypeSymbol.Void
@@ -9527,7 +9519,7 @@ partial class Binder {
             method.TypeParameters = slot.TypeParameters
             let receiver = AdapterSourceReceiver(adapter, method, sourceField, sourceMemberType, handleMode)
             let arguments = parameters.Select(
-                (parameter ParameterSymbol) -> cast[BoundExpression](BoundVariableExpression(syntax, parameter))
+                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, syntax)
             )
                 .ToImmutableArray()
             let call = BoundUserInstanceCallExpression(syntax, receiver, sourceMethod, arguments, slot.Type){
@@ -9578,9 +9570,7 @@ partial class Binder {
                 receiver,
                 callableSourceMethod,
                 slot.Type,
-                parameters.Select(
-                    (parameter ParameterSymbol) -> cast[BoundExpression](BoundVariableExpression(syntax, parameter))
-                )
+                parameters.Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, syntax))
                     .ToImmutableArray(),
                 callableSourceMethod.GetParameters().Select(GetAdapterRefKind).ToImmutableArray(),
                 typeArgumentSymbols: slot.TypeParameters.Cast[TypeSymbol?]().ToImmutableArray()
@@ -9682,9 +9672,7 @@ partial class Binder {
                                 expression: "sourceProperty.GetterSymbol"
                             ),
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             slot.Type
@@ -9730,11 +9718,7 @@ partial class Binder {
                                 expression: "sourceProperty.SetterSymbol"
                             ),
                             indexParameters
-                                .Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
-                            )
+                                .Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil))
                                 .Append(BoundVariableExpression(nil, value))
                                 .ToImmutableArray(),
                             TypeSymbol.Void
@@ -10216,6 +10200,18 @@ partial class Binder {
                 bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void)
             }
             return (eventSymbol, bodies)
+        }
+
+        private func ForwardAdapterParameter(parameter ParameterSymbol, syntax SyntaxNode?) BoundExpression {
+            if parameter.RefKind == RefKind.None {
+                return BoundVariableExpression(syntax, parameter)
+            }
+            return BoundAddressOfExpression(
+                syntax,
+                BoundVariableExpression(syntax, parameter),
+                unmanaged: false,
+                isReadOnly: parameter.RefKind == RefKind.In
+            )
         }
 
         private func AdapterSourceReceiver(
@@ -10815,8 +10811,14 @@ partial class Binder {
                 return false
             }
             for var i = 0; i < targetParameters.Length; i++ {
-                let targetType = MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i)
-                let sourceType = MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)
+                var targetType = MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i)
+                if targetType is ByRefTypeSymbol targetByRef {
+                    targetType = targetByRef.PointeeType
+                }
+                var sourceType = MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)
+                if sourceType is ByRefTypeSymbol sourceByRef {
+                    sourceType = sourceByRef.PointeeType
+                }
                 if !RefCapabilities.ImportedParameterContractsMatch(
                     targetParameters[i],
                     targetType,
@@ -12541,7 +12543,7 @@ partial class Binder {
         /// ADR-0060: human-readable label for a (cref:RefKind).
         /// @param kind The ref-kind value.
         /// @returns "none", "ref", "out", or "in".
-        private func RefKindToString(kind RefKind) string -> switch kind {
+        internal func RefKindToString(kind RefKind) string -> switch kind {
             case RefKind.Ref: "ref"
             case RefKind.Out: "out"
             case RefKind.In: "in"
@@ -12635,7 +12637,7 @@ partial class Binder {
         /// ADR-0060: maps a ref-kind modifier syntax token to a (cref:RefKind) value.
         /// @param modifier The `ref`/`out`/`in` contextual-keyword token (`null` for none).
         /// @returns The corresponding (cref:RefKind) value.
-        private func GetRefKindFromModifier(modifier SyntaxToken?) RefKind {
+        internal func GetRefKindFromModifier(modifier SyntaxToken?) RefKind {
             if modifier == nil {
                 return RefKind.None
             }

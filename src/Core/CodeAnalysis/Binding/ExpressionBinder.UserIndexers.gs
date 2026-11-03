@@ -12,6 +12,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import System.Reflection
 
@@ -306,7 +307,7 @@ internal partial class ExpressionBinder {
     /// @param target The indexed receiver.
     /// @param indexer The selected OPEN indexer.
     /// @param substitution The receiver's type-parameter substitution.
-    /// @param convert Converts argument `i` to the given parameter type.
+    /// @param convert Converts argument `i` to the given parameter and type.
     /// @param targetLocation The receiver location for diagnostics.
     /// @param writtenArgumentCount How many index arguments were written;
     /// trailing optional parameters beyond them take their declared defaults.
@@ -326,12 +327,13 @@ internal partial class ExpressionBinder {
         }
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](indexer.Parameters.Length)
         for var i = 0; i < indexer.Parameters.Length; i++ {
-            let parameterType = SubstituteIndexerType(indexer.Parameters[i].Type, substitution)
+            let parameter = indexer.Parameters[i]
+            let parameterType = SubstituteIndexerType(parameter.Type, substitution)
             arguments.Add(
                 if i < argumentCount {
                     convert(i, parameterType)
                 } else {
-                    IndexerDefaultArgument(indexer.Parameters[i], parameterType)
+                    BindUserIndexerDefaultArgument(parameter, parameterType)
                 }
             )
         }
@@ -345,6 +347,130 @@ internal partial class ExpressionBinder {
             arguments.MoveToImmutable(),
             SubstituteIndexerType(indexer.Type, substitution)
         )
+    }
+
+    private func BindIndexArgumentExpression(syntax ExpressionSyntax) BoundExpression {
+        if syntax is RefArgumentExpressionSyntax refArgument {
+            let placeholder ParameterSymbol? = if refArgument.IsInlineDeclaration {
+                ParameterSymbol("index", TypeSymbol.Error, refKind: RefKind.None)
+            } else {
+                default(ParameterSymbol?)
+            }
+            return BindRefArgumentExpression(refArgument, placeholder)
+        }
+        return BindExpression(syntax)
+    }
+
+    private func BindUserIndexerArgument(
+        syntax ExpressionSyntax,
+        preBoundArguments ImmutableArray[BoundExpression],
+        fallbackPreBound BoundExpression?,
+        parameter ParameterSymbol,
+        parameterType TypeSymbol,
+        argumentIndex int32
+    ) BoundExpression {
+        var preBound BoundExpression? = fallbackPreBound
+        if !preBoundArguments.IsDefault && argumentIndex < preBoundArguments.Length {
+            preBound = preBoundArguments[argumentIndex]
+        }
+        let location = syntax.Location
+        if syntax is RefArgumentExpressionSyntax refArgument {
+            let argumentRefKind = Binder.GetRefKindFromModifier(refArgument.RefKindModifier)
+            let bound BoundExpression = preBound ?? BindRefArgumentExpression(refArgument, parameter)
+            if refArgument.IsInlineDeclaration {
+                if preBound is BoundAddressOfExpression preBoundAddr && preBoundAddr.Operand is BoundErrorExpression {
+                    let _ = BindRefArgumentExpression(refArgument, parameter)
+                }
+                return BoundErrorExpression(syntax)
+            }
+            if argumentRefKind != parameter.RefKind {
+                Diagnostics.ReportRefKindMismatch(
+                    location,
+                    argumentIndex + 1,
+                    parameter.Name,
+                    Binder.RefKindToString(parameter.RefKind),
+                    Binder.RefKindToString(argumentRefKind)
+                )
+                return BoundErrorExpression(syntax)
+            }
+            return conversions.BindCallArgumentWithRefKind(location, bound, parameterType, parameter, argumentIndex + 1)
+        }
+        if parameter.RefKind == RefKind.In {
+            var bound BoundExpression
+            if preBound != nil {
+                bound = preBound
+            } else if syntax is DefaultExpressionSyntax || syntax is InterpolatedStringExpressionSyntax {
+                bound = conversions.BindConversion(syntax, parameterType)
+            } else {
+                bound = BindExpression(syntax)
+            }
+            return conversions.BindCallArgumentWithRefKind(location, bound, parameterType, parameter, argumentIndex + 1)
+        }
+        return if preBound != nil {
+            conversions.BindConversion(location, preBound, parameterType, callParameter: parameter)
+        } else {
+            conversions.BindConversion(syntax, parameterType)
+        }
+    }
+
+    private func CaptureUserIndexerArgument(
+        argument BoundExpression,
+        statements ImmutableArray[BoundStatement].Builder
+    ) BoundExpression {
+        if !(argument is BoundAddressOfExpression address) {
+            let argumentLocal = DeclareRangeTemp("index", argument.Type, argument, statements)
+            return BoundVariableExpression(nil, argumentLocal)
+        }
+        var spilledValue BoundExpression? = nil
+        if OverloadResolver.TryGetImplicitInSpilledValue(address, out spilledValue) && spilledValue != nil {
+            var pointeeType TypeSymbol? = nil
+            let tempType TypeSymbol = if TypeSymbol.TryGetPointeeType(address.Type, out pointeeType) {
+                pointeeType ?? spilledValue.Type
+            } else {
+                spilledValue.Type
+            }
+            let spilledLocal = DeclareRangeTemp("index", tempType, spilledValue, statements)
+            return BoundAddressOfExpression(
+                address.Syntax,
+                BoundVariableExpression(address.Syntax, spilledLocal),
+                unmanaged: false,
+                address.IsReadOnly
+            )
+        }
+        if OverloadResolver.IsFixedStorageAddress(address) {
+            return address
+        }
+        var inputAddress BoundAddressOfExpression? = nil
+        var inputs = default(ImmutableArray[BoundExpression])
+        if OverloadResolver.TryGetAddressInputs(address, out inputAddress, out inputs) && inputAddress != nil {
+            let inputTemps = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
+            for var i = 0; i < inputs.Length; i++ {
+                let input = inputs[i]
+                let inputLocal = DeclareRangeTemp("index", input.Type, input, statements)
+                inputTemps[input] = BoundVariableExpression(input.Syntax, inputLocal)
+            }
+            return BoundAddressOfExpression(
+                inputAddress.Syntax,
+                OverloadResolver.RewriteAddressInputs(inputAddress.Operand, inputTemps),
+                unmanaged: false,
+                inputAddress.IsReadOnly
+            )
+        }
+        let valueLocal = DeclareRangeTemp("index", address.Operand.Type, address.Operand, statements)
+        return BoundAddressOfExpression(
+            address.Syntax,
+            BoundVariableExpression(address.Syntax, valueLocal),
+            unmanaged: false,
+            address.IsReadOnly
+        )
+    }
+
+    private func BindUserIndexerDefaultArgument(parameter ParameterSymbol, parameterType TypeSymbol) BoundExpression {
+        let defaultArgument = IndexerDefaultArgument(parameter, parameterType)
+        if parameter.RefKind == RefKind.In {
+            return conversions.CreateImplicitInReference(defaultArgument, parameterType)
+        }
+        return defaultArgument
     }
 
     /// Binds `target[a, b, …] = value` (or a compound form) against a
@@ -392,7 +518,7 @@ internal partial class ExpressionBinder {
         let BindAll = func () ImmutableArray[BoundExpression] {
             let bound = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
             for indexSyntax in indexSyntaxes {
-                bound.Add(BindExpression(indexSyntax))
+                bound.Add(BindIndexArgumentExpression(indexSyntax))
             }
             return bound.MoveToImmutable()
         }
@@ -440,20 +566,14 @@ internal partial class ExpressionBinder {
         }
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](indexer!!.Parameters.Length)
         for var i = 0; i < indexer!!.Parameters.Length; i++ {
-            let parameterType = SubstituteIndexerType(indexer!!.Parameters[i].Type, substitution)
+            let parameter = indexer!!.Parameters[i]
+            let parameterType = SubstituteIndexerType(parameter.Type, substitution)
             let converted = if i >= indexSyntaxes.Count {
-                IndexerDefaultArgument(indexer!!.Parameters[i], parameterType)
+                BindUserIndexerDefaultArgument(parameter, parameterType)
             } else {
-                (
-                    if preBound.IsDefault {
-                        conversions.BindConversion(indexSyntaxes[i], parameterType)
-                    } else {
-                        conversions.BindConversion(indexSyntaxes[i].Location, preBound[i], parameterType)
-                    }
-                )
+                BindUserIndexerArgument(indexSyntaxes[i], preBound, nil, parameter, parameterType, i)
             }
-            let argumentLocal = DeclareRangeTemp("index", parameterType, converted, statements)
-            arguments.Add(BoundVariableExpression(nil, argumentLocal))
+            arguments.Add(CaptureUserIndexerArgument(converted, statements))
         }
         let capturedArguments = arguments.MoveToImmutable()
         let elementType = SubstituteIndexerType(storedType, substitution)
@@ -630,7 +750,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression? {
         let bound = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
         for indexSyntax in indexSyntaxes {
-            bound.Add(BindExpression(indexSyntax))
+            bound.Add(BindIndexArgumentExpression(indexSyntax))
         }
         let outcome = memberLookup.TryResolveClrIndexer(
             target.Type,
@@ -669,11 +789,10 @@ internal partial class ExpressionBinder {
             let receiverLocal = DeclareRangeTemp("receiver", target.Type, target, statements)
             receiver = BoundVariableExpression(nil, receiverLocal)
         }
-        let converted = BindClrIndexerArguments(target.Type, indexer, resolvedArguments, location)
+        let converted = BindClrIndexerArguments(target.Type, indexer, resolvedArguments, location, indexSyntaxes)
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](converted.Length)
         for argument in converted {
-            let argumentLocal = DeclareRangeTemp("index", argument.Type, argument, statements)
-            arguments.Add(BoundVariableExpression(nil, argumentLocal))
+            arguments.Add(CaptureUserIndexerArgument(argument, statements))
         }
         let capturedArguments = arguments.MoveToImmutable()
         if isRefIndexer && elementType is ByRefTypeSymbol byRef {
@@ -770,7 +889,7 @@ internal partial class ExpressionBinder {
         let defaults = ImmutableArray.CreateBuilder[BoundExpression]()
         for var i = writtenCount; i < indexer.Parameters.Length; i++ {
             defaults.Add(
-                IndexerDefaultArgument(
+                BindUserIndexerDefaultArgument(
                     indexer.Parameters[i],
                     SubstituteIndexerType(indexer.Parameters[i].Type, substitution)
                 )

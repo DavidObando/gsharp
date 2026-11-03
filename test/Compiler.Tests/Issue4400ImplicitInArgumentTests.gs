@@ -385,6 +385,128 @@ Console.WriteLine(StaticCaller[StaticIn]())`
         }
     }
 
+    /// Issue #4421: a G#-declared user indexer with an `in` parameter emits a
+    /// by-ref parameter carrying `ParameterAttributes.In` and
+    /// `IsReadOnlyAttribute` on both `PropertyDef` and `get_Item`/`set_Item`,
+    /// so Roslyn sees `this[in int]` rather than `this[int]` and a
+    /// cross-assembly consumer can call and implement the `in` indexer.
+    @Fact
+    func UserDeclaredInIndexer_MetadataAndCSharpConsumer_VerifyAndRun() {
+        const gsLibSource = `package GsInIdx
+
+public interface IInIndexer {
+    prop this[in k int32] int32 { get; set; }
+}
+
+public class GsIndexer : IInIndexer {
+    private var store []int32 = []int32{10, 20, 30}
+
+    public prop this[in k int32] int32 {
+        get { return store[k] }
+        set { store[k] = value }
+    }
+}`
+        const gsConsumerSource = `package GsConsumer
+import System
+import GsInIdx
+
+class CrossImpl : IInIndexer {
+    private var v int32 = 100
+    public prop this[in k int32] int32 {
+        get { return v + k }
+        set { v = value - k }
+    }
+}
+
+let g = GsIndexer()
+var idx = 1
+g[in idx] = 55
+g[2] += 5
+let a = g[in idx] + g[2]
+let iface IInIndexer = CrossImpl()
+iface[in idx] = 70
+iface[2] += 3
+let b = iface[in idx]
+Console.WriteLine("${a} ${b}")`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4421_meta_").FullName
+        try {
+            let gsLibPath = Path.Combine(tempDir, "GsInIdx.dll")
+            let log = Compile(tempDir, gsLibSource, gsLibPath, "/target:library")
+            Assert.True(File.Exists(gsLibPath), "GsInIdx must compile. Log:\n$log")
+            IlVerifier.Verify(gsLibPath)
+
+            let gsAppPath = Path.Combine(tempDir, "GsConsumer.dll")
+            let appLog = Compile(tempDir, gsConsumerSource, gsAppPath, "/reference:" + gsLibPath)
+            Assert.True(File.Exists(gsAppPath), "GsConsumer must compile. Log:\n$appLog")
+            IlVerifier.Verify(gsAppPath, []string{gsLibPath})
+            let (exit, output) = RunDotnet(gsAppPath)
+            Assert.True(exit == 0, "GsConsumer must run. Exit $exit:\n$output")
+            Assert.Equal("90 73", output.Trim())
+
+            let tpa = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!!))
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
+                .Append(MetadataReference.CreateFromFile(gsLibPath))
+            let csCompilation = CSharpCompilation.Create(
+                "Inspect",
+                syntaxTrees: nil,
+                references: tpa,
+                options: CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            for typeName in[]string{"GsInIdx.GsIndexer", "GsInIdx.IInIndexer"} {
+                let csType = csCompilation.GetTypeByMetadataName(typeName)!!
+                let csIndexer = csType.GetMembers("this[]").OfType[IPropertySymbol]().Single()
+                Assert.Single(csIndexer.Parameters)
+                Assert.Equal(Microsoft.CodeAnalysis.RefKind.In, csIndexer.Parameters[0].RefKind)
+            }
+
+            let context = AssemblyLoadContext("gs_4421_meta", isCollectible: true)
+            try {
+                using let gsStream = MemoryStream(File.ReadAllBytes(gsLibPath))
+                let gsAsm = context.LoadFromStream(gsStream)
+
+                for typeName in[]string{"GsInIdx.GsIndexer", "GsInIdx.IInIndexer"} {
+                    let gsType = gsAsm.GetType(typeName, throwOnError: true)!!
+                    let prop = gsType.GetProperty("Item")!!
+                    let propParams = prop.GetIndexParameters()
+                    Assert.Single(propParams)
+                    Assert.True(propParams[0].ParameterType.IsByRef)
+                    Assert.True(propParams[0].IsIn)
+                    Assert.Contains(
+                        propParams[0].GetRequiredCustomModifiers(),
+                        (t Type) -> t.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+
+                    let getterParams = prop.GetMethod!!.GetParameters()
+                    Assert.Single(getterParams)
+                    Assert.True(getterParams[0].ParameterType.IsByRef)
+                    Assert.True(getterParams[0].IsIn)
+                    Assert.Contains(
+                        getterParams[0].CustomAttributes,
+                        (a CustomAttributeData) -> a
+                            .AttributeType
+                            .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+
+                    let setterParams = prop.SetMethod!!.GetParameters()
+                    Assert.Equal(2, setterParams.Length)
+                    Assert.True(setterParams[0].ParameterType.IsByRef)
+                    Assert.True(setterParams[0].IsIn)
+                    Assert.Contains(
+                        setterParams[0].CustomAttributes,
+                        (a CustomAttributeData) -> a
+                            .AttributeType
+                            .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    )
+                }
+            } finally {
+                context.Unload()
+            }
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const RunTimeout int32 = 60_000
 
@@ -794,9 +916,9 @@ Console.WriteLine(TopG("s"))
 Console.WriteLine(callback(local))
 Console.WriteLine(callback(4))`, []string{"4", "4", "3", "s", "9", "12"}}
             // Constructors: direct, convenience-init chaining, `: base(...)`; an
-            // extension; a struct passing `this` and its own readonly field; and a
-            // call inside an async function. (A user indexer's `in` parameter is
-            // dropped at declaration, #4421, so it has no row here.)
+            // extension; a struct passing `this` and its own readonly field; a
+            // user indexer with `in` parameters (#4421); and a call inside an
+            // async function.
             yield[]object{"constructor-extension-struct-async", `package P
 import System
 import System.Threading.Tasks
@@ -811,6 +933,18 @@ struct Pt {
     func Read(in p Pt) int32 -> p.X + p.Y
     func Self() int32 -> this.Read(this)
     func FromField() int32 -> Take(Y) + Take(X)
+}
+
+class Idx {
+    var scale int32 = 10
+    prop this[in i int32] int32 {
+        get { return i * scale }
+        set { scale = value + i }
+    }
+    prop this[in r int32, c int32 = 2] int32 {
+        get { return r * 10 + c }
+        set { scale = r + c + value }
+    }
 }
 
 func Take(in x int32) int32 -> x
@@ -841,6 +975,9 @@ async func Later() int32 {
 
 let p = Pt(1, 2)
 var i = 4
+let idx = Idx()
+idx[3] = 7
+idx[in i] += 2
 Console.WriteLine(p.Self())
 Console.WriteLine(p.FromField())
 Console.WriteLine(GDerived(4).V)
@@ -848,7 +985,8 @@ Console.WriteLine(Chained().V)
 Console.WriteLine(GBase(i).V)
 Console.WriteLine(p.Ext(5))
 Console.WriteLine(p.Ext(i))
-Console.WriteLine(Later().Result)`, []string{"3", "3", "5", "21", "4", "6", "5", "10"}}
+Console.WriteLine(Later().Result)
+Console.WriteLine(idx[in i] + idx[2] + idx[i, 3])`, []string{"3", "3", "5", "21", "4", "6", "5", "10", "319"}}
             // Forwarding storage that is ALREADY a reference: an `in`, `ref` or
             // `out` parameter and a `ref`/`ref readonly` alias local pass their
             // existing address (the slot's own `T&`, never the address of it).
@@ -1112,10 +1250,21 @@ let r = C().F((x int32) -> x + 1, 2)`, "GS0235"}
             .Where((line string) -> line.Length > 0)
             .ToArray()
 
-        private func CompileCSharp(tempDir string, assemblyName string, source string) string {
-            let references = TrustedPlatformAssemblies().Select(
-                (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
-            )
+        private func CompileCSharp(tempDir string, assemblyName string, source string) string -> CompileCSharpWithRef(
+            tempDir,
+            assemblyName,
+            source
+        )
+
+        private func CompileCSharpWithRef(
+            tempDir string,
+            assemblyName string,
+            source string,
+            extraRefs ...string
+        ) string {
+            let references = TrustedPlatformAssemblies()
+                .Concat(extraRefs)
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
                 .ToList()
             let compilation = CSharpCompilation.Create(
                 assemblyName,
