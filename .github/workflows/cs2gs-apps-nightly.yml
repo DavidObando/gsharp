@@ -229,6 +229,14 @@ jobs:
     env:
       # The same absolute path in csharp-validate (`env` is not available here).
       SELFMIG_SOURCE_ROOT: /tmp/gsharp-csharp-corpus
+      # Issue #5659: Nerdbank.GitVersioning takes the public-release decision
+      # from GITHUB_REF, so on a run on main the corpus built Gsharp.NET.Sdk
+      # 0.4.1271 and on any other ref 0.4.1271-g<sha>. The cached corpus out/
+      # is shared across refs, and a shard's C# oracle build then packed the
+      # other version beside the restored one. Fix the decision for every
+      # build in the gsharp-csharp jobs, so the versions never depend on the
+      # ref. Keep this in csharp-validate too.
+      PublicRelease: 'false'
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -260,7 +268,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.SELFMIG_SOURCE_ROOT }}/out
-          key: selfmig-corpus-out-${{ runner.os }}-${{ hashFiles('tools/cs2gs/external/gsharp-csharp.json') }}
+          # v2 (issue #5659): entries saved before PublicRelease was fixed can
+          # hold a public-release corpus package; never restore them.
+          key: selfmig-corpus-out-v2-${{ runner.os }}-${{ hashFiles('tools/cs2gs/external/gsharp-csharp.json') }}
 
       - name: Translate the corpus
         env:
@@ -334,6 +344,8 @@ jobs:
     env:
       # The same absolute path csharp-migrate recorded.
       SELFMIG_SOURCE_ROOT: /tmp/gsharp-csharp-corpus
+      # Issue #5659: the same versions as csharp-migrate on every ref.
+      PublicRelease: 'false'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.csharp-migrate.outputs.matrix) }}

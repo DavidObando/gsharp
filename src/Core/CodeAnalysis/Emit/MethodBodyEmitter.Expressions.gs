@@ -1284,7 +1284,11 @@ internal partial class MethodBodyEmitter {
                 literal
                 .StructType
                 .ClrType is {} importedClrTypeForCtorCheck &&
-                importedClrTypeForCtorCheck.GetConstructor(Type.EmptyTypes) == nil {
+                (
+                importedClrTypeForCtorCheck.GetConstructor(Type.EmptyTypes) == nil || literal.Initializers.Any(
+                    (init BoundFieldInitializer) -> init.Property is {HasSetter: false}
+                )
+            ) {
                 this.EmitImportedPositionalRecordLiteral(literal, importedClrTypeForCtorCheck)
                 return
             }

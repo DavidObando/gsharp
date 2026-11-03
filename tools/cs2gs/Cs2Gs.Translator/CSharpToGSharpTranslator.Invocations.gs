@@ -2045,6 +2045,22 @@ partial class CSharpToGSharpTranslator {
             .DeclaringSyntaxReferences
             .IsDefaultOrEmpty
 
+        // Issue #5582: whether `TranslateArgumentValue` passes this argument's storage with no `!!`: a `ref`,
+        // `out` or `in` argument (an author's `!` is dropped), or an implicit argument at a source-declared
+        // `in` parameter, unless it keeps an author's `!` (only a variable that takes the `in` spelling drops it).
+        private func PassesArgumentStorageUnasserted(argument ArgumentSyntax) bool {
+            if argument.RefKindKeyword.RawKind != 0 {
+                return true
+            }
+            if !this.TargetsSourceDeclaredInParameter(argument) {
+                return false
+            }
+            return Unparenthesize(argument.Expression) is not PostfixUnaryExpressionSyntax suppression ||
+                !suppression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) ||
+                Unparenthesize(suppression.Operand) is IdentifierNameSyntax &&
+                this.PassesInArgumentWithoutConversion(argument)
+        }
+
         // Issue #4400: C# passes an implicit `in` argument by reference only
         // when it is variable storage that already has the parameter's type
         // (nullability included: `string` at `in string?` is not an exact

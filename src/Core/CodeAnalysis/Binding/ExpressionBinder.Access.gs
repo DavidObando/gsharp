@@ -175,7 +175,7 @@ internal partial class ExpressionBinder {
                     current = accessor.RightPart
                     continue
                 }
-                if accessor.LeftPart is CallExpressionSyntax nestedCall {
+                if segments.Count > 0 && accessor.LeftPart is CallExpressionSyntax nestedCall {
                     // `System.Nullable[int32]().HasValue` keeps the call on the
                     // left of the final accessor; bind it here, then continue on
                     // the constructed value rather than re-reading `System` as a type.
@@ -183,7 +183,8 @@ internal partial class ExpressionBinder {
                     trailingAccess = accessor.RightPart
                     break
                 }
-                if accessor.LeftPart is ObjectCreationExpressionSyntax{
+                if segments.Count > 0 &&
+                    accessor.LeftPart is ObjectCreationExpressionSyntax{
                     Target: CallExpressionSyntax nestedObjectCall
                 } nestedObjectCreation {
                     terminalCall = nestedObjectCall
@@ -191,7 +192,8 @@ internal partial class ExpressionBinder {
                     trailingAccess = accessor.RightPart
                     break
                 }
-                if accessor.LeftPart is CollectionInitializerExpressionSyntax{
+                if segments.Count > 0 &&
+                    accessor.LeftPart is CollectionInitializerExpressionSyntax{
                     Target: CallExpressionSyntax nestedCollectionCall
                 } nestedCollection {
                     terminalCall = nestedCollectionCall
@@ -221,7 +223,7 @@ internal partial class ExpressionBinder {
             // is not a constructor invocation.
             return false
         }
-        if terminalCall == nil || terminalCall.Identifier.IsMissing {
+        if segments.Count == 0 || terminalCall == nil || terminalCall.Identifier.IsMissing {
             return false
         }
         let typeSimpleName = terminalCall.Identifier.ValueText
@@ -244,6 +246,11 @@ internal partial class ExpressionBinder {
         // a NESTED type can take — passed none, so
         // `DebuggableAttribute.DebuggingModes(2)` had no conversion arm to land
         // on and reported GS0159 instead.
+        let constructedTarget = if openGenericDef != nil && !symbolicArgs.IsDefaultOrEmpty {
+            cast[TypeSymbol](ImportedTypeSymbol.GetConstructed(clrType!!, openGenericDef, symbolicArgs))
+        } else {
+            TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+        }
         var handled = TryBindClrConstructorFromType(
             clrType!!,
             terminalCall,
@@ -259,7 +266,7 @@ internal partial class ExpressionBinder {
             noApplicableOverload,
             boundArguments,
             &result,
-            TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure)
+            constructedTarget
         )
         // Issue #3821: the shared failure helper only commits to the
         // no-applicable-overload diagnostic when the call carries an explicit
@@ -360,14 +367,23 @@ internal partial class ExpressionBinder {
         let segments = List[string]()
         var current ExpressionSyntax = syntax
         var terminalLiteral StructLiteralExpressionSyntax? = nil
+        var trailingAccess ExpressionSyntax? = nil
         while true {
             if current is AccessorExpressionSyntax accessor {
-                if accessor.IsNullConditional || !(accessor.LeftPart is NameExpressionSyntax leftName) {
+                if accessor.IsNullConditional {
                     return false
                 }
-                segments.Add(leftName.IdentifierToken.ValueText)
-                current = accessor.RightPart
-                continue
+                if accessor.LeftPart is NameExpressionSyntax leftName {
+                    segments.Add(leftName.IdentifierToken.ValueText)
+                    current = accessor.RightPart
+                    continue
+                }
+                if segments.Count > 0 && accessor.LeftPart is StructLiteralExpressionSyntax nestedLiteral {
+                    terminalLiteral = nestedLiteral
+                    trailingAccess = accessor.RightPart
+                    break
+                }
+                return false
             }
             if current is StructLiteralExpressionSyntax literal {
                 terminalLiteral = literal
@@ -376,7 +392,7 @@ internal partial class ExpressionBinder {
             // A bare trailing name/call is not a struct literal.
             return false
         }
-        if terminalLiteral == nil || terminalLiteral.TypeIdentifier.IsMissing {
+        if segments.Count == 0 || terminalLiteral == nil || terminalLiteral.TypeIdentifier.IsMissing {
             return false
         }
         let typeSimpleName = terminalLiteral.TypeIdentifier.ValueText
@@ -400,6 +416,17 @@ internal partial class ExpressionBinder {
                 nil
             }
         )
+        if trailingAccess != nil && !(result is BoundErrorExpression) {
+            result = BindAccessorStep(
+                Invariant.Required(
+                    result,
+                    "a successful qualified struct-literal binding produces a bound target",
+                    expression: "result"
+                ),
+                classSymbol: nil,
+                trailingAccess
+            )
+        }
         return true
     }
 
@@ -734,7 +761,15 @@ internal partial class ExpressionBinder {
         // This covers `Outer.Inner()`, `Ns.Outer.Inner()`, and deeply-nested
         // chains like `Outer.Middle.Inner()` where the prefix segments include
         // both namespace and outer-type components.
-        if TryResolveAsNestedTypeChain(namespacePrefix, typeSimpleName, arity, typeArgumentList, out clrType) {
+        if TryResolveAsNestedTypeChain(
+            namespacePrefix,
+            typeSimpleName,
+            arity,
+            typeArgumentList,
+            out clrType,
+            out openGenericDefinition,
+            out symbolicTypeArgs
+        ) {
             return true
         }
         return false
@@ -749,9 +784,13 @@ internal partial class ExpressionBinder {
         typeSimpleName string,
         arity int32,
         typeArgumentList TypeArgumentListSyntax?,
-        @NotNullWhen(true) out clrType Type?
+        @NotNullWhen(true) out clrType Type?,
+        out openGenericDefinition Type?,
+        out symbolicTypeArgs ImmutableArray[TypeSymbol]
     ) bool {
         clrType = nil
+        openGenericDefinition = nil
+        symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
         if string.IsNullOrEmpty(namespacePrefix) {
             return false
         }
@@ -811,21 +850,29 @@ internal partial class ExpressionBinder {
                 if typeArgumentList is not TypeArgumentListSyntax typeArguments {
                     return false
                 }
-                let clrArgs = [arity]Type
-                var argsResolved = true
-                for var i = 0; i < arity; i++ {
-                    let ta = bindTypeClause(typeArguments.Arguments[i])
-                    if ta?.ClrType is not Type taClrType {
-                        argsResolved = false
-                        break
-                    }
-                    clrArgs[i] = $scope.References!!.MapClrTypeToReferences(taClrType)!!
-                }
-                if !argsResolved {
+                if !TryResolveClrConstructionTypeArgs(
+                    typeArguments,
+                    out var clrArgs,
+                    out var symbolic,
+                    out var hasSymbolicArg
+                ) {
                     continue
+                }
+                if Binder.ReportUnsatisfiedGenericTypeConstraint(
+                    Diagnostics,
+                    nestedType,
+                    clrArgs,
+                    symbolic,
+                    typeArguments.Location
+                ) {
+                    return false
                 }
                 try {
                     clrType = nestedType.MakeGenericType(clrArgs)
+                    if hasSymbolicArg {
+                        openGenericDefinition = nestedType
+                        symbolicTypeArgs = symbolic
+                    }
                     return true
                 } catch (ArgumentException) {
                     continue

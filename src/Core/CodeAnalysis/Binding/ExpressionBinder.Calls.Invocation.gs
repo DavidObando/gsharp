@@ -2106,7 +2106,7 @@ internal partial class ExpressionBinder {
             // the call identifier names a nested type of the outer class. If so,
             // bind as a constructor invocation — this unifies the call-expression
             // path with the type-clause path that #526 already fixed.
-            if TryBindNestedTypeConstructorCall(classSymbol.ClassType, ce, out var nestedCtorResult) {
+            if TryBindNestedTypeConstructorCall(classSymbol, ce, out var nestedCtorResult) {
                 return nestedCtorResult!!
             }
             // Issue #1833: a value-type-erased type argument (a concrete

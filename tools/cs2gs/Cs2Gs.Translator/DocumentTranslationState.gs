@@ -71,6 +71,11 @@ internal class DocumentTranslationState {
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
+        VarCaptureUndecided = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        LocalsMentioningNilableOnlyValues = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         LiftedStaticLocalFunctions = Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
@@ -430,6 +435,35 @@ internal class DocumentTranslationState {
     // Issue #4445: semantic/CFG default provenance is invariant per local and
     // can be queried repeatedly while lowering one declaration.
     prop InferredLocalDefaultTypedDeclarations Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: whether the input of a `var` pattern capture is non-null in G#. The answer is invariant
+    // per capture and each read asks it. A capture whose input is another capture asks again, so the cache
+    // keeps a chain of captures linear.
+    prop VarCaptureInputNonNull Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: whether a `var` local is `T?` only in the emitted G#, because its initializer is. The
+    // answer is invariant per local, and the cache keeps a chain of locals linear.
+    prop NilableOnlyInEmittedGSharpLocals Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: the same answer for an expression node, so that nested generic calls stay linear.
+    prop NilableOnlyInEmittedGSharpNodes Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool] {
+        get;
+    }
+
+    // Issue #5582: `var` captures whose emitted type the capture decision cannot name. Each form keeps its
+    // previous translation for them.
+    prop VarCaptureUndecided HashSet[ILocalSymbol] {
+        get;
+    }
+
+    // Issue #5582: whether a local's initializer mentions a value that is `T?` only in G#.
+    prop LocalsMentioningNilableOnlyValues Dictionary[ILocalSymbol, bool] {
         get;
     }
 

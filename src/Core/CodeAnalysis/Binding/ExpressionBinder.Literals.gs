@@ -1823,6 +1823,15 @@ internal partial class ExpressionBinder {
                     return BindImportedTypeLiteralExpression(
                         syntax,
                         closedImportedType,
+                        if hasSymbolicArgument {
+                            ImportedTypeSymbol.GetConstructed(
+                                closedImportedType,
+                                importedCandidate.ClassType,
+                                literalSymbolicArguments
+                            )
+                        } else {
+                            nil
+                        },
                         resolveTypeOnly: resolveTypeOnly
                     )
                 } else if !typeNameAmbiguous &&
