@@ -81,6 +81,11 @@ class BoundFunctionLiteralExpression : BoundExpression {
     /// against, valid whenever that property is non-null.
     internal prop EnclosingTypeParameterOffenderLocation TextLocation
 
+    /// Gets or sets a value indicating whether this direct-call local function
+    /// requires its lexical owner's access/generic domain (see
+    /// (cref:LambdaBinder.PrepareGenericLocalFunctionDeclaration)).
+    internal prop RequiresLexicalOwner bool
+
     /// Gets or sets a value indicating whether the "local function cannot
     /// reference enclosing type parameter" diagnostic has already been
     /// reported for this literal, so a later re-check (after

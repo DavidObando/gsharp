@@ -812,7 +812,8 @@ internal class LambdaBinder {
                             offender.Name
                         )
                         literal.EnclosingTypeParameterDiagnosticReported = true
-                    } else if function.LexicalEnclosingType is {} owner &&
+                    } else if function.IsGeneric &&
+                        function.LexicalEnclosingType is {} owner &&
                         requiresLexicalOwner &&
                         !function
                         .HasNonGenericLexicalOwner {
@@ -832,8 +833,9 @@ internal class LambdaBinder {
                     // can re-evaluate the exclusion instead of silently
                     // reaching the emitter with an enclosing type parameter
                     // its capturing-closure host has no slot for.
-                    if offender != nil {
+                    if offender != nil || requiresLexicalOwner {
                         literal.EnclosingTypeParameterOffender = offender
+                        literal.RequiresLexicalOwner = requiresLexicalOwner
                         literal.EnclosingTypeParameterOffenderLocation = syntax.Identifier.Location
                     }
                     return BoundLocalFunctionDeclaration(syntax, literal)
@@ -878,29 +880,27 @@ internal class LambdaBinder {
     /// `let Name[T, ...] = func (...) ... { ... }` declarations, in
     /// source order, after each one's body has been bound.
     func ReconcileGenericLocalFunctionGroupCaptures(group IReadOnlyList[BoundFunctionLiteralExpression]) {
-        if group.Count < 2 {
-            // A single generic local function has no sibling to call, so the
-            // in-order pass inside CollectCapturedVariables already saw
-            // everything it ever will. (A local function nested inside that
-            // lone member still can't reach a sibling that doesn't exist.)
+        if group.Count == 0 {
             return
         }
         let literals = List[BoundFunctionLiteralExpression](group)
-        for member in group {
-            CollectNestedFunctionLiterals(member.Body, literals)
-        }
-        let maxPasses = Math.Max(8, literals.Count * literals.Count)
-        for var pass = 0; pass < maxPasses; pass++ {
-            var changed = false
-            for literal in literals {
-                let recomputed = CollectCapturedVariables(literal.Body, literal.Function)
-                if !HashSet[VariableSymbol](literal.CapturedVariables).SetEquals(recomputed) {
-                    literal.CapturedVariables = recomputed
-                    changed = true
-                }
+        if group.Count >= 2 {
+            for member in group {
+                CollectNestedFunctionLiterals(member.Body, literals)
             }
-            if !changed {
-                break
+            let maxPasses = Math.Max(8, literals.Count * literals.Count)
+            for var pass = 0; pass < maxPasses; pass++ {
+                var changed = false
+                for literal in literals {
+                    let recomputed = CollectCapturedVariables(literal.Body, literal.Function)
+                    if !HashSet[VariableSymbol](literal.CapturedVariables).SetEquals(recomputed) {
+                        literal.CapturedVariables = recomputed
+                        changed = true
+                    }
+                }
+                if !changed {
+                    break
+                }
             }
         }
         // Issue #4221/#4223 merge follow-up: a literal that referenced an
@@ -923,6 +923,29 @@ internal class LambdaBinder {
                     literal.EnclosingTypeParameterOffenderLocation,
                     literal.Function.Name,
                     offender.Name
+                )
+                literal.EnclosingTypeParameterDiagnosticReported = true
+            } else if !literal.EnclosingTypeParameterDiagnosticReported &&
+                !literal
+                .Function
+                .IsGeneric &&
+                literal
+                .Function
+                .LocalDeclaration != nil &&
+                literal
+                .CapturedVariables
+                .IsEmpty &&
+                literal.RequiresLexicalOwner &&
+                literal
+                .Function
+                .LexicalEnclosingType is {} owner &&
+                !literal
+                .Function
+                .HasNonGenericLexicalOwner {
+                Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(
+                    literal.EnclosingTypeParameterOffenderLocation,
+                    literal.Function.Name,
+                    owner
                 )
                 literal.EnclosingTypeParameterDiagnosticReported = true
             }
@@ -3834,17 +3857,21 @@ internal class LambdaBinder {
             private set;
         }
 
+        private prop IsComplete bool -> Found != nil && (!checkOwners || RequiresLexicalOwner)
+
         func CheckType(type TypeSymbol?) {
-            if Found != nil || type == nil {
+            if IsComplete || type == nil {
                 return
             }
             if checkOwners {
-                let referenced = List[TypeParameterSymbol]()
-                TypeSymbol.CollectReferencedTypeParameters(type, referenced)
-                for parameter in enclosingTypeParameters {
-                    if referenced.Contains(parameter) {
-                        Found = parameter
-                        break
+                if Found == nil {
+                    let referenced = List[TypeParameterSymbol]()
+                    TypeSymbol.CollectReferencedTypeParameters(type, referenced)
+                    for parameter in enclosingTypeParameters {
+                        if referenced.Contains(parameter) {
+                            Found = parameter
+                            break
+                        }
                     }
                 }
                 RequiresLexicalOwner |= switch type {
@@ -3867,7 +3894,7 @@ internal class LambdaBinder {
         }
 
         override func VisitExpression(node BoundExpression?) {
-            if node == nil || Found != nil {
+            if node == nil || IsComplete {
                 return
             }
             CheckType(node.Type)
@@ -3914,9 +3941,9 @@ internal class LambdaBinder {
                         CheckType(cast[TypeSymbol?](property.StructType) ?? property.InterfaceType)
                         RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility)
                     }
-                    case literal is BoundFunctionLiteralExpression when literal
-                        .Function
-                        .LocalDeclaration == nil &&
+                    case literal is BoundFunctionLiteralExpression when(
+                        literal.Function.LocalDeclaration == nil || !literal.CapturedVariables.IsEmpty
+                    ) &&
                         !literal
                         .Function
                         .IsGeneric {
@@ -3956,7 +3983,7 @@ internal class LambdaBinder {
         }
 
         override func VisitPattern(node BoundPattern?) {
-            if node == nil || Found != nil {
+            if node == nil || IsComplete {
                 return
             }
             CheckType(node.Type)
@@ -3967,7 +3994,7 @@ internal class LambdaBinder {
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
-            if Found != nil {
+            if IsComplete {
                 return
             }
             CheckType(node.Variable.Type)

@@ -219,4 +219,22 @@ Box[string]().Run([]int32{1}) + s.Run([]int32{2}) + Box[int32]().RunGenericEleme
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal(142, result.Value)
     }
+
+    @Fact
+    func GenericClassEncloser_CapturingRefReturningLocalWithNestedLambda_CompilesAndRuns() {
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(data []int32) int32 {
+        let At = func (index int32) ref int32 {
+            let nested = func () int32 { return index }
+            return ref data[nested()]
+        }
+        var ref a = At(0)
+        a = 35
+        return data[0]
+    }
+}
+Box[string]().Run([]int32{1})`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(35, result.Value)
+    }
 }

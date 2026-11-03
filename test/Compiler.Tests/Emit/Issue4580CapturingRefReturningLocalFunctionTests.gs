@@ -209,6 +209,27 @@ class Box[T] {
         a = fn(replacement)
         return data[0]
     }
+    func RunCapturingRefWithNestedLambda(data []int32) int32 {
+        let At = func (index int32) ref int32 {
+            let nested = func () int32 { return index }
+            return ref data[nested()]
+        }
+        var ref a = At(0)
+        a = 77
+        return data[0]
+    }
+    func RunFunctionPointerToPromotedLocal() string {
+        let First = func (n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func (n int32) string { return n < 0 ? First(n) : typeof(T).Name }
+        let Caller = func () string {
+            unsafe {
+                let fp = &First
+                return cast[nint](fp) != 0 ? First(1) : ""
+            }
+        }
+        let CallerSibling = func () string { return Caller() }
+        return CallerSibling()
+    }
 }
 
 struct SBox[T] {
@@ -230,9 +251,12 @@ var sb = SBox[string]{}
 Console.WriteLine(b.RunGroup(4))
 Console.WriteLine(b.RunRef([]int32{1}))
 Console.WriteLine(b.RunGenericRefAndDelegate([]string{"old"}, "new"))
+Console.WriteLine(b.RunCapturingRefWithNestedLambda([]int32{1}))
+Console.WriteLine(b.RunFunctionPointerToPromotedLocal())
 Console.WriteLine(sb.RunGroup(4))
 Console.WriteLine(sb.RunRef([]int32{1}))`
-        let expected = string.Join(Environment.NewLine, "1", "35", "new", "1", "35") + Environment.NewLine
+        let expected = string.Join(Environment.NewLine, "1", "35", "new", "77", "String", "1", "35") +
+            Environment.NewLine
         Assert.Equal(expected, CompileVerifyAndRun(Source))
     }
 

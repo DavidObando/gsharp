@@ -332,6 +332,10 @@ Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
     @Theory
     @InlineData("let callback () -> int32 = Holder[int32].Secret\nreturn callback()", "GS0586")
     @InlineData("let nested = func() int32 { return 42 }\nreturn nested()", "GS0586")
+    @InlineData(
+        "var data = []int32{1}\nlet At = func(i int32) ref int32 { return ref data[i] }\nreturn At(0)",
+        "GS0586"
+    )
     func GenericOwnerDependencies_InNonGenericGroup_FailBeforeEmission(body string, diagnostic string) {
         let result = EmittedOracle.Evaluate((`class Holder[Outer] {
     shared {
@@ -346,5 +350,58 @@ Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
 Holder[string].Run()`))
         Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == diagnostic)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
+
+    @Fact
+    func GenericOwnerDependencies_WithEnclosingTypeParameterInSignature_StillReportsGS0586() {
+        let result = EmittedOracle.Evaluate(`class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run(seed Outer) int32 {
+            let first = func(x Outer, depth int32) int32 { return second(x, depth) }
+            let second = func(x Outer, depth int32) int32 {
+                if depth < 0 { return first(x, depth) }
+                let callback () -> int32 = Holder[int32].Secret
+                return callback()
+            }
+            return first(seed, 0)
+        }
+    }
+}
+Holder[string].Run("ok")`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0586")
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
+
+    @Fact
+    func CapturingNonGenericGroupInGenericOwner_WithNestedLambda_CompilesAndRuns() {
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(data []int32) int32 {
+        let first = func(i int32) int32 {
+            let nested = func() int32 { return i }
+            return second(nested())
+        }
+        let second = func(i int32) int32 {
+            if i < 0 { return first(i) }
+            return data[i]
+        }
+        return first(0)
+    }
+    func RunFunctionPointer() string {
+        let First = func(n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func(n int32) string { return n < 0 ? First(n) : typeof(T).Name }
+        let Caller = func() string {
+            unsafe {
+                let fp = &First
+                return fp(1)
+            }
+        }
+        let CallerSibling = func() string { return Caller() }
+        return CallerSibling()
+    }
+}
+"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}"`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("42:String", result.Value)
     }
 }
